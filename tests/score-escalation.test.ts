@@ -6,7 +6,7 @@ import { freshHome } from "./helpers/tmpHome.js";
 import { scoreArtDir } from "../src/core/score.js";
 import { partDir } from "../src/core/paths.js";
 import { outboxPath } from "../src/core/ipc.js";
-import { researchSendWith, researchWaitWith, diffRun, spawnAllWith } from "../src/commands/score.js";
+import { researchSendWith, researchWaitWith, diffRun, spawnAllWith, verifySendWith } from "../src/commands/score.js";
 
 let env: { home: string; cleanup: () => void };
 beforeEach(() => { env = freshHome(); });
@@ -200,5 +200,42 @@ describe("score spawn-all", () => {
   it("roster with <2 parts → rc 2", async () => {
     seedRoster("t", [{ provider: "codex", instrument: "viola" }]);
     expect(await spawnAllWith("t", { preflight: async () => 0, spawn: async () => 0, repoRoot: () => "/repo" })).toBe(2);
+  });
+});
+
+describe("score verify-send", () => {
+  function seedV(topic: string, rows: Array<{ provider: string; instrument: string }>, buckets: Record<string, string>): string {
+    const art = scoreArtDir(topic);
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "roster.txt"), rows.map((r) => `${r.provider}\t${r.instrument}`).join("\n") + "\n");
+    writeFileSync(join(art, "topic.txt"), topic);
+    for (const [f, c] of Object.entries(buckets)) writeFileSync(join(art, f), c);
+    return art;
+  }
+  const rows = [{ provider: "codex", instrument: "viola" }, { provider: "claude", instrument: "cello" }];
+
+  it("N=2: scope = other's bucket; composes + sends (rc 0)", async () => {
+    const art = seedV("t", rows, { "viola_only_items.txt": "[a:1] vc\n", "cello_only_items.txt": "[b:2] cc\n" });
+    const calls: string[][] = [];
+    const rc = await verifySendWith("t", "viola", "codex", { offsetFor: () => 7, send: async (a) => { calls.push(a); return 0; } });
+    expect(rc).toBe(0);
+    expect(readFileSync(join(art, "verify-claims-viola.txt"), "utf8")).toContain("[b:2] cc"); // cello's, not viola's
+    expect(readFileSync(join(art, "verify-viola.txt"), "utf8")).toBe("OFFSET=7\n");
+    expect(calls[0]).toContain("@" + join(art, "viola_verify_prompt.md"));
+  });
+
+  it("empty scope → VS=skipped, no send (rc 0)", async () => {
+    const art = seedV("t", rows, { "viola_only_items.txt": "", "cello_only_items.txt": "" });
+    let sent = 0;
+    const rc = await verifySendWith("t", "cello", "claude", { offsetFor: () => 0, send: async () => { sent++; return 0; } });
+    expect(rc).toBe(0);
+    expect(readFileSync(join(art, "verify-cello.txt"), "utf8")).toBe("VS=skipped\n");
+    expect(sent).toBe(0);
+  });
+
+  it("refuses if verify-<inst>.txt exists (rc 1)", async () => {
+    const art = seedV("t", rows, { "viola_only_items.txt": "x\n", "cello_only_items.txt": "y\n" });
+    writeFileSync(join(art, "verify-viola.txt"), "OFFSET=0\n");
+    expect(await verifySendWith("t", "viola", "codex", { offsetFor: () => 0, send: async () => 0 })).toBe(1);
   });
 });
