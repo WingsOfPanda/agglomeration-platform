@@ -1,6 +1,6 @@
 ---
 description: Gracefully end parts (FINE banner) and archive their state
-argument-hint: <topic> | <instrument> <topic> | --all
+argument-hint: <topic> | <instrument> <topic> | --all --yes
 allowed-tools: Bash, Write
 ---
 
