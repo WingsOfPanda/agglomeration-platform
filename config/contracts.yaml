@@ -38,7 +38,7 @@ agy:
   # v0.61.2: bumped 8 → 20 (matching codex). agy displays an
   # eligibility-check screen at startup; with 8s the identity
   # keystrokes were sometimes sent BEFORE the REPL was accepting input
-  # and got swallowed by the screen-transition, causing the trooper
+  # and got swallowed by the screen-transition, causing the part
   # to time out without ever processing identity.md (empty outbox,
   # visible `>` prompt at capture). Verified by the bly-agy
   # 20260524T012248Z FAILED archive: pane.json registered, outbox.jsonl
