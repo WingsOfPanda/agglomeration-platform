@@ -50,7 +50,8 @@ export function formatRosterFile(rows: RosterRow[], isoStamp: string): string {
   return `# generated ${isoStamp} by /consort:score\n${body}${rows.length ? "\n" : ""}`;
 }
 
-/** Parse roster.txt: skip #/blank lines; keep rows with both fields. */
+/** Parse roster.txt: skip #/blank lines; keep rows with both fields.
+ *  Consumed by the ensemble path (Phase C reads roster.txt back to spawn the parts); not orphaned. */
 export function parseRosterFile(text: string): RosterRow[] {
   return text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#"))
     .map((l) => { const [provider, instrument] = l.split("\t"); return { provider, instrument }; })

@@ -24,9 +24,10 @@ Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs"`.
    MODE=<single|single-sub|multi>
    PART=<instrument>:<provider>   (one per part)
    ```
+   `MODE` reflects `--targets`: `single` (none passed), `single-sub` (one), or `multi` (two or more).
    Non-zero aborts: rc 1 = empty topic OR fewer than 2 validated providers (redirect: just ask
    Claude directly — no orchestration needed); rc 2 = topic already in flight. Capture `TOPIC`/`N`/
-   `ENSEMBLE` for later stages.
+   `ENSEMBLE`/`MODE` for later stages.
 
 ## Stage 1 — routing
 
@@ -44,12 +45,21 @@ Decide fast-path vs escalation, in order:
    If any fires → **escalate**, Path label = `escalated-from-signals`.
 3. None fire → **fast-path**, Path label = `fast`.
 
-> **Phase B scope:** the **escalation** path (spawn a 2-3 part ensemble → research → diff →
-> cross-verify → adjudicate → walk → audit) is **not yet built** — it lands in Phases C–E. For now,
-> if Stage 1 selects escalation, tell the user plainly: "the cross-verified ensemble path is not yet
-> available in this build; producing a Maestro-solo (fast-path) doc instead — re-run once the
-> ensemble phase ships for cross-verification," then proceed to Stage 2. (When Phases C–E land, this
-> stub is replaced by the real escalation pipeline.)
+> **Phase B scope — two stubbed cases.** The full **escalation** path (spawn a 2-3 part ensemble →
+> research → diff → cross-verify → adjudicate → walk → audit) and the **multi-repo** pipeline are
+> **not yet built** — they land in Phases C–E. Before proceeding to Stage 2, branch on `MODE`:
+>
+> - **`MODE=single` and Stage 1 selected escalation** (`ENSEMBLE=yes`, or a complexity signal fired):
+>   tell the user plainly: "the cross-verified ensemble path is not yet available in this build
+>   (Phases C–E); producing a Maestro-solo (fast-path) single-repo doc instead — re-run once the
+>   ensemble ships for cross-verification," then **proceed to Stage 2**. (Phases C–E replace this
+>   stub with the real escalation pipeline.)
+> - **`MODE` is `multi` or `single-sub`** (i.e. `--targets` was passed): do **NOT** proceed to the
+>   fast-path — a multi doc would assemble placeholder Execution DAG / Cross-Repo Notes sections that
+>   pass the audit while silently under-serving the multi-repo intent. Tell the user plainly:
+>   "multi-repo runs (`--targets`) need the full ensemble + design-walk pipeline, which lands in
+>   Phase E; re-run without `--targets` for a single-repo fast-path doc," and **stop**. (Phase E
+>   replaces this stop with the real multi-repo pipeline.)
 
 ## Stage 2 — fast-path (Maestro solo)
 

@@ -64,6 +64,7 @@ export async function initWith(tokens: string[], d: ScoreInitDeps): Promise<numb
 
   mkdirSync(scoreDraftDir(topic), { recursive: true }); // creates _score/design-doc/.draft
   atomicWrite(join(art, "topic.txt"), topicText);
+  // Full roster written even on a fast-path run; the ensemble path (Phase C) reads roster.txt back.
   atomicWrite(join(art, "roster.txt"), formatRosterFile(rows, isoUtc()));
   const mode = targets.length >= 2 ? "multi" : targets.length === 1 ? "single-sub" : "single";
   atomicWrite(join(art, "multi-repo.txt"), mode + "\n");
@@ -91,7 +92,9 @@ async function assembleRun(rest: string[]): Promise<number> {
   const targets = mode === "single" ? [] : parseRosterTargets(readIf(join(art, "targets.txt")));
   const keys = mode === "multi" ? SECTIONS_MULTI : SECTIONS_SINGLE;
   const drafts = new Map<string, string>();
-  for (const k of keys) { const f = join(draftDir, `${k}.md`); if (existsSync(f)) drafts.set(k, readFileSync(f, "utf8").replace(/\n+$/, "")); }
+  // One trailing newline per section → a blank line between them (matches the behavioral source's
+  // `cat draft; printf '\n'` and assembleDoc's missing-draft branch which emits a blank line).
+  for (const k of keys) { const f = join(draftDir, `${k}.md`); if (existsSync(f)) drafts.set(k, readFileSync(f, "utf8").replace(/\n+$/, "") + "\n"); }
 
   const date = isoUtc().slice(0, 10);
   const doc = assembleDoc({ title, mode, date, targets, drafts });
