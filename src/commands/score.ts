@@ -20,6 +20,7 @@ import { outboxOffset, outboxPath, outboxWaitSince, type OutboxEvent } from "../
 import { instrumentConsultValidated, consultTimeout, instrumentTimeoutMultiplier } from "../core/contracts.js";
 import { composeResearchPrompt, researchState, parseLatestOffset, scaledTimeout, composeVerifyPrompt, verifyState } from "../core/scoreTurn.js";
 import { diffFindings, type DiffPart } from "../core/scoreDiff.js";
+import { adjudicate, type AdjudicateInput } from "../core/scoreAdjudicate.js";
 import { run as sendRun } from "./send.js";
 import { run as spawnRun } from "./spawn.js";
 import { run as preflightRun } from "./preflight.js";
@@ -38,6 +39,7 @@ export async function run(args: string[]): Promise<number> {
     case "diff": return diffRun(rest);
     case "verify-send": return verifySendRun(rest);
     case "verify-wait": return verifyWaitRun(rest);
+    case "adjudicate": return adjudicateRun(rest);
     default: return usage();
   }
 }
@@ -364,6 +366,39 @@ export async function verifyWaitWith(topic: string, instrument: string, provider
   }
   writeFileSync(join(art, `verify-${instrument}.done`), "");
   log.ok(`score verify-wait: ${instrument} VS=${vs}`);
+  return 0;
+}
+
+export async function adjudicateRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: score adjudicate <topic>"); return 2; }
+  const art = scoreArtDir(topic);
+  if (!existsSync(art)) { log.error(`score adjudicate: ${art} not found`); return 1; }
+  const rosterPath = join(art, "roster.txt");
+  if (!existsSync(rosterPath)) { log.error("score adjudicate: roster.txt missing"); return 1; }
+  const rows = parseRosterFile(readFileSync(rosterPath, "utf8"));
+  if (rows.length < 2) { log.error(`score adjudicate: need >=2 parts, got ${rows.length}`); return 1; }
+
+  const instruments = rows.map((r) => r.instrument);
+  const readIfExists = (p: string): string => (existsSync(p) ? readFileSync(p, "utf8") : "");
+  const verify: Record<string, string> = {};
+  const vs: Record<string, string> = {};
+  for (const r of rows) {
+    verify[r.instrument] = readIfExists(join(partDir(r.instrument, r.provider, topic), "verify.md"));
+    vs[r.instrument] = lastTag(readIfExists(join(art, `verify-${r.instrument}.txt`)), "VS") ?? "skipped";
+  }
+  const buckets: Record<string, string> = {};
+  const addBucket = (f: string): void => { buckets[f] = readIfExists(join(art, f)); };
+  for (const c of instruments) addBucket(`${c}_only_items.txt`);
+  if (instruments.length >= 3) {
+    addBucket("consensus.txt");
+    for (let i = 0; i < instruments.length; i++) for (let j = i + 1; j < instruments.length; j++) addBucket(`${instruments[i]}+${instruments[j]}_only.txt`);
+  }
+
+  const input: AdjudicateInput = { parts: rows.map((r) => ({ instrument: r.instrument, provider: r.provider })), verify, vs, buckets };
+  atomicWrite(join(art, "adjudicated-draft.md"), adjudicate(input));
+  log.ok(`score adjudicate: wrote ${join(art, "adjudicated-draft.md")}`);
+  log.info("  cp adjudicated-draft.md -> adjudicated.md, then resolve every '- PENDING:' line");
   return 0;
 }
 
