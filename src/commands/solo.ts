@@ -6,7 +6,7 @@ import { applyArgsFile } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
 import { isoUtc } from "../core/archive.js";
 import { repoRoot } from "../core/paths.js";
-import { soloArtDir, soloExecDir, deriveSlug, parseSoloArgs, detectTestCommand } from "../core/solo.js";
+import { soloArtDir, soloExecDir, deriveSlug, parseSoloArgs, detectTestCommand, renderSummary, renderResume, type SummaryFacts } from "../core/solo.js";
 import { instrumentBinary } from "../core/contracts.js";
 import { haveCmd } from "../core/deps.js";
 import { pickRandomInstrument } from "../core/instruments.js";
@@ -36,7 +36,6 @@ export async function run(args: string[]): Promise<number> {
   }
 }
 
-// Handlers are filled in by later tasks. Stubs keep the dispatcher compilable.
 async function initRun(tokens: string[]): Promise<number> {
   const { topicText, provider: provArg, finish } = parseSoloArgs(tokens);
   if (!topicText) { log.error("solo init: topic text is empty"); return 1; }
@@ -210,4 +209,55 @@ export async function finishWith(topic: string, r: Runner, hasGh: boolean): Prom
   log.ok(`solo finish: ${res.action} → ${res.outcome}`);
   return 0;
 }
-async function summaryRun(_a: string[]): Promise<number> { log.error("solo summary: not implemented"); return 2; }
+async function summaryRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: solo summary <topic> [--aborted <phase> <gate> <reason...>]"); return 2; }
+  const art = soloArtDir(topic);
+  const exec = soloExecDir(topic);
+
+  const started = kvField(join(art, "timing.txt"), "started") || "unknown";
+  let ended: string | undefined;
+  let duration: number | undefined;
+
+  const i = rest.indexOf("--aborted");
+  const aborted = i >= 0;
+  if (!aborted) {
+    ended = isoUtc();
+    const s = Date.parse(started), e = Date.parse(ended);
+    duration = Number.isFinite(s) && Number.isFinite(e) ? Math.round((e - s) / 1000) : 0;
+    atomicWrite(join(art, "timing.txt"), `started=${started}\nended=${ended}\nduration=${duration}\n`);
+  }
+
+  const facts: SummaryFacts = {
+    topic,
+    status: aborted ? "aborted" : "ok",
+    started, ended, duration,
+    provider: readField(join(art, "selected-provider.txt")) || "unknown",
+    instrument: readField(join(art, "instrument.txt")) || "unknown",
+    branch: readField(join(exec, "branch.txt")) || "unknown",
+    verify: readField(join(exec, "verify-result.txt")) || "unknown",
+    diffStats: readField(join(exec, "diff-stats.txt")) || "unknown",
+    archived: readField(join(art, "archived-path.txt")) || "(not archived)",
+    targetCwd: readField(join(exec, "target_cwd.txt")) || "<target>",
+    branchBase: readField(join(exec, "branch-base.sha")) || "<base>",
+    abortedPhase: aborted ? rest[i + 1] : undefined,
+    abortedGate: aborted ? rest[i + 2] : undefined,
+    abortedReason: aborted ? rest.slice(i + 3).join(" ") || "unknown" : undefined,
+  };
+
+  atomicWrite(join(art, "SUMMARY.md"), renderSummary(facts));
+  if (aborted) {
+    atomicWrite(join(art, "RESUME.md"), renderResume({
+      topic, branch: facts.branch, artDir: art, phase: facts.abortedPhase ?? "unknown", gate: facts.abortedGate ?? "unknown",
+    }));
+  }
+  log.ok(`solo summary: wrote ${join(art, "SUMMARY.md")}`);
+  return 0;
+}
+
+/** Read a `key=value` line from a KV file; "" if absent. */
+function kvField(path: string, key: string): string {
+  if (!existsSync(path)) return "";
+  const m = readFileSync(path, "utf8").match(new RegExp(`^${key}=(.*)$`, "m"));
+  return m ? m[1].trim() : "";
+}
