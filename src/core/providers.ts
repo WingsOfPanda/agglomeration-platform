@@ -30,3 +30,8 @@ export function planRoster(input: { detectedValidated: string[]; prior: string[]
   if (detected.length === 1) return { detected, prior, dropped, decision: "auto", auto: detected[0] };
   return { detected, prior, dropped, decision: "prompt" };
 }
+
+/** The providers-active.txt body. Trailing newline only when non-empty (matches the available-file writer). */
+export function formatActiveFile(providers: string[], isoStamp: string): string {
+  return `# generated ${isoStamp} by /consort:soundcheck\n# active providers selected by user\n${providers.join("\n")}${providers.length ? "\n" : ""}`;
+}
