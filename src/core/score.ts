@@ -115,6 +115,12 @@ export function verifyScopeFiles(target: string, instruments: string[]): string[
   return out;
 }
 
+/** targets.txt as TSV: a generated-comment header + one `<slug>\t<abs-marker>` row per hit. The
+ *  consumer parseRosterTargets reads col 0 and tolerates the comment header. */
+export function writeTargetsTsv(hits: { slug: string; marker: string }[], isoStamp: string): string {
+  return `# generated ${isoStamp} by /consort:score\n` + (hits.length ? hits.map((h) => `${h.slug}\t${h.marker}`).join("\n") + "\n" : "");
+}
+
 /** Last `^<tag>=<value>$` value in a KV state file's text; null if absent. */
 export function lastTag(text: string, tag: string): string | null {
   const re = new RegExp(`^${tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}=(.*)$`, "gm");
