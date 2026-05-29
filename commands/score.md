@@ -153,16 +153,88 @@ ensemble could not produce 2 sets of findings, stop). If some parts were dropped
 plus the bucket files (`<inst>_only_items.txt` for N=2; `consensus.txt` + `<a>+<b>_only.txt` + singles
 for N=3). rc 1 = `diff.md` already exists (`rm` to retry) or a `findings.md` is missing.
 
-> **Phase C ends here.** Cross-verify → adjudicate → the interactive design walk → the deploy-audit
-> gate land in **Phase D**; multi-repo + the execution DAG in **Phase E**; drilldown, forensics,
-> teardown, and `present` in **Phase F**. The buckets are in `$ART/diff.md`. The parts are still live —
-> run `/consort:coda <instrument> <TOPIC>` for each to tear them down (Phase F automates this). No
-> design doc is produced on the escalation path until Phase D.
+## Stage 7 — cross-verify dispatch (per part)
+
+Read the diff roster (`$ART/roster.txt`) and dispatch each part's verify turn:
+
+```bash
+grep -v '^#' "$ART/roster.txt" | while IFS=$'\t' read -r PROV INST; do
+  [ -n "$PROV" ] && [ -n "$INST" ] && $CS score verify-send <TOPIC> "$INST" "$PROV"
+done
+```
+
+`verify-send` computes each part's scope (the bucket files where it is NOT a member), writes
+`verify-claims-<inst>.txt`, and either sends the verify prompt (`OFFSET=` captured) or writes
+`VS=skipped` when there's nothing for that part to verify (no send).
+
+## Stage 8 — cross-verify wait + question relay (per part)
+
+For each part, background `$CS score verify-wait <TOPIC> <INST> <PROV>`. On each completion, read the
+**last** `VS=` line (`grep '^VS=' "$ART/verify-<INST>.txt" | tail -1 | cut -d= -f2`):
+- **`VS=ok` / `VS=skipped` / `VS=missing`** — terminal.
+- **`VS=question`** — same classify+relay as Stage 5 (read `$ART/question-<INST>.txt` + the part's
+  `verify.md`; AskUserQuestion if critical else self-answer; `$CS send --from maestro <INST> <TOPIC>
+  @<reply>`; `rm -f $ART/verify-<INST>.done`; re-arm the background `verify-wait`).
+- **`VS=failed` / `VS=timeout`** — record; the rival's claims this part would have verified are marked
+  `Not-verified` by adjudicate.
+Proceed when every part is terminal (no `VS=question` outstanding).
+
+## Stage 9 — adjudicate + resolve PENDING
+
+1. `$CS score adjudicate <TOPIC>` → writes `$ART/adjudicated-draft.md` (5-tier for N≥3, 4-section for N=2).
+2. `cp "$ART/adjudicated-draft.md" "$ART/adjudicated.md"`.
+3. **Read** `$ART/adjudicated.md`. For **every** `- PENDING:` line: read the cited source, decide, and
+   **Edit** the line in place — rewrite the `PENDING` prefix to `CONFIRMED`/`REFUTED`, or move the item
+   under `## Contested`. **Done only when no `- PENDING:` line remains** (`synthesize` refuses otherwise).
+   You may also lead claim lines with a steer-tag — `- [Goal] …`, `- [Architecture] …`,
+   `- [Components] …`, `- [Testing] …`, `- [Success Criteria] …` — to route them into the matching
+   synthesize seed.
+
+## Stage 10 — multi-repo detection
+
+`MODE=single` here (Phase D is single-repo; `--targets` stopped at Stage 1). Multi-repo detection + the
+8-section walk land in **Phase E** — continue to Stage 11.
+
+## Stage 11 — interactive per-section design walk
+
+1. Seed the drafts: `$CS score synthesize <TOPIC>` (refuses while any `- PENDING:` remains, or if
+   `adjudicated.md` is missing). Writes the 6 `.draft/<section>.md`.
+2. Resume check: `$CS score walk-state <TOPIC>` prints `<section>\t<approved|skipped>` for drafts
+   already settled — skip those on re-entry.
+3. **Walk the 6 sections in order** (problem, goal, architecture, components, testing, success-criteria).
+   For each: **Read** `$ART/design-doc/.draft/<section>.md` (the seed) + `$ART/adjudicated.md` + the
+   parts' `findings.md`; **draft** the section and **Write** it to that `.draft/<section>.md` path;
+   present it in chat; then **AskUserQuestion**: Approve / Revise / Skip.
+   - **Approve** → keep, next section.
+   - **Revise** → take free-form direction via a follow-up, re-draft, re-present (cap 4 revises; after
+     the cap, force-approve the current draft and move on).
+   - **Skip** → Write `_(skipped)_` as the whole body. **Skip is NOT offered for the four
+     audit-required sections** (goal, architecture, testing, success-criteria) — they must be drafted.
+
+## Stage 12 — assemble + deploy-audit gate (retry loop)
+
+`$CS score assemble <TOPIC>`.
+- **rc 0** → it prints the design-doc path. **Read and present** the doc, then point at
+  `/consort:perform <path>` (once perform ships). Continue to Stage 13 (Phase F).
+- **rc 1** (audit FAIL) → it printed paired `ISSUE=<code>` + `SECTION=<mapped>` lines to stderr. For
+  each `SECTION=`:
+  - a **section name** (problem/goal/architecture/components/testing/success-criteria) → re-walk that
+    one section (Stage 11 for it), then re-assemble.
+  - `ASK` (a TBD/TODO/fill-in marker) → AskUserQuestion which section carries the marker, re-walk it.
+  - `header` / `execution-dag` → only arise in multi-repo (Phase E); not reachable single-repo.
+  - empty (unknown code) → surface the raw `ISSUE=` and stop.
+  Re-assemble after each fix; loop until rc 0 (bound to a few attempts per section, then surface the
+  remaining ISSUEs and stop).
+
+> **Phase D ends at the assembled, audit-passing single-repo doc.** Drilldown, forensics, `coda`
+> teardown, and the `present` handoff land in **Phase F**; multi-repo + the execution DAG in **Phase E**.
+> The parts are still live — `/consort:coda <instrument> <TOPIC>` each to tear them down (Phase F
+> automates it).
 
 ## Notes
 
 - Fast-path spawns no parts and writes no working artifacts beyond `topic.txt`, `.draft/*.md`, the
   assembled `design-doc/<date>-<slug>-design.md`, and `audit.log`. No teardown needed.
-- Escalation Stages 3–6 (spawn-all → research → diff) ship in Phase C. The cross-verify → adjudicate
-  → interactive design walk → deploy-audit gate (Phase D), multi-repo + execution-DAG (Phase E), and
+- Escalation Stages 3–12 (spawn-all → research → diff → cross-verify → adjudicate → synthesize →
+  design walk → deploy-audit gate) ship in Phases C–D. Multi-repo + execution-DAG (Phase E) and
   drilldown / forensics / teardown / present (Phase F) arrive in later phases.
