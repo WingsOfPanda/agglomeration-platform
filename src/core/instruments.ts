@@ -59,6 +59,23 @@ export function pickRandomInstrument(topic: string, rng: () => number = Math.ran
   return candidates[Math.floor(rng() * candidates.length)];
 }
 
+/** Pick n DISTINCT instruments for a topic. Prefers globally-unused names; falls back to
+ *  topic-unused; already-picked-this-call are always excluded. Returns up to n (fewer if the
+ *  pool is exhausted). Generalizes pickRandomInstrument for the N-part score ensemble. */
+export function pickInstruments(topic: string, n: number, rng: () => number = Math.random): string[] {
+  const pool = loadInstrumentPool();
+  const globalUsed = new Set(instrumentsInUseGlobally());
+  const localUsed = new Set(instrumentsInUseInTopic(topic));
+  const picked: string[] = [];
+  for (let k = 0; k < n; k++) {
+    let candidates = pool.filter((x) => !globalUsed.has(x) && !picked.includes(x));
+    if (candidates.length === 0) candidates = pool.filter((x) => !localUsed.has(x) && !picked.includes(x));
+    if (candidates.length === 0) break;
+    picked.push(candidates[Math.floor(rng() * candidates.length)]);
+  }
+  return picked;
+}
+
 export function formatCollisionError(instrument: string, model: string, topic: string, sessionId?: string): string {
   const lines = [`${instrument} is already deployed on ${topic}; pick another instrument`];
   const sidFile = join(partDir(instrument, model, topic), ".session_id");
