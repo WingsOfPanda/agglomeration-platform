@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseProviderList, readProviderList, planRoster } from "../src/core/providers.js";
+import { parseProviderList, readProviderList, planRoster, formatActiveFile } from "../src/core/providers.js";
 
 describe("parseProviderList", () => {
   it("keeps providers, skips blank + # lines, trims whitespace", () => {
@@ -45,5 +45,18 @@ describe("planRoster", () => {
     const p = planRoster({ detectedValidated: ["codex", "claude"], prior: ["codex", "gone"] });
     expect(p.prior).toEqual(["codex"]);
     expect(p.dropped).toEqual(["gone (no longer detected)"]);
+  });
+});
+
+describe("formatActiveFile", () => {
+  it("header + one provider per line + trailing newline", () => {
+    expect(formatActiveFile(["codex", "claude"], "2026-05-29T00:00:00Z")).toBe(
+      "# generated 2026-05-29T00:00:00Z by /consort:soundcheck\n# active providers selected by user\ncodex\nclaude\n",
+    );
+  });
+  it("empty set → headers only, no trailing provider newline", () => {
+    expect(formatActiveFile([], "2026-05-29T00:00:00Z")).toBe(
+      "# generated 2026-05-29T00:00:00Z by /consort:soundcheck\n# active providers selected by user\n",
+    );
   });
 });
