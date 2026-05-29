@@ -6,7 +6,7 @@ import { freshHome } from "./helpers/tmpHome.js";
 import { scoreArtDir } from "../src/core/score.js";
 import { partDir } from "../src/core/paths.js";
 import { outboxPath } from "../src/core/ipc.js";
-import { researchSendWith, researchWaitWith, diffRun, spawnAllWith, verifySendWith, verifyWaitWith, adjudicateRun } from "../src/commands/score.js";
+import { researchSendWith, researchWaitWith, diffRun, spawnAllWith, verifySendWith, verifyWaitWith, adjudicateRun, synthesizeRun } from "../src/commands/score.js";
 
 let env: { home: string; cleanup: () => void };
 beforeEach(() => { env = freshHome(); });
@@ -293,5 +293,24 @@ describe("score adjudicate", () => {
     expect(draft).toContain("## Contested");
     expect(draft).toContain("## Not-verified");
     expect(existsSync(join(art, "adjudicated.md"))).toBe(false);
+  });
+});
+
+describe("score synthesize", () => {
+  it("refuses when adjudicated.md missing (rc 1)", async () => {
+    mkdirSync(scoreArtDir("t"), { recursive: true });
+    expect(await synthesizeRun(["t"])).toBe(1);
+  });
+  it("refuses while a '- PENDING:' line remains (rc 1)", async () => {
+    const art = scoreArtDir("t"); mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "adjudicated.md"), "## Cross-verified\n- PENDING: [a:1] x\n");
+    expect(await synthesizeRun(["t"])).toBe(1);
+  });
+  it("seeds the 6 .draft/*.md (rc 0)", async () => {
+    const art = scoreArtDir("t"); mkdirSync(join(art, "design-doc", ".draft"), { recursive: true });
+    writeFileSync(join(art, "adjudicated.md"), "## Cross-verified\n- [Goal] ship it [a:1]\n");
+    expect(await synthesizeRun(["t"])).toBe(0);
+    expect(readFileSync(join(art, "design-doc", ".draft", "goal.md"), "utf8")).toContain("[Goal] ship it");
+    expect(existsSync(join(art, "design-doc", ".draft", "success-criteria.md"))).toBe(true);
   });
 });

@@ -11,7 +11,7 @@ import {
   spawnRosterArg, spawnResultsTsv, spawnTally, parsePanesFile, verifyScopeFiles, lastTag,
   type RosterRow, type SpawnResult,
 } from "../core/score.js";
-import { assembleDoc, SECTIONS_SINGLE, SECTIONS_MULTI, type DocMode } from "../core/scoreDoc.js";
+import { assembleDoc, SECTIONS_SINGLE, SECTIONS_MULTI, synthesizeSeeds, type DocMode } from "../core/scoreDoc.js";
 import { auditDoc } from "../core/audit.js";
 import { readProviderList } from "../core/providers.js";
 import { activeProvidersPath, partDir, repoRoot } from "../core/paths.js";
@@ -40,6 +40,7 @@ export async function run(args: string[]): Promise<number> {
     case "verify-send": return verifySendRun(rest);
     case "verify-wait": return verifyWaitRun(rest);
     case "adjudicate": return adjudicateRun(rest);
+    case "synthesize": return synthesizeRun(rest);
     default: return usage();
   }
 }
@@ -399,6 +400,23 @@ export async function adjudicateRun(rest: string[]): Promise<number> {
   atomicWrite(join(art, "adjudicated-draft.md"), adjudicate(input));
   log.ok(`score adjudicate: wrote ${join(art, "adjudicated-draft.md")}`);
   log.info("  cp adjudicated-draft.md -> adjudicated.md, then resolve every '- PENDING:' line");
+  return 0;
+}
+
+export async function synthesizeRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: score synthesize <topic>"); return 2; }
+  const art = scoreArtDir(topic);
+  const adj = join(art, "adjudicated.md");
+  if (!existsSync(adj)) { log.error(`score synthesize: ${adj} missing — cp adjudicated-draft.md -> adjudicated.md and resolve PENDINGs first`); return 1; }
+  const adjText = readFileSync(adj, "utf8");
+  if (adjText.split("\n").some((l) => /^- PENDING:/.test(l))) { log.error("score synthesize: adjudicated.md still has '- PENDING:' lines; resolve them first"); return 1; }
+
+  const draftDir = scoreDraftDir(topic);
+  mkdirSync(draftDir, { recursive: true });
+  const seeds = synthesizeSeeds(adjText);
+  for (const s of seeds) atomicWrite(join(draftDir, `${s.section}.md`), s.body);
+  log.ok(`score synthesize: wrote ${seeds.length} seed drafts to ${draftDir}`);
   return 0;
 }
 
