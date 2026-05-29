@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseProviderList, readProviderList, planRoster, formatActiveFile } from "../src/core/providers.js";
+import { parseProviderList, readProviderList, planRoster, formatActiveFile, formatProviderFile } from "../src/core/providers.js";
 
 describe("parseProviderList", () => {
   it("keeps providers, skips blank + # lines, trims whitespace", () => {
@@ -57,6 +57,14 @@ describe("formatActiveFile", () => {
   it("empty set → headers only, no trailing provider newline", () => {
     expect(formatActiveFile([], "2026-05-29T00:00:00Z")).toBe(
       "# generated 2026-05-29T00:00:00Z by /consort:soundcheck\n# active providers selected by user\n",
+    );
+  });
+});
+
+describe("formatProviderFile", () => {
+  it("renders a custom subtitle (the available-file form)", () => {
+    expect(formatProviderFile(["codex", "claude"], "2026-05-29T00:00:00Z", "providers detected with binary on PATH + contracts.yaml row")).toBe(
+      "# generated 2026-05-29T00:00:00Z by /consort:soundcheck\n# providers detected with binary on PATH + contracts.yaml row\ncodex\nclaude\n",
     );
   });
 });
