@@ -158,3 +158,53 @@ plus the `auto`/`skip` decision branches behave exactly as specified.
 - Per-phase two-stage review (spec compliance → code quality) across Phases 1–3; one
   Approved-with-minors finding fixed (the single-pass partition above). The `medic` → `soundcheck`
   rebrand kept the frozen `consult_validated` contracts key; no stale clone-wars tokens shipped.
+
+---
+
+# Consort `score` — Phase B (fast-path) Dogfood Result
+
+**Date:** 2026-05-29 · **Branch:** `feat/score` · **Verdict:** PASS
+
+The first user-facing slice of `score` (full-parity consult): the **Maestro fast-path** —
+`init → route → draft 6 deploy-schema sections → assemble + deploy-audit gate → present`, no parts
+spawned. Driven by the controller (the fast-path is Maestro-solo, so no tmux/parts needed) under an
+isolated `CONSORT_HOME=/tmp/consort-score-dogfood`, exercising the real CLI subcommands the directive
+orchestrates. (Escalation, the interactive walk, multi-repo, and drilldown arrive in Phases C–F.)
+
+## Run
+
+| Step | Result |
+|---|---|
+| `soundcheck` | `Verdict: OK — ready to spawn (4/4 providers available; 0 warnings)`; wrote `providers-available.txt` = `codex agy claude opencode` |
+| `score init "document how consort derives the repo hash…"` | `[WARN] capping the ensemble to the first 3`; rc 0; `TOPIC=document-how-consort N=3 ENSEMBLE=no MODE=single`; roster `trumpet:codex / viol:agy / harp:claude`; scaffolded `_score/design-doc/.draft/` |
+| draft 6 sections | Maestro wrote `.draft/{problem,goal,architecture,components,testing,success-criteria}.md` from real research (consort's `repoHash` derivation, cited to `src/core/paths.ts:30` + `tests/paths.test.ts`) |
+| `score assemble document-how-consort` | `audit PASSED`; rc 0; wrote `design-doc/2026-05-29-document-how-consort-design.md` (clean `# Title` + blank-line-separated deploy-schema sections) + `audit.log` (`VERDICT=PASS`) |
+| audit-retry (heading-less `goal.md`) | `ISSUE=no_goal_section` to stderr; rc 1; `audit.log` = `VERDICT=FAIL` + `ISSUE=no_goal_section` |
+| restore `## Goal` → re-assemble | `audit PASSED`; rc 0 |
+
+All Phase B acceptance checks pass: init (roster load + 3-cap + scaffold), the fast-path draft →
+assemble → audit-PASS, and the audit-FAIL → `ISSUE=` → re-draft → PASS retry loop.
+
+## Findings / fixes surfaced
+
+- **Plan-test defect (spec compliance review):** the plan's `assemble` FAIL test deleted `goal.md`,
+  but a *missing* draft makes `assembleDoc` emit a `## Goal\n\n_(missing draft)_` placeholder heading
+  that *satisfies* the audit's `^##\s+Goal\b` check (byte-faithful: clone-wars' walk-assemble emits
+  the same placeholder + deploy.sh uses the same regex), so a missing draft PASSES. The frozen
+  Phase-A behavior was kept; the test was corrected to a heading-less `goal.md` (the realistic
+  mis-draft the retry loop handles) — confirmed in the dogfood (heading-less → `no_goal_section`).
+- **`--targets` honesty (code quality review):** a `--targets` fast-path run would have produced a
+  `multi` doc with placeholder DAG/cross-repo sections that pass the audit — silently under-serving
+  multi-repo intent. The directive now **stops** on `--targets` ("multi-repo needs the Phase E
+  ensemble pipeline; re-run without `--targets`"), keeping `score init` faithful for Phase E reuse.
+- **Section spacing:** present sections now end with one trailing newline so the assembled doc has a
+  blank line between sections (matching the behavioral source + the missing-draft branch).
+
+## Verification context
+
+- 223 vitest unit tests green (`score-init` / `score-assemble` suites + extended `instruments` /
+  `score-core` added; Phase A's `audit`/`dag`/`multirepo`/`scoreWalk`/`scoreDoc`/`score-core` already
+  green); `tsc --noEmit` + eslint + stale-token gate clean; `dist/consort.cjs` rebuilt + committed.
+- Per-task two-stage review (spec compliance → code quality) across Phases A + B; two
+  Approved-with-minors findings fixed (the plan-test correction + the `--targets` stop). Escalation,
+  the interactive design walk, multi-repo + execution-DAG, and drilldown remain Phases C–F.
