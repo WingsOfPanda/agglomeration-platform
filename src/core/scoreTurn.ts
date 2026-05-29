@@ -47,3 +47,54 @@ export function scaledTimeout(baseSec: number, multiplier: string): number {
   const m = Number(multiplier);
   return Math.floor(baseSec * (Number.isFinite(m) && m > 0 ? m : 1) + 0.5);
 }
+
+const RESEARCH_BLOCKERS =
+  "IF YOU ARE BLOCKED:\n" +
+  "- If a referenced path, file, command, env var, or assumption is wrong or missing, do NOT guess\n" +
+  "  or silently work around it. Append a question event to your outbox and stop:\n" +
+  '  {"event":"question","message":"<what you need and why>","ts":"<iso>"}\n' +
+  "  The Maestro will reply via your inbox, then re-engage you.\n";
+
+/** Research-phase prompt body (port of config/prompt-templates/consult/research.md, rebranded).
+ *  NOTE: must NOT include END_OF_INSTRUCTION or the done-event line — inboxWrite() appends the
+ *  canonical done instruction and the fence when this becomes the inbox task (cf. composeRound1Prompt). */
+export function composeResearchPrompt(topicText: string, findingsPath: string): string {
+  const topic = topicText.trim();
+  return [
+    "Investigate the following topic and produce structured findings.",
+    "",
+    `Topic: ${topic}`,
+    "",
+    `Output requirements — write to ${findingsPath} with this EXACT structure:`,
+    "",
+    `  # Findings: ${topic}`,
+    "",
+    "  ## Summary",
+    "  <2-3 sentence overview, free-form prose>",
+    "",
+    "  ## Claims",
+    "  1. [<source citation>] <one-sentence claim>",
+    "  2. [<source citation>] <one-sentence claim>",
+    "  ...",
+    "",
+    "  ## Notes",
+    "  <any free-form additions; not parsed>",
+    "",
+    "Citation format options:",
+    "  - <file path>:<line>          e.g. src/auth/store.py:42",
+    "  - <file path>:<line-range>    e.g. src/auth/refresh.py:15-30",
+    "  - <URL>                       e.g. https://datatracker.ietf.org/doc/html/rfc6749",
+    "  - runtime: <command>          e.g. runtime: pytest tests/test_auth.py",
+    "",
+    "Each claim must have a citation in [brackets]. Claims without citations will be silently",
+    "dropped — and if NO claim has a citation, your findings will be flagged as malformed.",
+    "",
+    "Research methods: use any tool available in your environment. When local repository evidence is",
+    "insufficient or the topic references external knowledge (RFCs, standards, library docs, vendor",
+    "APIs, recent CVEs, design patterns), you SHOULD use web search / fetch to find authoritative",
+    "sources and cite them as URL citations. Prefer primary sources over blog posts. If a tool is",
+    "unavailable, fall back to local-only investigation and note the gap as an [unverified] claim.",
+    "",
+    RESEARCH_BLOCKERS,
+  ].join("\n");
+}
