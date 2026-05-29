@@ -6,7 +6,7 @@ import { freshHome } from "./helpers/tmpHome.js";
 import { scoreArtDir } from "../src/core/score.js";
 import { partDir } from "../src/core/paths.js";
 import { outboxPath } from "../src/core/ipc.js";
-import { researchSendWith, researchWaitWith, diffRun, spawnAllWith, verifySendWith } from "../src/commands/score.js";
+import { researchSendWith, researchWaitWith, diffRun, spawnAllWith, verifySendWith, verifyWaitWith } from "../src/commands/score.js";
 
 let env: { home: string; cleanup: () => void };
 beforeEach(() => { env = freshHome(); });
@@ -237,5 +237,39 @@ describe("score verify-send", () => {
     const art = seedV("t", rows, { "viola_only_items.txt": "x\n", "cello_only_items.txt": "y\n" });
     writeFileSync(join(art, "verify-viola.txt"), "OFFSET=0\n");
     expect(await verifySendWith("t", "viola", "codex", { offsetFor: () => 0, send: async () => 0 })).toBe(1);
+  });
+});
+
+describe("score verify-wait", () => {
+  function seedVw(topic: string, instrument: string, provider: string, body: string): string {
+    const art = scoreArtDir(topic); mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, `verify-${instrument}.txt`), body);
+    mkdirSync(partDir(instrument, provider, topic), { recursive: true });
+    return art;
+  }
+  const dep = (ev: any) => ({ wait: async () => ev, multiplier: () => "1.0" });
+
+  it("VS=skipped short-circuit: writes .done, no wait (rc 0)", async () => {
+    const art = seedVw("t", "viola", "codex", "VS=skipped\n");
+    let waited = 0;
+    const rc = await verifyWaitWith("t", "viola", "codex", { wait: async () => { waited++; return null; }, multiplier: () => "1.0" });
+    expect(rc).toBe(0); expect(waited).toBe(0);
+    expect(existsSync(join(art, "verify-viola.done"))).toBe(true);
+  });
+
+  it("done + non-empty verify.md → VS=ok", async () => {
+    const art = seedVw("t", "viola", "codex", "OFFSET=0\n");
+    writeFileSync(join(partDir("viola", "codex", "t"), "verify.md"), "## Verdicts\n1. AGREE [a:1] x\n");
+    await verifyWaitWith("t", "viola", "codex", dep({ event: "done", summary: "ok" }));
+    expect(readFileSync(join(art, "verify-viola.txt"), "utf8")).toContain("VS=ok");
+  });
+
+  it("question → bumped OFFSET + VS=question + payload", async () => {
+    const art = seedVw("t", "viola", "codex", "OFFSET=3\n");
+    writeFileSync(outboxPath("viola", "codex", "t"), "0123456789"); // size 10
+    await verifyWaitWith("t", "viola", "codex", dep({ event: "question", message: "scope?" }));
+    const s = readFileSync(join(art, "verify-viola.txt"), "utf8");
+    expect(s).toContain("VS=question"); expect(s).toMatch(/OFFSET=10/);
+    expect(readFileSync(join(art, "question-viola.txt"), "utf8")).toContain("scope?");
   });
 });
