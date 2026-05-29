@@ -58,7 +58,11 @@ Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs"`.
    ```
    Bash(command='$CS solo turn-wait <SLUG> 1', run_in_background: true, description='solo await turn 1')
    ```
-5. On the completion notification, read `TS` from `<SLUG state>/_solo/execute/turn-1.txt` and branch:
+5. On the completion notification, read the **last** `TS=` line from
+   `<SLUG state>/_solo/execute/turn-1.txt` and branch on it —
+   `TS=$(grep '^TS=' <SLUG state>/_solo/execute/turn-1.txt | tail -1 | cut -d= -f2)`. (`turn-wait`
+   *appends* one `TS=` line per wait, so after a question→re-arm cycle the file holds e.g.
+   `TS=question` then `TS=ok`; the last line is the current outcome.)
    - **`TS=ok`** → Stage 2.
    - **`TS=question`** → read `execute/question-1.txt`, **Write** a best-judgment reply to a temp
      file, then `$CS send --from maestro <INSTRUMENT> <SLUG> @<reply-file>`, and re-arm the
