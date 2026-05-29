@@ -316,10 +316,44 @@ live)" — **Yes, drill** / **No, proceed to teardown**. While Yes, per round:
 The drill files stay in `_score/drilldowns/_scratch/` (out of `design-doc/`) and ride along into the
 archive (Stage 15). Re-drilling the same section auto-suffixes `-2`, `-3`, ….
 
+## Stage 14a — forensics capture + Maestro reflection
+
+`FORENSICS=$($CS score forensics <TOPIC>)` (best-effort; prints a path only if mechanical signals were
+found, else empty — never blocks). If `FORENSICS` is non-empty: tell the user "forensics captured:
+$FORENSICS", then **Read** it and **append** a `## Maestro reflection` section (3–5 interpretive bullets:
+what's surprising, repeat-vs-first-time patterns, the suggested next action — a memory worth saving, a
+spec topic, a patch, or a one-off) via the Write/Edit tool. **Idempotent:** skip the append if the file
+already contains the exact header `## Maestro reflection`. The forensics file lives under
+`~/.consort/forensics/<date>/` — OUTSIDE the topic state — so it survives teardown + archive.
+
+## Stage 14b — teardown (FINE banner)
+
+Tear down all live parts in one shared banner: read the roster instruments from `$ART/roster.txt` and
+run `$CS coda --pairs <TOPIC> <instrument…>` (one 9s graceful FINE-banner batch, then hard-kill +
+per-part archive). Per-part failures are tolerated. (Equivalent fallback: `$CS coda <instrument>
+<TOPIC>` per part.) Fast-path: no parts → skip.
+
+## Stage 15 — archive
+
+`$CS score archive <TOPIC>` → `archiveTopic(topic,'score')`: stamps every part `status.json` to
+`state=archived`, moves the whole `_score/` dir (including `drilldowns/`) to
+`~/.consort/archive/<repo-hash>/<TOPIC>/_score-<ts>`, and rmdirs the topic. The forensics file from
+Stage 14a is untouched (it lives outside the state tree). Fast-path: skip (nothing beyond the doc).
+
+## Stage 16 — present + perform handoff
+
+**Read and present** the final design-doc (`$ART/design-doc/<date>-<TOPIC>-design.md` — the path
+`assemble` printed; after Stage 15 it's the archived copy). Then point the user at the next step:
+"run `/consort:perform <doc>` once perform ships" — the deploy-audit gate already guarantees the doc is
+perform-ready (single-repo AND multi-repo). This is the end of `score`.
+
 ## Notes
 
 - Fast-path spawns no parts and writes no working artifacts beyond `topic.txt`, `.draft/*.md`, the
   assembled `design-doc/<date>-<slug>-design.md`, and `audit.log`. No teardown needed.
 - Escalation Stages 3–12 (spawn-all → research → diff → cross-verify → adjudicate → synthesize →
   design walk → deploy-audit gate), single-repo AND multi-repo (detection → 8-section walk → execution
-  DAG), ship in Phases C–E. Drilldown / forensics / teardown / present (Phase F) arrive in the last phase.
+  DAG), ship in Phases C–E. The wind-down (Stages 13–16: drilldown → forensics + Maestro reflection →
+  `coda` teardown → archive → present + perform handoff) ships in Phase F. `score` is now complete
+  end-to-end; only the other high-level commands (`perform` / `prelude` / `rehearsal` / `playback`)
+  remain unbuilt.
