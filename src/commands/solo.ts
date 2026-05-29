@@ -1,5 +1,5 @@
 // src/commands/solo.ts
-import { mkdirSync, existsSync, readFileSync } from "node:fs";
+import { mkdirSync, existsSync, readFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile } from "../args.js";
@@ -12,8 +12,8 @@ import { haveCmd } from "../core/deps.js";
 import { pickRandomInstrument } from "../core/instruments.js";
 import { runnerAt, preSnapshot, createOrResumeBranch } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
-import { outboxOffset, outboxPath } from "../core/ipc.js";
-import { composeRound1Prompt, composeFixPrompt } from "../core/turn.js";
+import { outboxOffset, outboxPath, outboxWaitSince, type OutboxEvent } from "../core/ipc.js";
+import { composeRound1Prompt, composeFixPrompt, classifyTurn, parseOffset } from "../core/turn.js";
 import { run as sendRun } from "./send.js";
 
 function usage(): number {
@@ -142,7 +142,39 @@ export async function turnSendWith(topic: string, round: number, d: TurnSendDeps
 function readField(path: string): string {
   return existsSync(path) ? readFileSync(path, "utf8").split("\n")[0].trim() : "";
 }
-async function turnWaitRun(_a: string[]): Promise<number> { log.error("solo turn-wait: not implemented"); return 2; }
+export interface TurnWaitDeps {
+  wait(instrument: string, model: string, topic: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null>;
+}
+
+const SOLO_TURN_TIMEOUT = Number(process.env.CONSORT_SOLO_TURN_TIMEOUT) || 14400;
+
+async function turnWaitRun(rest: string[]): Promise<number> {
+  const [topic, roundStr] = rest;
+  const round = Number(roundStr);
+  if (!topic || !Number.isInteger(round) || round < 1) { log.error("usage: solo turn-wait <topic> <round>=1.."); return 2; }
+  return turnWaitWith(topic, round, {
+    wait: (i, m, t, off, ev, to) => outboxWaitSince(i, m, t, off, ev, to),
+  });
+}
+
+export async function turnWaitWith(topic: string, round: number, d: TurnWaitDeps): Promise<number> {
+  const art = soloArtDir(topic);
+  const exec = soloExecDir(topic);
+  const instrument = readField(join(art, "instrument.txt"));
+  const provider = readField(join(art, "selected-provider.txt"));
+  const stateFile = join(exec, `turn-${round}.txt`);
+  if (!existsSync(stateFile)) { log.error(`solo turn-wait: ${stateFile} missing (run solo turn-send first)`); return 1; }
+  const offset = parseOffset(readFileSync(stateFile, "utf8"));
+  if (offset === null) { log.error(`solo turn-wait: OFFSET not set in ${stateFile}`); return 1; }
+
+  log.info(`solo turn-wait: round=${round} offset=${offset} timeout=${SOLO_TURN_TIMEOUT}s`);
+  const ev = await d.wait(instrument, provider, topic, offset, ["done", "error", "question"], SOLO_TURN_TIMEOUT);
+  const ts = classifyTurn(ev);
+  if (ts === "question" && ev) atomicWrite(join(exec, `question-${round}.txt`), JSON.stringify(ev) + "\n");
+  appendFileSync(stateFile, `TS=${ts}\n`);
+  log.ok(`solo turn-wait: round=${round} TS=${ts}`);
+  return 0;
+}
 async function detectTestRun(_a: string[]): Promise<number> { log.error("solo detect-test: not implemented"); return 2; }
 async function finishRun(_a: string[]): Promise<number> { log.error("solo finish: not implemented"); return 2; }
 async function summaryRun(_a: string[]): Promise<number> { log.error("solo summary: not implemented"); return 2; }
