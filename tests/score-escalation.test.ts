@@ -6,7 +6,7 @@ import { freshHome } from "./helpers/tmpHome.js";
 import { scoreArtDir } from "../src/core/score.js";
 import { partDir } from "../src/core/paths.js";
 import { outboxPath } from "../src/core/ipc.js";
-import { researchSendWith, researchWaitWith, diffRun, spawnAllWith, verifySendWith, verifyWaitWith } from "../src/commands/score.js";
+import { researchSendWith, researchWaitWith, diffRun, spawnAllWith, verifySendWith, verifyWaitWith, adjudicateRun } from "../src/commands/score.js";
 
 let env: { home: string; cleanup: () => void };
 beforeEach(() => { env = freshHome(); });
@@ -271,5 +271,27 @@ describe("score verify-wait", () => {
     const s = readFileSync(join(art, "verify-viola.txt"), "utf8");
     expect(s).toContain("VS=question"); expect(s).toMatch(/OFFSET=10/);
     expect(readFileSync(join(art, "question-viola.txt"), "utf8")).toContain("scope?");
+  });
+});
+
+describe("score adjudicate", () => {
+  it("N=2: writes adjudicated-draft.md with the 4 sections; leaves adjudicated.md untouched", async () => {
+    const art = scoreArtDir("t"); mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "roster.txt"), "codex\tviola\nclaude\tcello\n");
+    writeFileSync(join(art, "viola_only_items.txt"), "[a:1] viola claim\n");
+    writeFileSync(join(art, "cello_only_items.txt"), "[b:2] cello claim\n");
+    for (const [inst, prov] of [["viola", "codex"], ["cello", "claude"]]) {
+      mkdirSync(partDir(inst, prov, "t"), { recursive: true });
+      writeFileSync(join(partDir(inst, prov, "t"), "verify.md"), "## Verdicts\n1. AGREE [b:2] cello claim\n   confirmed\n");
+      writeFileSync(join(art, `verify-${inst}.txt`), "OFFSET=0\nVS=ok\n");
+    }
+    const rc = await adjudicateRun(["t"]);
+    expect(rc).toBe(0);
+    const draft = readFileSync(join(art, "adjudicated-draft.md"), "utf8");
+    expect(draft).toContain("## Cross-verified");
+    expect(draft).toContain("## Adjudicated");
+    expect(draft).toContain("## Contested");
+    expect(draft).toContain("## Not-verified");
+    expect(existsSync(join(art, "adjudicated.md"))).toBe(false);
   });
 });
