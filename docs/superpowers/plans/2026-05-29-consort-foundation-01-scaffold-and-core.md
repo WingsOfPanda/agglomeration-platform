@@ -1200,11 +1200,14 @@ export function outboxOffset(path: string): number {
 
 function readFrom(path: string, offset: number): string {
   const size = outboxOffset(path);
-  if (size <= offset) return "";
+  // If the file shrank below the captured offset (crash/rotation recreated it),
+  // re-read from the start so a fresh event in the smaller file is still seen.
+  const start = size < offset ? 0 : offset;
+  if (size <= start) return "";
   const fd = openSync(path, "r");
   try {
-    const buf = Buffer.alloc(size - offset);
-    readSync(fd, buf, 0, buf.length, offset);
+    const buf = Buffer.alloc(size - start);
+    readSync(fd, buf, 0, buf.length, start);
     return buf.toString("utf8");
   } finally { closeSync(fd); }
 }
