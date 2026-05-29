@@ -7,7 +7,7 @@ import { freshHome } from "./helpers/tmpHome.js";
 import { scoreArtDir } from "../src/core/score.js";
 import { partDir } from "../src/core/paths.js";
 import { outboxPath } from "../src/core/ipc.js";
-import { researchSendWith, researchWaitWith, diffRun, spawnAllWith, verifySendWith, verifyWaitWith, adjudicateRun, synthesizeRun, walkStateRun, detectMultiRepoRun, emitDagRun, checkDagRun } from "../src/commands/score.js";
+import { researchSendWith, researchWaitWith, diffRun, spawnAllWith, verifySendWith, verifyWaitWith, adjudicateRun, synthesizeRun, walkStateRun, detectMultiRepoRun, emitDagRun, checkDagRun, drilldownWith } from "../src/commands/score.js";
 
 let env: { home: string; cleanup: () => void };
 beforeEach(() => { env = freshHome(); });
@@ -342,6 +342,33 @@ describe("score detect-multi-repo", () => {
     expect(out).toContain("api\t");
     expect(out).toContain("web\t");
     expect(out).not.toContain("zzz\t"); // slug not in corpus
+  });
+});
+
+describe("score drilldown", () => {
+  it("dispatches K=1, writes a non-empty file → rc 0; resolves the scratch path", async () => {
+    const art = scoreArtDir("t"); const dd = join(art, "drilldowns"); mkdirSync(join(dd, "_scratch"), { recursive: true });
+    writeFileSync(join(art, "doc.md"), "# doc\n");
+    mkdirSync(partDir("viola", "codex", "t"), { recursive: true });
+    const sends: string[][] = [];
+    const rc = await drilldownWith(
+      ["t", "Architecture", dd, "", join(art, "doc.md"), "viola", "codex"],
+      { offsetFor: () => 0, send: async (a) => { sends.push(a); // simulate the part writing its drill file
+          a[a.length - 1].slice(1); /* @<promptfile> not the out path */ return 0; },
+        wait: async () => ({ event: "done" }), multiplier: () => "1.0" },
+      { writeProbe: (p: string) => writeFileSync(p, "notes\n") }, // test hook: create the out file the part would write
+    );
+    expect(rc).toBe(0);
+    expect(sends[0]).toContain("--from"); expect(sends[0]).toContain("maestro");
+    expect(existsSync(join(dd, "_scratch", "drilldown-architecture-viola.md"))).toBe(true);
+  });
+  it("all-empty round → rc 1; bad arg count → rc 2", async () => {
+    const art = scoreArtDir("t"); const dd = join(art, "drilldowns"); mkdirSync(join(dd, "_scratch"), { recursive: true });
+    writeFileSync(join(art, "doc.md"), "# doc\n"); mkdirSync(partDir("viola", "codex", "t"), { recursive: true });
+    const rc = await drilldownWith(["t", "Arch", dd, "", join(art, "doc.md"), "viola", "codex"],
+      { offsetFor: () => 0, send: async () => 0, wait: async () => ({ event: "done" }), multiplier: () => "1.0" }, {});
+    expect(rc).toBe(1); // no file written
+    expect(await drilldownWith(["t", "Arch"], { offsetFor: () => 0, send: async () => 0, wait: async () => null, multiplier: () => "1.0" }, {})).toBe(2);
   });
 });
 
