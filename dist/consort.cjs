@@ -16445,7 +16445,10 @@ var init_tmux = __esm({
     init_colors();
     splitRight = (launch, target, cwd) => tmux(splitRightArgs(launch, target, cwd));
     splitDown = (launch, target, cwd) => tmux(splitDownArgs(launch, target, cwd));
-    respawn = (pane, launch, cwd) => tmux(respawnArgs(pane, launch, cwd));
+    respawn = async (pane, launch, cwd) => {
+      await tmux(respawnArgs(pane, launch, cwd));
+      return pane;
+    };
   }
 });
 

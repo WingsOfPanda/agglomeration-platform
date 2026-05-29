@@ -48,7 +48,12 @@ async function tmux(args: string[]): Promise<string> {
 }
 export const splitRight = (launch: string, target?: string, cwd?: string) => tmux(splitRightArgs(launch, target, cwd));
 export const splitDown = (launch: string, target: string, cwd?: string) => tmux(splitDownArgs(launch, target, cwd));
-export const respawn = (pane: string, launch: string, cwd?: string) => tmux(respawnArgs(pane, launch, cwd));
+// respawn-pane reuses the SAME pane (and prints nothing), so the resulting pane id IS the target.
+// Return it explicitly — never the empty stdout, which would leave callers with a blank pane id.
+export const respawn = async (pane: string, launch: string, cwd?: string): Promise<string> => {
+  await tmux(respawnArgs(pane, launch, cwd));
+  return pane;
+};
 
 export async function setOption(pane: string, opt: string, val: string): Promise<void> { await tmux(setOptionArgs(pane, opt, val)); }
 
