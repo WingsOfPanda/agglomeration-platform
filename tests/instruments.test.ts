@@ -55,3 +55,17 @@ describe("instruments", () => {
     expect(msg).not.toContain("owned by another");
   });
 });
+
+describe("pickInstruments", () => {
+  it("returns n DISTINCT instruments from the pool", () => {
+    home();
+    const picks = I.pickInstruments("t-distinct", 3);
+    expect(picks).toHaveLength(3);
+    expect(new Set(picks).size).toBe(3);
+  });
+  it("deterministic with a fixed rng (always index 0 → first available, no repeats)", () => {
+    home();
+    const picks = I.pickInstruments("t-fixed", 2, () => 0);
+    expect(new Set(picks).size).toBe(2); // index-0 each round, but picked are excluded → 2 distinct
+  });
+});
