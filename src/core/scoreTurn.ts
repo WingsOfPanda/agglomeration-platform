@@ -22,7 +22,7 @@ export function findingsStatus(text: string | null): "ok" | "empty" | "malformed
 
 export type FsState = "ok" | "empty" | "malformed" | "missing" | "failed" | "timeout" | "question";
 
-/** Map a research wait outcome to its FS= value, ported from cw_consult_wait (lib/consult-wait.sh):
+/** Map a research wait outcome to its FS= value, ported from consult_wait (lib/consult-wait.sh):
  *  null (no terminal event before timeout) -> timeout; question -> question;
  *  done -> findingsStatus; any other event (error/unknown) -> failed. */
 export function researchState(ev: OutboxEvent | null, findingsText: string | null): FsState {
@@ -41,7 +41,7 @@ export function parseLatestOffset(stateText: string): number | null {
   return ms.length ? Number(ms[ms.length - 1][1]) : null;
 }
 
-/** Apply a provider's timeout_multiplier to a base timeout, ported from cw_consult_wait's
+/** Apply a provider's timeout_multiplier to a base timeout, ported from the consult_wait loop's
  *  `printf "%d", b*m + 0.5` (round-half-up to an integer second). Bad/<=0 multiplier -> identity. */
 export function scaledTimeout(baseSec: number, multiplier: string): number {
   const m = Number(multiplier);
