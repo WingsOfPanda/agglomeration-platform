@@ -4,11 +4,12 @@ import { join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
-import { isoUtc } from "../core/archive.js";
+import { isoUtc, archiveTopic } from "../core/archive.js";
 import {
   deriveSlug, parseScoreArgs, scoreArtDir, scoreDraftDir,
   formatRosterFile, scoreDocPath, parseMultiRepoMode, parseRosterFile,
   spawnRosterArg, spawnResultsTsv, spawnTally, parsePanesFile, verifyScopeFiles, lastTag, writeTargetsTsv,
+  resolveDrilldownPath,
   type RosterRow, type SpawnResult,
 } from "../core/score.js";
 import { detectMultiRepo, validateTargets, type RepoHit } from "../core/multirepo.js";
@@ -19,7 +20,8 @@ import { activeProvidersPath, partDir, repoRoot } from "../core/paths.js";
 import { pickInstruments } from "../core/instruments.js";
 import { outboxOffset, outboxPath, outboxWaitSince, type OutboxEvent } from "../core/ipc.js";
 import { instrumentConsultValidated, consultTimeout, instrumentTimeoutMultiplier } from "../core/contracts.js";
-import { composeResearchPrompt, researchState, parseLatestOffset, scaledTimeout, composeVerifyPrompt, verifyState } from "../core/scoreTurn.js";
+import { composeResearchPrompt, researchState, parseLatestOffset, scaledTimeout, composeVerifyPrompt, verifyState, composeDrilldownPrompt, drilldownState } from "../core/scoreTurn.js";
+import { captureArtDir } from "../core/forensics.js";
 import { diffFindings, type DiffPart } from "../core/scoreDiff.js";
 import { emitSoftDag, checkDagSection, dagMalformedLines, type SoftDagRow } from "../core/dag.js";
 import { adjudicate, type AdjudicateInput } from "../core/scoreAdjudicate.js";
@@ -28,7 +30,7 @@ import { run as sendRun } from "./send.js";
 import { run as spawnRun } from "./spawn.js";
 import { run as preflightRun } from "./preflight.js";
 
-function usage(): number { log.error("usage: score <init|assemble|spawn-all|research-send|research-wait|diff|verify-send|verify-wait|adjudicate|synthesize|walk-state|detect-multi-repo|emit-dag|check-dag> ..."); return 2; }
+function usage(): number { log.error("usage: score <init|assemble|spawn-all|research-send|research-wait|diff|verify-send|verify-wait|adjudicate|synthesize|walk-state|detect-multi-repo|emit-dag|check-dag|drilldown|forensics|archive> ..."); return 2; }
 
 export async function run(args: string[]): Promise<number> {
   const verb = args[0];
@@ -48,6 +50,9 @@ export async function run(args: string[]): Promise<number> {
     case "detect-multi-repo": return detectMultiRepoRun(rest);
     case "emit-dag": return emitDagRun(rest);
     case "check-dag": return checkDagRun(rest);
+    case "drilldown": return drilldownRun(rest);
+    case "forensics": return forensicsRun(rest);
+    case "archive": return archiveRun(rest);
     default: return usage();
   }
 }
@@ -498,4 +503,71 @@ export async function checkDagRun(rest: string[]): Promise<number> {
 function parseRosterTargets(text: string): string[] {
   return text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#"))
     .map((l) => l.split("\t")[0]).filter(Boolean);
+}
+
+// ---- Phase F: drilldown (optional, parts still live) ----
+
+interface DrilldownDeps extends ResearchSendDeps, ResearchWaitDeps {}
+interface DrilldownTestHooks { writeProbe?: (outPath: string) => void; }
+const DRILLDOWN_TIMEOUT = (): number => Number(process.env.CONSORT_DRILLDOWN_TIMEOUT_S) || 90;
+
+async function drilldownRun(rest: string[]): Promise<number> {
+  return drilldownWith(rest, { ...liveResearchSendDeps, ...liveResearchWaitDeps }, {});
+}
+
+export async function drilldownWith(rest: string[], d: DrilldownDeps, hooks: DrilldownTestHooks): Promise<number> {
+  // positional: topic section ddDir focus designDoc i1 m1 [i2 m2] [subproject]
+  const n = rest.length;
+  if (![7, 8, 9, 10].includes(n)) { log.error("usage: score drilldown <topic> <section> <dd-dir> <focus> <design-doc> <i1> <m1> [<i2> <m2>] [<subproject>]"); return 2; }
+  const [topic, section, ddDir, focus, designDoc, i1, m1] = rest;
+  let i2 = "", m2 = "", subproject = "";
+  if (n === 8) subproject = rest[7];
+  else if (n === 9) { i2 = rest[7]; m2 = rest[8]; }
+  else if (n === 10) { i2 = rest[7]; m2 = rest[8]; subproject = rest[9]; }
+  if (!existsSync(ddDir)) { log.error(`score drilldown: dd-dir not found: ${ddDir}`); return 2; }
+  if (!existsSync(designDoc)) { log.error(`score drilldown: design-doc not found: ${designDoc}`); return 2; }
+
+  const scratch = join(ddDir, "_scratch");
+  mkdirSync(scratch, { recursive: true });
+  const parts = [{ inst: i1, model: m1 }, ...(i2 ? [{ inst: i2, model: m2 }] : [])];
+
+  // Resolve all out-paths BEFORE dispatch so parallel parts (distinct by instrument in the filename)
+  // never target the same file.
+  const jobs = parts.map((p) => ({ ...p, outPath: resolveDrilldownPath(scratch, section, p.inst, subproject || undefined) }));
+  const timeout = (provider: string): number => scaledTimeout(DRILLDOWN_TIMEOUT(), d.multiplier(provider));
+
+  const results = await Promise.all(jobs.map(async (j) => {
+    const promptFile = join(scratch, `.${j.inst}-drill-prompt.md`);
+    atomicWrite(promptFile, composeDrilldownPrompt({ section, designDocPath: designDoc, focus, outPath: j.outPath }));
+    const offset = d.offsetFor(j.inst, j.model, topic);          // BEFORE send
+    const rc = await d.send(["--from", "maestro", j.inst, topic, `@${promptFile}`]);
+    if (rc !== 0) return "missing" as const;
+    hooks.writeProbe?.(j.outPath);                                // test-only: simulate the part's write
+    const ev = await d.wait(j.inst, j.model, topic, offset, ["done", "error"], timeout(j.model));
+    const fileText = existsSync(j.outPath) ? readFileSync(j.outPath, "utf8") : null;
+    return drilldownState(ev, fileText);
+  }));
+
+  const ok = results.filter((r) => r === "ok").length;
+  log.ok(`score drilldown: ${ok}/${jobs.length} parts produced notes`);
+  return ok > 0 ? 0 : 1;
+}
+
+// ---- Phase F: forensics + archive (thin wind-down verbs) ----
+
+export async function forensicsRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: score forensics <topic>"); return 2; }
+  const path = captureArtDir({ artDir: scoreArtDir(topic), command: "score" });
+  if (path) { log.ok(`score forensics: captured ${path}`); process.stdout.write(path + "\n"); }
+  else log.info("score forensics: no mechanical findings (no file written)");
+  return 0; // best-effort: never fails the wind-down
+}
+
+export async function archiveRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: score archive <topic>"); return 2; }
+  archiveTopic(topic, "score");
+  log.ok(`score archive: archived _score for ${topic}`);
+  return 0;
 }
