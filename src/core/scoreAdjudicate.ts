@@ -31,11 +31,15 @@ export function parseVerdicts(verify: string): Verdict[] {
   return out;
 }
 
-export interface AdjPart { commander: string; provider: string; }
+export interface AdjPart {
+  instrument: string;
+  /** provider retained for caller-shape parity (Phase D); unused in adjudication. */
+  provider: string;
+}
 export interface AdjudicateInput {
   parts: AdjPart[];
-  verify: Record<string, string>;  // commander -> verify.md content
-  vs: Record<string, string>;      // commander -> VS state (default "skipped")
+  verify: Record<string, string>;  // keyed by instrument -> verify.md content
+  vs: Record<string, string>;      // keyed by instrument -> VS state (default "skipped")
   buckets: Record<string, string>; // bucket filename -> content (from diffFindings)
 }
 
@@ -52,15 +56,15 @@ export function adjudicate(input: AdjudicateInput): string {
 }
 
 // n2 ## Adjudicated comment (byte-faithful to consult.sh:547, rebranded).
-const YODA_PENDING = "<!-- Maestro: read each cited source for every \"PENDING\" line below; rewrite the prefix to CONFIRMED, REFUTED, or move to ## Contested. synthesize refuses to finalize while any PENDING remains. -->";
-const YODA_CONTESTED = "<!-- Maestro: move CONTESTED items here from Adjudicated. Items in this section ship in the design-doc as unresolved. -->";
+const N2_ADJUDICATED_NOTE = "<!-- Maestro: read each cited source for every \"PENDING\" line below; rewrite the prefix to CONFIRMED, REFUTED, or move to ## Contested. synthesize refuses to finalize while any PENDING remains. -->";
+const N2_CONTESTED_NOTE = "<!-- Maestro: move CONTESTED items here from Adjudicated. Items in this section ship in the design-doc as unresolved. -->";
 // nge3 ## - PENDING: comment (byte-faithful to consult.sh:753, rebranded) — note it
 // lacks the "to CONFIRMED, REFUTED," clause that the n2 comment carries.
-const PENDING_NOTE_NGE3 = "<!-- Maestro: read each cited source for every \"PENDING\" line below; rewrite the prefix or move to ## Contested. synthesize refuses to finalize while any PENDING remains. -->";
+const NGE3_PENDING_NOTE = "<!-- Maestro: read each cited source for every \"PENDING\" line below; rewrite the prefix or move to ## Contested. synthesize refuses to finalize while any PENDING remains. -->";
 
 function adjudicateN2(input: AdjudicateInput): string {
   const [p0, p1] = input.parts;
-  const c0 = p0.commander, c1 = p1.commander;
+  const c0 = p0.instrument, c1 = p1.instrument;
   const uc = (s: string): string => s.toUpperCase();
   const vs0 = input.vs[c0] ?? "skipped";
   const vs1 = input.vs[c1] ?? "skipped";
@@ -81,8 +85,8 @@ function adjudicateN2(input: AdjudicateInput): string {
 
   return emitSections([
     { header: "## Cross-verified", acc: cross },
-    { header: "## Adjudicated", acc: adjudicated, comment: YODA_PENDING },
-    { header: "## Contested", acc: [], comment: YODA_CONTESTED },
+    { header: "## Adjudicated", acc: adjudicated, comment: N2_ADJUDICATED_NOTE },
+    { header: "## Contested", acc: [], comment: N2_CONTESTED_NOTE },
     { header: "## Not-verified", acc: notVerified },
   ]);
 }
@@ -96,19 +100,19 @@ function classify(na: number, nd: number, nu: number, k: number, owners: number)
 }
 
 function adjudicateNge3(input: AdjudicateInput): string {
-  const commanders = input.parts.map((p) => p.commander);
-  const n = commanders.length;
+  const instruments = input.parts.map((p) => p.instrument);
+  const n = instruments.length;
   const verdictMap = new Map<string, string>();
-  for (const p of input.parts) for (const v of parseVerdicts(input.verify[p.commander] ?? "")) verdictMap.set(`${p.commander}__${v.cite}`, v.tag);
+  for (const p of input.parts) for (const v of parseVerdicts(input.verify[p.instrument] ?? "")) verdictMap.set(`${p.instrument}__${v.cite}`, v.tag);
 
   const cross: string[] = [], contested: string[] = [], refuted: string[] = [], pending: string[] = [];
-  const allCsv = commanders.join("+");
+  const allCsv = instruments.join("+");
   const consensus: string[] = nonEmptyLines(input.buckets["consensus.txt"]).map((l) => `- ${l} [${allCsv}]`);
 
   const processBucket = (content: string | undefined, ownersCsv: string): void => {
     const own = ownersCsv.split("+");
     const ownerCount = own.length;
-    const verifiers = commanders.filter((c) => !own.includes(c));
+    const verifiers = instruments.filter((c) => !own.includes(c));
     const k = verifiers.length;
     for (const raw of nonEmptyLines(content)) {
       const cite = raw.slice(1, raw.indexOf("]"));
@@ -127,14 +131,14 @@ function adjudicateNge3(input: AdjudicateInput): string {
     }
   };
 
-  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) processBucket(input.buckets[`${commanders[i]}+${commanders[j]}_only.txt`], `${commanders[i]}+${commanders[j]}`);
-  for (const c of commanders) processBucket(input.buckets[`${c}_only_items.txt`], c);
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) processBucket(input.buckets[`${instruments[i]}+${instruments[j]}_only.txt`], `${instruments[i]}+${instruments[j]}`);
+  for (const c of instruments) processBucket(input.buckets[`${c}_only_items.txt`], c);
 
   return emitSections([
-    { header: "## Consensus findings (all troopers)", acc: consensus },
+    { header: "## Consensus findings (all parts)", acc: consensus },
     { header: "## Cross-verified", acc: cross },
     { header: "## Contested", acc: contested },
     { header: "## Refuted", acc: refuted },
-    { header: "## - PENDING:", acc: pending, comment: PENDING_NOTE_NGE3 },
+    { header: "## - PENDING:", acc: pending, comment: NGE3_PENDING_NOTE },
   ]);
 }

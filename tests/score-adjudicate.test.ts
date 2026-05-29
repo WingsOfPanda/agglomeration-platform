@@ -30,7 +30,7 @@ describe("parseVerdicts", () => {
 describe("adjudicate N=2", () => {
   it("AGREE→Cross-verified (cody first), non-AGREE→PENDING, Not-verified on failed VS", () => {
     const input: AdjudicateInput = {
-      parts: [{ commander: "rex", provider: "codex" }, { commander: "cody", provider: "claude" }],
+      parts: [{ instrument: "rex", provider: "codex" }, { instrument: "cody", provider: "claude" }],
       verify: {
         rex: verdictsMd("1. AGREE [a.ts:1] shared claim", "   rex confirms"),
         cody: verdictsMd("1. DISPUTE [c.ts:1] cody-only thing", "   cody disputes"),
@@ -51,7 +51,7 @@ describe("adjudicate N=2", () => {
   });
   it("Not-verified lists the other part's _only items when a VS dispatch failed", () => {
     const input: AdjudicateInput = {
-      parts: [{ commander: "rex", provider: "codex" }, { commander: "cody", provider: "claude" }],
+      parts: [{ instrument: "rex", provider: "codex" }, { instrument: "cody", provider: "claude" }],
       verify: {}, vs: { rex: "timeout", cody: "ok" },
       buckets: { "rex_only_items.txt": "[r.ts:1] rex item\n", "cody_only_items.txt": "[c.ts:1] cody item\n" },
     };
@@ -63,9 +63,9 @@ describe("adjudicate N=2", () => {
 
 describe("adjudicate N=3 (_classify)", () => {
   function n3(ownerBucket: string, verifierVerdicts: Record<string, string>): string {
-    const parts = [{ commander: "rex", provider: "codex" }, { commander: "cody", provider: "claude" }, { commander: "bly", provider: "agy" }];
+    const parts = [{ instrument: "rex", provider: "codex" }, { instrument: "cody", provider: "claude" }, { instrument: "bly", provider: "agy" }];
     const verify: Record<string, string> = {};
-    for (const [cmdr, tag] of Object.entries(verifierVerdicts)) verify[cmdr] = verdictsMd(`1. ${tag} [x.ts:1] the claim`);
+    for (const [inst, tag] of Object.entries(verifierVerdicts)) verify[inst] = verdictsMd(`1. ${tag} [x.ts:1] the claim`);
     return adjudicate({ parts, verify, vs: {}, buckets: { [ownerBucket]: "[x.ts:1] the claim\n" } });
   }
   it("single-owner, all verifiers AGREE → Cross-verified", () => {
@@ -85,8 +85,8 @@ describe("adjudicate N=3 (_classify)", () => {
     expect(out).not.toContain("to CONFIRMED, REFUTED");
   });
   it("consensus.txt lines → Consensus section with [all] srcset", () => {
-    const parts = [{ commander: "rex", provider: "codex" }, { commander: "cody", provider: "claude" }, { commander: "bly", provider: "agy" }];
+    const parts = [{ instrument: "rex", provider: "codex" }, { instrument: "cody", provider: "claude" }, { instrument: "bly", provider: "agy" }];
     const out = adjudicate({ parts, verify: {}, vs: {}, buckets: { "consensus.txt": "[a.ts:1] everyone agrees\n" } });
-    expect(out).toContain("## Consensus findings (all troopers)\n- [a.ts:1] everyone agrees [rex+cody+bly]\n");
+    expect(out).toContain("## Consensus findings (all parts)\n- [a.ts:1] everyone agrees [rex+cody+bly]\n");
   });
 });
