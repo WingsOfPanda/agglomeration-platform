@@ -1,6 +1,6 @@
 // tests/score-turn.test.ts
 import { describe, it, expect } from "vitest";
-import { findingsStatus, researchState, parseLatestOffset, scaledTimeout } from "../src/core/scoreTurn.js";
+import { findingsStatus, researchState, parseLatestOffset, scaledTimeout, composeResearchPrompt } from "../src/core/scoreTurn.js";
 
 describe("findingsStatus", () => {
   it("null (no findings.md) → missing", () => { expect(findingsStatus(null)).toBe("missing"); });
@@ -52,5 +52,25 @@ describe("scaledTimeout", () => {
     expect(scaledTimeout(601, "1.5")).toBe(902); // 901.5 → 902
     expect(scaledTimeout(600, "bad")).toBe(600);
     expect(scaledTimeout(600, "0")).toBe(600);
+  });
+});
+
+describe("composeResearchPrompt", () => {
+  const p = composeResearchPrompt("compare LRU vs LFU", "/state/x/viola-codex/findings.md");
+  it("names the topic + the findings write path with the Findings structure", () => {
+    expect(p).toContain("compare LRU vs LFU");
+    expect(p).toContain("/state/x/viola-codex/findings.md");
+    expect(p).toContain("## Claims");
+    expect(p).toMatch(/\[<source citation>\]/);
+  });
+  it("documents the question protocol and is NOT branch-disciplined", () => {
+    expect(p).toContain('"event":"question"');
+    expect(p).not.toMatch(/git (checkout|switch|branch)/i);
+  });
+  it("carries no canonical fence (inboxWrite appends it) and no stale rebrand tokens", () => {
+    expect(p).not.toContain("END_OF_INSTRUCTION");
+    expect(p).not.toContain('"event":"done"');
+    expect(p).not.toMatch(/master[ -]?yoda/i);
+    expect(p).not.toMatch(/trooper|commander/i);
   });
 });
