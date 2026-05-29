@@ -8,7 +8,7 @@ import { isoUtc } from "../core/archive.js";
 import {
   deriveSlug, parseScoreArgs, scoreArtDir, scoreDraftDir,
   formatRosterFile, scoreDocPath, parseMultiRepoMode, parseRosterFile,
-  spawnRosterArg, spawnResultsTsv, spawnTally, parsePanesFile,
+  spawnRosterArg, spawnResultsTsv, spawnTally, parsePanesFile, verifyScopeFiles,
   type RosterRow, type SpawnResult,
 } from "../core/score.js";
 import { assembleDoc, SECTIONS_SINGLE, SECTIONS_MULTI, type DocMode } from "../core/scoreDoc.js";
@@ -18,7 +18,7 @@ import { activeProvidersPath, partDir, repoRoot } from "../core/paths.js";
 import { pickInstruments } from "../core/instruments.js";
 import { outboxOffset, outboxPath, outboxWaitSince, type OutboxEvent } from "../core/ipc.js";
 import { instrumentConsultValidated, consultTimeout, instrumentTimeoutMultiplier } from "../core/contracts.js";
-import { composeResearchPrompt, researchState, parseLatestOffset, scaledTimeout } from "../core/scoreTurn.js";
+import { composeResearchPrompt, researchState, parseLatestOffset, scaledTimeout, composeVerifyPrompt } from "../core/scoreTurn.js";
 import { diffFindings, type DiffPart } from "../core/scoreDiff.js";
 import { run as sendRun } from "./send.js";
 import { run as spawnRun } from "./spawn.js";
@@ -36,6 +36,7 @@ export async function run(args: string[]): Promise<number> {
     case "research-send": return researchSendRun(rest);
     case "research-wait": return researchWaitRun(rest);
     case "diff": return diffRun(rest);
+    case "verify-send": return verifySendRun(rest);
     default: return usage();
   }
 }
@@ -278,6 +279,50 @@ export async function diffRun(rest: string[]): Promise<number> {
     .map((f) => `${f.filename.replace(/\.txt$/, "")}=${f.content.split("\n").filter(Boolean).length}`)
     .join(" ");
   log.ok(`score diff: wrote ${join(art, "diff.md")} (${rows.length} parts) ${summary}`);
+  return 0;
+}
+
+// ---- Phase D: cross-verify -> adjudicate -> synthesize ----
+
+async function verifySendRun(rest: string[]): Promise<number> {
+  const [topic, instrument, provider] = rest;
+  if (!topic || !instrument || !provider) { log.error("usage: score verify-send <topic> <instrument> <provider>"); return 2; }
+  return verifySendWith(topic, instrument, provider, liveResearchSendDeps);
+}
+
+export async function verifySendWith(topic: string, instrument: string, provider: string, d: ResearchSendDeps): Promise<number> {
+  const art = scoreArtDir(topic);
+  if (!existsSync(art)) { log.error(`score verify-send: ${art} not found`); return 1; }
+  const stateFile = join(art, `verify-${instrument}.txt`);
+  if (existsSync(stateFile)) { log.error(`score verify-send: ${stateFile} exists; rm to retry`); return 1; }
+
+  const rosterPath = join(art, "roster.txt");
+  if (!existsSync(rosterPath)) { log.error("score verify-send: roster.txt missing — run score init first"); return 1; }
+  const instruments = parseRosterFile(readFileSync(rosterPath, "utf8")).map((r) => r.instrument);
+  if (instruments.length < 2) { log.error(`score verify-send: need >=2 parts, got ${instruments.length}`); return 1; }
+  if (!instruments.includes(instrument)) { log.error(`score verify-send: ${instrument} not in roster.txt`); return 1; }
+
+  const parts: string[] = [];
+  for (const f of verifyScopeFiles(instrument, instruments)) {
+    const p = join(art, f);
+    if (!existsSync(p)) { log.error(`score verify-send: expected bucket missing: ${p} (run score diff first)`); return 1; }
+    const c = readFileSync(p, "utf8");
+    if (c.split("\n").some((l) => l.length > 0)) parts.push(c.replace(/\n+$/, ""));
+  }
+  const items = parts.join("\n");
+  atomicWrite(join(art, `verify-claims-${instrument}.txt`), items ? items + "\n" : "");
+
+  if (!items) { atomicWrite(stateFile, "VS=skipped\n"); log.ok(`score verify-send: ${instrument} VS=skipped (no claims to verify)`); return 0; }
+
+  const verifyPath = join(partDir(instrument, provider, topic), "verify.md");
+  const promptFile = join(art, `${instrument}_verify_prompt.md`);
+  atomicWrite(promptFile, composeVerifyPrompt(items, verifyPath));
+
+  const offset = d.offsetFor(instrument, provider, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}\n`);
+  const rc = await d.send(["--from", "maestro", instrument, topic, `@${promptFile}`]);
+  if (rc !== 0) { log.error(`score verify-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`); return 1; }
+  log.ok(`score verify-send: ${instrument} offset=${offset}`);
   return 0;
 }
 
