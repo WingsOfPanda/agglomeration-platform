@@ -94,6 +94,24 @@ describe("ipc outbox", () => {
     const ev = await p;
     expect(ev?.summary).toBe("after-restart");
   });
+  it("event precedence: ready (listed first) beats a later error", async () => {
+    home(); const d = seedPart("violin", "codex", "demo");
+    writeFileSync(join(d, "outbox.jsonl"), `{"event":"ready","ts":"t"}\n{"event":"error","message":"late","fatal":false}\n`);
+    const ev = await IPC.outboxWait("violin", "codex", "demo", ["ready", "error"], 3);
+    expect(ev?.event).toBe("ready");
+  });
+  it("event precedence: done (listed first) beats error regardless of file order", async () => {
+    home(); const d = seedPart("violin", "codex", "demo");
+    writeFileSync(join(d, "outbox.jsonl"), `{"event":"error","message":"x"}\n{"event":"done","summary":"ok"}\n`);
+    const ev = await IPC.outboxWait("violin", "codex", "demo", ["done", "error"], 3);
+    expect(ev?.event).toBe("done");
+  });
+  it("event precedence: first-listed absent falls through to next", async () => {
+    home(); const d = seedPart("violin", "codex", "demo");
+    writeFileSync(join(d, "outbox.jsonl"), `{"event":"error","message":"boom","fatal":true}\n`);
+    const ev = await IPC.outboxWait("violin", "codex", "demo", ["ready", "error"], 3);
+    expect(ev?.event).toBe("error");
+  });
 });
 
 describe("ipc pane meta", () => {

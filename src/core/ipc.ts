@@ -69,11 +69,16 @@ function readFrom(path: string, offset: number): string {
 
 function lastMatch(text: string, events: string[]): OutboxEvent | null {
   const lines = text.split("\n").filter(Boolean);
-  for (let k = lines.length - 1; k >= 0; k--) {
-    try {
-      const obj = JSON.parse(lines[k]) as OutboxEvent;
-      if (events.includes(obj.event)) return obj;
-    } catch { /* skip non-JSON */ }
+  // Match the upstream outbox-wait precedence: events in ARGUMENT ORDER — the
+  // first listed event that appears anywhere wins, returning its LAST (tail-n1)
+  // occurrence. (NOT file-position order.)
+  for (const name of events) {
+    for (let k = lines.length - 1; k >= 0; k--) {
+      try {
+        const obj = JSON.parse(lines[k]) as OutboxEvent;
+        if (obj.event === name) return obj;
+      } catch { /* skip non-JSON */ }
+    }
   }
   return null;
 }
