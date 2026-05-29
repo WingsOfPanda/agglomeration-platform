@@ -28,7 +28,9 @@ Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs"`.
 
 ### Step 4 — Plan
 
-Run `$CS soundcheck roster-plan`. It prints one JSON object to stdout (stderr holds logs):
+Run `$CS soundcheck roster-plan` (it reads the `providers-available.txt` that the health pass in
+Steps 1-3 just wrote — always run it after the health check, not standalone). It prints one JSON
+object to stdout (stderr holds logs):
 
 ```json
 { "detected": ["codex","claude"], "prior": ["codex"], "skipped": [], "dropped": [], "decision": "skip|auto|prompt", "auto": "codex" }
