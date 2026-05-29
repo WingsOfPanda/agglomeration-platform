@@ -192,6 +192,10 @@ function runArgsFile(command, prefix) {
   (0, import_node_fs2.writeFileSync)((0, import_node_path.join)(dir, "args-path.txt"), f);
   return f;
 }
+function activeProvidersPath(gRoot = globalRoot()) {
+  const active = (0, import_node_path.join)(gRoot, "providers-active.txt");
+  return (0, import_node_fs2.existsSync)(active) ? active : (0, import_node_path.join)(gRoot, "providers-available.txt");
+}
 var import_node_crypto, import_node_fs2, import_node_os, import_node_path, import_node_child_process;
 var init_paths = __esm({
   "src/core/paths.ts"() {
@@ -321,8 +325,8 @@ function haveCmd(name) {
     return false;
   }
 }
-function tmuxVersionString(run10) {
-  if (run10) return run10();
+function tmuxVersionString(run11) {
+  if (run11) return run11();
   if (!haveCmd("tmux")) return null;
   try {
     return (0, import_node_child_process2.execFileSync)("tmux", ["-V"], { encoding: "utf8" }).trim();
@@ -7952,6 +7956,19 @@ function pickRandomInstrument(topic, rng = Math.random) {
   }
   if (candidates.length === 0) return null;
   return candidates[Math.floor(rng() * candidates.length)];
+}
+function pickInstruments(topic, n2, rng = Math.random) {
+  const pool = loadInstrumentPool();
+  const globalUsed = new Set(instrumentsInUseGlobally());
+  const localUsed = new Set(instrumentsInUseInTopic(topic));
+  const picked = [];
+  for (let k = 0; k < n2; k++) {
+    let candidates = pool.filter((x) => !globalUsed.has(x) && !picked.includes(x));
+    if (candidates.length === 0) candidates = pool.filter((x) => !localUsed.has(x) && !picked.includes(x));
+    if (candidates.length === 0) break;
+    picked.push(candidates[Math.floor(rng() * candidates.length)]);
+  }
+  return picked;
 }
 function formatCollisionError(instrument, model, topic, sessionId) {
   const lines = [`${instrument} is already deployed on ${topic}; pick another instrument`];
@@ -17900,12 +17917,335 @@ var init_solo2 = __esm({
   }
 });
 
+// src/core/score.ts
+function scoreArtDir(topic, opts) {
+  return (0, import_node_path19.join)(topicDir(topic, opts), "_score");
+}
+function scoreDraftDir(topic, opts) {
+  return (0, import_node_path19.join)(scoreArtDir(topic, opts), "design-doc", ".draft");
+}
+function parseScoreArgs(tokens) {
+  let ensemble = false;
+  let targets = [];
+  const rest = [];
+  for (let i2 = 0; i2 < tokens.length; i2++) {
+    const t = tokens[i2];
+    if (t === "--ensemble") {
+      ensemble = true;
+      continue;
+    }
+    if (t === "--targets" || t.startsWith("--targets=")) {
+      const { value, shift } = kvParse(t, tokens[i2 + 1]);
+      targets = value.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+      if (shift === 2) i2++;
+      continue;
+    }
+    rest.push(t);
+  }
+  return { topicText: rest.join(" "), ensemble, targets };
+}
+function scoreDocPath(topic, dateUtc, opts) {
+  return (0, import_node_path19.join)(scoreArtDir(topic, opts), "design-doc", `${dateUtc}-${topic}-design.md`);
+}
+function formatRosterFile(rows, isoStamp) {
+  const body = rows.map((r) => `${r.provider}	${r.instrument}`).join("\n");
+  return `# generated ${isoStamp} by /consort:score
+${body}${rows.length ? "\n" : ""}`;
+}
+function parseMultiRepoMode(text) {
+  const v = text.replace(/\s/g, "");
+  return v === "multi" ? "multi" : v === "single-sub" ? "single-sub" : "single";
+}
+var import_node_path19;
+var init_score = __esm({
+  "src/core/score.ts"() {
+    "use strict";
+    import_node_path19 = require("node:path");
+    init_paths();
+    init_args();
+    init_solo();
+  }
+});
+
+// src/core/scoreDoc.ts
+function sectionTitle(key) {
+  return TITLES[key] ?? key;
+}
+function assembleDoc(input) {
+  const sections = input.mode === "multi" ? SECTIONS_MULTI : SECTIONS_SINGLE;
+  let out = `# ${input.title}
+
+`;
+  if (input.mode === "multi") {
+    out += `**Date:** ${input.date}
+`;
+    out += `**Target Sub-Project(s):** ${input.targets.join(", ")}
+
+`;
+  } else if (input.mode === "single-sub") {
+    out += `**Date:** ${input.date}
+`;
+    out += `**Target Sub-Project:** ${input.targets[0] ?? ""}
+
+`;
+  }
+  for (const key of sections) {
+    const draft = input.drafts.get(key);
+    if (draft != null) out += `${draft}
+`;
+    else out += `## ${sectionTitle(key)}
+
+_(missing draft)_
+
+`;
+  }
+  return out;
+}
+var SECTIONS_SINGLE, SECTIONS_MULTI, TITLES;
+var init_scoreDoc = __esm({
+  "src/core/scoreDoc.ts"() {
+    "use strict";
+    SECTIONS_SINGLE = ["problem", "goal", "architecture", "components", "testing", "success-criteria"];
+    SECTIONS_MULTI = ["problem", "goal", "architecture", "components", "execution-dag", "cross-repo-notes", "testing", "success-criteria"];
+    TITLES = {
+      problem: "Problem",
+      goal: "Goal",
+      architecture: "Architecture",
+      components: "Components",
+      "execution-dag": "Execution DAG",
+      "cross-repo-notes": "Cross-Repo Notes",
+      testing: "Testing",
+      "success-criteria": "Success Criteria"
+    };
+  }
+});
+
+// src/core/dag.ts
+function parseDagLine(line) {
+  const m = LINE_RE.exec(line);
+  if (!m) return null;
+  const step = m[1], repo = m[2], path6 = m[3] ?? "none", rest = m[4];
+  const d = DEPS_RE.exec(rest);
+  if (d) return { step, repo, path: path6, desc: d[1], deps: d[2].replace(/ /g, "") };
+  return { step, repo, path: path6, desc: rest, deps: "none" };
+}
+function checkDagSection(docText) {
+  const lines = docText.split("\n");
+  let inDag = false;
+  const body = [];
+  for (const l of lines) {
+    if (/^## Execution DAG[ \t]*$/.test(l)) {
+      inDag = true;
+      continue;
+    }
+    if (/^## /.test(l)) {
+      inDag = false;
+      continue;
+    }
+    if (inDag) body.push(l);
+  }
+  for (const l of body) {
+    if (!/^[ \t]*\d+\./.test(l)) continue;
+    if (parseDagLine(l) === null) return false;
+  }
+  return true;
+}
+var LINE_RE, DEPS_RE;
+var init_dag = __esm({
+  "src/core/dag.ts"() {
+    "use strict";
+    LINE_RE = /^(\d+)\.[ \t]+([A-Za-z0-9_-]+)(?:[ \t]+\((\/[^)]+)\))?[ \t]+—[ \t]+(.+)$/;
+    DEPS_RE = /^(.+?)[ \t]+\(depends[ \t]+on[ \t]+([0-9, ]+)\)[ \t]*$/;
+  }
+});
+
+// src/core/audit.ts
+function extractTarget(docText) {
+  const matches = docText.match(TARGET_HEADER);
+  if (!matches || matches.length === 0) return { present: false };
+  if (matches.length > 1) return { present: true, valid: false };
+  const line = docText.split("\n").find((l) => /^[ \t]*\*\*Target Sub-Project:\*\*[ \t]+/.test(l)) ?? "";
+  const slug = line.replace(/^[ \t]*\*\*Target Sub-Project:\*\*[ \t]+([^ \t]+).*$/, "$1");
+  return SLUG_REGEX.test(slug) ? { present: true, valid: true, slug } : { present: true, valid: false };
+}
+function auditDoc(docText) {
+  const issues = [];
+  if (!/^##\s+Goal\b/m.test(docText)) issues.push("no_goal_section");
+  if (!/^##\s+(Architecture|Approach)\b/m.test(docText)) issues.push("no_arch_section");
+  if (!/^##\s+.*[Tt]est/m.test(docText)) issues.push("no_testing_section");
+  if (!/^##\s+.*[Ss]uccess/m.test(docText)) issues.push("no_success_section");
+  if (/<(archive|previous-[a-z][a-z0-9_-]*|archived-[a-z][a-z0-9_-]*|source-[a-z][a-z0-9_-]*)>/.test(docText)) issues.push("unresolved_placeholder");
+  if (/\bTBD\b/.test(docText)) issues.push("tbd_marker");
+  if (/\bTODO\b/.test(docText)) issues.push("todo_marker");
+  if (/fill in later/i.test(docText)) issues.push("fill_in_later_marker");
+  if (/to be determined/i.test(docText)) issues.push("to_be_determined_marker");
+  const t = extractTarget(docText);
+  if (t.present && !t.valid) issues.push("target_subproject_when_invalid");
+  if (/^## Execution DAG[ \t]*$/m.test(docText) && !checkDagSection(docText)) issues.push("execution_dag_not_parseable");
+  return issues.length === 0 ? { verdict: "PASS", issues } : { verdict: "FAIL", issues };
+}
+var SLUG_REGEX, TARGET_HEADER;
+var init_audit = __esm({
+  "src/core/audit.ts"() {
+    "use strict";
+    init_dag();
+    SLUG_REGEX = /^[A-Za-z0-9._-]+$/;
+    TARGET_HEADER = /^[ \t]*\*\*Target Sub-Project:\*\*[ \t]+/gm;
+  }
+});
+
+// src/commands/score.ts
+var score_exports = {};
+__export(score_exports, {
+  initWith: () => initWith2,
+  run: () => run10
+});
+function usage2() {
+  log.error("usage: score <init|assemble> ...");
+  return 2;
+}
+async function run10(args) {
+  const verb = args[0];
+  const rest = args.slice(1);
+  switch (verb) {
+    case "init":
+      return initRun2(applyArgsFile(rest));
+    case "assemble":
+      return assembleRun(rest);
+    default:
+      return usage2();
+  }
+}
+async function initRun2(tokens) {
+  return initWith2(tokens, liveInitDeps2);
+}
+async function initWith2(tokens, d) {
+  const { topicText, ensemble, targets } = parseScoreArgs(tokens);
+  if (!topicText) {
+    log.error("score init: topic text is empty");
+    return 1;
+  }
+  const topic = deriveSlug(topicText);
+  if (!topic) {
+    log.error("score init: topic produced an empty slug; provide alphanumerics");
+    return 1;
+  }
+  let roster = d.activeProviders().filter((p) => d.isValidated(p));
+  if (roster.length < 2) {
+    log.error(`score init: needs >=2 consult-validated providers; got ${roster.length}`);
+    log.error("  just ask Claude directly (this session) \u2014 no /consort:score orchestration needed");
+    return 1;
+  }
+  if (roster.length > 3) {
+    log.warn(`score init: ${roster.length} providers available; capping the ensemble to the first 3`);
+    roster = roster.slice(0, 3);
+  }
+  const art = scoreArtDir(topic);
+  if ((0, import_node_fs24.existsSync)(art)) {
+    log.error(`score init: topic already in flight: ${art}`);
+    log.error("  run /consort:coda or pick a different topic");
+    return 2;
+  }
+  const instruments = d.pickInstruments(topic, roster.length);
+  if (instruments.length < roster.length) {
+    log.error(`score init: instrument pool exhausted (need ${roster.length}, got ${instruments.length})`);
+    return 1;
+  }
+  const rows = roster.map((provider, i2) => ({ provider, instrument: instruments[i2] }));
+  (0, import_node_fs24.mkdirSync)(scoreDraftDir(topic), { recursive: true });
+  atomicWrite((0, import_node_path20.join)(art, "topic.txt"), topicText);
+  atomicWrite((0, import_node_path20.join)(art, "roster.txt"), formatRosterFile(rows, isoUtc()));
+  const mode = targets.length >= 2 ? "multi" : targets.length === 1 ? "single-sub" : "single";
+  atomicWrite((0, import_node_path20.join)(art, "multi-repo.txt"), mode + "\n");
+  if (targets.length > 0) atomicWrite((0, import_node_path20.join)(art, "targets.txt"), `# generated ${isoUtc()} by /consort:score
+${targets.join("\n")}
+`);
+  log.ok(`score init: topic=${topic} N=${rows.length} ensemble=${ensemble ? "yes" : "no"} mode=${mode}`);
+  process.stdout.write(
+    `TOPIC=${topic}
+N=${rows.length}
+ENSEMBLE=${ensemble ? "yes" : "no"}
+MODE=${mode}
+` + rows.map((r) => `PART=${r.instrument}:${r.provider}`).join("\n") + "\n"
+  );
+  return 0;
+}
+function readIf(path6) {
+  return (0, import_node_fs24.existsSync)(path6) ? (0, import_node_fs24.readFileSync)(path6, "utf8") : "";
+}
+async function assembleRun(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("usage: score assemble <topic>");
+    return 2;
+  }
+  const art = scoreArtDir(topic);
+  const draftDir = scoreDraftDir(topic);
+  if (!(0, import_node_fs24.existsSync)(draftDir)) {
+    log.error(`score assemble: no draft dir at ${draftDir} (run score init + draft sections)`);
+    return 2;
+  }
+  const title = (readIf((0, import_node_path20.join)(art, "topic.txt")).split("\n")[0] || topic).trim();
+  const mode = parseMultiRepoMode(readIf((0, import_node_path20.join)(art, "multi-repo.txt")));
+  const targets = mode === "single" ? [] : parseRosterTargets(readIf((0, import_node_path20.join)(art, "targets.txt")));
+  const keys = mode === "multi" ? SECTIONS_MULTI : SECTIONS_SINGLE;
+  const drafts = /* @__PURE__ */ new Map();
+  for (const k of keys) {
+    const f = (0, import_node_path20.join)(draftDir, `${k}.md`);
+    if ((0, import_node_fs24.existsSync)(f)) drafts.set(k, (0, import_node_fs24.readFileSync)(f, "utf8").replace(/\n+$/, "") + "\n");
+  }
+  const date = isoUtc().slice(0, 10);
+  const doc = assembleDoc({ title, mode, date, targets, drafts });
+  const out = scoreDocPath(topic, date);
+  (0, import_node_fs24.mkdirSync)((0, import_node_path20.join)(art, "design-doc"), { recursive: true });
+  atomicWrite(out, doc);
+  const result = auditDoc(doc);
+  const auditText = [`VERDICT=${result.verdict}`, ...result.issues.map((i2) => `ISSUE=${i2}`)].join("\n") + "\n";
+  atomicWrite((0, import_node_path20.join)(art, "design-doc", "audit.log"), auditText);
+  if (result.verdict === "FAIL") {
+    for (const i2 of result.issues) process.stderr.write(`ISSUE=${i2}
+`);
+    log.error(`score assemble: audit FAILED on ${out} (see design-doc/audit.log)`);
+    return 1;
+  }
+  log.ok(`score assemble: audit PASSED`);
+  process.stdout.write(out + "\n");
+  return 0;
+}
+function parseRosterTargets(text) {
+  return text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#")).map((l) => l.split("	")[0]).filter(Boolean);
+}
+var import_node_fs24, import_node_path20, liveInitDeps2;
+var init_score2 = __esm({
+  "src/commands/score.ts"() {
+    "use strict";
+    import_node_fs24 = require("node:fs");
+    import_node_path20 = require("node:path");
+    init_log();
+    init_args();
+    init_atomic();
+    init_archive();
+    init_score();
+    init_scoreDoc();
+    init_audit();
+    init_providers();
+    init_paths();
+    init_contracts();
+    init_instruments();
+    liveInitDeps2 = {
+      activeProviders: () => readProviderList(activeProvidersPath()),
+      isValidated: instrumentConsultValidated,
+      pickInstruments
+    };
+  }
+});
+
 // src/consort.ts
 init_args();
 init_paths();
 init_colors();
 async function loadHandlers() {
-  const [spawn2, send, collect, roster, coda, soundcheck, preflight, hook, solo] = await Promise.all([
+  const [spawn2, send, collect, roster, coda, soundcheck, preflight, hook, solo, score] = await Promise.all([
     Promise.resolve().then(() => (init_spawn(), spawn_exports)),
     Promise.resolve().then(() => (init_send2(), send_exports)),
     Promise.resolve().then(() => (init_collect(), collect_exports)),
@@ -17914,7 +18254,8 @@ async function loadHandlers() {
     Promise.resolve().then(() => (init_soundcheck(), soundcheck_exports)),
     Promise.resolve().then(() => (init_preflight(), preflight_exports)),
     Promise.resolve().then(() => (init_hook(), hook_exports)),
-    Promise.resolve().then(() => (init_solo2(), solo_exports))
+    Promise.resolve().then(() => (init_solo2(), solo_exports)),
+    Promise.resolve().then(() => (init_score2(), score_exports))
   ]);
   return {
     spawn: spawn2.run,
@@ -17925,7 +18266,8 @@ async function loadHandlers() {
     soundcheck: soundcheck.run,
     preflight: preflight.run,
     hook: hook.run,
-    solo: solo.run
+    solo: solo.run,
+    score: score.run
   };
 }
 async function banner(label, color) {
