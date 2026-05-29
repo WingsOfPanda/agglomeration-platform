@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { scoreArtDir } from "../src/core/score.js";
 import { partDir } from "../src/core/paths.js";
-import { researchSendWith } from "../src/commands/score.js";
+import { outboxPath } from "../src/core/ipc.js";
+import { researchSendWith, researchWaitWith } from "../src/commands/score.js";
 
 let env: { home: string; cleanup: () => void };
 beforeEach(() => { env = freshHome(); });
@@ -48,5 +49,55 @@ describe("score research-send", () => {
     const rc = await researchSendWith("cache-policy", "viola", "codex", { offsetFor: () => 7, send: async () => 1 });
     expect(rc).toBe(1);
     expect(existsSync(join(art, "research-viola.txt"))).toBe(true);
+  });
+});
+
+describe("score research-wait", () => {
+  function seedState(topic: string, instrument: string, provider: string, offset = 0): string {
+    const art = scoreArtDir(topic);
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, `research-${instrument}.txt`), `OFFSET=${offset}\n`);
+    mkdirSync(partDir(instrument, provider, topic), { recursive: true });
+    return art;
+  }
+  const dep = (ev: any, mult = "1.0") => ({ wait: async () => ev, multiplier: () => mult });
+
+  it("done + cited findings → FS=ok + .done sentinel (rc 0)", async () => {
+    const art = seedState("t", "viola", "codex");
+    writeFileSync(join(partDir("viola", "codex", "t"), "findings.md"), "## Claims\n1. [a:1] x\n");
+    const rc = await researchWaitWith("t", "viola", "codex", dep({ event: "done", summary: "ok" }));
+    expect(rc).toBe(0);
+    expect(readFileSync(join(art, "research-viola.txt"), "utf8")).toContain("FS=ok");
+    expect(existsSync(join(art, "research-viola.done"))).toBe(true);
+  });
+
+  it("done with no findings.md → FS=missing", async () => {
+    const art = seedState("t", "viola", "codex");
+    await researchWaitWith("t", "viola", "codex", dep({ event: "done", summary: "ok" }));
+    expect(readFileSync(join(art, "research-viola.txt"), "utf8")).toContain("FS=missing");
+  });
+
+  it("timeout (null) → FS=timeout; error → FS=failed", async () => {
+    const art = seedState("t", "viola", "codex");
+    await researchWaitWith("t", "viola", "codex", dep(null));
+    expect(readFileSync(join(art, "research-viola.txt"), "utf8")).toContain("FS=timeout");
+    writeFileSync(join(art, "research-viola.txt"), "OFFSET=0\n"); // reset
+    await researchWaitWith("t", "viola", "codex", dep({ event: "error", reason: "x" }));
+    expect(readFileSync(join(art, "research-viola.txt"), "utf8")).toContain("FS=failed");
+  });
+
+  it("question → captures payload, appends bumped OFFSET + FS=question", async () => {
+    const art = seedState("t", "viola", "codex", 5);
+    writeFileSync(outboxPath("viola", "codex", "t"), "0123456789ABC"); // size 13 → bumped offset
+    await researchWaitWith("t", "viola", "codex", dep({ event: "question", message: "which db?" }));
+    const state = readFileSync(join(art, "research-viola.txt"), "utf8");
+    expect(state).toContain("FS=question");
+    expect(state).toMatch(/OFFSET=13/); // bumped to current outbox size
+    expect(readFileSync(join(art, "question-viola.txt"), "utf8")).toContain("which db?");
+  });
+
+  it("missing state file → rc 1", async () => {
+    mkdirSync(scoreArtDir("t"), { recursive: true });
+    expect(await researchWaitWith("t", "viola", "codex", dep(null))).toBe(1);
   });
 });

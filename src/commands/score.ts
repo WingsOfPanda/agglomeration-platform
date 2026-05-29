@@ -1,5 +1,5 @@
 // src/commands/score.ts
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile } from "../args.js";
@@ -13,10 +13,10 @@ import { assembleDoc, SECTIONS_SINGLE, SECTIONS_MULTI, type DocMode } from "../c
 import { auditDoc } from "../core/audit.js";
 import { readProviderList } from "../core/providers.js";
 import { activeProvidersPath, partDir } from "../core/paths.js";
-import { instrumentConsultValidated } from "../core/contracts.js";
 import { pickInstruments } from "../core/instruments.js";
-import { outboxOffset, outboxPath } from "../core/ipc.js";
-import { composeResearchPrompt } from "../core/scoreTurn.js";
+import { outboxOffset, outboxPath, outboxWaitSince, type OutboxEvent } from "../core/ipc.js";
+import { instrumentConsultValidated, consultTimeout, instrumentTimeoutMultiplier } from "../core/contracts.js";
+import { composeResearchPrompt, researchState, parseLatestOffset, scaledTimeout } from "../core/scoreTurn.js";
 import { run as sendRun } from "./send.js";
 
 function usage(): number { log.error("usage: score <init|assemble|spawn-all|research-send|research-wait|diff> ..."); return 2; }
@@ -28,6 +28,7 @@ export async function run(args: string[]): Promise<number> {
     case "init": return initRun(applyArgsFile(rest));
     case "assemble": return assembleRun(rest);
     case "research-send": return researchSendRun(rest);
+    case "research-wait": return researchWaitRun(rest);
     default: return usage();
   }
 }
@@ -154,6 +155,48 @@ export async function researchSendWith(topic: string, instrument: string, provid
   const rc = await d.send(["--from", "maestro", instrument, topic, `@${promptFile}`]);
   if (rc !== 0) { log.error(`score research-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`); return 1; }
   log.ok(`score research-send: ${instrument} offset=${offset}`);
+  return 0;
+}
+
+export interface ResearchWaitDeps {
+  wait(instrument: string, model: string, topic: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null>;
+  multiplier(provider: string): string;
+}
+const liveResearchWaitDeps: ResearchWaitDeps = {
+  wait: (i, m, t, off, ev, to) => outboxWaitSince(i, m, t, off, ev, to),
+  multiplier: instrumentTimeoutMultiplier,
+};
+
+async function researchWaitRun(rest: string[]): Promise<number> {
+  const [topic, instrument, provider] = rest;
+  if (!topic || !instrument || !provider) { log.error("usage: score research-wait <topic> <instrument> <provider>"); return 2; }
+  return researchWaitWith(topic, instrument, provider, liveResearchWaitDeps);
+}
+
+export async function researchWaitWith(topic: string, instrument: string, provider: string, d: ResearchWaitDeps): Promise<number> {
+  const art = scoreArtDir(topic);
+  const stateFile = join(art, `research-${instrument}.txt`);
+  if (!existsSync(stateFile)) { log.error(`score research-wait: ${stateFile} missing (run score research-send first)`); return 1; }
+  const offset = parseLatestOffset(readFileSync(stateFile, "utf8"));
+  if (offset === null) { log.error(`score research-wait: OFFSET not set in ${stateFile}`); return 1; }
+
+  const timeout = scaledTimeout(consultTimeout("research"), d.multiplier(provider));
+  log.info(`score research-wait: ${instrument} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(instrument, provider, topic, offset, ["done", "error", "question"], timeout);
+
+  const findingsPath = join(partDir(instrument, provider, topic), "findings.md");
+  const findingsText = existsSync(findingsPath) ? readFileSync(findingsPath, "utf8") : null;
+  const fs = researchState(ev, findingsText);
+
+  if (fs === "question" && ev) {
+    atomicWrite(join(art, `question-${instrument}.txt`), JSON.stringify(ev) + "\n");
+    const bumped = outboxOffset(outboxPath(instrument, provider, topic));
+    appendFileSync(stateFile, `OFFSET=${bumped}\nFS=question\n`);
+  } else {
+    appendFileSync(stateFile, `FS=${fs}\n`);
+  }
+  writeFileSync(join(art, `research-${instrument}.done`), "");
+  log.ok(`score research-wait: ${instrument} FS=${fs}`);
   return 0;
 }
 
