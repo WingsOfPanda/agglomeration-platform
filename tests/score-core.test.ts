@@ -1,7 +1,7 @@
 // tests/score-core.test.ts
 import { describe, it, expect } from "vitest";
 import { join } from "node:path";
-import { scoreArtDir, scoreDraftDir, parseScoreArgs, scoreDocPath, formatRosterFile, parseRosterFile, parseMultiRepoMode, verifyScopeFiles, lastTag } from "../src/core/score.js";
+import { scoreArtDir, scoreDraftDir, parseScoreArgs, scoreDocPath, formatRosterFile, parseRosterFile, parseMultiRepoMode, verifyScopeFiles, lastTag, writeTargetsTsv } from "../src/core/score.js";
 
 describe("score paths", () => {
   it("scoreArtDir / scoreDraftDir hang off the topic dir under _score", () => {
@@ -80,5 +80,14 @@ describe("lastTag", () => {
     expect(lastTag("VS=skipped\n", "VS")).toBe("skipped");
     expect(lastTag("OFFSET=1\nVS=question\nOFFSET=9\nVS=ok\n", "VS")).toBe("ok");
     expect(lastTag("OFFSET=1\n", "VS")).toBeNull();
+  });
+});
+
+describe("writeTargetsTsv", () => {
+  it("emits a comment header + TSV rows; empty hits → just the header", () => {
+    const tsv = writeTargetsTsv([{ slug: "api", marker: "/r/api/CLAUDE.md" }, { slug: "web", marker: "/r/web/AGENTS.md" }], "2026-05-29T00:00:00Z");
+    expect(tsv).toContain("# generated 2026-05-29T00:00:00Z by /consort:score");
+    expect(tsv.trim().split("\n").filter((l) => !l.startsWith("#"))).toEqual(["api\t/r/api/CLAUDE.md", "web\t/r/web/AGENTS.md"]);
+    expect(writeTargetsTsv([], "2026-05-29T00:00:00Z")).toBe("# generated 2026-05-29T00:00:00Z by /consort:score\n");
   });
 });
