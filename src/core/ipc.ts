@@ -1,0 +1,131 @@
+import { statSync, readFileSync, existsSync, openSync, readSync, closeSync } from "node:fs";
+import { join } from "node:path";
+import { partDir } from "./paths.js";
+import { atomicWrite } from "./atomic.js";
+
+export function inboxPath(i: string, m: string, t: string) { return join(partDir(i, m, t), "inbox.md"); }
+export function outboxPath(i: string, m: string, t: string) { return join(partDir(i, m, t), "outbox.jsonl"); }
+export function identityPath(i: string, m: string, t: string) { return join(partDir(i, m, t), "identity.md"); }
+export function statusPath(i: string, m: string, t: string) { return join(partDir(i, m, t), "status.json"); }
+export function paneMetaPath(i: string, m: string, t: string) { return join(partDir(i, m, t), "pane.json"); }
+
+const SENDER_RE = /^[a-zA-Z0-9_-]+$/;
+
+export function inboxWrite(i: string, m: string, t: string, task: string, opts?: { from?: string }): void {
+  const from = opts?.from ?? "maestro";
+  if (!SENDER_RE.test(from)) throw new Error(`inboxWrite: invalid sender name '${from}' (allowed: [a-zA-Z0-9_-])`);
+  const outbox = outboxPath(i, m, t);
+  const body =
+    `From: ${from}\n\n${task}\n\nWhen done, append a single JSONL line to ${outbox}:\n\n` +
+    '`{"event":"done","summary":"<one-line summary>","ts":"<iso-timestamp>"}`\n\nEND_OF_INSTRUCTION\n';
+  atomicWrite(inboxPath(i, m, t), body);
+}
+
+function pluginRoot(): string {
+  return process.env.CLAUDE_PLUGIN_ROOT ?? process.cwd();
+}
+
+export function identityWrite(i: string, m: string, t: string): void {
+  const tplPath = join(pluginRoot(), "config", "prompt-templates", "identity.md");
+  const stateDir = partDir(i, m, t);
+  const outbox = outboxPath(i, m, t);
+  let body = readFileSync(tplPath, "utf8")
+    .replaceAll("{{instrument}}", i)
+    .replaceAll("{{model}}", m)
+    .replaceAll("{{topic}}", t)
+    .replaceAll("{{state_dir}}", stateDir);
+  body += `\n\n---\n\n**First action (do this immediately, then wait):**\n\n` +
+    `Append exactly ONE JSONL line to ${outbox}. The line MUST be:\n\n` +
+    '`{"event":"ready","ts":"<ISO-8601 UTC>","instrument":"' + i + '","model":"' + m + '"}`\n\n' +
+    `Generate the timestamp at the moment you emit. Use this shell command verbatim:\n\n` +
+    '`echo "{\\"event\\":\\"ready\\",\\"ts\\":\\"$(date -u +' + "'%Y-%m-%dT%H:%M:%SZ'" + ')\\",\\"instrument\\":\\"' + i + '\\",\\"model\\":\\"' + m + '\\"}" >> ' + outbox + '`\n\n' +
+    `Then stop and wait. I will send another instruction asking you to read your inbox.\n`;
+  atomicWrite(identityPath(i, m, t), body);
+}
+
+export interface OutboxEvent { event: string; ts?: string; [k: string]: unknown; }
+
+export function eventMatches(line: string, name: string): boolean {
+  try { return (JSON.parse(line) as OutboxEvent).event === name; } catch { return false; }
+}
+
+export function outboxOffset(path: string): number {
+  try { return statSync(path).size; } catch { return 0; }
+}
+
+function readFrom(path: string, offset: number): string {
+  const size = outboxOffset(path);
+  // If the file shrank below the captured offset (crash/rotation recreated it),
+  // re-read from the start so a fresh event in the smaller file is still seen.
+  const start = size < offset ? 0 : offset;
+  if (size <= start) return "";
+  const fd = openSync(path, "r");
+  try {
+    const buf = Buffer.alloc(size - start);
+    readSync(fd, buf, 0, buf.length, start);
+    return buf.toString("utf8");
+  } finally { closeSync(fd); }
+}
+
+function lastMatch(text: string, events: string[]): OutboxEvent | null {
+  const lines = text.split("\n").filter(Boolean);
+  for (let k = lines.length - 1; k >= 0; k--) {
+    try {
+      const obj = JSON.parse(lines[k]) as OutboxEvent;
+      if (events.includes(obj.event)) return obj;
+    } catch { /* skip non-JSON */ }
+  }
+  return null;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export async function outboxWaitSince(i: string, m: string, t: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null> {
+  const path = outboxPath(i, m, t);
+  for (let n = 0; n < timeoutSec; n++) {
+    const hit = lastMatch(readFrom(path, offset), events);
+    if (hit) return hit;
+    await sleep(1000);
+  }
+  return null;
+}
+
+export async function outboxWait(i: string, m: string, t: string, events: string[], timeoutSec: number): Promise<OutboxEvent | null> {
+  return outboxWaitSince(i, m, t, 0, events, timeoutSec);
+}
+
+export function outboxDump(i: string, m: string, t: string): string {
+  const p = outboxPath(i, m, t);
+  return existsSync(p) ? readFileSync(p, "utf8") : "";
+}
+
+export function paneMetaWrite(i: string, m: string, t: string, paneId: string, opts?: { now?: Date }): void {
+  const spawned = (opts?.now ?? new Date()).toISOString().replace(/\.\d{3}Z$/, "Z");
+  atomicWrite(paneMetaPath(i, m, t), JSON.stringify({ pane_id: paneId, instrument: i, model: m, spawned_at: spawned }) + "\n");
+}
+
+export interface PaneMeta { instrument: string; model: string; paneId: string; }
+
+export function paneMetaReadForDir(dir: string): PaneMeta {
+  const p = join(dir, "pane.json");
+  if (existsSync(p)) {
+    try {
+      const o = JSON.parse(readFileSync(p, "utf8"));
+      if (o.instrument && o.model) return { instrument: o.instrument, model: o.model, paneId: o.pane_id ?? "" };
+    } catch { /* fall through */ }
+  }
+  const name = dir.replace(/\/+$/, "").split("/").pop() ?? "";
+  return { instrument: name.replace(/-[^-]*$/, ""), model: name.replace(/^.*-/, ""), paneId: "" };
+}
+
+export function paneMetaRead(i: string, m: string, t: string): string | null {
+  const p = paneMetaPath(i, m, t);
+  if (!existsSync(p)) return null;
+  try { return JSON.parse(readFileSync(p, "utf8")).pane_id ?? null; } catch { return null; }
+}
+
+export function paneMetaModel(i: string, modelHint: string, t: string): string {
+  const p = paneMetaPath(i, modelHint, t);
+  if (existsSync(p)) { try { return JSON.parse(readFileSync(p, "utf8")).model ?? modelHint; } catch { /* */ } }
+  return modelHint;
+}
