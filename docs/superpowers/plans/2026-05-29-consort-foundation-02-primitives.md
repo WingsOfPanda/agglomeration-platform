@@ -649,6 +649,10 @@ export async function run(args: string[]): Promise<number> {
     return 2;
   }
   if (a0 === "--all") {
+    if (!args.includes("--yes")) {
+      log.warn("coda --all tears down EVERY part across every topic in this repo; re-run to confirm: coda --all --yes");
+      return 2;
+    }
     const repo = repoStateDir();
     if (!existsSync(repo)) { log.info("no state dirs to tear down"); return 0; }
     for (const t of readdirSync(repo, { withFileTypes: true })) {
