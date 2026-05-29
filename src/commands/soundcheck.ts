@@ -5,7 +5,8 @@ import { log } from "../core/log.js";
 import { haveCmd, inTmuxSession, tmuxVersionOk, tmuxVersionString } from "../core/deps.js";
 import { globalRoot } from "../core/paths.js";
 import { atomicWrite } from "../core/atomic.js";
-import { contractsExist, listInstruments, instrumentBinary } from "../core/contracts.js";
+import { contractsExist, listInstruments, instrumentBinary, instrumentConsultValidated } from "../core/contracts.js";
+import { readProviderList, planRoster } from "../core/providers.js";
 
 export interface PermissionResult { rc: 0 | 1 | 2; message?: string; configPath?: string; }
 
@@ -36,7 +37,23 @@ export async function run(args: string[]): Promise<number> {
   return healthCheck();
 }
 
-function rosterPlan(): number { return 0; }
+function detectedValidatedProviders(): string[] {
+  const available = readProviderList(join(globalRoot(), "providers-available.txt"));
+  return available.filter((p) => instrumentConsultValidated(p));
+}
+
+function rosterPlan(): number {
+  const available = readProviderList(join(globalRoot(), "providers-available.txt"));
+  const detected = available.filter((p) => instrumentConsultValidated(p));
+  const skipped = available
+    .filter((p) => !instrumentConsultValidated(p))
+    .map((p) => `${p} (consult_validated: false)`);
+  const prior = readProviderList(join(globalRoot(), "providers-active.txt"));
+  const plan = planRoster({ detectedValidated: detected, prior });
+  process.stdout.write(JSON.stringify({ ...plan, skipped }) + "\n");
+  return 0;
+}
+
 function rosterSet(_providers: string[]): number { return 0; }
 
 function healthCheck(): number {
