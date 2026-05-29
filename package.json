@@ -1,0 +1,27 @@
+{
+  "name": "consort",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Multi-model tmux pane orchestration for Claude Code",
+  "license": "MIT",
+  "scripts": {
+    "build": "esbuild src/consort.ts --bundle --platform=node --target=node18 --format=cjs --outfile=dist/consort.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests --ext .ts"
+  },
+  "dependencies": {
+    "execa": "^9.5.1",
+    "yaml": "^2.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.24.0",
+    "eslint": "^9.16.0",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.0",
+    "vitest": "^2.1.8"
+  }
+}
