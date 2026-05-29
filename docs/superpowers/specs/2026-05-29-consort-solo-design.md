@@ -209,8 +209,10 @@ clone-wars' `CW_DEPLOY_TURN_TIMEOUT`; configurable via `CONSORT_SOLO_TURN_TIMEOU
 4. Record `<action>\t<outcome>` to `finish-result.txt`.
 
 All `git`/`gh` operations are **best-effort**: a failure is logged + recorded as the outcome
-and never crashes the pipeline (faithful to `deploy-finish.sh … || true`). `gh` absence ⇒
-outcome `pr-skipped (gh not installed)`.
+and never crashes the pipeline (faithful to `deploy-finish.sh … || true`). Outcome tokens
+(written to `finish-result.txt`, consumed by nothing): `kept` (no remote) · `pr-opened` (push +
+`gh pr create` ok) · `pr-pushed-no-gh` (pushed, but `gh` absent or PR-create failed) ·
+`pr-failed-kept` (push failed).
 
 Without `--finish`, Stage 2 simply restores the start-branch checkout; `feat/solo-<topic>`
 retains the part's commits and `SUMMARY.md` documents how to review/finish manually.

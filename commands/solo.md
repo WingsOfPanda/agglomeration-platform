@@ -50,9 +50,13 @@ Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs"`.
 ## Stage 1 — Build
 
 1. Branch the target: `$CS solo branch <SLUG>` (snapshots HEAD, commits any WIP on the current
-   branch, creates/resumes `feat/solo-<SLUG>`). rc 1 = target is not a git repo (abort).
-2. Spawn the part: `$CS spawn <INSTRUMENT> <PROVIDER> <SLUG> --cwd <TARGET>`. rc 1 = bootstrap
-   failed (the part's state is FAILED-archived); abort with a SUMMARY (Stage 3 abort form).
+   branch, creates/resumes `feat/solo-<SLUG>`). On **rc 1** (target is not a git repo) → abort:
+   `$CS solo summary <SLUG> --aborted build not-a-git-repo "target is not a git repository"`,
+   print the SUMMARY, and stop. No part was spawned, so do **not** run `coda`.
+2. Spawn the part: `$CS spawn <INSTRUMENT> <PROVIDER> <SLUG> --cwd <TARGET>`. On **rc 1**
+   (bootstrap failed) → abort: `$CS solo summary <SLUG> --aborted build spawn-failed "part failed
+   bootstrap"`, print the SUMMARY, and stop. Do **not** run `coda` — `spawn` already
+   FAILED-archived the part.
 3. Dispatch round 1: `$CS solo turn-send <SLUG> 1`.
 4. Await it in the background:
    ```
@@ -93,8 +97,9 @@ Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs"`.
 
 ## Stage 3 — Teardown + SUMMARY
 
-1. `$CS coda <INSTRUMENT> <SLUG>` — graceful FINE banner → teardown → archive the part dir.
-   Capture the archived path it reports and record it for the summary:
+1. Tear down + archive the part with `coda` (graceful FINE banner → kill pane → archive the part
+   dir), capturing the archived path it reports into `archived-path.txt` for the summary. Run this
+   single command (do not invoke `coda` separately):
    ```bash
    ARCHIVED=$($CS coda <INSTRUMENT> <SLUG> 2>&1 | sed -n 's/.*archived [^:]*: //p' | tail -1)
    [ -n "$ARCHIVED" ] && printf '%s\n' "$ARCHIVED" > <SLUG state>/_solo/archived-path.txt
