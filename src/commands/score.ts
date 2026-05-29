@@ -72,7 +72,7 @@ export async function initWith(tokens: string[], d: ScoreInitDeps): Promise<numb
 
   log.ok(`score init: topic=${topic} N=${rows.length} ensemble=${ensemble ? "yes" : "no"} mode=${mode}`);
   process.stdout.write(
-    `TOPIC=${topic}\nN=${rows.length}\nENSEMBLE=${ensemble ? "yes" : "no"}\nMODE=${mode}\n` +
+    `TOPIC=${topic}\nN=${rows.length}\nENSEMBLE=${ensemble ? "yes" : "no"}\nMODE=${mode}\nART=${art}\n` +
     rows.map((r) => `PART=${r.instrument}:${r.provider}`).join("\n") + "\n",
   );
   return 0;

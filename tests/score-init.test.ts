@@ -49,4 +49,13 @@ describe("score init", () => {
     await initWith(["dup"], d);
     expect(await initWith(["dup"], d)).toBe(2);
   });
+  it("prints ART=<abs _score dir> on stdout", async () => {
+    let out = "";
+    const orig = process.stdout.write.bind(process.stdout);
+    (process.stdout as any).write = (s: string) => { out += s; return true; };
+    try {
+      await initWith(["cache", "policy"], deps(["codex", "claude"], ["viola", "cello"]));
+    } finally { (process.stdout as any).write = orig; }
+    expect(out).toContain(`ART=${scoreArtDir("cache-policy")}`);
+  });
 });
