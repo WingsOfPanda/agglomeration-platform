@@ -493,11 +493,13 @@ function readFrom(path6, offset) {
 }
 function lastMatch(text, events) {
   const lines = text.split("\n").filter(Boolean);
-  for (let k = lines.length - 1; k >= 0; k--) {
-    try {
-      const obj = JSON.parse(lines[k]);
-      if (events.includes(obj.event)) return obj;
-    } catch {
+  for (const name of events) {
+    for (let k = lines.length - 1; k >= 0; k--) {
+      try {
+        const obj = JSON.parse(lines[k]);
+        if (obj.event === name) return obj;
+      } catch {
+      }
     }
   }
   return null;
