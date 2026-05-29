@@ -21,7 +21,7 @@
   panes** the user can attach to. Coordination is **file-based IPC**
   (inbox / outbox / status / pane), not in-process messaging.
 - **What changes:** the language (Bash → TypeScript) and the packaging (61 `bin/*.sh`
-  scripts → one bundled `dist/consort.js` with subcommands). The **wire protocol,
+  scripts → one bundled `dist/consort.cjs` with subcommands). The **wire protocol,
   state layout, and tmux mechanics stay byte-identical** so the external model
   binaries behave exactly as they do today.
 - **What stays the same:** the thesis ("the trimmed primitive, smaller than OMC"),
@@ -29,7 +29,7 @@
   the IPC contract.
 - **License:** MIT (already in `/home/liupan/CC/consort/LICENSE`). Open source.
 - **Distribution:** committed `dist/` bundle so it installs with zero build step;
-  `commands/*.md` dispatch to `node ${CLAUDE_PLUGIN_ROOT}/dist/consort.js <sub>`.
+  `commands/*.md` dispatch to `node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs <sub>`.
 
 ---
 
@@ -326,7 +326,7 @@ metacharacters in `$ARGUMENTS`, and is language-independent):
 In consort the invocation becomes:
 
 ```
-node ${CLAUDE_PLUGIN_ROOT}/dist/consort.js <subcommand> --args-file <path>
+node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs <subcommand> --args-file <path>
 ```
 
 See `commands/list.md` for the canonical 3-step shape to copy.
@@ -524,7 +524,7 @@ consort/
 │   ├── core/                # §8 modules
 │   └── commands/            # one file per verb/command
 ├── dist/
-│   └── consort.js           # COMMITTED single-file bundle (zero-build install)
+│   └── consort.cjs           # COMMITTED single-file bundle (zero-build install)
 ├── tests/                   # vitest
 ├── package.json
 ├── tsconfig.json
@@ -546,7 +546,7 @@ consort/
   "keywords": ["claude-code", "plugin", "multi-agent", "orchestration", "tmux", "codex"],
   "hooks": {
     "UserPromptSubmit": [
-      { "matcher": "*", "hooks": [ { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/consort.js hook user-prompt-submit" } ] }
+      { "matcher": "*", "hooks": [ { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs hook user-prompt-submit" } ] }
     ]
   }
 }
@@ -568,8 +568,8 @@ process.exit(await fn(rest));
 ```
 
 **Build** (zero-dep install): `esbuild src/consort.ts --bundle --platform=node
---target=node18 --outfile=dist/consort.js` (or `bun build`). Commit `dist/`.
-`commands/*.md` call `node ${CLAUDE_PLUGIN_ROOT}/dist/consort.js <sub> --args-file …`.
+--target=node18 --outfile=dist/consort.cjs` (or `bun build`). Commit `dist/`.
+`commands/*.md` call `node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs <sub> --args-file …`.
 
 **Distribution:** add a marketplace entry pointing at `WingsOfPanda/consort`
 (public). Optionally publish to npm as `@wingsofpanda/consort` — but **not required**
@@ -601,7 +601,7 @@ Build in this order; each phase is independently testable.
 
 - **Phase 0 — scaffold.** `package.json`, `tsconfig.json`, esbuild build script,
   vitest, `plugin.json`, empty `commands/`, `config/` copied from clone-wars
-  (rename tokens). Commit a hello-world `dist/consort.js`.
+  (rename tokens). Commit a hello-world `dist/consort.cjs`.
 - **Phase 1 — core primitives.** `core/paths`, `core/atomic`, `core/log`,
   `core/deps`, `core/contracts`, `core/commanders`, `core/colors`, `core/ipc`,
   `core/tmux`. Full unit coverage on `ipc`/`atomic`/`paths`. **No commands yet.**
@@ -671,7 +671,7 @@ cp /home/liupan/CC/clone-wars/config/commanders.yaml         config/
 cp /home/liupan/CC/clone-wars/config/prompt-templates/identity.md config/prompt-templates/
 
 # build script in package.json:
-#   "build": "esbuild src/consort.ts --bundle --platform=node --target=node18 --outfile=dist/consort.js"
+#   "build": "esbuild src/consort.ts --bundle --platform=node --target=node18 --outfile=dist/consort.cjs"
 #   "test":  "vitest run"
 #   "typecheck": "tsc --noEmit"
 ```

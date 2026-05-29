@@ -4,7 +4,7 @@
 
 **Goal:** Build the scaffolded TypeScript project and the fully unit-tested `core/*` + `args` library for the `consort` plugin — the substrate every command reuses. No commands yet; this plan ends with `tsc` clean, `vitest` green, and a building `dist/`.
 
-**Architecture:** A single-file esbuild bundle (`dist/consort.js`) dispatched by subcommand. Logic lives in typed `src/core/*` modules ported behavior-for-behavior from clone-wars Bash (`/home/liupan/CC/clone-wars`), with Bash footguns replaced by typed objects + `JSON.parse`. tmux is the only subprocess surface (via `execa`). The IPC wire protocol and tmux mechanics are preserved byte-for-byte; the only schema rename is `commander`→`instrument` (musical rebrand).
+**Architecture:** A single-file esbuild bundle (`dist/consort.cjs`) dispatched by subcommand. Logic lives in typed `src/core/*` modules ported behavior-for-behavior from clone-wars Bash (`/home/liupan/CC/clone-wars`), with Bash footguns replaced by typed objects + `JSON.parse`. tmux is the only subprocess surface (via `execa`). The IPC wire protocol and tmux mechanics are preserved byte-for-byte; the only schema rename is `commander`→`instrument` (musical rebrand).
 
 **Tech Stack:** TypeScript (ES2022, NodeNext, strict), esbuild (bundle), vitest (tests), eslint, `execa` (tmux), `yaml` (config). Node ≥18 target; dev on Node 24.
 
@@ -48,7 +48,7 @@ config/
 .claude-plugin/plugin.json      # T3
 commands/{roster,coda,soundcheck}.md  # T3
 hooks/                  # T3 — stub
-dist/consort.js         # T2 — committed bundle
+dist/consort.cjs         # T2 — committed bundle
 package.json tsconfig.json vitest.config.ts .eslintrc.cjs  # T1-T2
 ```
 
@@ -74,7 +74,7 @@ Test helper used throughout: a `tests/helpers/tmpHome.ts` that sets `CONSORT_HOM
   "description": "Multi-model tmux pane orchestration for Claude Code",
   "license": "MIT",
   "scripts": {
-    "build": "esbuild src/consort.ts --bundle --platform=node --target=node18 --format=cjs --outfile=dist/consort.js",
+    "build": "esbuild src/consort.ts --bundle --platform=node --target=node18 --format=cjs --outfile=dist/consort.cjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
@@ -95,7 +95,7 @@ Test helper used throughout: a `tests/helpers/tmpHome.ts` that sets `CONSORT_HOM
 }
 ```
 
-> Note: bundle `--format=cjs` because the entry uses Node builtins and the plugin invokes it via `node dist/consort.js`; CJS avoids ESM `__dirname` friction inside the single-file bundle. Source stays ESM (`"type":"module"`, NodeNext).
+> Note: bundle `--format=cjs` because the entry uses Node builtins and the plugin invokes it via `node dist/consort.cjs`; CJS avoids ESM `__dirname` friction inside the single-file bundle. Source stays ESM (`"type":"module"`, NodeNext).
 
 - [ ] **Step 2: Write `tsconfig.json`**
 
@@ -187,8 +187,8 @@ process.exit(2);
 
 - [ ] **Step 5: Build and smoke-test**
 
-Run: `npm run build && node dist/consort.js spawn`
-Expected: stderr `consort: subcommand 'spawn' not yet implemented`, exit code 2. Confirm `dist/consort.js` exists.
+Run: `npm run build && node dist/consort.cjs spawn`
+Expected: stderr `consort: subcommand 'spawn' not yet implemented`, exit code 2. Confirm `dist/consort.cjs` exists.
 
 - [ ] **Step 6: Typecheck (should be clean with no real modules yet)**
 
@@ -198,7 +198,7 @@ Expected: no output, exit 0.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add vitest.config.ts eslint.config.js .gitignore src/consort.ts dist/consort.js
+git add vitest.config.ts eslint.config.js .gitignore src/consort.ts dist/consort.cjs
 git commit -m "chore: build/test toolchain + hello-world dist"
 ```
 
@@ -332,7 +332,7 @@ EOF
   "keywords": ["claude-code", "plugin", "multi-agent", "orchestration", "tmux", "codex"],
   "hooks": {
     "UserPromptSubmit": [
-      { "matcher": "*", "hooks": [ { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/consort.js hook user-prompt-submit" } ] }
+      { "matcher": "*", "hooks": [ { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs hook user-prompt-submit" } ] }
     ]
   }
 }
@@ -356,10 +356,10 @@ Show every active part across topics, or scope to a single topic.
 ## Steps
 
 1. Run this Bash block to mint an args path and capture it:
-   `node ${CLAUDE_PLUGIN_ROOT}/dist/consort.js roster --mint-args-file`
+   `node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs roster --mint-args-file`
    (prints an absolute path under `.consort/_args/`).
 2. **Write** `$ARGUMENTS` into that exact path using the Write tool (never echo it into a shell).
-3. Run: `node ${CLAUDE_PLUGIN_ROOT}/dist/consort.js roster --args-file <path-from-step-1>`
+3. Run: `node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs roster --args-file <path-from-step-1>`
 ```
 
 `commands/coda.md` (same 3-step shape; `description: Gracefully end parts (FINE banner) and archive their state`, `argument-hint: <topic> | <instrument> <topic> | --all`).
@@ -373,7 +373,7 @@ Show every active part across topics, or scope to a single topic.
 ```markdown
 # user-prompt-submit hook (stub)
 
-The plugin's UserPromptSubmit hook dispatches to `consort.js hook user-prompt-submit`.
+The plugin's UserPromptSubmit hook dispatches to `consort.cjs hook user-prompt-submit`.
 In the foundation it is a no-op (no active-session resume logic yet — that lands with
 the `rehearsal` command). Implemented as `src/commands/hook.ts` in Plan 02.
 ```
@@ -2166,10 +2166,10 @@ export async function captureFailure(input: CaptureFailureInput, deps: Forensics
 ```bash
 npm run typecheck && npm run test && npm run lint && npm run build
 ```
-Expected: tsc clean; all vitest files PASS; eslint clean; `dist/consort.js` rebuilt. Then commit the refreshed `dist/`:
+Expected: tsc clean; all vitest files PASS; eslint clean; `dist/consort.cjs` rebuilt. Then commit the refreshed `dist/`:
 
 ```bash
-git add dist/consort.js && git commit -m "chore: rebuild dist after core library"
+git add dist/consort.cjs && git commit -m "chore: rebuild dist after core library"
 ```
 
 **Exit state:** `core/*` + `args` fully unit-tested; no commands yet. Proceed to **Plan 02 — Primitives**.

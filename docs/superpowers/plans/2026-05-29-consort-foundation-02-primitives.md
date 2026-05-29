@@ -47,7 +47,7 @@ import { mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const CLI = join(process.cwd(), "dist", "consort.js");
+const CLI = join(process.cwd(), "dist", "consort.cjs");
 function run(args: string[], env: Record<string, string> = {}) {
   try {
     const stdout = execFileSync("node", [CLI, ...args], { encoding: "utf8", env: { ...process.env, ...env } });
@@ -76,7 +76,7 @@ describe("dispatcher (requires npm run build first)", () => {
 });
 ```
 
-> The test runs the built `dist/consort.js`; ensure `npm run build` runs before this test (Plan 02 close-out rebuilds). `CONSORT_BANNER_FAST=1` makes the countdown instant for tests.
+> The test runs the built `dist/consort.cjs`; ensure `npm run build` runs before this test (Plan 02 close-out rebuilds). `CONSORT_BANNER_FAST=1` makes the countdown instant for tests.
 
 - [ ] **Step 2: Run, expect FAIL** — `npm run build && npx vitest run tests/consort-dispatch.test.ts`.
 
@@ -153,7 +153,7 @@ main().then((code) => process.exit(code)).catch((e) => { process.stderr.write(`$
 - Modify: `src/core/tmux.ts` (append; depends on `colors` + the `_banner` subcommand from T15)
 - Test: `tests/tmux-graceful.test.ts` (pure: the respawn-command builder)
 
-`killGraceful(pane, label, color, pluginRoot)`: no-op if `!paneAlive`; snapshot via `capture-pane -p -e` to a temp file; `respawn-pane -k` running `cat <snap>; node <pluginRoot>/dist/consort.js _banner <label> <color>; rm -f <snap>`. The command builder `gracefulRespawnCommand(snap, pluginRoot, label, color)` is pure and unit-tested. `preflightLayout(topic, roster, opts)`: orchestrates `conductorPane` → first `-h` then `-v` splits running `sentinelCommand(labelFmt)` → `paneLabelSet` → `selectLayoutMainVertical` → write `preflight-panes.txt` atomically with rollback (kill created panes on throw). `paneLabelSet(pane, instrument, model, topic)` sets the three `@cs_*` options.
+`killGraceful(pane, label, color, pluginRoot)`: no-op if `!paneAlive`; snapshot via `capture-pane -p -e` to a temp file; `respawn-pane -k` running `cat <snap>; node <pluginRoot>/dist/consort.cjs _banner <label> <color>; rm -f <snap>`. The command builder `gracefulRespawnCommand(snap, pluginRoot, label, color)` is pure and unit-tested. `preflightLayout(topic, roster, opts)`: orchestrates `conductorPane` → first `-h` then `-v` splits running `sentinelCommand(labelFmt)` → `paneLabelSet` → `selectLayoutMainVertical` → write `preflight-panes.txt` atomically with rollback (kill created panes on throw). `paneLabelSet(pane, instrument, model, topic)` sets the three `@cs_*` options.
 
 - [ ] **Step 1: Write failing test** `tests/tmux-graceful.test.ts`
 
@@ -165,7 +165,7 @@ describe("tmux graceful + labels", () => {
   it("gracefulRespawnCommand cats snapshot, runs _banner, removes snapshot", () => {
     const cmd = gracefulRespawnCommand("/tmp/snap.txt", "/plugin", "strings-violin:codex:demo", "colour110");
     expect(cmd).toContain("cat '/tmp/snap.txt'");
-    expect(cmd).toContain("node '/plugin/dist/consort.js' _banner 'strings-violin:codex:demo' 'colour110'");
+    expect(cmd).toContain("node '/plugin/dist/consort.cjs' _banner 'strings-violin:codex:demo' 'colour110'");
     expect(cmd).toContain("rm -f '/tmp/snap.txt'");
   });
   it("paneLabelSetArgs returns three @cs_* set-option arg arrays", () => {
@@ -202,7 +202,7 @@ export async function paneLabelSet(pane: string, instrument: string, model: stri
 
 // --- graceful kill with FINE banner ---
 export function gracefulRespawnCommand(snap: string, pluginRoot: string, label: string, color: string): string {
-  return `cat '${snap}'; node '${pluginRoot}/dist/consort.js' _banner '${label}' '${color}'; rm -f '${snap}'`;
+  return `cat '${snap}'; node '${pluginRoot}/dist/consort.cjs' _banner '${label}' '${color}'; rm -f '${snap}'`;
 }
 
 export async function paneLabel(pane: string): Promise<string> {
@@ -1065,9 +1065,9 @@ export async function run(_args: string[]): Promise<number> { return 0; }
 
 ```bash
 npm run typecheck && npm run test && npm run lint && npm run build
-git add dist/consort.js && git commit -m "chore: rebuild dist after primitives"
+git add dist/consort.cjs && git commit -m "chore: rebuild dist after primitives"
 ```
 Expected: tsc clean, all vitest PASS (incl. dispatcher test against the fresh `dist`), eslint clean.
 
-**Exit state:** working CLI — `node dist/consort.js {spawn,send,collect,roster,coda,soundcheck,preflight}` reachable; slash commands wired. Proceed to **Plan 03 — Verify + Dogfood**.
+**Exit state:** working CLI — `node dist/consort.cjs {spawn,send,collect,roster,coda,soundcheck,preflight}` reachable; slash commands wired. Proceed to **Plan 03 — Verify + Dogfood**.
 
