@@ -7,7 +7,7 @@ import { atomicWrite } from "../core/atomic.js";
 import { isoUtc } from "../core/archive.js";
 import {
   deriveSlug, parseScoreArgs, scoreArtDir, scoreDraftDir,
-  formatRosterFile, scoreDocPath, parseMultiRepoMode, type RosterRow,
+  formatRosterFile, scoreDocPath, parseMultiRepoMode, parseRosterFile, type RosterRow,
 } from "../core/score.js";
 import { assembleDoc, SECTIONS_SINGLE, SECTIONS_MULTI, type DocMode } from "../core/scoreDoc.js";
 import { auditDoc } from "../core/audit.js";
@@ -17,6 +17,7 @@ import { pickInstruments } from "../core/instruments.js";
 import { outboxOffset, outboxPath, outboxWaitSince, type OutboxEvent } from "../core/ipc.js";
 import { instrumentConsultValidated, consultTimeout, instrumentTimeoutMultiplier } from "../core/contracts.js";
 import { composeResearchPrompt, researchState, parseLatestOffset, scaledTimeout } from "../core/scoreTurn.js";
+import { diffFindings, type DiffPart } from "../core/scoreDiff.js";
 import { run as sendRun } from "./send.js";
 
 function usage(): number { log.error("usage: score <init|assemble|spawn-all|research-send|research-wait|diff> ..."); return 2; }
@@ -29,6 +30,7 @@ export async function run(args: string[]): Promise<number> {
     case "assemble": return assembleRun(rest);
     case "research-send": return researchSendRun(rest);
     case "research-wait": return researchWaitRun(rest);
+    case "diff": return diffRun(rest);
     default: return usage();
   }
 }
@@ -197,6 +199,37 @@ export async function researchWaitWith(topic: string, instrument: string, provid
   }
   writeFileSync(join(art, `research-${instrument}.done`), "");
   log.ok(`score research-wait: ${instrument} FS=${fs}`);
+  return 0;
+}
+
+export async function diffRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: score diff <topic>"); return 2; }
+  const art = scoreArtDir(topic);
+  if (!existsSync(art)) { log.error(`score diff: ${art} not found`); return 1; }
+  if (existsSync(join(art, "diff.md"))) { log.error("score diff: diff.md exists; rm to retry"); return 1; }
+
+  const rosterPath = join(art, "roster.txt");
+  if (!existsSync(rosterPath)) { log.error("score diff: roster.txt missing — run score init first"); return 1; }
+  const rows = parseRosterFile(readFileSync(rosterPath, "utf8"));
+  if (rows.length < 2) { log.error(`score diff: need >=2 parts in roster.txt, got ${rows.length}`); return 1; }
+
+  const parts: DiffPart[] = [];
+  for (const r of rows) {
+    const f = join(partDir(r.instrument, r.provider, topic), "findings.md");
+    if (!existsSync(f)) { log.error(`score diff: ${r.instrument} findings.md missing: ${f}`); return 1; }
+    parts.push({ name: r.instrument, findings: readFileSync(f, "utf8") });
+  }
+
+  const result = diffFindings(parts);
+  for (const file of result.files) atomicWrite(join(art, file.filename), file.content);
+  atomicWrite(join(art, "diff.md"), result.diffMd);
+
+  const summary = result.files
+    .filter((f) => f.filename.endsWith("_only_items.txt") || f.filename === "consensus.txt")
+    .map((f) => `${f.filename.replace(/\.txt$/, "")}=${f.content.split("\n").filter(Boolean).length}`)
+    .join(" ");
+  log.ok(`score diff: wrote ${join(art, "diff.md")} (${rows.length} parts) ${summary}`);
   return 0;
 }
 
