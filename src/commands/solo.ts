@@ -10,7 +10,7 @@ import { soloArtDir, soloExecDir, deriveSlug, parseSoloArgs, detectTestCommand }
 import { instrumentBinary } from "../core/contracts.js";
 import { haveCmd } from "../core/deps.js";
 import { pickRandomInstrument } from "../core/instruments.js";
-import { runnerAt, preSnapshot, createOrResumeBranch } from "../core/gitwork.js";
+import { runnerAt, preSnapshot, createOrResumeBranch, finishBranch } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
 import { outboxOffset, outboxPath, outboxWaitSince, type OutboxEvent } from "../core/ipc.js";
 import { composeRound1Prompt, composeFixPrompt, classifyTurn, parseOffset } from "../core/turn.js";
@@ -180,5 +180,34 @@ async function detectTestRun(rest: string[]): Promise<number> {
   process.stdout.write(detectTestCommand(cwd) + "\n");
   return 0;
 }
-async function finishRun(_a: string[]): Promise<number> { log.error("solo finish: not implemented"); return 2; }
+async function finishRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: solo finish <topic>"); return 2; }
+  const target = readField(join(soloExecDir(topic), "target_cwd.txt")) || repoRoot();
+  return finishWith(topic, runnerAt(target), haveCmd("gh"));
+}
+
+export async function finishWith(topic: string, r: Runner, hasGh: boolean): Promise<number> {
+  const exec = soloExecDir(topic);
+  const branch = readField(join(exec, "branch.txt"));
+  const startBranch = readField(join(exec, "start-branch.txt")) || "main";
+  const doFinish = readField(join(exec, "finish.txt")) === "yes";
+
+  if (!doFinish) {
+    r.run("git", ["checkout", "-q", startBranch]);
+    atomicWrite(join(exec, "finish-result.txt"), `none\tbranch-only (kept ${branch})\n`);
+    log.ok(`solo finish: branch-only — kept ${branch}, restored ${startBranch}`);
+    return 0;
+  }
+  const brief = existsSync(join(soloArtDir(topic), "task-brief.md")) ? readFileSync(join(soloArtDir(topic), "task-brief.md"), "utf8") : "";
+  const verify = readField(join(exec, "verify-result.txt"));
+  const res = finishBranch(r, {
+    branch, startBranch, hasGh,
+    title: `solo: ${branch}`,
+    body: `${brief}\n\nVerify: ${verify}\n\n(Automated solo branch — review and merge into ${startBranch}.)`,
+  });
+  atomicWrite(join(exec, "finish-result.txt"), `${res.action}\t${res.outcome}\n`);
+  log.ok(`solo finish: ${res.action} → ${res.outcome}`);
+  return 0;
+}
 async function summaryRun(_a: string[]): Promise<number> { log.error("solo summary: not implemented"); return 2; }

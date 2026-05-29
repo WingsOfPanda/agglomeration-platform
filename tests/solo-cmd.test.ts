@@ -222,3 +222,51 @@ describe("solo detect-test", () => {
     expect(outSpy.text().trim()).toBe("npm test");
   });
 });
+
+import { finishWith } from "../src/commands/solo.js";
+
+describe("solo finish (finishWith core)", () => {
+  let h: { home: string; cleanup: () => void };
+  beforeEach(() => { h = freshHome(); });
+  afterEach(() => { h.cleanup(); });
+
+  async function scaffold(topic: string, finishFlag: string) {
+    const { soloArtDir, soloExecDir } = await import("../src/core/solo.js");
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(soloExecDir(topic), { recursive: true });
+    const exec = soloExecDir(topic);
+    writeFileSync(join(exec, "target_cwd.txt"), "/proj\n");
+    writeFileSync(join(exec, "branch.txt"), "feat/solo-auth\n");
+    writeFileSync(join(exec, "start-branch.txt"), "main\n");
+    writeFileSync(join(exec, "finish.txt"), finishFlag + "\n");
+    writeFileSync(join(soloArtDir(topic), "task-brief.md"), "## Goal\nX");
+    writeFileSync(join(exec, "verify-result.txt"), "PASS (npm test)\n");
+  }
+
+  function fake(replies: Record<string, { code: number; stdout: string }>) {
+    const calls: string[][] = [];
+    return { calls, r: { run: (cmd: string, args: string[]) => { calls.push([cmd, ...args]); return replies[[cmd, ...args].join(" ")] ?? { code: 0, stdout: "" }; } } };
+  }
+
+  it("finish.txt=no → restore only, records branch-only; rc 0", async () => {
+    await scaffold("auth", "no");
+    const { calls, r } = fake({});
+    expect(await finishWith("auth", r as any, true)).toBe(0);
+    expect(calls).toContainEqual(["git", "checkout", "-q", "main"]);
+    const { soloExecDir } = await import("../src/core/solo.js");
+    expect(readFileSync(join(soloExecDir("auth"), "finish-result.txt"), "utf8")).toContain("branch-only");
+  });
+
+  it("finish.txt=yes + remote → push/pr path, records outcome", async () => {
+    await scaffold("auth", "yes");
+    const { calls, r } = fake({
+      "git remote": { code: 0, stdout: "origin\n" },
+      "git push -q -u origin feat/solo-auth": { code: 0, stdout: "" },
+      "git remote get-url origin": { code: 0, stdout: "url\n" },
+    });
+    expect(await finishWith("auth", r as any, true)).toBe(0);
+    expect(calls.some((c) => c[0] === "gh")).toBe(true);
+    const { soloExecDir } = await import("../src/core/solo.js");
+    expect(readFileSync(join(soloExecDir("auth"), "finish-result.txt"), "utf8")).toContain("pr-opened");
+  });
+});
