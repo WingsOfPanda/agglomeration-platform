@@ -31,7 +31,12 @@ export function planRoster(input: { detectedValidated: string[]; prior: string[]
   return { detected, prior, dropped, decision: "prompt" };
 }
 
-/** The providers-active.txt body. Trailing newline only when non-empty (matches the available-file writer). */
+/** Render a providers-*.txt body: two header lines (timestamp + subtitle), then one provider per line. */
+export function formatProviderFile(providers: string[], isoStamp: string, subtitle: string): string {
+  return `# generated ${isoStamp} by /consort:soundcheck\n# ${subtitle}\n${providers.join("\n")}${providers.length ? "\n" : ""}`;
+}
+
+/** The providers-active.txt body. */
 export function formatActiveFile(providers: string[], isoStamp: string): string {
-  return `# generated ${isoStamp} by /consort:soundcheck\n# active providers selected by user\n${providers.join("\n")}${providers.length ? "\n" : ""}`;
+  return formatProviderFile(providers, isoStamp, "active providers selected by user");
 }

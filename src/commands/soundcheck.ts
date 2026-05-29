@@ -6,7 +6,7 @@ import { haveCmd, inTmuxSession, tmuxVersionOk, tmuxVersionString } from "../cor
 import { globalRoot } from "../core/paths.js";
 import { atomicWrite } from "../core/atomic.js";
 import { contractsExist, listInstruments, instrumentBinary, instrumentConsultValidated } from "../core/contracts.js";
-import { readProviderList, planRoster, formatActiveFile } from "../core/providers.js";
+import { readProviderList, planRoster, formatActiveFile, formatProviderFile } from "../core/providers.js";
 import { isoUtc } from "../core/archive.js";
 
 export interface PermissionResult { rc: 0 | 1 | 2; message?: string; configPath?: string; }
@@ -116,9 +116,8 @@ function healthCheck(): number {
     }
   }
 
-  const stamp = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
   atomicWrite(join(globalRoot(), "providers-available.txt"),
-    `# generated ${stamp} by /consort:soundcheck\n# providers detected with binary on PATH + contracts.yaml row\n${detected.join("\n")}${detected.length ? "\n" : ""}`);
+    formatProviderFile(detected, isoUtc(), "providers detected with binary on PATH + contracts.yaml row"));
 
   if (fail !== 0 || ok === 0) {
     if (ok === 0 && total > 0) log.error(`no providers available; install at least one of: ${listInstruments().join(" ")}`);
