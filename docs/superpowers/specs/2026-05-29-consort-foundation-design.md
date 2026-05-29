@@ -84,11 +84,11 @@ Frozen (Tier 3 — neutral protocol, NOT renamed): event names `ready`/`ack`/`pr
 
 ```
 consort/
-├── .claude-plugin/plugin.json        # name=consort; UserPromptSubmit hook → consort.js hook
+├── .claude-plugin/plugin.json        # name=consort; UserPromptSubmit hook → consort.cjs hook
 ├── commands/
-│   ├── roster.md                     # → node …/consort.js roster --args-file <p>
-│   ├── coda.md                       # → node …/consort.js coda   --args-file <p>
-│   └── soundcheck.md                 # → node …/consort.js soundcheck --args-file <p>
+│   ├── roster.md                     # → node …/consort.cjs roster --args-file <p>
+│   ├── coda.md                       # → node …/consort.cjs coda   --args-file <p>
+│   └── soundcheck.md                 # → node …/consort.cjs soundcheck --args-file <p>
 ├── config/
 │   ├── contracts.yaml                # copied verbatim (codex/agy/claude/opencode)
 │   ├── instruments.yaml              # renamed from commanders.yaml; instrument pool (§4.3)
@@ -113,7 +113,7 @@ consort/
 │       ├── roster.ts  coda.ts  soundcheck.ts    # themed; have .md slash commands
 │       ├── preflight.ts                         # pane-grid pre-allocation (§5.5)
 │       └── hook.ts                              # UserPromptSubmit handler (stub for now)
-├── dist/consort.js                   # COMMITTED single-file esbuild bundle (zero-build install)
+├── dist/consort.cjs                   # COMMITTED single-file esbuild bundle (zero-build install)
 ├── tests/                            # vitest
 ├── package.json  tsconfig.json  LICENSE  README.md
 ```
@@ -372,14 +372,14 @@ before the live run.
 
 ## 9. Build & packaging
 
-- `esbuild src/consort.ts --bundle --platform=node --target=node18 --outfile=dist/consort.js`.
-- **Commit `dist/`** → zero-build install. Build + smoke (`node dist/consort.js`) is part
+- `esbuild src/consort.ts --bundle --platform=node --target=node18 --outfile=dist/consort.cjs`.
+- **Commit `dist/`** → zero-build install. Build + smoke (`node dist/consort.cjs`) is part
   of every change; vitest runs against `src`.
-- `plugin.json`: `name=consort`, `UserPromptSubmit` hook → `node ${CLAUDE_PLUGIN_ROOT}/dist/consort.js hook user-prompt-submit`.
+- `plugin.json`: `name=consort`, `UserPromptSubmit` hook → `node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs hook user-prompt-submit`.
 - `commands/*.md` dispatch via the 3-step args-file fence:
   1. CLI mints a unique path under `.consort/_args/` and prints it.
   2. The directive **Writes** `$ARGUMENTS` into that path (Write tool — never echo/printf into a shell).
-  3. The directive invokes `node ${CLAUDE_PLUGIN_ROOT}/dist/consort.js <sub> --args-file <path>`; the CLI reads + deletes it.
+  3. The directive invokes `node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs <sub> --args-file <path>`; the CLI reads + deletes it.
 
 ---
 
@@ -389,7 +389,7 @@ before the live run.
 |---|---|
 | tmux spawn fidelity regression (split/color/preflight/timing) | behavior-preserving port (§5); pure-fn arg tests; `CONSORT_LIVE_TMUX=1` integration test; adversarial verify vs. Bash; live dogfood gate |
 | IPC contract drift breaks provider drop-in | TDD ipc against pinned fixtures; strict `obj.event===name` parse; bootstrap-floor sleeps preserved exactly; dogfood |
-| committed `dist/` drifts from `src/` | build + smoke (`node dist/consort.js`) on every change; vitest runs against `src` |
+| committed `dist/` drifts from `src/` | build + smoke (`node dist/consort.cjs`) on every change; vitest runs against `src` |
 | partial rename leaves stale tokens | wholesale rename map + grep gate (§8); `tsc` catches broken refs |
 | fan-out agents diverge on conventions | signatures fixed by the module map; scaffold tsconfig/eslint enforce style; single-owner integration |
 | scope creep into high-level commands | foundation-only guard; `solo`/`score`/etc. explicitly out of this spec |
@@ -399,7 +399,7 @@ before the live run.
 ## 11. Acceptance — definition of "done"
 
 1. `npm run typecheck` clean; `npm run test` (vitest) green; `npm run build` emits
-   `dist/consort.js`; smoke-dispatch (`node dist/consort.js <sub>`) works.
+   `dist/consort.cjs`; smoke-dispatch (`node dist/consort.cjs <sub>`) works.
 2. Stale-token grep gate clean.
 3. **Live dogfood passes here:** inside tmux,
    `spawn violin codex <topic> "<task>"` → pane appears with the colored

@@ -12,7 +12,7 @@ commands) spawns and orchestrates real interactive model TUIs (`codex` / `claude
 `opencode`) as **tmux panes** the user can attach to. Coordination is **file-based IPC**
 (inbox / outbox / status / pane), not in-process messaging.
 
-The language and packaging change (Bash → TS; 61 `bin/*.sh` → one committed `dist/consort.js`);
+The language and packaging change (Bash → TS; 61 `bin/*.sh` → one committed `dist/consort.cjs`);
 the **wire protocol, state layout, and tmux mechanics stay byte-identical** so the external model
 binaries behave exactly as they do under clone-wars.
 
@@ -66,10 +66,10 @@ Fix the offending file; never weaken the gate.
 
 ## Architecture & conventions
 
-- **One esbuild bundle:** `dist/consort.js`, dispatched by subcommand (`src/consort.ts` →
+- **One esbuild bundle:** `dist/consort.cjs`, dispatched by subcommand (`src/consort.ts` →
   `src/commands/<verb>.run(args)`). Logic in `src/core/*`; one file per responsibility.
 - **`dist/` is committed** (zero-build install). After changing `src/`, run `npm run build` and
-  commit the refreshed `dist/consort.js`.
+  commit the refreshed `dist/consort.cjs`.
 - **tmux is the only subprocess surface** (via `execa`). Test tmux code as **pure arg-array
   builders**; never spawn real panes in unit tests (live behavior = the dogfood).
 - **Typed objects + `JSON.parse`, not shell parsing.** Event matching is `JSON.parse(line)` then
@@ -86,7 +86,7 @@ Fix the offending file; never weaken the gate.
 npm run typecheck   # tsc --noEmit (replaces clone-wars' static-wiring locks)
 npm run test        # vitest run
 npm run lint        # eslint
-npm run build       # esbuild → dist/consort.js (commit the result)
+npm run build       # esbuild → dist/consort.cjs (commit the result)
 ```
 
 Test isolation: set `CONSORT_HOME` to a fresh temp dir per test (see `tests/helpers/tmpHome.ts`).
