@@ -357,3 +357,60 @@ carry a marker).
   the 8-section multi walk (per-target architecture, cross-repo notes), and the multi-doc assemble +
   plural header + deploy-audit all exercised. Drilldown / forensics / `coda` teardown / `present`
   (Phase F) remain.
+
+# Consort `score` — Phase F (drilldown → forensics → teardown → archive → present) Dogfood Result
+
+**Date:** 2026-05-30 · **Branch:** `feat/score` · **Result:** PASS (focused new-surface dogfood; one
+real-model fix surfaced + applied). This completes the `score` command (Phases A–F).
+
+## Run
+
+Isolated `CONSORT_HOME=/tmp/consort-dogfood-phaseF`. Two halves:
+
+**Part A — forensics + reflection + archive (seeded, no live parts):** seeded an `_score` art dir with
+four mechanical signals (an `audit.log` `ISSUE=`, a part dir's `outbox.jsonl` `error` event +
+`status.json` `state=error`, a `spawn-results.tsv` rc≠0 row).
+- `score forensics <topic>` → wrote `$CONSORT_HOME/forensics/<date>/<time>-score-<topic>.md` (verified
+  **outside** the state tree — a sibling of `state/`), with YAML frontmatter (`n_findings_mechanical: 4`)
+  + the 4 findings as `- **<source>** <key> _(source: part=…)_` bullets. `part=` labels, no stale tokens.
+- Maestro appended `## Maestro reflection` (3 bullets); a second append **skipped** (idempotent on the
+  exact header) — 1 header in the file.
+- `score archive <topic>` → moved `_score` to `~/.consort/archive/<hash>/<topic>/_score-<ts>`,
+  `finalizeArchived` stamped the part `status.json` to `state=archived` + `archived_ts` (verified), and
+  the **forensics file still exists** post-archive (survives, as designed). (The topic dir lingered only
+  because the seeded part wasn't torn down — in the real Stage 14b→15 order `coda` archives the parts
+  first, leaving `_score` alone so the rmdir succeeds.)
+
+**Part B — drilldown + teardown (one live codex part):** spawned `viola:codex`, gave it a design doc,
+ran `score drilldown drilltest Architecture <dd> <focus> <doc> viola codex`.
+- Round 1 returned "0/1 produced notes" — **a real fix, not a verb bug:** the part ack'd, read the
+  source, and was still writing cited notes at ~110s when the **90s default timeout** fired. The verb
+  mechanics were correct (it sent, captured the offset before send, waited `[done,error]`); the default
+  was just too tight. **Fixed** (`fix(score)` commit): the drilldown timeout now defaults to
+  `consultTimeout("research")` (~600s, the bash predecessor's `findings_timeout_s` default), still
+  overridable via `CONSORT_DRILLDOWN_TIMEOUT_S`. The wait still returns the instant `done` appears, so the
+  generous ceiling only bounds the hang case.
+- Round 2 (post-fix, same section) → "1/1 parts produced notes" (rc 0) and demonstrated the **collision
+  suffix** live: the second file landed as `drilldown-architecture-viola-2.md` (4551 B of cited notes)
+  alongside the original `drilldown-architecture-viola.md`. Both carry real `[src/...:line]` citations.
+- `coda viola drilltest` → archived the part, pane gone (the **FINE** banner teardown).
+
+## Findings / fixes surfaced
+
+- **Drilldown default timeout 90s → 600s (fixed).** A real codex drill turn (read the doc + write cited
+  notes) routinely exceeds 90s; the flat 90 default diverged from clone-wars' `findings_timeout_s`
+  (research-timeout) default. Now defaults to `consultTimeout("research")`, env-overridable. Surfaced
+  and fixed mid-dogfood; round 2 passed cleanly.
+- No other defects. Forensics is genuinely best-effort + outside the state tree; the reflection
+  idempotency holds; the collision counter (`-2`) works against real files; `coda`/`archiveTopic` reuse
+  behaves; `finalizeArchived` stamps `state=archived` before the move.
+
+## Verification context
+
+- 330 vitest unit tests green (added `forensics` scrapers/scrapeArtDir/captureArtDir, `score-core`
+  `resolveDrilldownPath`, `score-turn` `composeDrilldownPrompt`/`drilldownState`, `score-escalation`
+  `drilldown`/`forensics`/`archive`); `tsc --noEmit` + eslint + stale-token gate clean; `dist/consort.cjs`
+  rebuilt + committed (the new `drilldown`/`forensics`/`archive` verbs ship in the bundle).
+- Phase F built subagent-driven: 4 fresh implementers (forensics core / drilldown core / command verbs /
+  directive) each through two-stage review (spec → quality), all approved. The `score` command (A–F) is
+  now complete; `perform`/`prelude`/`rehearsal`/`playback` remain as separate future commands.
