@@ -165,3 +165,48 @@ describe("solo turn-send (turnSendWith core)", () => {
     expect(await turnSendWith("auth", 2, { offsetFor: () => 0, send: async () => 0 })).toBe(1);
   });
 });
+
+import { turnWaitWith } from "../src/commands/solo.js";
+
+describe("solo turn-wait (turnWaitWith core)", () => {
+  let h: { home: string; cleanup: () => void };
+  beforeEach(() => { h = freshHome(); });
+  afterEach(() => { h.cleanup(); });
+
+  async function scaffold(topic: string, stateBody: string) {
+    const { soloArtDir, soloExecDir } = await import("../src/core/solo.js");
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(soloExecDir(topic), { recursive: true });
+    writeFileSync(join(soloArtDir(topic), "instrument.txt"), "violin\n");
+    writeFileSync(join(soloArtDir(topic), "selected-provider.txt"), "codex\n");
+    writeFileSync(join(soloExecDir(topic), `turn-1.txt`), stateBody);
+  }
+
+  it("done → appends TS=ok; rc 0", async () => {
+    await scaffold("auth", "OFFSET=10\n");
+    const rc = await turnWaitWith("auth", 1, { wait: async () => ({ event: "done", summary: "ok" }) });
+    expect(rc).toBe(0);
+    const { soloExecDir } = await import("../src/core/solo.js");
+    expect(readFileSync(join(soloExecDir("auth"), "turn-1.txt"), "utf8")).toBe("OFFSET=10\nTS=ok\n");
+  });
+
+  it("question → captures payload + TS=question", async () => {
+    await scaffold("auth", "OFFSET=0\n");
+    await turnWaitWith("auth", 1, { wait: async () => ({ event: "question", message: "which db?" }) });
+    const { soloExecDir } = await import("../src/core/solo.js");
+    expect(readFileSync(join(soloExecDir("auth"), "turn-1.txt"), "utf8")).toContain("TS=question");
+    expect(readFileSync(join(soloExecDir("auth"), "question-1.txt"), "utf8")).toContain("which db?");
+  });
+
+  it("timeout (null) → TS=timeout", async () => {
+    await scaffold("auth", "OFFSET=0\n");
+    await turnWaitWith("auth", 1, { wait: async () => null });
+    const { soloExecDir } = await import("../src/core/solo.js");
+    expect(readFileSync(join(soloExecDir("auth"), "turn-1.txt"), "utf8")).toContain("TS=timeout");
+  });
+
+  it("missing OFFSET → rc 1", async () => {
+    await scaffold("auth", "TS=stale\n");
+    expect(await turnWaitWith("auth", 1, { wait: async () => null })).toBe(1);
+  });
+});
