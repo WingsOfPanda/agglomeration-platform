@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { topicDir } from "./paths.js";
 
 export function soloArtDir(topic: string): string { return join(topicDir(topic), "_solo"); }
@@ -30,4 +31,20 @@ export function parseSoloArgs(tokens: string[]): SoloArgs {
     text.push(t);
   }
   return { topicText: text.join(" ").trim(), provider, finish };
+}
+
+/** Repo test command by file presence (never executes). Precedence:
+ *  tests/run.sh > package.json "test" > Makefile test: > pytest. "" if none. */
+export function detectTestCommand(root: string): string {
+  if (existsSync(join(root, "tests", "run.sh"))) return "bash tests/run.sh";
+  const pkg = join(root, "package.json");
+  if (existsSync(pkg)) {
+    try { if (JSON.parse(readFileSync(pkg, "utf8"))?.scripts?.test) return "npm test"; } catch { /* not JSON */ }
+  }
+  const mk = join(root, "Makefile");
+  if (existsSync(mk)) {
+    try { if (/^test:/m.test(readFileSync(mk, "utf8"))) return "make test"; } catch { /* unreadable */ }
+  }
+  if ((existsSync(join(root, "pyproject.toml")) || existsSync(join(root, "setup.cfg"))) && existsSync(join(root, "tests"))) return "pytest";
+  return "";
 }
