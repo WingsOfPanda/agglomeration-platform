@@ -18026,6 +18026,24 @@ function parsePanesFile(text) {
   }
   return m;
 }
+function verifyScopeFiles(target, instruments) {
+  const out = [];
+  for (const c3 of instruments) if (c3 !== target) out.push(`${c3}_only_items.txt`);
+  if (instruments.length >= 3) {
+    for (let i2 = 0; i2 < instruments.length; i2++) {
+      for (let j = i2 + 1; j < instruments.length; j++) {
+        const a2 = instruments[i2], b = instruments[j];
+        if (a2 !== target && b !== target) out.push(`${a2}+${b}_only.txt`);
+      }
+    }
+  }
+  return out;
+}
+function lastTag(text, tag) {
+  const re = new RegExp(`^${tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}=(.*)$`, "gm");
+  const ms = [...text.matchAll(re)];
+  return ms.length ? ms[ms.length - 1][1].trim() : null;
+}
 var import_node_path19;
 var init_score = __esm({
   "src/core/score.ts"() {
@@ -18071,7 +18089,18 @@ _(missing draft)_
   }
   return out;
 }
-var SECTIONS_SINGLE, SECTIONS_MULTI, TITLES;
+function synthesizeSeeds(adjText) {
+  const lines = adjText.split("\n");
+  return SEED_SPECS.map((spec) => {
+    const matched = lines.filter(spec.match);
+    const body = `${spec.heading}
+
+${spec.comment}
+` + (matched.length ? matched.join("\n") + "\n" : SEED_PLACEHOLDER + "\n");
+    return { section: spec.section, body };
+  });
+}
+var SECTIONS_SINGLE, SECTIONS_MULTI, TITLES, SEED_SPECS, SEED_PLACEHOLDER;
 var init_scoreDoc = __esm({
   "src/core/scoreDoc.ts"() {
     "use strict";
@@ -18087,6 +18116,45 @@ var init_scoreDoc = __esm({
       testing: "Testing",
       "success-criteria": "Success Criteria"
     };
+    SEED_SPECS = [
+      {
+        section: "problem",
+        heading: "## Problem",
+        comment: "<!-- seed: cross-verified facts about the current state -->",
+        match: (l) => /^- \[/.test(l)
+      },
+      {
+        section: "goal",
+        heading: "## Goal",
+        comment: "<!-- seed: claims tagged [Goal] -->",
+        match: (l) => /^- \[Goal/i.test(l)
+      },
+      {
+        section: "architecture",
+        heading: "## Architecture",
+        comment: "<!-- seed: claims tagged [Architecture] -->",
+        match: (l) => /^- \[Architecture/i.test(l)
+      },
+      {
+        section: "components",
+        heading: "## Components",
+        comment: "<!-- seed: claims tagged [Components] -->",
+        match: (l) => /^- \[Components/i.test(l)
+      },
+      {
+        section: "testing",
+        heading: "## Testing",
+        comment: '<!-- seed: claims tagged [Testing] or containing "test" -->',
+        match: (l) => /^- \[Testing/i.test(l) || /^- .*\btest/i.test(l)
+      },
+      {
+        section: "success-criteria",
+        heading: "## Success Criteria",
+        comment: "<!-- seed: claims tagged [Success Criteria] -->",
+        match: (l) => /^- \[Success/i.test(l)
+      }
+    ];
+    SEED_PLACEHOLDER = "_(no seed content matched; Maestro drafts from scratch in the design walk)_";
   }
 });
 
@@ -18356,6 +18424,43 @@ function composeResearchPrompt(topicText, findingsPath) {
     RESEARCH_BLOCKERS
   ].join("\n");
 }
+function verifyState(ev, verifyText) {
+  if (!ev) return "timeout";
+  if (ev.event === "question") return "question";
+  if (ev.event === "done") return verifyText !== null && verifyText.length > 0 ? "ok" : "missing";
+  return "failed";
+}
+function composeVerifyPrompt(itemsText, verifyPath) {
+  const items = itemsText.split("\n").filter((l) => l.length > 0).map((l, i2) => `${i2 + 1}. ${l}`).join("\n");
+  return [
+    "You researched a topic in your previous turn. Below are claims the OTHER researchers raised that",
+    "you did not. For EACH item, do ONE of:",
+    "",
+    "  AGREE     \u2014 confirm with your own evidence (cite a file/line/source)",
+    "  DISPUTE   \u2014 explain why it's wrong, with counter-evidence",
+    "  UNCERTAIN \u2014 you cannot tell from available evidence; say so",
+    "",
+    "Items to verify:",
+    items,
+    "",
+    `Write your verdicts to ${verifyPath} in this exact format:`,
+    "",
+    "  # Verify",
+    "  ## Verdicts",
+    "  1. <TAG> <original [citation] and text>",
+    "     <one-line evidence>",
+    "  2. ...",
+    "",
+    "Where <TAG> is one of: AGREE / DISPUTE / UNCERTAIN.",
+    "",
+    "Verification methods: use any tool in your environment. WebSearch / fetch are authorized when an",
+    "item cites a URL, references external standards/docs, or makes a claim local repo evidence cannot",
+    "resolve. For URL-cited items, fetching the source is the default. For file-cited items prefer the",
+    "local file. If a tool is unavailable, mark the item UNCERTAIN and note the gap \u2014 never fabricate.",
+    "",
+    RESEARCH_BLOCKERS
+  ].join("\n");
+}
 var RESEARCH_BLOCKERS;
 var init_scoreTurn = __esm({
   "src/core/scoreTurn.ts"() {
@@ -18365,15 +18470,199 @@ var init_scoreTurn = __esm({
   }
 });
 
+// src/core/scoreAdjudicate.ts
+function parseVerdicts(verify) {
+  const out = [];
+  let inV = false;
+  let cur = null;
+  const flush = () => {
+    if (cur) {
+      out.push(cur);
+      cur = null;
+    }
+  };
+  for (const line of verify.split("\n")) {
+    if (/^## Verdicts/.test(line)) {
+      inV = true;
+      continue;
+    }
+    if (/^## /.test(line)) {
+      flush();
+      inV = false;
+      continue;
+    }
+    if (inV && /^[0-9]+\. (AGREE|DISPUTE|UNCERTAIN) \[[^\]]+\] /.test(line)) {
+      flush();
+      const rest = line.replace(/^[0-9]+\. /, "");
+      const tag = rest.slice(0, rest.indexOf(" "));
+      const afterTag = rest.replace(/^[A-Z]+ /, "");
+      const m = afterTag.match(/\[[^\]]+\]/);
+      const cite = m[0].slice(1, -1);
+      const text = afterTag.slice((m.index ?? 0) + m[0].length).replace(/^[ \t]+/, "");
+      cur = { tag, cite, text, evidence: "" };
+      continue;
+    }
+    if (inV && cur && /^[ \t]+/.test(line)) {
+      const ev = line.replace(/^[ \t]+/, "");
+      cur.evidence = cur.evidence === "" ? ev : `${cur.evidence} ${ev}`;
+      continue;
+    }
+  }
+  flush();
+  return out;
+}
+function emitSections(secs) {
+  return secs.map((s) => s.header + "\n" + (s.comment ? s.comment + "\n" : "") + (s.acc.length ? s.acc.join("\n") + "\n" : "")).join("\n");
+}
+function adjudicate(input) {
+  return input.parts.length === 2 ? adjudicateN2(input) : adjudicateNge3(input);
+}
+function adjudicateN2(input) {
+  const [p0, p1] = input.parts;
+  const c0 = p0.instrument, c1 = p1.instrument;
+  const uc = (s) => s.toUpperCase();
+  const vs0 = input.vs[c0] ?? "skipped";
+  const vs1 = input.vs[c1] ?? "skipped";
+  const v0 = parseVerdicts(input.verify[c0] ?? "");
+  const v1 = parseVerdicts(input.verify[c1] ?? "");
+  const cross = [];
+  for (const v of v1) if (v.tag === "AGREE") cross.push(`- [${v.cite}] ${v.text} \u2014 ${uc(c1)} confirmed: ${v.evidence || v.text}`);
+  for (const v of v0) if (v.tag === "AGREE") cross.push(`- [${v.cite}] ${v.text} \u2014 ${uc(c0)} confirmed: ${v.evidence || v.text}`);
+  const adjudicated = [];
+  for (const v of v1) if (v.tag !== "AGREE") adjudicated.push(`- PENDING: [${v.cite}] ${v.text} \u2014 ${uc(c1)} ${v.tag}: ${v.evidence || v.text}`);
+  for (const v of v0) if (v.tag !== "AGREE") adjudicated.push(`- PENDING: [${v.cite}] ${v.text} \u2014 ${uc(c0)} ${v.tag}: ${v.evidence || v.text}`);
+  const notVerified = [];
+  if (vs0 !== "ok" && vs0 !== "skipped") for (const l of nonEmptyLines(input.buckets[`${c1}_only_items.txt`])) notVerified.push(`- ${l} \u2014 ${uc(c0)} verify dispatch ${vs0}`);
+  if (vs1 !== "ok" && vs1 !== "skipped") for (const l of nonEmptyLines(input.buckets[`${c0}_only_items.txt`])) notVerified.push(`- ${l} \u2014 ${uc(c1)} verify dispatch ${vs1}`);
+  return emitSections([
+    { header: "## Cross-verified", acc: cross },
+    { header: "## Adjudicated", acc: adjudicated, comment: N2_ADJUDICATED_NOTE },
+    { header: "## Contested", acc: [], comment: N2_CONTESTED_NOTE },
+    { header: "## Not-verified", acc: notVerified }
+  ]);
+}
+function classify(na, nd, nu, k, owners) {
+  if (nu > 0 && na + nd > 0) return "PENDING";
+  if (nu === k) return owners >= 2 ? "PENDING" : "CONTESTED";
+  if (na === k) return "CROSS";
+  if (nd === k) return owners >= 2 ? "CONTESTED" : "REFUTED";
+  return "CONTESTED";
+}
+function adjudicateNge3(input) {
+  const instruments = input.parts.map((p) => p.instrument);
+  const n2 = instruments.length;
+  const verdictMap = /* @__PURE__ */ new Map();
+  for (const p of input.parts) for (const v of parseVerdicts(input.verify[p.instrument] ?? "")) verdictMap.set(`${p.instrument}__${v.cite}`, v.tag);
+  const cross = [], contested = [], refuted = [], pending = [];
+  const allCsv = instruments.join("+");
+  const consensus = nonEmptyLines(input.buckets["consensus.txt"]).map((l) => `- ${l} [${allCsv}]`);
+  const processBucket = (content, ownersCsv) => {
+    const own = ownersCsv.split("+");
+    const ownerCount = own.length;
+    const verifiers = instruments.filter((c3) => !own.includes(c3));
+    const k = verifiers.length;
+    for (const raw of nonEmptyLines(content)) {
+      const cite = raw.slice(1, raw.indexOf("]"));
+      const text = raw.slice(raw.indexOf("] ") + 2);
+      let na = 0, nd = 0, nu = 0;
+      const annotations = [];
+      for (const v of verifiers) {
+        const vd = verdictMap.get(`${v}__${cite}`) ?? "UNCERTAIN";
+        if (vd === "AGREE") na++;
+        else if (vd === "DISPUTE") nd++;
+        else nu++;
+        annotations.push(`${v}:${vd}`);
+      }
+      const srcset = ownerCount === n2 || k === 0 ? ownersCsv : `${ownersCsv}, ${annotations.join(", ")}`;
+      const rendered = `- [${cite}] ${text} [${srcset}]`;
+      const verdict = classify(na, nd, nu, k, ownerCount);
+      (verdict === "CROSS" ? cross : verdict === "CONTESTED" ? contested : verdict === "REFUTED" ? refuted : pending).push(rendered);
+    }
+  };
+  for (let i2 = 0; i2 < n2; i2++) for (let j = i2 + 1; j < n2; j++) processBucket(input.buckets[`${instruments[i2]}+${instruments[j]}_only.txt`], `${instruments[i2]}+${instruments[j]}`);
+  for (const c3 of instruments) processBucket(input.buckets[`${c3}_only_items.txt`], c3);
+  return emitSections([
+    { header: "## Consensus findings (all parts)", acc: consensus },
+    { header: "## Cross-verified", acc: cross },
+    { header: "## Contested", acc: contested },
+    { header: "## Refuted", acc: refuted },
+    { header: "## - PENDING:", acc: pending, comment: NGE3_PENDING_NOTE }
+  ]);
+}
+var nonEmptyLines, N2_ADJUDICATED_NOTE, N2_CONTESTED_NOTE, NGE3_PENDING_NOTE;
+var init_scoreAdjudicate = __esm({
+  "src/core/scoreAdjudicate.ts"() {
+    "use strict";
+    nonEmptyLines = (s) => (s ?? "").split("\n").filter((l) => l.length > 0);
+    N2_ADJUDICATED_NOTE = '<!-- Maestro: read each cited source for every "PENDING" line below; rewrite the prefix to CONFIRMED, REFUTED, or move to ## Contested. synthesize refuses to finalize while any PENDING remains. -->';
+    N2_CONTESTED_NOTE = "<!-- Maestro: move CONTESTED items here from Adjudicated. Items in this section ship in the design-doc as unresolved. -->";
+    NGE3_PENDING_NOTE = '<!-- Maestro: read each cited source for every "PENDING" line below; rewrite the prefix or move to ## Contested. synthesize refuses to finalize while any PENDING remains. -->';
+  }
+});
+
+// src/core/scoreWalk.ts
+function auditIssueToSection(key) {
+  switch (key) {
+    case "no_goal_section":
+      return "goal";
+    case "no_arch_section":
+      return "architecture";
+    case "no_testing_section":
+      return "testing";
+    case "no_success_section":
+      return "success-criteria";
+    case "tbd_marker":
+    case "todo_marker":
+    case "fill_in_later_marker":
+    case "to_be_determined_marker":
+      return "ASK";
+    case "target_subproject_when_invalid":
+      return "header";
+    case "execution_dag_not_parseable":
+      return "execution-dag";
+    case "unresolved_placeholder":
+      return "architecture";
+    default:
+      return "";
+  }
+}
+function walkSectionState(dir, opts) {
+  let files;
+  try {
+    files = (0, import_node_fs24.readdirSync)(dir).filter((f) => f.endsWith(".md"));
+  } catch {
+    return [];
+  }
+  const names = files.map((f) => f.replace(/\.md$/, "")).sort();
+  if (!opts?.withStatus) return names;
+  return names.map((name) => {
+    const body = (0, import_node_fs24.readFileSync)((0, import_node_path20.join)(dir, `${name}.md`), "utf8").replace(/\s/g, "");
+    return { name, status: body === "_(skipped)_" ? "skipped" : "approved" };
+  });
+}
+var import_node_fs24, import_node_path20;
+var init_scoreWalk = __esm({
+  "src/core/scoreWalk.ts"() {
+    "use strict";
+    import_node_fs24 = require("node:fs");
+    import_node_path20 = require("node:path");
+  }
+});
+
 // src/commands/score.ts
 var score_exports = {};
 __export(score_exports, {
+  adjudicateRun: () => adjudicateRun,
   diffRun: () => diffRun,
   initWith: () => initWith2,
   researchSendWith: () => researchSendWith,
   researchWaitWith: () => researchWaitWith,
   run: () => run10,
-  spawnAllWith: () => spawnAllWith
+  spawnAllWith: () => spawnAllWith,
+  synthesizeRun: () => synthesizeRun,
+  verifySendWith: () => verifySendWith,
+  verifyWaitWith: () => verifyWaitWith,
+  walkStateRun: () => walkStateRun
 });
 function usage2() {
   log.error("usage: score <init|assemble|spawn-all|research-send|research-wait|diff> ...");
@@ -18395,6 +18684,16 @@ async function run10(args) {
       return researchWaitRun(rest);
     case "diff":
       return diffRun(rest);
+    case "verify-send":
+      return verifySendRun(rest);
+    case "verify-wait":
+      return verifyWaitRun(rest);
+    case "adjudicate":
+      return adjudicateRun(rest);
+    case "synthesize":
+      return synthesizeRun(rest);
+    case "walk-state":
+      return walkStateRun(rest);
     default:
       return usage2();
   }
@@ -18424,7 +18723,7 @@ async function initWith2(tokens, d) {
     roster = roster.slice(0, 3);
   }
   const art = scoreArtDir(topic);
-  if ((0, import_node_fs24.existsSync)(art)) {
+  if ((0, import_node_fs25.existsSync)(art)) {
     log.error(`score init: topic already in flight: ${art}`);
     log.error("  run /consort:coda or pick a different topic");
     return 2;
@@ -18435,12 +18734,12 @@ async function initWith2(tokens, d) {
     return 1;
   }
   const rows = roster.map((provider, i2) => ({ provider, instrument: instruments[i2] }));
-  (0, import_node_fs24.mkdirSync)(scoreDraftDir(topic), { recursive: true });
-  atomicWrite((0, import_node_path20.join)(art, "topic.txt"), topicText);
-  atomicWrite((0, import_node_path20.join)(art, "roster.txt"), formatRosterFile(rows, isoUtc()));
+  (0, import_node_fs25.mkdirSync)(scoreDraftDir(topic), { recursive: true });
+  atomicWrite((0, import_node_path21.join)(art, "topic.txt"), topicText);
+  atomicWrite((0, import_node_path21.join)(art, "roster.txt"), formatRosterFile(rows, isoUtc()));
   const mode = targets.length >= 2 ? "multi" : targets.length === 1 ? "single-sub" : "single";
-  atomicWrite((0, import_node_path20.join)(art, "multi-repo.txt"), mode + "\n");
-  if (targets.length > 0) atomicWrite((0, import_node_path20.join)(art, "targets.txt"), `# generated ${isoUtc()} by /consort:score
+  atomicWrite((0, import_node_path21.join)(art, "multi-repo.txt"), mode + "\n");
+  if (targets.length > 0) atomicWrite((0, import_node_path21.join)(art, "targets.txt"), `# generated ${isoUtc()} by /consort:score
 ${targets.join("\n")}
 `);
   log.ok(`score init: topic=${topic} N=${rows.length} ensemble=${ensemble ? "yes" : "no"} mode=${mode}`);
@@ -18455,7 +18754,7 @@ ART=${art}
   return 0;
 }
 function readIf(path6) {
-  return (0, import_node_fs24.existsSync)(path6) ? (0, import_node_fs24.readFileSync)(path6, "utf8") : "";
+  return (0, import_node_fs25.existsSync)(path6) ? (0, import_node_fs25.readFileSync)(path6, "utf8") : "";
 }
 async function assembleRun(rest) {
   const topic = rest[0];
@@ -18465,29 +18764,31 @@ async function assembleRun(rest) {
   }
   const art = scoreArtDir(topic);
   const draftDir = scoreDraftDir(topic);
-  if (!(0, import_node_fs24.existsSync)(draftDir)) {
+  if (!(0, import_node_fs25.existsSync)(draftDir)) {
     log.error(`score assemble: no draft dir at ${draftDir} (run score init + draft sections)`);
     return 2;
   }
-  const title = (readIf((0, import_node_path20.join)(art, "topic.txt")).split("\n")[0] || topic).trim();
-  const mode = parseMultiRepoMode(readIf((0, import_node_path20.join)(art, "multi-repo.txt")));
-  const targets = mode === "single" ? [] : parseRosterTargets(readIf((0, import_node_path20.join)(art, "targets.txt")));
+  const title = (readIf((0, import_node_path21.join)(art, "topic.txt")).split("\n")[0] || topic).trim();
+  const mode = parseMultiRepoMode(readIf((0, import_node_path21.join)(art, "multi-repo.txt")));
+  const targets = mode === "single" ? [] : parseRosterTargets(readIf((0, import_node_path21.join)(art, "targets.txt")));
   const keys = mode === "multi" ? SECTIONS_MULTI : SECTIONS_SINGLE;
   const drafts = /* @__PURE__ */ new Map();
   for (const k of keys) {
-    const f = (0, import_node_path20.join)(draftDir, `${k}.md`);
-    if ((0, import_node_fs24.existsSync)(f)) drafts.set(k, (0, import_node_fs24.readFileSync)(f, "utf8").replace(/\n+$/, "") + "\n");
+    const f = (0, import_node_path21.join)(draftDir, `${k}.md`);
+    if ((0, import_node_fs25.existsSync)(f)) drafts.set(k, (0, import_node_fs25.readFileSync)(f, "utf8").replace(/\n+$/, "") + "\n");
   }
   const date = isoUtc().slice(0, 10);
   const doc = assembleDoc({ title, mode, date, targets, drafts });
   const out = scoreDocPath(topic, date);
-  (0, import_node_fs24.mkdirSync)((0, import_node_path20.join)(art, "design-doc"), { recursive: true });
+  (0, import_node_fs25.mkdirSync)((0, import_node_path21.join)(art, "design-doc"), { recursive: true });
   atomicWrite(out, doc);
   const result = auditDoc(doc);
   const auditText = [`VERDICT=${result.verdict}`, ...result.issues.map((i2) => `ISSUE=${i2}`)].join("\n") + "\n";
-  atomicWrite((0, import_node_path20.join)(art, "design-doc", "audit.log"), auditText);
+  atomicWrite((0, import_node_path21.join)(art, "design-doc", "audit.log"), auditText);
   if (result.verdict === "FAIL") {
     for (const i2 of result.issues) process.stderr.write(`ISSUE=${i2}
+`);
+    for (const i2 of result.issues) process.stderr.write(`SECTION=${auditIssueToSection(i2)}
 `);
     log.error(`score assemble: audit FAILED on ${out} (see design-doc/audit.log)`);
     return 1;
@@ -18506,12 +18807,12 @@ async function spawnAllRun(rest) {
 }
 async function spawnAllWith(topic, d) {
   const art = scoreArtDir(topic);
-  const rosterPath = (0, import_node_path20.join)(art, "roster.txt");
-  if (!(0, import_node_fs24.existsSync)(rosterPath)) {
+  const rosterPath = (0, import_node_path21.join)(art, "roster.txt");
+  if (!(0, import_node_fs25.existsSync)(rosterPath)) {
     log.error(`score spawn-all: roster.txt missing at ${rosterPath} (run score init)`);
     return 2;
   }
-  const rows = parseRosterFile((0, import_node_fs24.readFileSync)(rosterPath, "utf8"));
+  const rows = parseRosterFile((0, import_node_fs25.readFileSync)(rosterPath, "utf8"));
   if (rows.length < 2) {
     log.error(`score spawn-all: need >=2 parts in roster.txt, got ${rows.length}`);
     return 2;
@@ -18521,12 +18822,12 @@ async function spawnAllWith(topic, d) {
     log.error(`score spawn-all: preflight failed (rc=${pf})`);
     return 2;
   }
-  const panesPath = (0, import_node_path20.join)(art, "preflight-panes.txt");
-  if (!(0, import_node_fs24.existsSync)(panesPath)) {
+  const panesPath = (0, import_node_path21.join)(art, "preflight-panes.txt");
+  if (!(0, import_node_fs25.existsSync)(panesPath)) {
     log.error(`score spawn-all: preflight wrote no ${panesPath}`);
     return 2;
   }
-  const panes = parsePanesFile((0, import_node_fs24.readFileSync)(panesPath, "utf8"));
+  const panes = parsePanesFile((0, import_node_fs25.readFileSync)(panesPath, "utf8"));
   const orphans = rows.filter((r) => !panes.has(r.instrument));
   if (orphans.length) {
     log.error(`score spawn-all: parts missing a preflight pane: ${orphans.map((r) => r.instrument).join(", ")}`);
@@ -18537,7 +18838,7 @@ async function spawnAllWith(topic, d) {
     const rc2 = await d.spawn([r.instrument, r.provider, topic, "--target-pane", panes.get(r.instrument), "--cwd", cwd]);
     return { instrument: r.instrument, provider: r.provider, rc: rc2 };
   }));
-  atomicWrite((0, import_node_path20.join)(art, "spawn-results.tsv"), spawnResultsTsv(results));
+  atomicWrite((0, import_node_path21.join)(art, "spawn-results.tsv"), spawnResultsTsv(results));
   const rc = spawnTally(results.map((r) => r.rc));
   const nOk = results.filter((r) => r.rc === 0).length;
   if (rc === 0) log.ok(`score spawn-all: ${nOk}/${rows.length} parts ready`);
@@ -18554,18 +18855,18 @@ async function researchSendRun(rest) {
 }
 async function researchSendWith(topic, instrument, provider, d) {
   const art = scoreArtDir(topic);
-  const stateFile = (0, import_node_path20.join)(art, `research-${instrument}.txt`);
-  if ((0, import_node_fs24.existsSync)(stateFile)) {
+  const stateFile = (0, import_node_path21.join)(art, `research-${instrument}.txt`);
+  if ((0, import_node_fs25.existsSync)(stateFile)) {
     log.error(`score research-send: ${stateFile} exists; rm to retry`);
     return 1;
   }
-  const topicText = readIf((0, import_node_path20.join)(art, "topic.txt")).trim();
+  const topicText = readIf((0, import_node_path21.join)(art, "topic.txt")).trim();
   if (!topicText) {
     log.error(`score research-send: topic.txt missing/empty at ${art} (run score init)`);
     return 1;
   }
-  const findingsPath = (0, import_node_path20.join)(partDir(instrument, provider, topic), "findings.md");
-  const promptFile = (0, import_node_path20.join)(art, `${instrument}_research_prompt.md`);
+  const findingsPath = (0, import_node_path21.join)(partDir(instrument, provider, topic), "findings.md");
+  const promptFile = (0, import_node_path21.join)(art, `${instrument}_research_prompt.md`);
   atomicWrite(promptFile, composeResearchPrompt(topicText, findingsPath));
   const offset = d.offsetFor(instrument, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}
@@ -18588,12 +18889,12 @@ async function researchWaitRun(rest) {
 }
 async function researchWaitWith(topic, instrument, provider, d) {
   const art = scoreArtDir(topic);
-  const stateFile = (0, import_node_path20.join)(art, `research-${instrument}.txt`);
-  if (!(0, import_node_fs24.existsSync)(stateFile)) {
+  const stateFile = (0, import_node_path21.join)(art, `research-${instrument}.txt`);
+  if (!(0, import_node_fs25.existsSync)(stateFile)) {
     log.error(`score research-wait: ${stateFile} missing (run score research-send first)`);
     return 1;
   }
-  const offset = parseLatestOffset((0, import_node_fs24.readFileSync)(stateFile, "utf8"));
+  const offset = parseLatestOffset((0, import_node_fs25.readFileSync)(stateFile, "utf8"));
   if (offset === null) {
     log.error(`score research-wait: OFFSET not set in ${stateFile}`);
     return 1;
@@ -18601,20 +18902,20 @@ async function researchWaitWith(topic, instrument, provider, d) {
   const timeout = scaledTimeout(consultTimeout("research"), d.multiplier(provider));
   log.info(`score research-wait: ${instrument} offset=${offset} timeout=${timeout}s`);
   const ev = await d.wait(instrument, provider, topic, offset, ["done", "error", "question"], timeout);
-  const findingsPath = (0, import_node_path20.join)(partDir(instrument, provider, topic), "findings.md");
-  const findingsText = (0, import_node_fs24.existsSync)(findingsPath) ? (0, import_node_fs24.readFileSync)(findingsPath, "utf8") : null;
+  const findingsPath = (0, import_node_path21.join)(partDir(instrument, provider, topic), "findings.md");
+  const findingsText = (0, import_node_fs25.existsSync)(findingsPath) ? (0, import_node_fs25.readFileSync)(findingsPath, "utf8") : null;
   const fs = researchState(ev, findingsText);
   if (fs === "question" && ev) {
-    atomicWrite((0, import_node_path20.join)(art, `question-${instrument}.txt`), JSON.stringify(ev) + "\n");
+    atomicWrite((0, import_node_path21.join)(art, `question-${instrument}.txt`), JSON.stringify(ev) + "\n");
     const bumped = outboxOffset(outboxPath(instrument, provider, topic));
-    (0, import_node_fs24.appendFileSync)(stateFile, `OFFSET=${bumped}
+    (0, import_node_fs25.appendFileSync)(stateFile, `OFFSET=${bumped}
 FS=question
 `);
   } else {
-    (0, import_node_fs24.appendFileSync)(stateFile, `FS=${fs}
+    (0, import_node_fs25.appendFileSync)(stateFile, `FS=${fs}
 `);
   }
-  (0, import_node_fs24.writeFileSync)((0, import_node_path20.join)(art, `research-${instrument}.done`), "");
+  (0, import_node_fs25.writeFileSync)((0, import_node_path21.join)(art, `research-${instrument}.done`), "");
   log.ok(`score research-wait: ${instrument} FS=${fs}`);
   return 0;
 }
@@ -18625,49 +18926,238 @@ async function diffRun(rest) {
     return 2;
   }
   const art = scoreArtDir(topic);
-  if (!(0, import_node_fs24.existsSync)(art)) {
+  if (!(0, import_node_fs25.existsSync)(art)) {
     log.error(`score diff: ${art} not found`);
     return 1;
   }
-  if ((0, import_node_fs24.existsSync)((0, import_node_path20.join)(art, "diff.md"))) {
+  if ((0, import_node_fs25.existsSync)((0, import_node_path21.join)(art, "diff.md"))) {
     log.error("score diff: diff.md exists; rm to retry");
     return 1;
   }
-  const rosterPath = (0, import_node_path20.join)(art, "roster.txt");
-  if (!(0, import_node_fs24.existsSync)(rosterPath)) {
+  const rosterPath = (0, import_node_path21.join)(art, "roster.txt");
+  if (!(0, import_node_fs25.existsSync)(rosterPath)) {
     log.error("score diff: roster.txt missing \u2014 run score init first");
     return 1;
   }
-  const rows = parseRosterFile((0, import_node_fs24.readFileSync)(rosterPath, "utf8"));
+  const rows = parseRosterFile((0, import_node_fs25.readFileSync)(rosterPath, "utf8"));
   if (rows.length < 2) {
     log.error(`score diff: need >=2 parts in roster.txt, got ${rows.length}`);
     return 1;
   }
   const parts = [];
   for (const r of rows) {
-    const f = (0, import_node_path20.join)(partDir(r.instrument, r.provider, topic), "findings.md");
-    if (!(0, import_node_fs24.existsSync)(f)) {
+    const f = (0, import_node_path21.join)(partDir(r.instrument, r.provider, topic), "findings.md");
+    if (!(0, import_node_fs25.existsSync)(f)) {
       log.error(`score diff: ${r.instrument} findings.md missing: ${f}`);
       return 1;
     }
-    parts.push({ name: r.instrument, findings: (0, import_node_fs24.readFileSync)(f, "utf8") });
+    parts.push({ name: r.instrument, findings: (0, import_node_fs25.readFileSync)(f, "utf8") });
   }
   const result = diffFindings(parts);
-  for (const file of result.files) atomicWrite((0, import_node_path20.join)(art, file.filename), file.content);
-  atomicWrite((0, import_node_path20.join)(art, "diff.md"), result.diffMd);
+  for (const file of result.files) atomicWrite((0, import_node_path21.join)(art, file.filename), file.content);
+  atomicWrite((0, import_node_path21.join)(art, "diff.md"), result.diffMd);
   const summary = result.files.filter((f) => f.filename.endsWith("_only_items.txt") || f.filename === "consensus.txt").map((f) => `${f.filename.replace(/\.txt$/, "")}=${f.content.split("\n").filter(Boolean).length}`).join(" ");
-  log.ok(`score diff: wrote ${(0, import_node_path20.join)(art, "diff.md")} (${rows.length} parts) ${summary}`);
+  log.ok(`score diff: wrote ${(0, import_node_path21.join)(art, "diff.md")} (${rows.length} parts) ${summary}`);
+  return 0;
+}
+async function verifySendRun(rest) {
+  const [topic, instrument, provider] = rest;
+  if (!topic || !instrument || !provider) {
+    log.error("usage: score verify-send <topic> <instrument> <provider>");
+    return 2;
+  }
+  return verifySendWith(topic, instrument, provider, liveResearchSendDeps);
+}
+async function verifySendWith(topic, instrument, provider, d) {
+  const art = scoreArtDir(topic);
+  if (!(0, import_node_fs25.existsSync)(art)) {
+    log.error(`score verify-send: ${art} not found`);
+    return 1;
+  }
+  const stateFile = (0, import_node_path21.join)(art, `verify-${instrument}.txt`);
+  if ((0, import_node_fs25.existsSync)(stateFile)) {
+    log.error(`score verify-send: ${stateFile} exists; rm to retry`);
+    return 1;
+  }
+  const rosterPath = (0, import_node_path21.join)(art, "roster.txt");
+  if (!(0, import_node_fs25.existsSync)(rosterPath)) {
+    log.error("score verify-send: roster.txt missing \u2014 run score init first");
+    return 1;
+  }
+  const instruments = parseRosterFile((0, import_node_fs25.readFileSync)(rosterPath, "utf8")).map((r) => r.instrument);
+  if (instruments.length < 2) {
+    log.error(`score verify-send: need >=2 parts, got ${instruments.length}`);
+    return 1;
+  }
+  if (!instruments.includes(instrument)) {
+    log.error(`score verify-send: ${instrument} not in roster.txt`);
+    return 1;
+  }
+  const parts = [];
+  for (const f of verifyScopeFiles(instrument, instruments)) {
+    const p = (0, import_node_path21.join)(art, f);
+    if (!(0, import_node_fs25.existsSync)(p)) {
+      log.error(`score verify-send: expected bucket missing: ${p} (run score diff first)`);
+      return 1;
+    }
+    const c3 = (0, import_node_fs25.readFileSync)(p, "utf8");
+    if (c3.split("\n").some((l) => l.length > 0)) parts.push(c3.replace(/\n+$/, ""));
+  }
+  const items = parts.join("\n");
+  atomicWrite((0, import_node_path21.join)(art, `verify-claims-${instrument}.txt`), items ? items + "\n" : "");
+  if (!items) {
+    atomicWrite(stateFile, "VS=skipped\n");
+    log.ok(`score verify-send: ${instrument} VS=skipped (no claims to verify)`);
+    return 0;
+  }
+  const verifyPath = (0, import_node_path21.join)(partDir(instrument, provider, topic), "verify.md");
+  const promptFile = (0, import_node_path21.join)(art, `${instrument}_verify_prompt.md`);
+  atomicWrite(promptFile, composeVerifyPrompt(items, verifyPath));
+  const offset = d.offsetFor(instrument, provider, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}
+`);
+  const rc = await d.send(["--from", "maestro", instrument, topic, `@${promptFile}`]);
+  if (rc !== 0) {
+    log.error(`score verify-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`);
+    return 1;
+  }
+  log.ok(`score verify-send: ${instrument} offset=${offset}`);
+  return 0;
+}
+async function verifyWaitRun(rest) {
+  const [topic, instrument, provider] = rest;
+  if (!topic || !instrument || !provider) {
+    log.error("usage: score verify-wait <topic> <instrument> <provider>");
+    return 2;
+  }
+  return verifyWaitWith(topic, instrument, provider, liveResearchWaitDeps);
+}
+async function verifyWaitWith(topic, instrument, provider, d) {
+  const art = scoreArtDir(topic);
+  const stateFile = (0, import_node_path21.join)(art, `verify-${instrument}.txt`);
+  if (!(0, import_node_fs25.existsSync)(stateFile)) {
+    log.error(`score verify-wait: ${stateFile} missing (run score verify-send first)`);
+    return 1;
+  }
+  const text = (0, import_node_fs25.readFileSync)(stateFile, "utf8");
+  if (lastTag(text, "VS") === "skipped") {
+    (0, import_node_fs25.writeFileSync)((0, import_node_path21.join)(art, `verify-${instrument}.done`), "");
+    log.ok(`score verify-wait: ${instrument} VS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
+  if (offset === null) {
+    log.error(`score verify-wait: OFFSET not set in ${stateFile}`);
+    return 1;
+  }
+  const timeout = scaledTimeout(consultTimeout("verify"), d.multiplier(provider));
+  log.info(`score verify-wait: ${instrument} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(instrument, provider, topic, offset, ["done", "error", "question"], timeout);
+  const verifyPath = (0, import_node_path21.join)(partDir(instrument, provider, topic), "verify.md");
+  const verifyText = (0, import_node_fs25.existsSync)(verifyPath) ? (0, import_node_fs25.readFileSync)(verifyPath, "utf8") : null;
+  const vs = verifyState(ev, verifyText);
+  if (vs === "question" && ev) {
+    atomicWrite((0, import_node_path21.join)(art, `question-${instrument}.txt`), JSON.stringify(ev) + "\n");
+    const bumped = outboxOffset(outboxPath(instrument, provider, topic));
+    (0, import_node_fs25.appendFileSync)(stateFile, `OFFSET=${bumped}
+VS=question
+`);
+  } else {
+    (0, import_node_fs25.appendFileSync)(stateFile, `VS=${vs}
+`);
+  }
+  (0, import_node_fs25.writeFileSync)((0, import_node_path21.join)(art, `verify-${instrument}.done`), "");
+  log.ok(`score verify-wait: ${instrument} VS=${vs}`);
+  return 0;
+}
+async function adjudicateRun(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("usage: score adjudicate <topic>");
+    return 2;
+  }
+  const art = scoreArtDir(topic);
+  if (!(0, import_node_fs25.existsSync)(art)) {
+    log.error(`score adjudicate: ${art} not found`);
+    return 1;
+  }
+  const rosterPath = (0, import_node_path21.join)(art, "roster.txt");
+  if (!(0, import_node_fs25.existsSync)(rosterPath)) {
+    log.error("score adjudicate: roster.txt missing");
+    return 1;
+  }
+  const rows = parseRosterFile((0, import_node_fs25.readFileSync)(rosterPath, "utf8"));
+  if (rows.length < 2) {
+    log.error(`score adjudicate: need >=2 parts, got ${rows.length}`);
+    return 1;
+  }
+  const instruments = rows.map((r) => r.instrument);
+  const readIfExists = (p) => (0, import_node_fs25.existsSync)(p) ? (0, import_node_fs25.readFileSync)(p, "utf8") : "";
+  const verify = {};
+  const vs = {};
+  for (const r of rows) {
+    verify[r.instrument] = readIfExists((0, import_node_path21.join)(partDir(r.instrument, r.provider, topic), "verify.md"));
+    vs[r.instrument] = lastTag(readIfExists((0, import_node_path21.join)(art, `verify-${r.instrument}.txt`)), "VS") ?? "skipped";
+  }
+  const buckets = {};
+  const addBucket = (f) => {
+    buckets[f] = readIfExists((0, import_node_path21.join)(art, f));
+  };
+  for (const c3 of instruments) addBucket(`${c3}_only_items.txt`);
+  if (instruments.length >= 3) {
+    addBucket("consensus.txt");
+    for (let i2 = 0; i2 < instruments.length; i2++) for (let j = i2 + 1; j < instruments.length; j++) addBucket(`${instruments[i2]}+${instruments[j]}_only.txt`);
+  }
+  const input = { parts: rows.map((r) => ({ instrument: r.instrument, provider: r.provider })), verify, vs, buckets };
+  atomicWrite((0, import_node_path21.join)(art, "adjudicated-draft.md"), adjudicate(input));
+  log.ok(`score adjudicate: wrote ${(0, import_node_path21.join)(art, "adjudicated-draft.md")}`);
+  log.info("  cp adjudicated-draft.md -> adjudicated.md, then resolve every '- PENDING:' line");
+  return 0;
+}
+async function synthesizeRun(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("usage: score synthesize <topic>");
+    return 2;
+  }
+  const art = scoreArtDir(topic);
+  const adj = (0, import_node_path21.join)(art, "adjudicated.md");
+  if (!(0, import_node_fs25.existsSync)(adj)) {
+    log.error(`score synthesize: ${adj} missing \u2014 cp adjudicated-draft.md -> adjudicated.md and resolve PENDINGs first`);
+    return 1;
+  }
+  const adjText = (0, import_node_fs25.readFileSync)(adj, "utf8");
+  if (adjText.split("\n").some((l) => /^- PENDING:/.test(l))) {
+    log.error("score synthesize: adjudicated.md still has '- PENDING:' lines; resolve them first");
+    return 1;
+  }
+  const draftDir = scoreDraftDir(topic);
+  (0, import_node_fs25.mkdirSync)(draftDir, { recursive: true });
+  const seeds = synthesizeSeeds(adjText);
+  for (const s of seeds) atomicWrite((0, import_node_path21.join)(draftDir, `${s.section}.md`), s.body);
+  log.ok(`score synthesize: wrote ${seeds.length} seed drafts to ${draftDir}`);
+  return 0;
+}
+async function walkStateRun(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("usage: score walk-state <topic>");
+    return 2;
+  }
+  const states = walkSectionState(scoreDraftDir(topic), { withStatus: true });
+  for (const s of states) process.stdout.write(`${s.name}	${s.status}
+`);
   return 0;
 }
 function parseRosterTargets(text) {
   return text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#")).map((l) => l.split("	")[0]).filter(Boolean);
 }
-var import_node_fs24, import_node_path20, liveInitDeps2, liveSpawnAllDeps, liveResearchSendDeps, liveResearchWaitDeps;
+var import_node_fs25, import_node_path21, liveInitDeps2, liveSpawnAllDeps, liveResearchSendDeps, liveResearchWaitDeps;
 var init_score2 = __esm({
   "src/commands/score.ts"() {
     "use strict";
-    import_node_fs24 = require("node:fs");
-    import_node_path20 = require("node:path");
+    import_node_fs25 = require("node:fs");
+    import_node_path21 = require("node:path");
     init_log();
     init_args();
     init_atomic();
@@ -18682,6 +19172,8 @@ var init_score2 = __esm({
     init_contracts();
     init_scoreTurn();
     init_scoreDiff();
+    init_scoreAdjudicate();
+    init_scoreWalk();
     init_send2();
     init_spawn();
     init_preflight();

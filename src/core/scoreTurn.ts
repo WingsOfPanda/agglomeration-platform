@@ -99,7 +99,7 @@ export function composeResearchPrompt(topicText: string, findingsPath: string): 
   ].join("\n");
 }
 
-/** Verify wait outcome → VS= value, ported from cw_consult_wait verify branch (lib/consult-wait.sh):
+/** Verify wait outcome → VS= value, ported from the consult_wait verify branch (lib/consult-wait.sh):
  *  null → timeout; question → question; done → ok iff verify.md non-empty (the `-s` test) else missing;
  *  any other event → failed. (VS=skipped is written by verify-send on empty scope, not here.) */
 export function verifyState(ev: OutboxEvent | null, verifyText: string | null): "ok" | "missing" | "failed" | "timeout" | "question" {
