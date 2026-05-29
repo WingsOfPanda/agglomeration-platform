@@ -270,3 +270,43 @@ describe("solo finish (finishWith core)", () => {
     expect(readFileSync(join(soloExecDir("auth"), "finish-result.txt"), "utf8")).toContain("pr-opened");
   });
 });
+
+describe("solo summary", () => {
+  let h: { home: string; cleanup: () => void };
+  beforeEach(() => { h = freshHome(); });
+  afterEach(() => { h.cleanup(); });
+
+  async function scaffold(topic: string) {
+    const { soloArtDir, soloExecDir } = await import("../src/core/solo.js");
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(soloExecDir(topic), { recursive: true });
+    const art = soloArtDir(topic), exec = soloExecDir(topic);
+    writeFileSync(join(art, "topic.txt"), topic + "\n");
+    writeFileSync(join(art, "timing.txt"), "started=2026-05-29T06:00:00Z\n");
+    writeFileSync(join(art, "selected-provider.txt"), "codex\n");
+    writeFileSync(join(art, "instrument.txt"), "violin\n");
+    writeFileSync(join(exec, "branch.txt"), "feat/solo-auth\n");
+    writeFileSync(join(exec, "verify-result.txt"), "PASS (npm test)\n");
+    writeFileSync(join(exec, "diff-stats.txt"), "2 files changed\n");
+    writeFileSync(join(exec, "target_cwd.txt"), "/proj\n");
+    writeFileSync(join(exec, "branch-base.sha"), "base000\n");
+  }
+
+  it("ok summary → SUMMARY.md with status ok; rc 0", async () => {
+    await scaffold("auth");
+    expect(await soloRun(["summary", "auth"])).toBe(0);
+    const { soloArtDir } = await import("../src/core/solo.js");
+    const md = readFileSync(join(soloArtDir("auth"), "SUMMARY.md"), "utf8");
+    expect(md).toContain("status: ok");
+    expect(md).toContain("- Branch: feat/solo-auth");
+  });
+
+  it("aborted summary → SUMMARY.md (aborted) + RESUME.md", async () => {
+    await scaffold("auth");
+    expect(await soloRun(["summary", "auth", "--aborted", "build", "part-turn-failed", "turn", "failed", "twice"])).toBe(0);
+    const { soloArtDir } = await import("../src/core/solo.js");
+    expect(readFileSync(join(soloArtDir("auth"), "SUMMARY.md"), "utf8")).toContain("status: aborted");
+    expect(readFileSync(join(soloArtDir("auth"), "SUMMARY.md"), "utf8")).toContain("turn failed twice");
+    expect(existsSync(join(soloArtDir("auth"), "RESUME.md"))).toBe(true);
+  });
+});
