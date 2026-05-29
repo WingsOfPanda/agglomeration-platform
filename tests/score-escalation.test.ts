@@ -6,7 +6,7 @@ import { freshHome } from "./helpers/tmpHome.js";
 import { scoreArtDir } from "../src/core/score.js";
 import { partDir } from "../src/core/paths.js";
 import { outboxPath } from "../src/core/ipc.js";
-import { researchSendWith, researchWaitWith, diffRun } from "../src/commands/score.js";
+import { researchSendWith, researchWaitWith, diffRun, spawnAllWith } from "../src/commands/score.js";
 
 let env: { home: string; cleanup: () => void };
 beforeEach(() => { env = freshHome(); });
@@ -143,5 +143,62 @@ describe("score diff", () => {
     mkdirSync(partDir("viola", "codex", "t"), { recursive: true });
     writeFileSync(join(partDir("viola", "codex", "t"), "findings.md"), "## Claims\n1. [a:1] x\n");
     expect(await diffRun(["t"])).toBe(1); // cello findings.md absent
+  });
+});
+
+describe("score spawn-all", () => {
+  function seedRoster(topic: string, rows: Array<{ provider: string; instrument: string }>): string {
+    const art = scoreArtDir(topic);
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "roster.txt"), rows.map((r) => `${r.provider}\t${r.instrument}`).join("\n") + "\n");
+    return art;
+  }
+  // fake preflight writes the panes file the way the real one does
+  const fakePreflight = (art: string, rows: Array<{ instrument: string }>) => async (_args: string[]) => {
+    writeFileSync(join(art, "preflight-panes.txt"), rows.map((r, i) => `${r.instrument}\t%${i + 1}`).join("\n") + "\n");
+    return 0;
+  };
+
+  it("all parts ok → spawn-results.tsv + rc 0; preflight gets the i:p roster arg", async () => {
+    const rows = [{ provider: "codex", instrument: "viola" }, { provider: "claude", instrument: "cello" }];
+    const art = seedRoster("t", rows);
+    const pfArgs: string[][] = [];
+    const spawnArgs: string[][] = [];
+    const rc = await spawnAllWith("t", {
+      preflight: async (a) => { pfArgs.push(a); return fakePreflight(art, rows)(a); },
+      spawn: async (a) => { spawnArgs.push(a); return 0; },
+      repoRoot: () => "/repo",
+    });
+    expect(rc).toBe(0);
+    expect(pfArgs[0]).toContain("--roster");
+    expect(pfArgs[0][pfArgs[0].indexOf("--roster") + 1]).toBe("viola:codex,cello:claude");
+    expect(readFileSync(join(art, "spawn-results.tsv"), "utf8")).toBe("viola\tcodex\t0\t\ncello\tclaude\t0\t\n");
+    expect(spawnArgs.every((a) => a.includes("--target-pane") && a.includes("--cwd") && a.includes("/repo"))).toBe(true);
+  });
+
+  it("partial failure → rc 1", async () => {
+    const rows = [{ provider: "codex", instrument: "viola" }, { provider: "claude", instrument: "cello" }];
+    const art = seedRoster("t", rows);
+    const rc = await spawnAllWith("t", {
+      preflight: fakePreflight(art, rows),
+      spawn: async (a) => (a[0] === "cello" ? 1 : 0),
+      repoRoot: () => "/repo",
+    });
+    expect(rc).toBe(1);
+    expect(readFileSync(join(art, "spawn-results.tsv"), "utf8")).toContain("cello\tclaude\t1\tspawn-failed");
+  });
+
+  it("preflight failure → rc 2 (no spawns)", async () => {
+    const rows = [{ provider: "codex", instrument: "viola" }, { provider: "claude", instrument: "cello" }];
+    seedRoster("t", rows);
+    let spawned = 0;
+    const rc = await spawnAllWith("t", { preflight: async () => 1, spawn: async () => { spawned++; return 0; }, repoRoot: () => "/repo" });
+    expect(rc).toBe(2);
+    expect(spawned).toBe(0);
+  });
+
+  it("roster with <2 parts → rc 2", async () => {
+    seedRoster("t", [{ provider: "codex", instrument: "viola" }]);
+    expect(await spawnAllWith("t", { preflight: async () => 0, spawn: async () => 0, repoRoot: () => "/repo" })).toBe(2);
   });
 });

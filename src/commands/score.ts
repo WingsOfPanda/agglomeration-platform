@@ -7,18 +7,22 @@ import { atomicWrite } from "../core/atomic.js";
 import { isoUtc } from "../core/archive.js";
 import {
   deriveSlug, parseScoreArgs, scoreArtDir, scoreDraftDir,
-  formatRosterFile, scoreDocPath, parseMultiRepoMode, parseRosterFile, type RosterRow,
+  formatRosterFile, scoreDocPath, parseMultiRepoMode, parseRosterFile,
+  spawnRosterArg, spawnResultsTsv, spawnTally, parsePanesFile,
+  type RosterRow, type SpawnResult,
 } from "../core/score.js";
 import { assembleDoc, SECTIONS_SINGLE, SECTIONS_MULTI, type DocMode } from "../core/scoreDoc.js";
 import { auditDoc } from "../core/audit.js";
 import { readProviderList } from "../core/providers.js";
-import { activeProvidersPath, partDir } from "../core/paths.js";
+import { activeProvidersPath, partDir, repoRoot } from "../core/paths.js";
 import { pickInstruments } from "../core/instruments.js";
 import { outboxOffset, outboxPath, outboxWaitSince, type OutboxEvent } from "../core/ipc.js";
 import { instrumentConsultValidated, consultTimeout, instrumentTimeoutMultiplier } from "../core/contracts.js";
 import { composeResearchPrompt, researchState, parseLatestOffset, scaledTimeout } from "../core/scoreTurn.js";
 import { diffFindings, type DiffPart } from "../core/scoreDiff.js";
 import { run as sendRun } from "./send.js";
+import { run as spawnRun } from "./spawn.js";
+import { run as preflightRun } from "./preflight.js";
 
 function usage(): number { log.error("usage: score <init|assemble|spawn-all|research-send|research-wait|diff> ..."); return 2; }
 
@@ -28,6 +32,7 @@ export async function run(args: string[]): Promise<number> {
   switch (verb) {
     case "init": return initRun(applyArgsFile(rest));
     case "assemble": return assembleRun(rest);
+    case "spawn-all": return spawnAllRun(rest);
     case "research-send": return researchSendRun(rest);
     case "research-wait": return researchWaitRun(rest);
     case "diff": return diffRun(rest);
@@ -123,6 +128,49 @@ async function assembleRun(rest: string[]): Promise<number> {
 }
 
 // ---- Phase C: escalation (spawn-all → research → diff) ----
+
+export interface SpawnAllDeps {
+  preflight(args: string[]): Promise<number>;
+  spawn(args: string[]): Promise<number>;
+  repoRoot(): string;
+}
+const liveSpawnAllDeps: SpawnAllDeps = { preflight: preflightRun, spawn: spawnRun, repoRoot };
+
+async function spawnAllRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: score spawn-all <topic>"); return 2; }
+  return spawnAllWith(topic, liveSpawnAllDeps);
+}
+
+export async function spawnAllWith(topic: string, d: SpawnAllDeps): Promise<number> {
+  const art = scoreArtDir(topic);
+  const rosterPath = join(art, "roster.txt");
+  if (!existsSync(rosterPath)) { log.error(`score spawn-all: roster.txt missing at ${rosterPath} (run score init)`); return 2; }
+  const rows = parseRosterFile(readFileSync(rosterPath, "utf8"));
+  if (rows.length < 2) { log.error(`score spawn-all: need >=2 parts in roster.txt, got ${rows.length}`); return 2; }
+
+  const pf = await d.preflight([topic, String(rows.length), "--roster", spawnRosterArg(rows), "--art-dir", art]);
+  if (pf !== 0) { log.error(`score spawn-all: preflight failed (rc=${pf})`); return 2; }
+
+  const panesPath = join(art, "preflight-panes.txt");
+  if (!existsSync(panesPath)) { log.error(`score spawn-all: preflight wrote no ${panesPath}`); return 2; }
+  const panes = parsePanesFile(readFileSync(panesPath, "utf8"));
+  const orphans = rows.filter((r) => !panes.has(r.instrument));
+  if (orphans.length) { log.error(`score spawn-all: parts missing a preflight pane: ${orphans.map((r) => r.instrument).join(", ")}`); return 2; }
+
+  const cwd = d.repoRoot();
+  const results: SpawnResult[] = await Promise.all(rows.map(async (r) => {
+    const rc = await d.spawn([r.instrument, r.provider, topic, "--target-pane", panes.get(r.instrument)!, "--cwd", cwd]);
+    return { instrument: r.instrument, provider: r.provider, rc };
+  }));
+  atomicWrite(join(art, "spawn-results.tsv"), spawnResultsTsv(results));
+
+  const rc = spawnTally(results.map((r) => r.rc));
+  const nOk = results.filter((r) => r.rc === 0).length;
+  if (rc === 0) log.ok(`score spawn-all: ${nOk}/${rows.length} parts ready`);
+  else log.warn(`score spawn-all: ${nOk}/${rows.length} parts ready (rc=${rc})`);
+  return rc;
+}
 
 export interface ResearchSendDeps {
   offsetFor(instrument: string, model: string, topic: string): number;
