@@ -516,3 +516,58 @@ per-repo prompt first, so the composition — the Phase C deliverable — is ver
   **dispatch** is complete; cross-repo verify + per-repo fix-loop + per-repo finish (Phase D) remain
   (the `dagFanInRepos` "feels unsafe" heuristic is wired and unit-tested, ready for Phase D's
   cross-verify).
+
+---
+
+# Consort `perform` — Phase D (multi-repo verify/fix/finish COMPLETE) Dogfood Result
+
+**Date:** 2026-05-30 · **Branch:** `feat/perform` · **Verdict:** ✅ PASS — `perform` is now complete
+(single-repo + multi-repo, both paths end to end).
+
+Same 2-repo / 2-wave hub as Phase C (`api/`, `web/` declared sub-repos), extended with one
+**undeclared** sibling repo (`libx/`) and a non-repo dir (`docs/`) to exercise the adjacent-tree
+(sibling) commit guard. Design doc carries a `## Components` **table** (`api/src.txt`, `web/src.txt`)
+so multi-repo `scope-check` has declared paths. Parts are **simulated** (codex 0.135.0 directory-trust
+blocker — Phase B/C finding); every consort verb ran **live against real throwaway git repos**.
+
+## Run (every Phase D verb live)
+
+| Stage / verb | Result |
+|---|---|
+| `init` → `dag-parse` → `multi-init` → `pre-snapshot` → `branch` | ✅ `ROUTING=multi`; `WAVES=2`; `parts.txt` = 2 instruments in DAG order; `feat/perform-perf-d` in both sub-repos (Phase C path, re-confirmed) |
+| **`sibling-baseline <topic> <hub>`** | ✅ captured the one undeclared sibling `libx\t<sha>\tmain`; `api`/`web` excluded (declared), `docs` excluded (non-repo) |
+| **`cross-signal <topic>`** | ✅ `WAVE_COUNT=2`, `FAN_IN_REPOS=` (linear), `SHARED_PATHS=src.txt` (touched by both parts), **`UNSAFE=1`** — shared-path trigger fired |
+| **`sibling-verify <topic> <hub>`** | ✅ after a simulated rogue commit on `libx` main → `sibling-rogue.txt` per-commit TSV `libx\tf54d018\tlibx: rogue change` |
+| **`sibling-rescue <topic> <hub>`** | ✅ `rescued libx`; **`feat/perform-perf-d-rescue` branch created** in libx; `sibling-rescue.txt` = `libx\trescued` |
+| **`scope-check <topic>`** (multi-aware) | ✅ `diff-paths.txt` = `api/src.txt` / `web/rogue.txt` / `web/src.txt` (each prefixed `<repo>/`); `OOS_COUNT=1` → `scope-out-of-scope.txt` = `web/rogue.txt` (the out-of-scope stray) |
+| `summary <topic>` | ✅ one per-repo block per part (branch, baseline/HEAD, diff stat, commit list) |
+| **`finish-one <topic> <slug> keep`** (per repo) | ✅ both targets finished independently, **appended** to `finish-results.tsv` in order (`<instr>\tkeep\tkept` ×2; no truncation between calls) |
+| `forensics` → `coda` → `archive` | ✅ forensics (no findings), archive stamped + moved; `coda` is a no-op here (parts simulated → no live panes to tear down) |
+
+## Scope of the live run
+
+The whole Phase D verb chain — sibling baseline/verify/rescue, the cross-repo unsafe heuristic, the
+multi-repo-aware scope-check, and per-repo `finish-one` — ran **fully live against real git**, byte-
+verifying: the undeclared-sibling exclusion (declared sub-repos + non-repos skipped), the rogue-commit
+per-commit TSV, the two-phase revert-and-replay rescue (a real `feat/perform-<topic>-rescue` branch),
+the `<repo>/`-prefixed multi-repo diff + out-of-scope detection, and append (not truncate) per-repo
+finish. The **cross-verify bug-collection + fix-loop dispatch** (Stages 3c/3d) and the AskUserQuestion
+intercepts are Maestro/directive work, not verbs — exercised by the directive, not this verb-level
+dogfood; their inputs (`cross-signal`'s `UNSAFE=1`, `multi-verify-bugs.txt` re-dispatch via the
+existing `send`/`wave-wait`) are all validated. The live `spawn` of each part remains blocked by the
+codex 0.135.0 trust prompt (each sub-repo cwd would need to be codex-trusted), so the parts' build
+turns were stood in for — identical boundary to Phases B and C.
+
+## Verification context
+
+- **593 vitest unit tests green** (+ the D1–D5 suites: sibling verbs, sibling-rescue, cross-signal,
+  multi-repo scope-check, finish-one); `tsc --noEmit` 0, eslint 0, stale-token gate (incl. the
+  rewritten `commands/perform.md` Stages 3c/3d/4) green; `dist/consort.cjs` rebuilt (767.1kb) +
+  committed so `/consort:perform` dispatches the new verbs.
+- Phase D built subagent-driven: 5 implementers (D1 sibling-baseline+verify / D2 sibling-rescue / D3
+  cross-signal / D4 multi-repo scope-check / D5 finish-one), each through two-stage review (spec →
+  quality) — all SPEC PASS / QUALITY APPROVED (two Minor byte-faithfulness/test-coverage fixes folded
+  back into D1 and D2). The directive (Stages 3c/3d/4) + dist + phase-guard refresh were
+  conductor-authored.
+- **`perform` is COMPLETE.** The remaining high-level commands (`prelude`, `rehearsal`, `playback`)
+  are out of scope until each gets its own spec (the refreshed `CLAUDE.md` phase guard reflects this).
