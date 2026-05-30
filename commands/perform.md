@@ -12,9 +12,10 @@ whole run; `tmux select-pane` to watch.
 
 Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs"`.
 
-> **Scope (this build):** single-repo only. A multi-repo doc (a `**Target Sub-Project(s):**` header
-> plus a `## Execution DAG` section) is detected and recorded, but its execution is a later phase —
-> Stage 0 stops with a note when `ROUTING=multi`.
+> **Scope (this build):** single-repo **and multi-repo DAG execution**. A multi-repo doc (a
+> `**Target Sub-Project(s):**` header plus a `## Execution DAG` section) routes through Stages 3a/3b
+> (preflight panes → wave-by-wave dispatch). Cross-repo verify / per-repo fix-loop / per-repo finish
+> are a later phase; the multi-repo path here ends after all waves complete plus a per-repo summary.
 
 ## Stage 0 — args-file + init + route + branch
 
@@ -38,15 +39,28 @@ Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs"`.
      design doc (or re-run `/consort:score` to regenerate one). Stop.
    - **rc 2** — usage error, or the topic is already in flight (run `/consort:coda <TOPIC>` to clear it
      first). Stop.
-5. **If `ROUTING=multi`:** tell the user this design declares multiple sub-projects and a multi-repo
-   `perform` is a later phase; the doc is recorded but will not execute here. Stop.
+5. **If `ROUTING=multi`:** materialize the DAG + the per-repo roster *before* the shared step 6:
+   1. `$CS perform dag-parse <TOPIC>` — parses `## Execution DAG` → `$ART/dag-waves.txt`
+      (`<wave>\t<step>\t<repo>\t<path|none>\t<desc>`) + `$ART/dag-edges.txt` (`<from>\t<to>`); prints
+      `WAVES=`/`STEPS=`. rc 1 = a cyclic or malformed DAG (the offending line / cycle was printed to
+      stderr) → surface it and stop (re-run `/consort:score` for a clean DAG, or fix the doc by hand).
+   2. `$CS perform multi-init <TOPIC> "$TARGET_CWD"` — resolves each unique sub-repo (in DAG
+      first-occurrence order) under the hub `$TARGET_CWD`, checks its `CLAUDE.md`/`AGENTS.md` marker,
+      assigns one part (instrument) + its detected provider per repo, and writes `$ART/parts.txt`
+      (`<instrument>\t<cwd>\t<provider>`) + a per-part `$ART/<instrument>-branch-base.sha`. rc 1 = a
+      sub-repo is missing / lacks a marker / the instrument pool is exhausted → surface and stop.
+   Then step 6 runs **pre-snapshot + branch across all N parts** (`iterTargets` reads `parts.txt`).
 6. **Pre-snapshot + branch.** `$CS perform pre-snapshot <TOPIC>` (commits any dirty tree so the
    perform branch forks clean; rc 2 = the target is not a git repo → surface and stop). Then, unless
    the user passed `--no-branch`, `$CS perform branch <TOPIC>` (creates/resumes `feat/perform-<TOPIC>`
    from the clean HEAD and records `branch-base.sha`). With `--no-branch`, run
    `$CS perform branch --no-branch <TOPIC>` (stays on the current branch).
 
-## Stage 1.1 — spawn the part
+> **Routing after Stage 0.** `ROUTING=single` → Stages 1.1 / 1 / 2 / 3 / 4 below. `ROUTING=multi` →
+> **skip to Stage 3a** (the materialization in Stage 0 step 5 already ran; pre-snapshot + branch
+> covered every part).
+
+## Stage 1.1 — spawn the part (single-repo)
 
 Spawn one part in the resolved target cwd:
 
@@ -151,3 +165,66 @@ Then `ROUND=$((ROUND+1))`, `RETRY=0`, and loop back to Stage 1.
    then `$CS perform archive <TOPIC>`.
 6. **Final summary.** Print: the branch + commit count (`git -C "$TARGET_CWD" log --oneline
    "$(cat "$ART/branch-base.sha")"..HEAD | wc -l`), the finish outcome, and the archive path.
+
+## Stage 3a — multi-repo preflight (ROUTING=multi only)
+
+Stage 0 step 5 + step 6 have already written `$ART/{dag-waves.txt,dag-edges.txt,parts.txt}` and
+branched every sub-repo. Allocate one tmux pane per part, rooted later in each part's sub-repo cwd.
+Build the preflight roster `<instrument>:<provider>` from `parts.txt` (col 1 = instrument, col 3 =
+provider) and the part count `N`:
+
+```bash
+N=$(grep -vc '^$' "$ART/parts.txt")
+ROSTER=$(awk -F'\t' 'NF>=3 {printf "%s%s:%s", sep, $1, $3; sep=","}' "$ART/parts.txt")
+$CS preflight <TOPIC> "$N" --roster "$ROSTER" --art-dir "$ART"
+```
+
+`preflight` allocates **2–4** panes and writes `$ART/preflight-panes.txt` (TSV `<instrument>\t<pane>`).
+If `N > 4`, dispatch the first 4 parts' panes and tell the user wider intra-wave fan-out is not yet
+supported (the DAG still serializes by wave; only the per-wave pane budget is capped). Load
+`preflight-panes.txt` into an `instrument → pane` map for Stage 3b.
+
+## Stage 3b — DAG wave dispatch (ROUTING=multi only)
+
+Build the lookup tables once — for each `parts.txt` row `<instrument>\t<cwd>\t<provider>`, the repo is
+`basename(cwd)`; map `repo → {instrument, cwd, provider}`. Group `dag-waves.txt` rows by wave (column
+1). The **fan-in** parts (a step with ≥2 incoming `dag-edges.txt` rows — `dagFanInRepos`) warrant
+extra scrutiny in the later cross-verify phase; note them now.
+
+Walk the waves in ascending order — **never start wave W+1 until every part in wave W reports `done`**.
+For each wave, for each repo in it:
+
+1. **Spawn** the part on its allocated pane, rooted in its sub-repo cwd (issue the per-wave spawns as
+   parallel Bash calls in one message):
+   ```bash
+   $CS spawn "$INSTRUMENT" "$PROVIDER" "$TOPIC" --cwd "$CWD" --target-pane "$PANE"
+   ```
+2. **Dispatch the build unit** — `send-unit` composes the per-repo DAG-unit prompt (focus the part on
+   its `### <repo>` design-doc slice + its upstream siblings) and delivers it via the canonical
+   write+nudge `send` primitive:
+   ```bash
+   $CS perform send-unit "$TOPIC" "$REPO"
+   ```
+3. **Barrier** — fire one background `wave-wait` per part in the wave (parallel), then wait for all:
+   ```
+   Bash(command='$CS perform wave-wait "$TOPIC" "$INSTRUMENT" "$PROVIDER"', run_in_background: true,
+        description="maestro await <INSTRUMENT> wave <W>")
+   ```
+   On the completion notifications, read each part's first `TS=` line from `$ART/wave-<instrument>.txt`.
+   Every part `TS=ok` → advance to the next wave. Any `TS=failed`/`TS=timeout` → surface which
+   sub-repo(s) failed and **AskUserQuestion** ("Retry the wave / Hand-off (preserve panes) / Abort").
+   *Abort* → `$CS coda --pairs <TOPIC> <instrument…>` + `$CS perform archive <TOPIC>`, stop.
+
+When the last wave's parts all report `TS=ok`, multi-repo execution is complete.
+
+## Stage 3z — per-repo summary + teardown (ROUTING=multi; end of this build)
+
+`$CS perform summary <TOPIC>` — `iterTargets` reads `parts.txt`, so it emits one block per part
+(branch, baseline/HEAD, diff stat, commit list). Surface every block verbatim.
+
+> **Deferred to a later phase:** cross-repo verify (the Maestro's own cross-repo invariant check,
+> escalated on a fan-in / shared-path "feels unsafe" signal), the per-repo fix-loop, and the per-repo
+> finish menu are **not built here** — they will be inserted between the summary and teardown. For now,
+> tear down + archive: `$CS coda --pairs <TOPIC> <instrument…>` (closes every part pane; prints the
+> **FINE** banner) then `$CS perform archive <TOPIC>`. Print the per-part commit counts + the archive
+> path as the final summary.
