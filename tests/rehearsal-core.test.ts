@@ -362,6 +362,7 @@ describe("buildConsensus", () => {
 import {
   parseState, renderState, mergeState, reconcileFromOutbox, readHaltFlag,
 } from "../src/core/rehearsalState.js";
+import { buildResultsTsv, computeScore, type ScoreFs } from "../src/core/rehearsalScore.js";
 
 describe("state KV round-trip", () => {
   it("parses and renders KV, preserving '=' in values and escaping newlines", () => {
@@ -553,3 +554,112 @@ describe("rehearsal experiment template", () => {
     expect(out).not.toMatch(/\{\{[A-Z_]+\}\}/);
   });
 });
+
+describe("rehearsalScore", () => {
+  it("buildResultsTsv header is the frozen 7-col shape with 'instrument' col1", () => {
+    expect(buildResultsTsv([])).toBe("exp_id\tinstrument\tapproach\tmetric\tstatus\truntime_s\tmetric_name\n");
+  });
+
+  it("buildResultsTsv appends rows in given order (approach col3, metric col4)", () => {
+    const tsv = buildResultsTsv([
+      { expId: "exp-001", instrument: "viola", approach: "base", metric: "0.9", status: "ok", runtime: "12", metricName: "accuracy" },
+    ]);
+    expect(tsv).toBe("exp_id\tinstrument\tapproach\tmetric\tstatus\truntime_s\tmetric_name\n" +
+      "exp-001\tviola\tbase\t0.9\tok\t12\taccuracy\n");
+  });
+
+  it("computeScore validates, sorts, race-guards phase clear", () => {
+    const files: Record<string, string> = {
+      "/a/metric.md": "**Primary metric:** accuracy\n",
+      "/a/parts/viola/state.txt": "phase=working\ncurrent_exp_id=exp-001\n",
+      "/a/parts/cello/state.txt": "phase=working\ncurrent_exp_id=exp-001\n",
+      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+        branch_id:"b",approach_label:"base",metric_name:"accuracy",metric_value:0.95,status:"ok",
+        runtime_s:12,log_paths:[],checkpoint_path:null,notes:"" }),
+      "/a/parts/cello/experiments/exp-001/result.json": JSON.stringify({
+        branch_id:"b",approach_label:"deep",metric_name:"accuracy",metric_value:0.90,status:"ok",
+        runtime_s:20,log_paths:[],checkpoint_path:null,notes:"" }),
+    };
+    const c = computeScore("/a", fakeFs(files), () => "2026-05-30T00:00:00Z");
+    expect(c.scoreboardMd).toContain("| 1 | exp-001 | viola |");
+    expect(c.scoreboardMd).toContain("| 2 | exp-001 | cello |");
+    expect(c.resultsTsv.split("\n")[1]).toContain("cello");   // walk order ascending: cello before viola
+    expect(c.phaseClears.map((p) => p.statePath).sort()).toEqual([
+      "/a/parts/cello/state.txt", "/a/parts/viola/state.txt"]);
+    expect(c.phaseClears[0].merged).toMatch(/phase=idle/);
+    expect(c.phaseClears[0].merged).toMatch(/current_exp_id=\n|current_exp_id=$/m);
+  });
+
+  it("computeScore rejects a bad metric_name -> sidecar, omits from scoreboard+tsv, no throw", () => {
+    const files: Record<string, string> = {
+      "/a/metric.md": "**Primary metric:** accuracy\n",
+      "/a/parts/viola/state.txt": "current_exp_id=exp-001\n",
+      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+        branch_id:"b",approach_label:"x",metric_name:"loss",metric_value:0.1,status:"ok",
+        runtime_s:1,log_paths:[],checkpoint_path:null,notes:"" }),
+    };
+    const c = computeScore("/a", fakeFs(files), () => "T");
+    expect(c.sidecars).toHaveLength(1);
+    expect(c.sidecars[0].path).toBe("/a/parts/viola/experiments/exp-001/result-validation.txt");
+    expect(c.sidecars[0].body).toMatch(/^FAILED at T: metric_name 'loss' != /);
+    expect(c.scoreboardMd).not.toContain("exp-001");
+    expect(c.resultsTsv.split("\n").filter(Boolean)).toHaveLength(1);   // header only
+    expect(c.warnings).toHaveLength(1);
+  });
+
+  it("computeScore does NOT clear phase for a part whose current_exp_id has no result.json (race guard)", () => {
+    const files: Record<string, string> = {
+      "/a/metric.md": "**Primary metric:** accuracy\n",
+      "/a/parts/viola/state.txt": "phase=working\ncurrent_exp_id=exp-002\n",
+      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+        branch_id:"b",approach_label:"x",metric_name:"accuracy",metric_value:0.9,status:"ok",
+        runtime_s:1,log_paths:[],checkpoint_path:null,notes:"" }),
+    };
+    const c = computeScore("/a", fakeFs(files), () => "T");
+    expect(c.phaseClears).toHaveLength(0);
+  });
+
+  it("computeScore removes a stale sidecar when a result becomes valid", () => {
+    const files: Record<string, string> = {
+      "/a/metric.md": "**Primary metric:** accuracy\n",
+      "/a/parts/viola/state.txt": "current_exp_id=exp-001\n",
+      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+        branch_id:"b",approach_label:"x",metric_name:"accuracy",metric_value:0.9,status:"ok",
+        runtime_s:1,log_paths:[],checkpoint_path:null,notes:"" }),
+      "/a/parts/viola/experiments/exp-001/result-validation.txt": "FAILED at old: x\n",
+    };
+    const c = computeScore("/a", fakeFs(files), () => "T");
+    expect(c.staleSidecars).toEqual(["/a/parts/viola/experiments/exp-001/result-validation.txt"]);
+  });
+
+  it("computeScore routes a non-ok (fail) result to the scoreboard FAIL group + tsv", () => {
+    const files: Record<string, string> = {
+      "/a/metric.md": "**Primary metric:** accuracy\n",
+      "/a/parts/viola/state.txt": "current_exp_id=exp-001\n",
+      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+        branch_id:"b",approach_label:"flop",metric_name:"accuracy",metric_value:null,status:"fail",
+        runtime_s:5,log_paths:[],checkpoint_path:null,notes:"broke" }),
+    };
+    const c = computeScore("/a", fakeFs(files), () => "T");
+    // valid (status=fail requires null metric_value, which it has) -> appears, in the FAIL group with n/a metric
+    expect(c.scoreboardMd).toContain("exp-001");
+    expect(c.scoreboardMd).toContain("fail");
+    expect(c.scoreboardMd).toContain("n/a");
+    // tsv row: metric cell empty (str(null)=""), status=fail
+    const row = c.resultsTsv.split("\n").find((l) => l.startsWith("exp-001"));
+    expect(row).toBe("exp-001\tviola\tflop\t\tfail\t5\taccuracy");
+    // a fail's current_exp_id has a result.json on disk -> phase still cleared (race-guard is result-presence, not status)
+    expect(c.phaseClears).toHaveLength(1);
+  });
+});
+
+function fakeFs(files: Record<string, string>): ScoreFs {
+  const has = (p: string): boolean => p in files;
+  const dirsUnder = (p: string): string[] => {
+    const pre = p.endsWith("/") ? p : p + "/";
+    const set = new Set<string>();
+    for (const k of Object.keys(files)) if (k.startsWith(pre)) set.add(k.slice(pre.length).split("/")[0]);
+    return [...set].sort();
+  };
+  return { exists: has, read: (p) => (p in files ? files[p] : null), listDir: (p) => dirsUnder(p) };
+}
