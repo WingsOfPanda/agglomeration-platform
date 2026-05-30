@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
-import { initWith, type PreludeInitDeps } from "../src/commands/prelude.js";
+import { initWith, classifyRun, type PreludeInitDeps } from "../src/commands/prelude.js";
 import { preludeArtDir } from "../src/core/prelude.js";
 
 function initDeps(over: Partial<PreludeInitDeps> = {}): PreludeInitDeps {
@@ -48,5 +48,23 @@ describe("prelude init", () => {
       const rc = await initWith(["x"], initDeps());
       expect(rc).toBe(2);
     } finally { cleanup(); }
+  });
+});
+
+describe("prelude classify", () => {
+  it("writes lit-track.txt = ON for an academic topic", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["attention", "models"], initDeps());
+      const rc = await classifyRun(["attention-models"]);
+      expect(rc).toBe(0);
+      const lt = readFileSync(join(preludeArtDir("attention-models"), "lit-track.txt"), "utf8");
+      expect(lt.startsWith("ON\n")).toBe(true);
+      expect(lt).toContain("reason: auto-detect via keyword scan");
+    } finally { cleanup(); }
+  });
+  it("rc1 when the art dir is missing", async () => {
+    const { cleanup } = freshHome();
+    try { expect(await classifyRun(["nope"])).toBe(1); } finally { cleanup(); }
   });
 });

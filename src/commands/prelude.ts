@@ -1,7 +1,7 @@
 // src/commands/prelude.ts — /consort:prelude CLI verbs (port of meditate). Built on score's DI
 // pattern + IPC/wait/archive helpers; meditate-specific logic lives in src/core/prelude*.ts.
 // NOTE: verbs are added task-by-task; the dispatcher's switch grows as each verb lands.
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile } from "../args.js";
@@ -13,6 +13,7 @@ import { readProviderList } from "../core/providers.js";
 import { activeProvidersPath } from "../core/paths.js";
 import { pickInstruments } from "../core/instruments.js";
 import { instrumentConsultValidated } from "../core/contracts.js";
+import { classifyTopic } from "../core/preludeLit.js";
 
 function usage(): number {
   log.error("usage: prelude <init|classify|spawn-all|research-send|research-wait|synth-preliminary|" +
@@ -25,9 +26,12 @@ export async function run(args: string[]): Promise<number> {
   const rest = args.slice(1);
   switch (verb) {
     case "init": return initRun(applyArgsFile(rest));
+    case "classify": return classifyRun(rest);
     default: return usage();
   }
 }
+
+const readIf = (p: string): string => (existsSync(p) ? readFileSync(p, "utf8") : "");
 
 // ---- init ----
 
@@ -73,5 +77,18 @@ export async function initWith(tokens: string[], d: PreludeInitDeps): Promise<nu
     `TOPIC=${topic}\nN=${rows.length}\nART=${art}\n` +
     rows.map((r) => `PART=${r.instrument}:${r.provider}`).join("\n") + "\n",
   );
+  return 0;
+}
+
+// ---- classify (lit auto-detect) ----
+export async function classifyRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: prelude classify <topic>"); return 2; }
+  const art = preludeArtDir(topic);
+  if (!existsSync(art)) { log.error(`prelude classify: ${art} not found (run prelude init)`); return 1; }
+  const topicText = readIf(join(art, "topic.txt")).trim();
+  const track = classifyTopic(topicText);
+  atomicWrite(join(art, "lit-track.txt"), `${track}\nreason: auto-detect via keyword scan\n`);
+  log.ok(`prelude classify: lit-track=${track}`);
   return 0;
 }
