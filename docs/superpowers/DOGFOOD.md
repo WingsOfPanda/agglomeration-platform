@@ -674,3 +674,75 @@ and is validated live in the **Phase D full dogfood**.
   half of `rehearsal` (the persistent advisor loop: directive metric/sota/spawn-all live, the
   experiment dispatch, consensus, completion) lands in the Phase C+ dogfoods; `prelude` (meditate)
   remains the only fully unshipped high-level command.
+
+---
+
+# Consort `rehearsal` — Phase C (experiment loop) Dogfood Result
+
+**Date:** 2026-05-30 · **Branch:** `feat/rehearsal` · **Verdict:** PASS — **20/20 assertions green,
+0 fail** (the Phase C ACCEPTANCE GATE: the whole experiment loop driven through the REAL CLI verbs
+against simulated parts).
+
+The four Phase C verbs (`experiment-send` / `score` / `monitor` / `status-brief`) plus the Phase B
+`init`/`metric` front-half, exercised end-to-end across simulated experiment rounds under a fresh
+isolated `CONSORT_HOME` (`mktemp -d`). The driver is `scripts/dogfood-rehearsal-loop.sh` (self-
+contained + idempotent — creates its own temp home, prints PASS/FAIL per assertion + a final tally,
+exits 0 iff all pass). Re-running yields the same 20/20.
+
+## Parts are SIMULATED (codex directory-trust blocks live spawns)
+
+codex IS on PATH, so `init`'s codex gate passes (Phase B dogfooded init+spawn-all-prep live), but
+actually spawning codex panes is blocked by codex 0.135.0's directory-trust prompt + needs tmux (the
+standing Phase B/C/D `score`/`perform` finding). So the dogfood **simulates the parts**: it scaffolds
+each part's `_rehearsal` state (`state.txt` + `experiments/`) AND the standard part dir
+(`<topicDir>/<inst>-codex/{pane.json,outbox.jsonl}` that `resolveModel`/`experiment-send`/`monitor`
+read) by hand instead of `spawn-all`, then drives the dispatch/score/monitor verbs against that state.
+`CONSORT_DRY_RUN=1` makes `experiment-send` skip the tmux pane nudge.
+
+## Scenarios
+
+**Scenario A — floor → target+K stop (17 assertions, A1–A17):** `init` "maximize mnist accuracy under
+100k params" + `metric` (floor `>= 0.90`, target `>= 0.99`, K_corroboration=2). Simulate-spawn 2 parts
+(violin, viola). **Round 1** `experiment-send exp-001` to each → asserted rc 0, `prompt.md` written
+with **no `{{` leftover**, inbox `END_OF_INSTRUCTION`, `state.txt` = `phase=working
+current_exp_id=exp-001 exp_counter=1`. Simulated both below floor (0.85 / 0.88) → `score` → scoreboard
+sorted higher-metric-first (rank 1 = viola 0.8800), `results.tsv` = header + 2 rows, both parts
+race-guard-flipped to `phase=idle`, `status-brief` prints the `| Part |` table + `floor_met=no`.
+**Round 2** crossed the floor (viola exp-002=0.91 → `floor_met=yes`) then drove violin across **2
+strictly-improving at-target experiments** (exp-002=0.992, exp-003=0.995, both ≥ target) → the
+completion line reached `floor_met=yes target_met=yes K_so_far=2 K_required=2` — the floor → target+K
+→ default-stop path.
+
+**Scenario B — plateau stop (B1):** a fresh topic, metric with a target never met; ~5 experiments at
+0.905/0.906/0.904/0.905/0.906 (floor met at 0.90, tight spread < `plateau_threshold` 0.01 over the
+`plateau_window` 5) → completion line `floor_met=yes target_met=no plateau=yes` — the floor + plateau +
+no-target → default-stop path.
+
+**Scenario C — monitor --once (C1–C2):** a simulated part with `done` lines already in its outbox and a
+pre-written `liveness-cursor.txt`=`0` under `partStateDir` → `monitor … --once` printed a line
+parseable as `{"part":"cello","event":"done",…}` (the byte-tail (A) pass; a rescan-tagged duplicate
+also fires, both valid), and `liveness-cursor.txt` advanced to the outbox byte size (375).
+
+## Findings / notes
+
+- **No integration bugs.** All 20 assertions passed on the first run; every Phase C verb matched the
+  spec — `experiment-send` template substitution leaves no `{{`, `score`'s frozen write order +
+  metric-desc sort + race-guarded phase-clear behave, the `checkCompletion` K-chain (per-part
+  longest strictly-improving at-target streak) reaches K=2, plateau detection fires on a tight spread,
+  and `monitor --once` advances the cursor to the outbox size.
+- The `score` race-guard (a part's `phase` flips to `idle` only when its `current_exp_id`'s
+  `result.json` is present) means each round must re-dispatch (`experiment-send` re-sets
+  `current_exp_id`) before the next result is written — exercised correctly across all three rounds.
+
+## Verification context
+
+- **774 vitest unit tests green** (full suite, 60 files); `tsc --noEmit` 0, eslint 0, stale-token gate
+  7/7 (the new `scripts/` driver isn't in the scanned set but carries no banned tokens anyway).
+- **`dist/consort.cjs` rebuilt + committed** (827.4kb): the committed bundle was stale (the Phase C
+  tasks deferred the rebuild — it didn't know `score`/`monitor`/`status-brief`); the rebuild adds the
+  four verbs (+762/-153 vs HEAD). **Deterministic:** two consecutive `npm run build`s produce a
+  byte-identical bundle (same sha256). All four Phase C verbs smoke-tested from the bundle (each prints
+  its usage to stderr with rc 2).
+- The Phase C experiment loop (`commands/rehearsal.md` Phases 0-4 + the inline loop) is now validated
+  end-to-end through the real CLI. The wind-down tail (Phases 5-7: synthesis doc → `coda` teardown →
+  handoff, Phase D) remains; `prelude` (meditate) is the only fully unshipped high-level command.

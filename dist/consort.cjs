@@ -1562,13 +1562,13 @@ var require_Collection = __commonJS({
 var require_stringifyComment = __commonJS({
   "node_modules/yaml/dist/stringify/stringifyComment.js"(exports2) {
     "use strict";
-    var stringifyComment = (str) => str.replace(/^(?!$)(?: $)?/gm, "#");
+    var stringifyComment = (str2) => str2.replace(/^(?!$)(?: $)?/gm, "#");
     function indentComment(comment, indent) {
       if (/^\n+$/.test(comment))
         return comment.substring(1);
       return indent ? comment.replace(/^(?! *$)/gm, indent) : comment;
     }
-    var lineComment = (str, indent, comment) => str.endsWith("\n") ? indentComment(comment, indent) : comment.includes("\n") ? "\n" + indentComment(comment, indent) : (str.endsWith(" ") ? "" : " ") + comment;
+    var lineComment = (str2, indent, comment) => str2.endsWith("\n") ? indentComment(comment, indent) : comment.includes("\n") ? "\n" + indentComment(comment, indent) : (str2.endsWith(" ") ? "" : " ") + comment;
     exports2.indentComment = indentComment;
     exports2.lineComment = lineComment;
     exports2.stringifyComment = stringifyComment;
@@ -1722,16 +1722,16 @@ var require_stringifyString = __commonJS({
       lineWidth: ctx.options.lineWidth,
       minContentWidth: ctx.options.minContentWidth
     });
-    var containsDocumentMarker = (str) => /^(%|---|\.\.\.)/m.test(str);
-    function lineLengthOverLimit(str, lineWidth, indentLength) {
+    var containsDocumentMarker = (str2) => /^(%|---|\.\.\.)/m.test(str2);
+    function lineLengthOverLimit(str2, lineWidth, indentLength) {
       if (!lineWidth || lineWidth < 0)
         return false;
       const limit = lineWidth - indentLength;
-      const strLen = str.length;
+      const strLen = str2.length;
       if (strLen <= limit)
         return false;
       for (let i2 = 0, start = 0; i2 < strLen; ++i2) {
-        if (str[i2] === "\n") {
+        if (str2[i2] === "\n") {
           if (i2 - start > limit)
             return true;
           start = i2 + 1;
@@ -1748,11 +1748,11 @@ var require_stringifyString = __commonJS({
       const { implicitKey } = ctx;
       const minMultiLineLength = ctx.options.doubleQuotedMinMultiLineLength;
       const indent = ctx.indent || (containsDocumentMarker(value) ? "  " : "");
-      let str = "";
+      let str2 = "";
       let start = 0;
       for (let i2 = 0, ch = json[i2]; ch; ch = json[++i2]) {
         if (ch === " " && json[i2 + 1] === "\\" && json[i2 + 2] === "n") {
-          str += json.slice(start, i2) + "\\ ";
+          str2 += json.slice(start, i2) + "\\ ";
           i2 += 1;
           start = i2;
           ch = "\\";
@@ -1761,38 +1761,38 @@ var require_stringifyString = __commonJS({
           switch (json[i2 + 1]) {
             case "u":
               {
-                str += json.slice(start, i2);
+                str2 += json.slice(start, i2);
                 const code = json.substr(i2 + 2, 4);
                 switch (code) {
                   case "0000":
-                    str += "\\0";
+                    str2 += "\\0";
                     break;
                   case "0007":
-                    str += "\\a";
+                    str2 += "\\a";
                     break;
                   case "000b":
-                    str += "\\v";
+                    str2 += "\\v";
                     break;
                   case "001b":
-                    str += "\\e";
+                    str2 += "\\e";
                     break;
                   case "0085":
-                    str += "\\N";
+                    str2 += "\\N";
                     break;
                   case "00a0":
-                    str += "\\_";
+                    str2 += "\\_";
                     break;
                   case "2028":
-                    str += "\\L";
+                    str2 += "\\L";
                     break;
                   case "2029":
-                    str += "\\P";
+                    str2 += "\\P";
                     break;
                   default:
                     if (code.substr(0, 2) === "00")
-                      str += "\\x" + code.substr(2);
+                      str2 += "\\x" + code.substr(2);
                     else
-                      str += json.substr(i2, 6);
+                      str2 += json.substr(i2, 6);
                 }
                 i2 += 5;
                 start = i2 + 1;
@@ -1802,14 +1802,14 @@ var require_stringifyString = __commonJS({
               if (implicitKey || json[i2 + 2] === '"' || json.length < minMultiLineLength) {
                 i2 += 1;
               } else {
-                str += json.slice(start, i2) + "\n\n";
+                str2 += json.slice(start, i2) + "\n\n";
                 while (json[i2 + 2] === "\\" && json[i2 + 3] === "n" && json[i2 + 4] !== '"') {
-                  str += "\n";
+                  str2 += "\n";
                   i2 += 2;
                 }
-                str += indent;
+                str2 += indent;
                 if (json[i2 + 2] === " ")
-                  str += "\\";
+                  str2 += "\\";
                 i2 += 1;
                 start = i2 + 1;
               }
@@ -1818,8 +1818,8 @@ var require_stringifyString = __commonJS({
               i2 += 1;
           }
       }
-      str = start ? str + json.slice(start) : json;
-      return implicitKey ? str : foldFlowLines.foldFlowLines(str, indent, foldFlowLines.FOLD_QUOTED, getFoldOptions(ctx, false));
+      str2 = start ? str2 + json.slice(start) : json;
+      return implicitKey ? str2 : foldFlowLines.foldFlowLines(str2, indent, foldFlowLines.FOLD_QUOTED, getFoldOptions(ctx, false));
     }
     function singleQuotedString(value, ctx) {
       if (ctx.options.singleQuote === false || ctx.implicitKey && value.includes("\n") || /[ \t]\n|\n[ \t]/.test(value))
@@ -1947,15 +1947,15 @@ ${indent}${start}${value}${end}`;
           return quotedString(value, ctx);
         }
       }
-      const str = value.replace(/\n+/g, `$&
+      const str2 = value.replace(/\n+/g, `$&
 ${indent}`);
       if (actualString) {
-        const test = (tag) => tag.default && tag.tag !== "tag:yaml.org,2002:str" && tag.test?.test(str);
+        const test = (tag) => tag.default && tag.tag !== "tag:yaml.org,2002:str" && tag.test?.test(str2);
         const { compat, tags } = ctx.doc.schema;
         if (tags.some(test) || compat?.some(test))
           return quotedString(value, ctx);
       }
-      return implicitKey ? str : foldFlowLines.foldFlowLines(str, indent, foldFlowLines.FOLD_FLOW, getFoldOptions(ctx, false));
+      return implicitKey ? str2 : foldFlowLines.foldFlowLines(str2, indent, foldFlowLines.FOLD_FLOW, getFoldOptions(ctx, false));
     }
     function stringifyString(item, ctx, onComment, onChompKeep) {
       const { implicitKey, inFlow } = ctx;
@@ -2107,11 +2107,11 @@ var require_stringify = __commonJS({
       const props = stringifyProps(node, tagObj, ctx);
       if (props.length > 0)
         ctx.indentAtStart = (ctx.indentAtStart ?? 0) + props.length + 1;
-      const str = typeof tagObj.stringify === "function" ? tagObj.stringify(node, ctx, onComment, onChompKeep) : identity3.isScalar(node) ? stringifyString.stringifyString(node, ctx, onComment, onChompKeep) : node.toString(ctx, onComment, onChompKeep);
+      const str2 = typeof tagObj.stringify === "function" ? tagObj.stringify(node, ctx, onComment, onChompKeep) : identity3.isScalar(node) ? stringifyString.stringifyString(node, ctx, onComment, onChompKeep) : node.toString(ctx, onComment, onChompKeep);
       if (!props)
-        return str;
-      return identity3.isScalar(node) || str[0] === "{" || str[0] === "[" ? `${props} ${str}` : `${props}
-${ctx.indent}${str}`;
+        return str2;
+      return identity3.isScalar(node) || str2[0] === "{" || str2[0] === "[" ? `${props} ${str2}` : `${props}
+${ctx.indent}${str2}`;
     }
     exports2.createStringifyContext = createStringifyContext;
     exports2.stringify = stringify;
@@ -2146,8 +2146,8 @@ var require_stringifyPair = __commonJS({
       });
       let keyCommentDone = false;
       let chompKeep = false;
-      let str = stringify.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
-      if (!explicitKey && !ctx.inFlow && str.length > 1024) {
+      let str2 = stringify.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
+      if (!explicitKey && !ctx.inFlow && str2.length > 1024) {
         if (simpleKeys)
           throw new Error("With simple keys, single line scalar must not span more than 1024 characters");
         explicitKey = true;
@@ -2156,27 +2156,27 @@ var require_stringifyPair = __commonJS({
         if (allNullValues || value == null) {
           if (keyCommentDone && onComment)
             onComment();
-          return str === "" ? "?" : explicitKey ? `? ${str}` : str;
+          return str2 === "" ? "?" : explicitKey ? `? ${str2}` : str2;
         }
       } else if (allNullValues && !simpleKeys || value == null && explicitKey) {
-        str = `? ${str}`;
+        str2 = `? ${str2}`;
         if (keyComment && !keyCommentDone) {
-          str += stringifyComment.lineComment(str, ctx.indent, commentString(keyComment));
+          str2 += stringifyComment.lineComment(str2, ctx.indent, commentString(keyComment));
         } else if (chompKeep && onChompKeep)
           onChompKeep();
-        return str;
+        return str2;
       }
       if (keyCommentDone)
         keyComment = null;
       if (explicitKey) {
         if (keyComment)
-          str += stringifyComment.lineComment(str, ctx.indent, commentString(keyComment));
-        str = `? ${str}
+          str2 += stringifyComment.lineComment(str2, ctx.indent, commentString(keyComment));
+        str2 = `? ${str2}
 ${indent}:`;
       } else {
-        str = `${str}:`;
+        str2 = `${str2}:`;
         if (keyComment)
-          str += stringifyComment.lineComment(str, ctx.indent, commentString(keyComment));
+          str2 += stringifyComment.lineComment(str2, ctx.indent, commentString(keyComment));
       }
       let vsb, vcb, valueComment;
       if (identity3.isNode(value)) {
@@ -2192,7 +2192,7 @@ ${indent}:`;
       }
       ctx.implicitKey = false;
       if (!explicitKey && !keyComment && identity3.isScalar(value))
-        ctx.indentAtStart = str.length + 1;
+        ctx.indentAtStart = str2.length + 1;
       chompKeep = false;
       if (!indentSeq && indentStep.length >= 2 && !ctx.inFlow && !explicitKey && identity3.isSeq(value) && !value.flow && !value.tag && !value.anchor) {
         ctx.indent = ctx.indent.substring(2);
@@ -2236,16 +2236,16 @@ ${ctx.indent}`;
       } else if (valueStr === "" || valueStr[0] === "\n") {
         ws = "";
       }
-      str += ws + valueStr;
+      str2 += ws + valueStr;
       if (ctx.inFlow) {
         if (valueCommentDone && onComment)
           onComment();
       } else if (valueComment && !valueCommentDone) {
-        str += stringifyComment.lineComment(str, ctx.indent, commentString(valueComment));
+        str2 += stringifyComment.lineComment(str2, ctx.indent, commentString(valueComment));
       } else if (chompKeep && onChompKeep) {
         onChompKeep();
       }
-      return str;
+      return str2;
     }
     exports2.stringifyPair = stringifyPair;
   }
@@ -2472,31 +2472,31 @@ var require_stringifyCollection = __commonJS({
           }
         }
         chompKeep = false;
-        let str2 = stringify.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
+        let str3 = stringify.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
         if (comment2)
-          str2 += stringifyComment.lineComment(str2, itemIndent, commentString(comment2));
+          str3 += stringifyComment.lineComment(str3, itemIndent, commentString(comment2));
         if (chompKeep && comment2)
           chompKeep = false;
-        lines.push(blockItemPrefix + str2);
+        lines.push(blockItemPrefix + str3);
       }
-      let str;
+      let str2;
       if (lines.length === 0) {
-        str = flowChars.start + flowChars.end;
+        str2 = flowChars.start + flowChars.end;
       } else {
-        str = lines[0];
+        str2 = lines[0];
         for (let i2 = 1; i2 < lines.length; ++i2) {
           const line = lines[i2];
-          str += line ? `
+          str2 += line ? `
 ${indent}${line}` : "\n";
         }
       }
       if (comment) {
-        str += "\n" + stringifyComment.indentComment(commentString(comment), indent);
+        str2 += "\n" + stringifyComment.indentComment(commentString(comment), indent);
         if (onComment)
           onComment();
       } else if (chompKeep && onChompKeep)
         onChompKeep();
-      return str;
+      return str2;
     }
     function stringifyFlowCollection({ items }, ctx, { flowChars, itemIndent }) {
       const { indent, indentStep, flowCollectionPadding: fcPadding, options: { commentString } } = ctx;
@@ -2539,21 +2539,21 @@ ${indent}${line}` : "\n";
         }
         if (comment)
           reqNewline = true;
-        let str = stringify.stringify(item, itemCtx, () => comment = null);
-        reqNewline || (reqNewline = lines.length > linesAtValue || str.includes("\n"));
+        let str2 = stringify.stringify(item, itemCtx, () => comment = null);
+        reqNewline || (reqNewline = lines.length > linesAtValue || str2.includes("\n"));
         if (i2 < items.length - 1) {
-          str += ",";
+          str2 += ",";
         } else if (ctx.options.trailingComma) {
           if (ctx.options.lineWidth > 0) {
-            reqNewline || (reqNewline = lines.reduce((sum, line) => sum + line.length + 2, 2) + (str.length + 2) > ctx.options.lineWidth);
+            reqNewline || (reqNewline = lines.reduce((sum, line) => sum + line.length + 2, 2) + (str2.length + 2) > ctx.options.lineWidth);
           }
           if (reqNewline) {
-            str += ",";
+            str2 += ",";
           }
         }
         if (comment)
-          str += stringifyComment.lineComment(str, itemIndent, commentString(comment));
-        lines.push(str);
+          str2 += stringifyComment.lineComment(str2, itemIndent, commentString(comment));
+        lines.push(str2);
         linesAtValue = lines.length;
       }
       const { start, end } = flowChars;
@@ -2565,11 +2565,11 @@ ${indent}${line}` : "\n";
           reqNewline = ctx.options.lineWidth > 0 && len > ctx.options.lineWidth;
         }
         if (reqNewline) {
-          let str = start;
+          let str2 = start;
           for (const line of lines)
-            str += line ? `
+            str2 += line ? `
 ${indentStep}${indent}${line}` : "\n";
-          return `${str}
+          return `${str2}
 ${indent}${end}`;
         } else {
           return `${start}${fcPadding}${lines.join(" ")}${fcPadding}${end}`;
@@ -2901,7 +2901,7 @@ var require_string = __commonJS({
       identify: (value) => typeof value === "string",
       default: true,
       tag: "tag:yaml.org,2002:str",
-      resolve: (str) => str,
+      resolve: (str2) => str2,
       stringify(item, ctx, onComment, onChompKeep) {
         ctx = Object.assign({ actualString: true }, ctx);
         return stringifyString.stringifyString(item, ctx, onComment, onChompKeep);
@@ -2939,7 +2939,7 @@ var require_bool = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:bool",
       test: /^(?:[Tt]rue|TRUE|[Ff]alse|FALSE)$/,
-      resolve: (str) => new Scalar.Scalar(str[0] === "t" || str[0] === "T"),
+      resolve: (str2) => new Scalar.Scalar(str2[0] === "t" || str2[0] === "T"),
       stringify({ source, value }, ctx) {
         if (source && boolTag.test.test(source)) {
           const sv = source[0] === "t" || source[0] === "T";
@@ -2991,7 +2991,7 @@ var require_float = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:float",
       test: /^(?:[-+]?\.(?:inf|Inf|INF)|\.nan|\.NaN|\.NAN)$/,
-      resolve: (str) => str.slice(-3).toLowerCase() === "nan" ? NaN : str[0] === "-" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
+      resolve: (str2) => str2.slice(-3).toLowerCase() === "nan" ? NaN : str2[0] === "-" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
       stringify: stringifyNumber.stringifyNumber
     };
     var floatExp = {
@@ -3000,7 +3000,7 @@ var require_float = __commonJS({
       tag: "tag:yaml.org,2002:float",
       format: "EXP",
       test: /^[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)[eE][-+]?[0-9]+$/,
-      resolve: (str) => parseFloat(str),
+      resolve: (str2) => parseFloat(str2),
       stringify(node) {
         const num = Number(node.value);
         return isFinite(num) ? num.toExponential() : stringifyNumber.stringifyNumber(node);
@@ -3011,11 +3011,11 @@ var require_float = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:float",
       test: /^[-+]?(?:\.[0-9]+|[0-9]+\.[0-9]*)$/,
-      resolve(str) {
-        const node = new Scalar.Scalar(parseFloat(str));
-        const dot = str.indexOf(".");
-        if (dot !== -1 && str[str.length - 1] === "0")
-          node.minFractionDigits = str.length - dot - 1;
+      resolve(str2) {
+        const node = new Scalar.Scalar(parseFloat(str2));
+        const dot = str2.indexOf(".");
+        if (dot !== -1 && str2[str2.length - 1] === "0")
+          node.minFractionDigits = str2.length - dot - 1;
         return node;
       },
       stringify: stringifyNumber.stringifyNumber
@@ -3032,7 +3032,7 @@ var require_int = __commonJS({
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
-    var intResolve = (str, offset, radix, { intAsBigInt }) => intAsBigInt ? BigInt(str) : parseInt(str.substring(offset), radix);
+    var intResolve = (str2, offset, radix, { intAsBigInt }) => intAsBigInt ? BigInt(str2) : parseInt(str2.substring(offset), radix);
     function intStringify(node, radix, prefix) {
       const { value } = node;
       if (intIdentify(value) && value >= 0)
@@ -3045,7 +3045,7 @@ var require_int = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "OCT",
       test: /^0o[0-7]+$/,
-      resolve: (str, _onError, opt) => intResolve(str, 2, 8, opt),
+      resolve: (str2, _onError, opt) => intResolve(str2, 2, 8, opt),
       stringify: (node) => intStringify(node, 8, "0o")
     };
     var int = {
@@ -3053,7 +3053,7 @@ var require_int = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:int",
       test: /^[-+]?[0-9]+$/,
-      resolve: (str, _onError, opt) => intResolve(str, 0, 10, opt),
+      resolve: (str2, _onError, opt) => intResolve(str2, 0, 10, opt),
       stringify: stringifyNumber.stringifyNumber
     };
     var intHex = {
@@ -3062,7 +3062,7 @@ var require_int = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "HEX",
       test: /^0x[0-9a-fA-F]+$/,
-      resolve: (str, _onError, opt) => intResolve(str, 2, 16, opt),
+      resolve: (str2, _onError, opt) => intResolve(str2, 2, 16, opt),
       stringify: (node) => intStringify(node, 16, "0x")
     };
     exports2.int = int;
@@ -3115,7 +3115,7 @@ var require_schema2 = __commonJS({
         identify: (value) => typeof value === "string",
         default: true,
         tag: "tag:yaml.org,2002:str",
-        resolve: (str) => str,
+        resolve: (str2) => str2,
         stringify: stringifyJSON
       },
       {
@@ -3132,7 +3132,7 @@ var require_schema2 = __commonJS({
         default: true,
         tag: "tag:yaml.org,2002:bool",
         test: /^true$|^false$/,
-        resolve: (str) => str === "true",
+        resolve: (str2) => str2 === "true",
         stringify: stringifyJSON
       },
       {
@@ -3140,7 +3140,7 @@ var require_schema2 = __commonJS({
         default: true,
         tag: "tag:yaml.org,2002:int",
         test: /^-?(?:0|[1-9][0-9]*)$/,
-        resolve: (str, _onError, { intAsBigInt }) => intAsBigInt ? BigInt(str) : parseInt(str, 10),
+        resolve: (str2, _onError, { intAsBigInt }) => intAsBigInt ? BigInt(str2) : parseInt(str2, 10),
         stringify: ({ value }) => intIdentify(value) ? value.toString() : JSON.stringify(value)
       },
       {
@@ -3148,7 +3148,7 @@ var require_schema2 = __commonJS({
         default: true,
         tag: "tag:yaml.org,2002:float",
         test: /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]*)?(?:[eE][-+]?[0-9]+)?$/,
-        resolve: (str) => parseFloat(str),
+        resolve: (str2) => parseFloat(str2),
         stringify: stringifyJSON
       }
     ];
@@ -3156,9 +3156,9 @@ var require_schema2 = __commonJS({
       default: true,
       tag: "",
       test: /^/,
-      resolve(str, onError) {
-        onError(`Unresolved plain scalar ${JSON.stringify(str)}`);
-        return str;
+      resolve(str2, onError) {
+        onError(`Unresolved plain scalar ${JSON.stringify(str2)}`);
+        return str2;
       }
     };
     var schema = [map.map, seq.seq].concat(jsonScalars, jsonError);
@@ -3190,10 +3190,10 @@ var require_binary = __commonJS({
         if (typeof node_buffer.Buffer === "function") {
           return node_buffer.Buffer.from(src, "base64");
         } else if (typeof atob === "function") {
-          const str = atob(src.replace(/[\n\r]/g, ""));
-          const buffer = new Uint8Array(str.length);
-          for (let i2 = 0; i2 < str.length; ++i2)
-            buffer[i2] = str.charCodeAt(i2);
+          const str2 = atob(src.replace(/[\n\r]/g, ""));
+          const buffer = new Uint8Array(str2.length);
+          for (let i2 = 0; i2 < str2.length; ++i2)
+            buffer[i2] = str2.charCodeAt(i2);
           return buffer;
         } else {
           onError("This environment does not support reading binary tags; either Buffer or atob is required");
@@ -3204,28 +3204,28 @@ var require_binary = __commonJS({
         if (!value)
           return "";
         const buf = value;
-        let str;
+        let str2;
         if (typeof node_buffer.Buffer === "function") {
-          str = buf instanceof node_buffer.Buffer ? buf.toString("base64") : node_buffer.Buffer.from(buf.buffer).toString("base64");
+          str2 = buf instanceof node_buffer.Buffer ? buf.toString("base64") : node_buffer.Buffer.from(buf.buffer).toString("base64");
         } else if (typeof btoa === "function") {
           let s = "";
           for (let i2 = 0; i2 < buf.length; ++i2)
             s += String.fromCharCode(buf[i2]);
-          str = btoa(s);
+          str2 = btoa(s);
         } else {
           throw new Error("This environment does not support writing binary tags; either Buffer or btoa is required");
         }
         type ?? (type = Scalar.Scalar.BLOCK_LITERAL);
         if (type !== Scalar.Scalar.QUOTE_DOUBLE) {
           const lineWidth = Math.max(ctx.options.lineWidth - ctx.indent.length, ctx.options.minContentWidth);
-          const n2 = Math.ceil(str.length / lineWidth);
+          const n2 = Math.ceil(str2.length / lineWidth);
           const lines = new Array(n2);
           for (let i2 = 0, o2 = 0; i2 < n2; ++i2, o2 += lineWidth) {
-            lines[i2] = str.substr(o2, lineWidth);
+            lines[i2] = str2.substr(o2, lineWidth);
           }
-          str = lines.join(type === Scalar.Scalar.BLOCK_LITERAL ? "\n" : " ");
+          str2 = lines.join(type === Scalar.Scalar.BLOCK_LITERAL ? "\n" : " ");
         }
-        return stringifyString.stringifyString({ comment, type, value: str }, ctx, onComment, onChompKeep);
+        return stringifyString.stringifyString({ comment, type, value: str2 }, ctx, onComment, onChompKeep);
       }
     };
     exports2.binary = binary;
@@ -3431,7 +3431,7 @@ var require_float2 = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:float",
       test: /^(?:[-+]?\.(?:inf|Inf|INF)|\.nan|\.NaN|\.NAN)$/,
-      resolve: (str) => str.slice(-3).toLowerCase() === "nan" ? NaN : str[0] === "-" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
+      resolve: (str2) => str2.slice(-3).toLowerCase() === "nan" ? NaN : str2[0] === "-" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
       stringify: stringifyNumber.stringifyNumber
     };
     var floatExp = {
@@ -3440,7 +3440,7 @@ var require_float2 = __commonJS({
       tag: "tag:yaml.org,2002:float",
       format: "EXP",
       test: /^[-+]?(?:[0-9][0-9_]*)?(?:\.[0-9_]*)?[eE][-+]?[0-9]+$/,
-      resolve: (str) => parseFloat(str.replace(/_/g, "")),
+      resolve: (str2) => parseFloat(str2.replace(/_/g, "")),
       stringify(node) {
         const num = Number(node.value);
         return isFinite(num) ? num.toExponential() : stringifyNumber.stringifyNumber(node);
@@ -3451,11 +3451,11 @@ var require_float2 = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:float",
       test: /^[-+]?(?:[0-9][0-9_]*)?\.[0-9_]*$/,
-      resolve(str) {
-        const node = new Scalar.Scalar(parseFloat(str.replace(/_/g, "")));
-        const dot = str.indexOf(".");
+      resolve(str2) {
+        const node = new Scalar.Scalar(parseFloat(str2.replace(/_/g, "")));
+        const dot = str2.indexOf(".");
         if (dot !== -1) {
-          const f = str.substring(dot + 1).replace(/_/g, "");
+          const f = str2.substring(dot + 1).replace(/_/g, "");
           if (f[f.length - 1] === "0")
             node.minFractionDigits = f.length;
         }
@@ -3475,34 +3475,34 @@ var require_int2 = __commonJS({
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
-    function intResolve(str, offset, radix, { intAsBigInt }) {
-      const sign = str[0];
+    function intResolve(str2, offset, radix, { intAsBigInt }) {
+      const sign = str2[0];
       if (sign === "-" || sign === "+")
         offset += 1;
-      str = str.substring(offset).replace(/_/g, "");
+      str2 = str2.substring(offset).replace(/_/g, "");
       if (intAsBigInt) {
         switch (radix) {
           case 2:
-            str = `0b${str}`;
+            str2 = `0b${str2}`;
             break;
           case 8:
-            str = `0o${str}`;
+            str2 = `0o${str2}`;
             break;
           case 16:
-            str = `0x${str}`;
+            str2 = `0x${str2}`;
             break;
         }
-        const n3 = BigInt(str);
+        const n3 = BigInt(str2);
         return sign === "-" ? BigInt(-1) * n3 : n3;
       }
-      const n2 = parseInt(str, radix);
+      const n2 = parseInt(str2, radix);
       return sign === "-" ? -1 * n2 : n2;
     }
     function intStringify(node, radix, prefix) {
       const { value } = node;
       if (intIdentify(value)) {
-        const str = value.toString(radix);
-        return value < 0 ? "-" + prefix + str.substr(1) : prefix + str;
+        const str2 = value.toString(radix);
+        return value < 0 ? "-" + prefix + str2.substr(1) : prefix + str2;
       }
       return stringifyNumber.stringifyNumber(node);
     }
@@ -3512,7 +3512,7 @@ var require_int2 = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "BIN",
       test: /^[-+]?0b[0-1_]+$/,
-      resolve: (str, _onError, opt) => intResolve(str, 2, 2, opt),
+      resolve: (str2, _onError, opt) => intResolve(str2, 2, 2, opt),
       stringify: (node) => intStringify(node, 2, "0b")
     };
     var intOct = {
@@ -3521,7 +3521,7 @@ var require_int2 = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "OCT",
       test: /^[-+]?0[0-7_]+$/,
-      resolve: (str, _onError, opt) => intResolve(str, 1, 8, opt),
+      resolve: (str2, _onError, opt) => intResolve(str2, 1, 8, opt),
       stringify: (node) => intStringify(node, 8, "0")
     };
     var int = {
@@ -3529,7 +3529,7 @@ var require_int2 = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:int",
       test: /^[-+]?[0-9][0-9_]*$/,
-      resolve: (str, _onError, opt) => intResolve(str, 0, 10, opt),
+      resolve: (str2, _onError, opt) => intResolve(str2, 0, 10, opt),
       stringify: stringifyNumber.stringifyNumber
     };
     var intHex = {
@@ -3538,7 +3538,7 @@ var require_int2 = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "HEX",
       test: /^[-+]?0x[0-9a-fA-F_]+$/,
-      resolve: (str, _onError, opt) => intResolve(str, 2, 16, opt),
+      resolve: (str2, _onError, opt) => intResolve(str2, 2, 16, opt),
       stringify: (node) => intStringify(node, 16, "0x")
     };
     exports2.int = int;
@@ -3642,9 +3642,9 @@ var require_timestamp = __commonJS({
   "node_modules/yaml/dist/schema/yaml-1.1/timestamp.js"(exports2) {
     "use strict";
     var stringifyNumber = require_stringifyNumber();
-    function parseSexagesimal(str, asBigInt) {
-      const sign = str[0];
-      const parts = sign === "-" || sign === "+" ? str.substring(1) : str;
+    function parseSexagesimal(str2, asBigInt) {
+      const sign = str2[0];
+      const parts = sign === "-" || sign === "+" ? str2.substring(1) : str2;
       const num = (n2) => asBigInt ? BigInt(n2) : Number(n2);
       const res = parts.replace(/_/g, "").split(":").reduce((res2, p) => res2 * num(60) + num(p), num(0));
       return sign === "-" ? num(-1) * res : res;
@@ -3681,7 +3681,7 @@ var require_timestamp = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "TIME",
       test: /^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+$/,
-      resolve: (str, _onError, { intAsBigInt }) => parseSexagesimal(str, intAsBigInt),
+      resolve: (str2, _onError, { intAsBigInt }) => parseSexagesimal(str2, intAsBigInt),
       stringify: stringifySexagesimal
     };
     var floatTime = {
@@ -3690,7 +3690,7 @@ var require_timestamp = __commonJS({
       tag: "tag:yaml.org,2002:float",
       format: "TIME",
       test: /^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*$/,
-      resolve: (str) => parseSexagesimal(str, false),
+      resolve: (str2) => parseSexagesimal(str2, false),
       stringify: stringifySexagesimal
     };
     var timestamp = {
@@ -3701,8 +3701,8 @@ var require_timestamp = __commonJS({
       // may be omitted altogether, resulting in a date format. In such a case, the time part is
       // assumed to be 00:00:00Z (start of day, UTC).
       test: RegExp("^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})(?:(?:t|T|[ \\t]+)([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2}(\\.[0-9]+)?)(?:[ \\t]*(Z|[-+][012]?[0-9](?::[0-9]{2})?))?)?$"),
-      resolve(str) {
-        const match = str.match(timestamp.test);
+      resolve(str2) {
+        const match = str2.match(timestamp.test);
         if (!match)
           throw new Error("!!timestamp expects a date, starting with yyyy-mm-dd");
         const [, year, month, day, hour, minute, second] = match.map(Number);
@@ -21654,6 +21654,82 @@ var init_rehearsal = __esm({
   }
 });
 
+// src/core/rehearsalResult.ts
+function validateResult(json, opts = {}) {
+  if (json === null || typeof json !== "object" || Array.isArray(json)) {
+    return { ok: false, error: "malformed JSON" };
+  }
+  const o2 = json;
+  for (const f of REQUIRED_FIELDS) {
+    if (!(f in o2)) return { ok: false, error: `missing required field: ${f}` };
+  }
+  if (typeof o2.status !== "string" || !STATUS_ENUM.includes(o2.status)) {
+    return { ok: false, error: `invalid status: ${String(o2.status)}` };
+  }
+  const isNull = o2.metric_value === null;
+  if (o2.status === "ok" && isNull) return { ok: false, error: "status=ok requires non-null metric_value" };
+  if (o2.status !== "ok" && !isNull) return { ok: false, error: `status=${o2.status} requires null metric_value` };
+  if (!Array.isArray(o2.log_paths)) return { ok: false, error: "log_paths must be an array" };
+  const exists = opts.logPathExists ?? (() => true);
+  for (const p of o2.log_paths) {
+    if (!exists(String(p))) return { ok: false, error: `log_path missing: ${String(p)}` };
+  }
+  if (opts.expectedMetric !== void 0 && o2.metric_name !== opts.expectedMetric) {
+    return { ok: false, error: `metric_name '${String(o2.metric_name)}' != metric.md primary '${opts.expectedMetric}'` };
+  }
+  return { ok: true };
+}
+function renderScoreboardRow(metric, runtime, metricName, status, approach) {
+  const metricFmt = NUM_RE.test(metric) ? parseFloat(metric).toFixed(4) : metric;
+  const runtimeFmt = NUM_RE.test(runtime) ? `${parseFloat(runtime).toFixed(2)}s` : runtime;
+  return `${metricFmt} | ${status} | ${runtimeFmt} | ${approach} | ${metricName}`;
+}
+function expNum(expId) {
+  const n2 = parseInt(expId.replace(/^exp-/, ""), 10);
+  return Number.isNaN(n2) ? Number.POSITIVE_INFINITY : n2;
+}
+function buildScoreboard(rows) {
+  const ok = rows.filter((r) => r.status === "ok");
+  const fail = rows.filter((r) => r.status !== "ok");
+  ok.sort((a2, b) => parseFloat(b.metric) - parseFloat(a2.metric) || parseFloat(a2.runtime) - parseFloat(b.runtime) || expNum(a2.expId) - expNum(b.expId));
+  fail.sort((a2, b) => expNum(a2.expId) - expNum(b.expId));
+  const lines = [
+    "<!-- scoreboard schema_version=2 -->",
+    "# Scoreboard",
+    "",
+    "| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |",
+    "|---|---|---|---|---|---|---|---|"
+  ];
+  let rank = 1;
+  for (const r of ok) {
+    lines.push(`| ${rank} | ${r.expId} | ${r.instrument} | ${renderScoreboardRow(r.metric, r.runtime, r.metricName, r.status, r.approach)} |`);
+    rank++;
+  }
+  for (const r of fail) {
+    const rankCell = r.status === "partial" ? `~${rank}` : `${rank}`;
+    lines.push(`| ${rankCell} | ${r.expId} | ${r.instrument} | ${renderScoreboardRow("n/a", r.runtime, r.metricName, r.status, r.approach)} |`);
+    rank++;
+  }
+  return lines.join("\n") + "\n";
+}
+var REQUIRED_FIELDS, STATUS_ENUM, NUM_RE;
+var init_rehearsalResult = __esm({
+  "src/core/rehearsalResult.ts"() {
+    "use strict";
+    REQUIRED_FIELDS = [
+      "branch_id",
+      "approach_label",
+      "metric_name",
+      "metric_value",
+      "status",
+      "runtime_s",
+      "log_paths"
+    ];
+    STATUS_ENUM = ["ok", "fail", "timeout", "cost_blown"];
+    NUM_RE = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+  }
+});
+
 // src/core/rehearsalState.ts
 function parseState(text) {
   const kv = {};
@@ -21681,6 +21757,323 @@ function mergeState(existing, updates) {
 var init_rehearsalState = __esm({
   "src/core/rehearsalState.ts"() {
     "use strict";
+  }
+});
+
+// src/core/rehearsalScore.ts
+function buildResultsTsv(rows) {
+  return TSV_HEADER + rows.map((r) => `${r.expId}	${r.instrument}	${r.approach}	${r.metric}	${r.status}	${r.runtime}	${r.metricName}
+`).join("");
+}
+function str(v) {
+  return v === null || v === void 0 ? "" : String(v);
+}
+function computeScore(art, fs, now) {
+  const metricMd = fs.read((0, import_node_path30.join)(art, "metric.md"));
+  const primary = metricMd ? parseMetricMd(metricMd).primaryMetric : "";
+  const expectedMetric = primary ? primary : void 0;
+  const rows = [];
+  const tsvRows = [];
+  const sidecars = [];
+  const staleSidecars = [];
+  const warnings = [];
+  const parts = fs.listDir(partsDir(art));
+  for (const instrument of parts) {
+    const exps = fs.listDir(experimentsDir(art, instrument));
+    for (const expId of exps) {
+      const branchDir = experimentDir(art, instrument, expId);
+      const resultPath = (0, import_node_path30.join)(branchDir, "result.json");
+      if (!fs.exists(resultPath)) continue;
+      const sidecar = (0, import_node_path30.join)(branchDir, "result-validation.txt");
+      let json;
+      try {
+        json = JSON.parse(fs.read(resultPath) ?? "");
+      } catch {
+        json = null;
+      }
+      const v = validateResult(json, {
+        expectedMetric,
+        logPathExists: (p) => p.startsWith("./") ? fs.exists((0, import_node_path30.join)(branchDir, p)) : true
+      });
+      if (!v.ok) {
+        sidecars.push({ path: sidecar, body: `FAILED at ${now()}: ${v.error}
+` });
+        warnings.push(`result.json invalid: ${resultPath} (${v.error})`);
+        continue;
+      }
+      if (fs.exists(sidecar)) staleSidecars.push(sidecar);
+      const o2 = json;
+      rows.push({
+        expId,
+        instrument,
+        metric: str(o2.metric_value),
+        status: str(o2.status),
+        runtime: str(o2.runtime_s),
+        approach: str(o2.approach_label),
+        metricName: str(o2.metric_name)
+      });
+      tsvRows.push({
+        expId,
+        instrument,
+        approach: str(o2.approach_label),
+        metric: str(o2.metric_value),
+        status: str(o2.status),
+        runtime: str(o2.runtime_s),
+        metricName: str(o2.metric_name)
+      });
+    }
+  }
+  const phaseClears = [];
+  for (const instrument of parts) {
+    const statePath = (0, import_node_path30.join)(partStateDir(art, instrument), "state.txt");
+    const stateTxt = fs.read(statePath);
+    if (stateTxt === null) continue;
+    const cur = parseState(stateTxt).current_exp_id ?? "";
+    if (!cur) continue;
+    if (!fs.exists((0, import_node_path30.join)(experimentDir(art, instrument, cur), "result.json"))) continue;
+    phaseClears.push({ statePath, merged: mergeState(stateTxt, {
+      last_event: "scored",
+      last_event_ts: now(),
+      phase: "idle",
+      current_exp_id: ""
+    }) });
+  }
+  return {
+    scoreboardMd: buildScoreboard(rows),
+    resultsTsv: buildResultsTsv(tsvRows),
+    sidecars,
+    staleSidecars,
+    phaseClears,
+    warnings
+  };
+}
+var import_node_path30, TSV_HEADER;
+var init_rehearsalScore = __esm({
+  "src/core/rehearsalScore.ts"() {
+    "use strict";
+    import_node_path30 = require("node:path");
+    init_rehearsalResult();
+    init_rehearsalState();
+    init_rehearsalMetric();
+    init_rehearsal();
+    TSV_HEADER = "exp_id	instrument	approach	metric	status	runtime_s	metric_name\n";
+  }
+});
+
+// src/core/rehearsalComplete.ts
+function cmp(a2, op, b) {
+  if (!op || b === void 0) return false;
+  const x = parseFloat(a2), y = parseFloat(b);
+  if (Number.isNaN(x) || Number.isNaN(y)) return false;
+  switch (op) {
+    case ">=":
+      return x >= y;
+    case "<=":
+      return x <= y;
+    case ">":
+      return x > y;
+    case "<":
+      return x < y;
+    case "==":
+      return x === y;
+    default:
+      return false;
+  }
+}
+function parseRows(scoreboardMd) {
+  const out = [];
+  for (const line of scoreboardMd.split("\n")) {
+    if (!/^\|\s+\d+\s+\|\s+exp-/.test(line)) continue;
+    const c3 = line.split("|").map((s) => s.trim());
+    out.push({ exp: c3[2], instrument: c3[3], metric: c3[4], status: c3[5], metricName: c3[8] ?? "" });
+  }
+  return out;
+}
+function checkCompletion(scoreboardMd, metricMd) {
+  const t = parseMetricMd(metricMd);
+  const matchesMetric = (r) => !(t.primaryMetric && r.metricName && r.metricName !== t.primaryMetric);
+  const allRows = parseRows(scoreboardMd).filter(matchesMetric);
+  const okRows = allRows.filter((r) => r.status === "ok" && NUM.test(r.metric));
+  let floorMet = false, targetMet = false;
+  const metrics = [];
+  for (const r of okRows) {
+    metrics.push(parseFloat(r.metric));
+    if (cmp(r.metric, t.minOp, t.minVal)) floorMet = true;
+    if (cmp(r.metric, t.tgtOp, t.tgtVal)) targetMet = true;
+  }
+  const tuples = [...allRows].sort((a2, b) => (a2.instrument < b.instrument ? -1 : a2.instrument > b.instrument ? 1 : 0) || (a2.exp < b.exp ? -1 : a2.exp > b.exp ? 1 : 0));
+  let kSoFar = 0, chain = 0, best = -Infinity, prevInst = "";
+  for (const r of tuples) {
+    if (r.instrument !== prevInst) {
+      if (chain > kSoFar) kSoFar = chain;
+      chain = 0;
+      best = -Infinity;
+      prevInst = r.instrument;
+    }
+    const mv = parseFloat(r.metric);
+    const atTarget = cmp(r.metric, t.tgtOp, t.tgtVal);
+    const improving = best === -Infinity || mv > best;
+    if (r.status === "ok" && NUM.test(r.metric) && atTarget && improving) {
+      chain += 1;
+      best = mv;
+    } else {
+      if (chain > kSoFar) kSoFar = chain;
+      chain = 0;
+      best = -Infinity;
+    }
+  }
+  if (chain > kSoFar) kSoFar = chain;
+  let plateau = false;
+  if (metrics.length >= t.plateauWindow) {
+    const lastN = metrics.slice(-t.plateauWindow);
+    if (Math.max(...lastN) - Math.min(...lastN) < t.plateauThreshold) plateau = true;
+  }
+  if (kSoFar > t.kRequired) kSoFar = t.kRequired;
+  return { floorMet, targetMet, kSoFar, kRequired: t.kRequired, plateau };
+}
+var NUM;
+var init_rehearsalComplete = __esm({
+  "src/core/rehearsalComplete.ts"() {
+    "use strict";
+    init_rehearsalMetric();
+    NUM = /^[0-9.]+$/;
+  }
+});
+
+// src/core/rehearsalBrief.ts
+function parseTopRows(scoreboardMd) {
+  const out = [];
+  for (const line of scoreboardMd.split("\n")) {
+    if (!/^\|\s+\d+\s+\|\s+exp-/.test(line)) continue;
+    const c3 = line.split("|").map((s) => s.trim());
+    out.push({ rank: c3[1], exp: c3[2], instrument: c3[3], metric: c3[4], metricName: c3[8] ?? "" });
+  }
+  return out;
+}
+function yn(b) {
+  return b ? "yes" : "no";
+}
+function buildStatusBrief(input) {
+  const sections = [];
+  if (input.latest) {
+    sections.push(`## Experiment status \u2014 ${input.latest.exp} (${input.latest.instrument}) just landed`);
+  } else {
+    sections.push("## Experiment status");
+  }
+  const table = [
+    "| Part | Phase | Current/last | Approach | Metric |",
+    "|---|---|---|---|---|"
+  ];
+  for (const p of input.parts) {
+    table.push(`| ${p.instrument} | ${p.phase} | ${p.currentOrLast} | ${p.approach} | ${p.metric} |`);
+  }
+  sections.push(table.join("\n"));
+  const sb = ["**Scoreboard top 3:**"];
+  if (input.scoreboardMd === null) {
+    sb.push("_(scoreboard absent)_");
+  } else {
+    const rows = parseTopRows(input.scoreboardMd).slice(0, 3);
+    if (rows.length === 0) {
+      sb.push("_(no scored experiments yet)_");
+    } else {
+      for (const r of rows) {
+        sb.push(`${r.rank}. ${r.instrument}/${r.exp} \u2014 ${r.metric} \u2014 ${r.metricName}`);
+      }
+    }
+  }
+  sections.push(sb.join("\n"));
+  const c3 = input.completion;
+  if (c3 === null) {
+    sections.push("**Completion check:** _(scoreboard or metric absent)_");
+  } else {
+    sections.push(
+      `**Completion check:** floor_met=${yn(c3.floorMet)} target_met=${yn(c3.targetMet)} K_so_far=${c3.kSoFar} K_required=${c3.kRequired} plateau=${yn(c3.plateau)}`
+    );
+  }
+  return sections.join("\n\n") + "\n";
+}
+var init_rehearsalBrief = __esm({
+  "src/core/rehearsalBrief.ts"() {
+    "use strict";
+  }
+});
+
+// src/core/rehearsalMonitor.ts
+function eventOf(line) {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return {};
+  }
+}
+function initScanState(size, fullText, persistedCursor, persistedRescan) {
+  const c3 = persistedCursor?.replace(/\s+/g, "") ?? "";
+  const offset = /^[0-9]+$/.test(c3) && Number(c3) <= size ? Number(c3) : size;
+  const rescanEmitted = new Set(persistedRescan ? persistedRescan.split("\n").filter(Boolean) : []);
+  if (offset > 0) {
+    let bytesSeen = 0;
+    let lineNum = 0;
+    for (const line of fullText.split("\n")) {
+      if (bytesSeen >= offset) break;
+      lineNum++;
+      bytesSeen += Buffer.byteLength(line) + 1;
+      const ev = eventOf(line).event;
+      if (ev && RESCAN_EVENTS.has(ev)) rescanEmitted.add(`${lineNum}	${ev}`);
+    }
+  }
+  return { offset, rescanEmitted, lastStaleTs: 0, lastStuckTs: 0, lastRescan: 0 };
+}
+function monitorScan(_outboxPath, part, prev, d) {
+  const notifications = [];
+  const emit = (event, summary) => {
+    notifications.push({ part, event, summary, ts: d.nowIso });
+  };
+  const state = { ...prev, rescanEmitted: new Set(prev.rescanEmitted) };
+  if (d.outboxSize > state.offset && d.outboxText) {
+    for (const line of d.outboxText.split("\n")) {
+      if (!line) continue;
+      const { event, summary } = eventOf(line);
+      if (event && TAIL_EVENTS.has(event)) emit(event, summary ?? "");
+    }
+    state.offset = d.outboxSize;
+  }
+  if (d.phase === "working" && d.outboxMtime > 0) {
+    const delta = d.now - d.outboxMtime;
+    if (delta >= d.thresholds.stuckS && d.now - state.lastStuckTs >= d.thresholds.stuckS) {
+      emit("stuck", `outbox mtime ${delta}s old (>= ${d.thresholds.stuckS}s threshold)`);
+      state.lastStuckTs = d.now;
+    } else if (delta >= d.thresholds.probeS && d.now - state.lastStaleTs >= d.thresholds.probeS) {
+      emit("stale", `outbox mtime ${delta}s old (>= ${d.thresholds.probeS}s threshold)`);
+      state.lastStaleTs = d.now;
+    }
+  }
+  if (d.now - state.lastRescan >= d.thresholds.rescanEveryS && d.outboxFullText) {
+    let lineNum = 0;
+    for (const line of d.outboxFullText.split("\n")) {
+      if (!line) {
+        lineNum++;
+        continue;
+      }
+      lineNum++;
+      const { event, summary } = eventOf(line);
+      if (event && RESCAN_EVENTS.has(event)) {
+        const key = `${lineNum}	${event}`;
+        if (!state.rescanEmitted.has(key)) {
+          emit(event, `${summary ?? ""} (rescan)`);
+          state.rescanEmitted.add(key);
+        }
+      }
+    }
+    state.lastRescan = d.now;
+  }
+  return { notifications, state };
+}
+var TAIL_EVENTS, RESCAN_EVENTS;
+var init_rehearsalMonitor = __esm({
+  "src/core/rehearsalMonitor.ts"() {
+    "use strict";
+    TAIL_EVENTS = /* @__PURE__ */ new Set(["done", "error", "question", "heartbeat"]);
+    RESCAN_EVENTS = /* @__PURE__ */ new Set(["done", "error", "question"]);
   }
 });
 
@@ -21788,10 +22181,14 @@ var rehearsal_exports = {};
 __export(rehearsal_exports, {
   experimentSendWith: () => experimentSendWith,
   initWith: () => initWith4,
+  liveScoreDeps: () => liveScoreDeps,
   metricWith: () => metricWith,
+  monitorRun: () => monitorRun,
   run: () => run13,
+  scoreWith: () => scoreWith,
   sotaWith: () => sotaWith,
-  spawnAllWith: () => spawnAllWith2
+  spawnAllWith: () => spawnAllWith2,
+  statusBriefWith: () => statusBriefWith
 });
 function parseInitArgs(args) {
   let topic = "";
@@ -21879,22 +22276,22 @@ async function initWith4(args, deps) {
     return 1;
   }
   (0, import_node_fs33.mkdirSync)(art, { recursive: true });
-  atomicWrite((0, import_node_path30.join)(art, "topic.txt"), p.topic);
-  atomicWrite((0, import_node_path30.join)(art, "metric.txt"), extractMetric(p.topic) + "\n");
-  if (p.seedFrom) atomicWrite((0, import_node_path30.join)(art, "seed-from.txt"), p.seedFrom + "\n");
+  atomicWrite((0, import_node_path31.join)(art, "topic.txt"), p.topic);
+  atomicWrite((0, import_node_path31.join)(art, "metric.txt"), extractMetric(p.topic) + "\n");
+  if (p.seedFrom) atomicWrite((0, import_node_path31.join)(art, "seed-from.txt"), p.seedFrom + "\n");
   (deps.probeHardware ?? (() => {
-  }))((0, import_node_path30.join)(art, "hardware.txt"));
+  }))((0, import_node_path31.join)(art, "hardware.txt"));
   if (p.metric !== void 0) {
     try {
-      atomicWrite((0, import_node_path30.join)(art, "metric.md"), formatMetricBlock(parseKv(p.metric)));
+      atomicWrite((0, import_node_path31.join)(art, "metric.md"), formatMetricBlock(parseKv(p.metric)));
     } catch (e) {
       log.error(`rehearsal init: --metric: ${e.message}`);
       return 2;
     }
   }
   if (resolvedBudget !== void 0) {
-    atomicWrite((0, import_node_path30.join)(art, "time-budget.txt"), resolvedBudget + "\n");
-    atomicWrite((0, import_node_path30.join)(art, "session-start.txt"), deps.now() + "\n");
+    atomicWrite((0, import_node_path31.join)(art, "time-budget.txt"), resolvedBudget + "\n");
+    atomicWrite((0, import_node_path31.join)(art, "session-start.txt"), deps.now() + "\n");
   }
   out(`TOPIC=${slug}`);
   out(`ART=${art}`);
@@ -21926,7 +22323,7 @@ async function metricWith(args, v = {}) {
     return 2;
   }
   try {
-    atomicWrite((0, import_node_path30.join)(rehearsalArtDir(topic, v.opts), "metric.md"), formatMetricBlock(parseKv(kv)));
+    atomicWrite((0, import_node_path31.join)(rehearsalArtDir(topic, v.opts), "metric.md"), formatMetricBlock(parseKv(kv)));
   } catch (e) {
     log.error(`rehearsal metric: ${e.message}`);
     return 2;
@@ -21946,7 +22343,7 @@ async function sotaWith(args, v = {}) {
   }
   try {
     atomicWrite(
-      (0, import_node_path30.join)(rehearsalArtDir(topic, v.opts), "sota.md"),
+      (0, import_node_path31.join)(rehearsalArtDir(topic, v.opts), "sota.md"),
       formatSotaBlock({ topic: f.topic ?? "", metric: f.metric ?? "", sweep_date: f.sweep_date ?? "", queries: f.queries, refs })
     );
   } catch (e) {
@@ -21969,13 +22366,13 @@ async function spawnAllWith2(args, deps, opts) {
     return 2;
   }
   const rows = instruments.map((instrument) => ({ instrument, provider: "codex" }));
-  atomicWrite((0, import_node_path30.join)(art, "parts.txt"), instruments.join("\n") + "\n");
+  atomicWrite((0, import_node_path31.join)(art, "parts.txt"), instruments.join("\n") + "\n");
   const prc = await deps.preflight([topic, String(rows.length), "--roster", spawnRosterArg(rows), "--art-dir", art]);
   if (prc !== 0) {
     log.error(`rehearsal spawn-all: preflight failed (rc ${prc})`);
     return 2;
   }
-  const panes = parsePanesFile((0, import_node_fs33.readFileSync)((0, import_node_path30.join)(art, "preflight-panes.txt"), "utf8"));
+  const panes = parsePanesFile((0, import_node_fs33.readFileSync)((0, import_node_path31.join)(art, "preflight-panes.txt"), "utf8"));
   const orphans = rows.filter((r) => !panes.has(r.instrument));
   if (orphans.length) {
     log.error(`rehearsal spawn-all: parts missing a preflight pane: ${orphans.map((r) => r.instrument).join(", ")}`);
@@ -21987,7 +22384,7 @@ async function spawnAllWith2(args, deps, opts) {
     provider: r.provider,
     rc: await deps.spawn([r.instrument, r.provider, topic, "--target-pane", panes.get(r.instrument), "--cwd", cwd])
   })));
-  atomicWrite((0, import_node_path30.join)(art, "spawn-results.tsv"), spawnResultsTsv(results));
+  atomicWrite((0, import_node_path31.join)(art, "spawn-results.tsv"), spawnResultsTsv(results));
   const rc = spawnTally(results.map((r) => r.rc));
   const nOk = results.filter((r) => r.rc === 0).length;
   if (rc === 0) log.ok(`rehearsal spawn-all: ${nOk}/${rows.length} codex parts ready`);
@@ -22026,7 +22423,7 @@ function parseExperimentSendArgs(args) {
   return { topic, instrument, expId, approachLabel, approachBrief, inputs, contextFile, smokeTest, timeout };
 }
 function gatherPeers(art, self) {
-  const partsFile = (0, import_node_path30.join)(art, "parts.txt");
+  const partsFile = (0, import_node_path31.join)(art, "parts.txt");
   if (!(0, import_node_fs33.existsSync)(partsFile)) return [];
   const peers = (0, import_node_fs33.readFileSync)(partsFile, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && l !== self);
   const rows = [];
@@ -22034,14 +22431,14 @@ function gatherPeers(art, self) {
     const peerDir = partStateDir(art, peer);
     if (!(0, import_node_fs33.existsSync)(peerDir)) continue;
     let phase = "", currentExp = "";
-    const statePath = (0, import_node_path30.join)(peerDir, "state.txt");
+    const statePath = (0, import_node_path31.join)(peerDir, "state.txt");
     if ((0, import_node_fs33.existsSync)(statePath)) {
       const kv = parseState((0, import_node_fs33.readFileSync)(statePath, "utf8"));
       phase = kv.phase ?? "";
       currentExp = kv.current_exp_id ?? "";
     }
     let latest = currentExp;
-    const expsDir = (0, import_node_path30.join)(peerDir, "experiments");
+    const expsDir = (0, import_node_path31.join)(peerDir, "experiments");
     if (!latest && (0, import_node_fs33.existsSync)(expsDir)) {
       for (const name of (0, import_node_fs33.readdirSync)(expsDir)) {
         if (EXP_ID_RE.test(name) && name > latest) latest = name;
@@ -22049,7 +22446,7 @@ function gatherPeers(art, self) {
     }
     let approach = "", metric = "", status = "", notes = "";
     if (latest) {
-      const resultPath = (0, import_node_path30.join)(expsDir, latest, "result.json");
+      const resultPath = (0, import_node_path31.join)(expsDir, latest, "result.json");
       if ((0, import_node_fs33.existsSync)(resultPath)) {
         try {
           const r = JSON.parse((0, import_node_fs33.readFileSync)(resultPath, "utf8"));
@@ -22121,13 +22518,13 @@ async function experimentSendWith(args, deps) {
     log.error(`rehearsal experiment-send: topic state dir missing: ${art} (was rehearsal init run?)`);
     return 1;
   }
-  const metricMd = (0, import_node_path30.join)(art, "metric.md");
+  const metricMd = (0, import_node_path31.join)(art, "metric.md");
   if (!(0, import_node_fs33.existsSync)(metricMd)) {
     log.error(`rehearsal experiment-send: metric.md missing at ${metricMd}`);
     return 1;
   }
   const stateDir = partStateDir(art, instrument);
-  const stateTxt = (0, import_node_path30.join)(stateDir, "state.txt");
+  const stateTxt = (0, import_node_path31.join)(stateDir, "state.txt");
   if (!(0, import_node_fs33.existsSync)(stateTxt)) {
     log.error(`rehearsal experiment-send: part state.txt missing: ${stateTxt}`);
     return 1;
@@ -22142,12 +22539,12 @@ async function experimentSendWith(args, deps) {
     return 1;
   }
   const branchDir = experimentDir(art, instrument, expId);
-  (0, import_node_fs33.mkdirSync)((0, import_node_path30.join)(branchDir, "code"), { recursive: true });
+  (0, import_node_fs33.mkdirSync)((0, import_node_path31.join)(branchDir, "code"), { recursive: true });
   if (p.smokeTest) {
-    const r = deps.runSmokeTest(p.smokeTest, (0, import_node_path30.join)(branchDir, "code"), deps.smokeTimeoutSec ?? 60);
+    const r = deps.runSmokeTest(p.smokeTest, (0, import_node_path31.join)(branchDir, "code"), deps.smokeTimeoutSec ?? 60);
     if (!r.ok) {
-      atomicWrite((0, import_node_path30.join)(branchDir, "smoke-test.err"), r.stderr);
-      log.error(`rehearsal experiment-send: smoke-test failed for ${instrument}/${expId}; stderr -> ${(0, import_node_path30.join)(branchDir, "smoke-test.err")}`);
+      atomicWrite((0, import_node_path31.join)(branchDir, "smoke-test.err"), r.stderr);
+      log.error(`rehearsal experiment-send: smoke-test failed for ${instrument}/${expId}; stderr -> ${(0, import_node_path31.join)(branchDir, "smoke-test.err")}`);
       return 2;
     }
   }
@@ -22168,17 +22565,17 @@ async function experimentSendWith(args, deps) {
     return 1;
   }
   const probe = deps.probeHardware();
-  const baselinePath = (0, import_node_path30.join)(art, "hardware.txt");
+  const baselinePath = (0, import_node_path31.join)(art, "hardware.txt");
   const baseline = (0, import_node_fs33.existsSync)(baselinePath) ? (0, import_node_fs33.readFileSync)(baselinePath, "utf8") : null;
   const hardwareBlock = assembleHardwareBlock(probe, hardwareDiffAlert(baseline, probe));
-  const topicTextPath = (0, import_node_path30.join)(art, "topic.txt");
+  const topicTextPath = (0, import_node_path31.join)(art, "topic.txt");
   const topicText = (0, import_node_fs33.existsSync)(topicTextPath) ? (0, import_node_fs33.readFileSync)(topicTextPath, "utf8") : "";
-  const sotaPath = (0, import_node_path30.join)(art, "sota.md");
+  const sotaPath = (0, import_node_path31.join)(art, "sota.md");
   const sotaBlock = buildSotaBlock((0, import_node_fs33.existsSync)(sotaPath) ? (0, import_node_fs33.readFileSync)(sotaPath, "utf8") : null);
   const peersBlock = formatPeersBlock(gatherPeers(art, instrument));
   const timeBudgetS = String(p.timeout ?? deps.consultTimeout());
   const pluginRoot6 = process.env.CLAUDE_PLUGIN_ROOT ?? process.cwd();
-  const templatePath = (0, import_node_path30.join)(pluginRoot6, "config", "prompt-templates", "rehearsal", "experiment.md");
+  const templatePath = (0, import_node_path31.join)(pluginRoot6, "config", "prompt-templates", "rehearsal", "experiment.md");
   if (!(0, import_node_fs33.existsSync)(templatePath)) {
     log.error(`rehearsal experiment-send: template missing: ${templatePath}`);
     return 1;
@@ -22210,7 +22607,7 @@ async function experimentSendWith(args, deps) {
     log.error(`rehearsal experiment-send: prompt rendered empty (template substitution failed)`);
     return 1;
   }
-  atomicWrite((0, import_node_path30.join)(branchDir, "prompt.md"), prompt);
+  atomicWrite((0, import_node_path31.join)(branchDir, "prompt.md"), prompt);
   inboxWrite(instrument, model, topic, prompt, { from: "maestro" });
   atomicWrite(stateTxt, buildDispatchState((0, import_node_fs33.readFileSync)(stateTxt, "utf8"), expId, deps.now()));
   if (!deps.dryRun) {
@@ -22242,6 +22639,184 @@ function liveProbeHardware() {
     return "no-gpu";
   }
 }
+async function scoreWith(args, deps) {
+  const positionals = args.filter((a2) => !a2.startsWith("--"));
+  if (positionals.length !== 1) {
+    log.error("usage: rehearsal score <topic>");
+    return 2;
+  }
+  const topic = positionals[0];
+  const art = rehearsalArtDir(topic, deps.opts);
+  const partsRoot = partsDir(art);
+  if (!(0, import_node_fs33.existsSync)(partsRoot)) {
+    log.error(`rehearsal score: parts dir missing: ${partsRoot}`);
+    return 1;
+  }
+  const c3 = deps.computeScore(art, deps.fs, deps.now);
+  deps.writeAtomic((0, import_node_path31.join)(art, "scoreboard.md"), c3.scoreboardMd);
+  log.ok(`[score] scoreboard at ${(0, import_node_path31.join)(art, "scoreboard.md")}`);
+  deps.writeAtomic((0, import_node_path31.join)(art, "results.tsv"), c3.resultsTsv);
+  for (const s of c3.sidecars) deps.writeAtomic(s.path, s.body);
+  for (const p of c3.staleSidecars) deps.removeFile(p);
+  for (const pc of c3.phaseClears) deps.writeAtomic(pc.statePath, pc.merged);
+  for (const w of c3.warnings) log.warn(w);
+  return 0;
+}
+async function monitorRun(args, opts) {
+  const once9 = args.includes("--once");
+  const pos = args.filter((a2) => a2 !== "--once");
+  if (pos.length !== 2) {
+    log.error("rehearsal monitor: usage: <topic> <instrument> [--once]");
+    return 2;
+  }
+  const [topic, instrument] = pos;
+  const art = rehearsalArtDir(topic, opts);
+  if (!(0, import_node_fs33.existsSync)(art)) {
+    log.error(`rehearsal monitor: art dir missing: ${art}`);
+    return 2;
+  }
+  const model = resolveModel(instrument, topic);
+  if (!model) {
+    log.error(`rehearsal monitor: no part '${instrument}' on topic '${topic}' (resolveModel null)`);
+    return 1;
+  }
+  const outbox = outboxPath(instrument, model, topic);
+  const stateDir = partStateDir(art, instrument);
+  (0, import_node_fs33.mkdirSync)(stateDir, { recursive: true });
+  const cursorFile = (0, import_node_path31.join)(stateDir, "liveness-cursor.txt");
+  const rescanFile = (0, import_node_path31.join)(stateDir, "liveness-rescan-emitted.txt");
+  const stateTxt = (0, import_node_path31.join)(stateDir, "state.txt");
+  const thresholds = {
+    probeS: Number(process.env.CONSORT_PROBE_S ?? 900),
+    stuckS: Number(process.env.CONSORT_STUCK_S ?? 1800),
+    rescanEveryS: Number(process.env.CONSORT_RESCAN_EVERY_S ?? 30)
+  };
+  const persist = (state2) => {
+    (0, import_node_fs33.writeFileSync)(cursorFile, String(state2.offset));
+    (0, import_node_fs33.writeFileSync)(rescanFile, [...state2.rescanEmitted].join("\n"));
+  };
+  const initBuf = (0, import_node_fs33.existsSync)(outbox) ? (0, import_node_fs33.readFileSync)(outbox) : Buffer.alloc(0);
+  let state = initScanState(
+    initBuf.length,
+    initBuf.toString("utf8"),
+    (0, import_node_fs33.existsSync)(cursorFile) ? (0, import_node_fs33.readFileSync)(cursorFile, "utf8") : null,
+    (0, import_node_fs33.existsSync)(rescanFile) ? (0, import_node_fs33.readFileSync)(rescanFile, "utf8") : null
+  );
+  persist(state);
+  do {
+    const buf = (0, import_node_fs33.existsSync)(outbox) ? (0, import_node_fs33.readFileSync)(outbox) : Buffer.alloc(0);
+    const size = buf.length;
+    const full = buf.toString("utf8");
+    const text = buf.subarray(state.offset).toString("utf8");
+    const mtime = (0, import_node_fs33.existsSync)(outbox) ? Math.floor((0, import_node_fs33.statSync)(outbox).mtimeMs / 1e3) : 0;
+    const phase = ((0, import_node_fs33.existsSync)(stateTxt) ? parseState((0, import_node_fs33.readFileSync)(stateTxt, "utf8")).phase : "") ?? "";
+    const r = monitorScan(outbox, instrument, state, {
+      outboxText: text,
+      outboxFullText: full,
+      outboxSize: size,
+      outboxMtime: mtime,
+      phase,
+      now: Math.floor(Date.now() / 1e3),
+      nowIso: isoUtc(),
+      thresholds
+    });
+    for (const n2 of r.notifications) process.stdout.write(JSON.stringify(n2) + "\n");
+    state = r.state;
+    persist(state);
+    if (once9) break;
+    await sleep4(2e3);
+  } while (!once9);
+  return 0;
+}
+function approachFromPrompt(promptPath) {
+  if (!(0, import_node_fs33.existsSync)(promptPath)) return "";
+  for (const line of (0, import_node_fs33.readFileSync)(promptPath, "utf8").split("\n")) {
+    const m = /^\s*Approach label:\s+(.*?)\s*$/.exec(line);
+    if (m) return m[1];
+  }
+  return "";
+}
+function readResultCells(resultPath) {
+  if (!(0, import_node_fs33.existsSync)(resultPath)) return { approach: "", metric: "\u2014" };
+  try {
+    const r = JSON.parse((0, import_node_fs33.readFileSync)(resultPath, "utf8"));
+    const approach = r.approach_label != null ? String(r.approach_label) : "";
+    const m = r.metric_value != null ? String(r.metric_value) : "";
+    const s = r.status != null ? String(r.status) : "";
+    const metric = `${m} ${s}`.trim() || "\u2014";
+    return { approach, metric };
+  } catch {
+    return { approach: "", metric: "\u2014" };
+  }
+}
+function parseStatusBriefArgs(args) {
+  let topic = "", latestInstrument, latestExp;
+  for (let i2 = 0; i2 < args.length; i2++) {
+    const a2 = args[i2];
+    if (a2 === "--latest-instrument") latestInstrument = args[++i2];
+    else if (a2 === "--latest-exp") latestExp = args[++i2];
+    else if (!a2.startsWith("--") && !topic) topic = a2;
+  }
+  return { topic, latestInstrument, latestExp };
+}
+async function statusBriefWith(args, v = {}) {
+  const out = v.stdout ?? ((l) => {
+    process.stdout.write(l + "\n");
+  });
+  const p = parseStatusBriefArgs(args);
+  if (!p.topic) {
+    log.error("rehearsal status-brief: topic required");
+    return 2;
+  }
+  const art = rehearsalArtDir(p.topic, v.opts);
+  const parts = [];
+  const partsFile = (0, import_node_path31.join)(art, "parts.txt");
+  if ((0, import_node_fs33.existsSync)(partsFile)) {
+    const instruments = (0, import_node_fs33.readFileSync)(partsFile, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+    for (const instrument of instruments) {
+      let phase = "?", currentOrLast = "\u2014";
+      const stateTxt = (0, import_node_path31.join)(partStateDir(art, instrument), "state.txt");
+      let curExp = "";
+      if ((0, import_node_fs33.existsSync)(stateTxt)) {
+        const kv = parseState((0, import_node_fs33.readFileSync)(stateTxt, "utf8"));
+        phase = kv.phase || "?";
+        curExp = kv.current_exp_id ?? "";
+      }
+      if (curExp) {
+        currentOrLast = curExp;
+      } else {
+        const expsRoot = experimentsDir(art, instrument);
+        if ((0, import_node_fs33.existsSync)(expsRoot)) {
+          let newest = "";
+          for (const name of (0, import_node_fs33.readdirSync)(expsRoot)) {
+            if (EXP_ID_RE.test(name) && name > newest) newest = name;
+          }
+          if (newest) currentOrLast = newest;
+        }
+      }
+      const expForFiles = curExp || (currentOrLast !== "\u2014" ? currentOrLast : "");
+      const promptPath = expForFiles ? (0, import_node_path31.join)(experimentDir(art, instrument, expForFiles), "prompt.md") : "";
+      const resultPath = expForFiles ? (0, import_node_path31.join)(experimentDir(art, instrument, expForFiles), "result.json") : "";
+      let approach, metric;
+      if (phase === "working") {
+        approach = promptPath && approachFromPrompt(promptPath) || "\u2014";
+        metric = "(running)";
+      } else {
+        const cells = resultPath ? readResultCells(resultPath) : { approach: "", metric: "\u2014" };
+        approach = cells.approach || promptPath && approachFromPrompt(promptPath) || "\u2014";
+        metric = cells.metric;
+      }
+      parts.push({ instrument, phase, currentOrLast, approach, metric });
+    }
+  }
+  const sbPath = (0, import_node_path31.join)(art, "scoreboard.md");
+  const scoreboardMd = (0, import_node_fs33.existsSync)(sbPath) ? (0, import_node_fs33.readFileSync)(sbPath, "utf8") : null;
+  const metricPath = (0, import_node_path31.join)(art, "metric.md");
+  const completion = scoreboardMd !== null && (0, import_node_fs33.existsSync)(metricPath) ? checkCompletion(scoreboardMd, (0, import_node_fs33.readFileSync)(metricPath, "utf8")) : null;
+  const latest = p.latestInstrument && p.latestExp ? { instrument: p.latestInstrument, exp: p.latestExp } : void 0;
+  out(buildStatusBrief({ parts, scoreboardMd, completion, latest }));
+  return 0;
+}
 async function run13(args) {
   const [verb, ...rest] = args;
   switch (verb) {
@@ -22255,18 +22830,24 @@ async function run13(args) {
       return spawnAllWith2(rest, liveSpawnAllDeps2);
     case "experiment-send":
       return experimentSendWith(applyArgsFile(rest), liveExperimentSendDeps);
+    case "score":
+      return scoreWith(rest, liveScoreDeps);
+    case "monitor":
+      return monitorRun(rest);
+    case "status-brief":
+      return statusBriefWith(rest);
     default:
       log.error(`rehearsal: unknown verb: ${verb ?? "(none)"}`);
       return 2;
   }
 }
-var import_node_fs33, import_node_child_process9, import_node_path30, liveInitDeps4, liveSpawnAllDeps2, liveExperimentSendDeps;
+var import_node_fs33, import_node_child_process9, import_node_path31, liveInitDeps4, liveSpawnAllDeps2, liveExperimentSendDeps, liveScoreDeps, sleep4;
 var init_rehearsal2 = __esm({
   "src/commands/rehearsal.ts"() {
     "use strict";
     import_node_fs33 = require("node:fs");
     import_node_child_process9 = require("node:child_process");
-    import_node_path30 = require("node:path");
+    import_node_path31 = require("node:path");
     init_log();
     init_args();
     init_atomic();
@@ -22274,7 +22855,11 @@ var init_rehearsal2 = __esm({
     init_solo();
     init_rehearsalMetric();
     init_rehearsal();
+    init_rehearsalScore();
     init_rehearsalState();
+    init_rehearsalComplete();
+    init_rehearsalBrief();
+    init_rehearsalMonitor();
     init_rehearsalExperiment();
     init_contracts();
     init_ipc();
@@ -22307,6 +22892,30 @@ var init_rehearsal2 = __esm({
       },
       dryRun: process.env.CONSORT_DRY_RUN === "1"
     };
+    liveScoreDeps = {
+      computeScore,
+      fs: {
+        exists: import_node_fs33.existsSync,
+        read: (p) => (0, import_node_fs33.existsSync)(p) ? (0, import_node_fs33.readFileSync)(p, "utf8") : null,
+        listDir: (p) => {
+          try {
+            return (0, import_node_fs33.readdirSync)(p).sort();
+          } catch {
+            return [];
+          }
+        }
+        // ENOENT-safe, per ScoreFs contract
+      },
+      writeAtomic: atomicWrite,
+      removeFile: (p) => {
+        try {
+          (0, import_node_fs33.rmSync)(p, { force: true });
+        } catch {
+        }
+      },
+      now: () => isoUtc()
+    };
+    sleep4 = (ms) => new Promise((r) => setTimeout(r, ms));
   }
 });
 
