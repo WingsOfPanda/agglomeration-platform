@@ -33,13 +33,14 @@ const BLOCKERS =
   "BLOCKERS / QUESTIONS (read carefully):\n" +
   "- If a referenced path, file, checkpoint, git ref, env var, or\n" +
   "  command is NOT where the notes say it is, DO NOT search the\n" +
-  "  filesystem yourself, DO NOT invent a workaround. Halt and ask:\n" +
-  '    $CLAUDE_PLUGIN_ROOT/bin/part-ask.sh $TOPIC cody "<why-asking>" <kind> <value>\n' +
-  "  where <kind> is one of: path | git | env | cmd | test.\n" +
-  "- The conductor will verify the claim against ground truth and reply\n" +
-  "  via inbox.md, then re-engage you.\n" +
-  "- After reading any inbox.md reply, acknowledge with:\n" +
-  "    $CLAUDE_PLUGIN_ROOT/bin/inbox-ack.sh $TOPIC cody <inbox-path>\n" +
+  "  filesystem yourself, DO NOT invent a workaround. Halt and ask by\n" +
+  "  appending ONE question event to your outbox.jsonl, then stop:\n" +
+  '    {"event":"question","message":"<why you are asking>",' +
+  '"claim":{"kind":"<path|git|env|cmd|test>","value":"<the value to check>"},"ts":"<iso>"}\n' +
+  '  Omit the "claim" object for a judgment question (no ground-truth to check).\n' +
+  "- The Maestro verifies the claim and replies via your inbox.md, then re-engages you.\n" +
+  "- After reading any inbox.md reply, acknowledge by appending an ack event:\n" +
+  '    {"event":"ack","task_summary":"<what you read>","ts":"<iso>"}\n' +
   "- The 'test' kind runs a diagnostic command under a 30s timeout — it\n" +
   "  is NOT for running your test suite. Running 'bash tests/run.sh' is\n" +
   "  your job. Banned values fail with rc=2.\n";

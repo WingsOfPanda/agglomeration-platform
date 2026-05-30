@@ -5,6 +5,7 @@
 // Runner so unit tests stay pure. Filesystem (path) + environment (env) checks read ambient state.
 import { existsSync, accessSync, constants, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import type { OutboxEvent } from "./ipc.js";
 
 export interface RunResult { code: number; stdout: string; }
 export interface QuestionRunner { run(cmd: string, args: string[]): RunResult; }
@@ -139,4 +140,20 @@ export function formatReply(kind: string, value: string, rc: number, evidence: s
   }
   body += `Resume implementation.\n`;
   return body;
+}
+
+/** Conductor-side extractor (port of deploy_question_extract_to_payload, deploy-questions.sh:15):
+ *  a question OutboxEvent -> the KV payload file body. consort uses the frozen `message` field for
+ *  the reason text (the prior plugin used `text`); `claim:{kind,value}` is the perform discriminator.
+ *  Only the newline is percent-encoded at extract time (%0A) — parseQuestionPayload's full table
+ *  decodes it. Returns null when there is no usable message. */
+export function extractQuestionPayload(ev: OutboxEvent, askedAt: number): string | null {
+  const message = typeof ev.message === "string" ? ev.message : "";
+  if (message === "") return null;
+  const encoded = message.split("\n").join("%0A");
+  const claim = ev.claim as { kind?: string; value?: string } | undefined;
+  const kind = claim && typeof claim.kind === "string" ? claim.kind : "";
+  const value = claim && typeof claim.value === "string" ? claim.value : "";
+  const route = claim ? "verify" : "escalate";
+  return `TEXT=${encoded}\nCLAIM_KIND=${kind}\nCLAIM_VALUE=${value}\nROUTE=${route}\nASKED_AT=${askedAt}\n`;
 }
