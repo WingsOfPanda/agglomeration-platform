@@ -320,6 +320,10 @@ describe("checkTimeBudget", () => {
 });
 
 import { buildConsensus } from "../src/core/rehearsalConsensus.js";
+import {
+  renderExperimentPrompt, buildSotaBlock, assembleHardwareBlock, hardwareDiffAlert,
+  formatPeersBlock, buildDispatchState, EXP_ID_RE, INSTRUMENT_RE, type PeerRow,
+} from "../src/core/rehearsalExperiment.js";
 
 describe("buildConsensus", () => {
   const nowIso = "2026-05-30T12:00:00Z";
@@ -415,3 +419,101 @@ describe("readHaltFlag", () => {
     expect(h.reason).toBe("stopped because the user said so");
   });
 });
+
+describe("rehearsalExperiment", () => {
+  it("EXP_ID_RE / INSTRUMENT_RE match the bash regexes", () => {
+    expect(EXP_ID_RE.test("exp-001")).toBe(true);
+    expect(EXP_ID_RE.test("exp-7")).toBe(true);
+    expect(EXP_ID_RE.test("exp-")).toBe(false);
+    expect(EXP_ID_RE.test("exp001")).toBe(false);
+    expect(INSTRUMENT_RE.test("violin")).toBe(true);
+    expect(INSTRUMENT_RE.test("french-horn")).toBe(true);
+    expect(INSTRUMENT_RE.test("Violin")).toBe(false);
+    expect(INSTRUMENT_RE.test("1st")).toBe(false);
+  });
+
+  it("renderExperimentPrompt substitutes all 14 tokens literally", () => {
+    const tpl = "M={{METRIC_BLOCK}} H={{HARDWARE_BLOCK}} O={{OUTBOX_PATH}} T={{TOPIC}} " +
+      "E={{EXP_ID}} L={{APPROACH_LABEL}} B={{APPROACH_BRIEF}} D={{BRANCH_DIR}} " +
+      "N={{METRIC_NAME}} S={{TIME_BUDGET_S}} C={{TASK_CONTEXT}} W={{SOTA_BLOCK}} P={{PEERS_BLOCK}} A={{ART_DIR}}";
+    const out = renderExperimentPrompt(tpl, {
+      metricBlock: "mb", hardwareBlock: "hb", outboxPath: "/o", topicText: "topic",
+      expId: "exp-001", approachLabel: "lab", approachBrief: "brief", branchDir: "/bd",
+      metricName: "accuracy", timeBudgetS: "1800", taskContext: "", sotaBlock: "", peersBlock: "", artDir: "/a",
+    });
+    expect(out).toBe("M=mb H=hb O=/o T=topic E=exp-001 L=lab B=brief D=/bd N=accuracy S=1800 C= W= P= A=/a");
+  });
+
+  it("renderExperimentPrompt treats $-sequences in values as literal", () => {
+    const out = renderExperimentPrompt("x={{TOPIC}}", { ...zeroFields(), topicText: "$1 & $& done" });
+    expect(out).toBe("x=$1 & $& done");
+  });
+
+  it("renderExperimentPrompt throws if an unrendered {{TOKEN}} remains", () => {
+    expect(() => renderExperimentPrompt("a {{UNKNOWN}} b", zeroFields())).toThrow(/unrendered/i);
+  });
+
+  it("buildSotaBlock empty when null/empty, wrapped otherwise", () => {
+    expect(buildSotaBlock(null)).toBe("");
+    expect(buildSotaBlock("")).toBe("");
+    const b = buildSotaBlock("ref content");
+    expect(b.startsWith("## Reference: SOTA\n\nref content")).toBe(true);
+    expect(b).toContain("### Web search affordance");
+    expect(b).toContain("## Sources consulted");
+  });
+
+  it("assembleHardwareBlock appends alert only when non-empty", () => {
+    expect(assembleHardwareBlock("no-gpu", "")).toBe("no-gpu");
+    expect(assembleHardwareBlock("gpu...", "ALERT: x")).toBe("gpu...\nALERT: x");
+  });
+
+  it("hardwareDiffAlert flags >50% free-memory drop per gpu", () => {
+    const base = "detected_at\t2026\ngpu\tA100\t80000\t40000\tdrv";
+    const cur  = "detected_at\t2026\ngpu\tA100\t80000\t10000\tdrv";   // 40000 -> 10000 = -75%
+    const a = hardwareDiffAlert(base, cur);
+    expect(a).toMatch(/ALERT: gpu 'A100' memory\.free 40000 -> 10000 MiB \(-75%\)/);
+    expect(hardwareDiffAlert(base, base)).toBe("");        // no change
+    expect(hardwareDiffAlert(null, cur)).toBe("");          // no baseline -> no alert
+  });
+
+  it("hardwareDiffAlert gates on raw ratio (>50% drop) and truncates the percentage", () => {
+    // 10000 -> 4951 is a 50.49% drop: bash fires, reports truncated -50%
+    const a = hardwareDiffAlert("gpu\tA100\t80000\t10000\tdrv", "gpu\tA100\t80000\t4951\tdrv");
+    expect(a).toBe("ALERT: gpu 'A100' memory.free 10000 -> 4951 MiB (-50%)");
+    // exactly 50% drop (10000 -> 5000) does NOT fire (strict raw ratio: cur < b*0.5)
+    expect(hardwareDiffAlert("gpu\tA100\t80000\t10000\tdrv", "gpu\tA100\t80000\t5000\tdrv")).toBe("");
+  });
+
+  it("formatPeersBlock empty for zero peers, else a ## Peers table", () => {
+    expect(formatPeersBlock([])).toBe("");
+    const peers: PeerRow[] = [{ instrument: "viola", phase: "working", currentExp: "exp-003",
+      approach: "deep-net", metric: "0.91", status: "ok", notes: "n" }];
+    const b = formatPeersBlock(peers);
+    expect(b).toContain("## Peers");
+    expect(b).toContain("| Part | Phase | Current/last | Approach | Best metric | Notes |");
+    expect(b).toContain("| viola | working | exp-003 | deep-net | 0.91 (ok) | n |");
+    expect(b).not.toMatch(/trooper/i);
+  });
+
+  it("buildDispatchState transitions phase->working, bumps counter, stamps event", () => {
+    const prev = "exp_counter=2\nphase=idle\ncurrent_exp_id=\nlast_event=spawn\n";
+    const next = buildDispatchState(prev, "exp-003", "2026-05-30T10:00:00Z");
+    const kv = Object.fromEntries(next.trim().split("\n").map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
+    expect(kv.phase).toBe("working");
+    expect(kv.current_exp_id).toBe("exp-003");
+    expect(kv.exp_counter).toBe("3");
+    expect(kv.last_event).toBe("dispatched");
+    expect(kv.last_event_ts).toBe("2026-05-30T10:00:00Z");
+  });
+
+  it("buildDispatchState defaults a non-numeric counter to 0 -> 1", () => {
+    const next = buildDispatchState("phase=idle\n", "exp-001", "T");
+    expect(next).toMatch(/exp_counter=1/);
+  });
+});
+
+function zeroFields() {
+  return { metricBlock: "", hardwareBlock: "", outboxPath: "", topicText: "", expId: "",
+    approachLabel: "", approachBrief: "", branchDir: "", metricName: "", timeBudgetS: "",
+    taskContext: "", sotaBlock: "", peersBlock: "", artDir: "" };
+}
