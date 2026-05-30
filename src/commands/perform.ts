@@ -26,7 +26,7 @@ import { scaledTimeout, parseLatestOffset } from "../core/scoreTurn.js";
 import { parseDagLine, dagTopological, dagSectionBody } from "../core/dag.js";
 import {
   enumerateSiblings, captureSiblingBaseline, formatBaselineFile,
-  parseBaselineFile, diffSiblingAgainstBaseline,
+  parseBaselineFile, diffSiblingAgainstBaseline, revertAndReplay,
 } from "../core/performSibling.js";
 import { run as sendRun } from "./send.js";
 
@@ -43,7 +43,7 @@ function detectRouting(docText: string): "single" | "multi" {
   return /^\*\*Target Sub-Project\(s\):\*\*/m.test(docText) && /^## Execution DAG[ \t]*$/m.test(docText) ? "multi" : "single";
 }
 function usage(): number {
-  log.error("usage: perform <init|pre-snapshot|branch|turn-send|turn-wait|scope-check|sibling-baseline|sibling-verify|summary|finish|forensics|archive|dag-parse|wave-wait|multi-init|send-unit> ...");
+  log.error("usage: perform <init|pre-snapshot|branch|turn-send|turn-wait|scope-check|sibling-baseline|sibling-verify|sibling-rescue|summary|finish|forensics|archive|dag-parse|wave-wait|multi-init|send-unit> ...");
   return 2;
 }
 
@@ -58,6 +58,7 @@ export async function run(args: string[]): Promise<number> {
     case "scope-check":  return scopeCheckRun(rest);
     case "sibling-baseline": return siblingBaselineRun(rest);
     case "sibling-verify":   return siblingVerifyRun(rest);
+    case "sibling-rescue":   return siblingRescueRun(rest);
     case "summary":      return summaryRun(rest);
     case "finish":       return finishRun(rest);
     case "forensics":    return forensicsRun(rest);
@@ -315,6 +316,48 @@ export async function siblingVerifyWith(topic: string, hubCwd: string, d: Siblin
   }
   atomicWrite(join(art, "sibling-rogue.txt"), out.length ? out.join("\n") + "\n" : "");
   if (out.length > 0) log.warn(`perform sibling-verify: ${out.length} rogue commit(s) on undeclared sibling main branches`);
+  return 0;
+}
+
+async function siblingRescueRun(rest: string[]): Promise<number> {
+  const [topic, hub] = rest;
+  if (!topic || !hub) { log.error("usage: perform sibling-rescue <topic> <hub-cwd>"); return 2; }
+  return siblingRescueWith(topic, hub, liveSiblingDeps);
+}
+/**
+ * Revert + replay on a feat branch — recovery for rogue sibling commits.
+ * Byte-faithful port of deploy.md:1242-1261 (the inline revert-and-replay call
+ * that sourced deploy-sibling.sh). consort has no shell libs, so it is a verb.
+ * Groups rogue SHAs per slug in sibling-rogue.txt row order (deploy.md:1244-1248),
+ * passes them verbatim to revertAndReplay (which builds feat/perform-<topic>-rescue),
+ * and APPENDS `<slug>\trescued|rescue-failed` to sibling-rescue.txt.
+ */
+export async function siblingRescueWith(topic: string, hubCwd: string, d: SiblingDeps): Promise<number> {
+  const art = performArtDir(topic);
+  const rogueFile = join(art, "sibling-rogue.txt"), baselineFile = join(art, "sibling-baseline.txt");
+  if (!existsSync(rogueFile)) { log.error(`perform sibling-rescue: no sibling-rogue.txt under ${art}`); return 1; }
+  if (!existsSync(baselineFile)) { log.error(`perform sibling-rescue: no sibling-baseline.txt under ${art}`); return 1; }
+  // Group rogue SHAs by slug in sibling-rogue.txt row order (deploy.md:1244-1248).
+  const shasBySlug = new Map<string, string[]>();
+  const order: string[] = [];
+  for (const line of readFileSync(rogueFile, "utf8").split("\n")) {
+    if (line.length === 0) continue;
+    const [slug, sha] = line.split("\t");
+    if (!slug) continue;
+    if (!shasBySlug.has(slug)) { shasBySlug.set(slug, []); order.push(slug); }
+    if (sha) shasBySlug.get(slug)!.push(sha);
+  }
+  const baseBySlug = new Map(parseBaselineFile(readFileSync(baselineFile, "utf8")).map((r) => [r.slug, r]));
+  const resultRows: string[] = [];
+  for (const slug of order) {
+    const b = baseBySlug.get(slug);
+    if (!b) { log.warn(`perform sibling-rescue: no baseline row for ${slug}; skipping`); continue; }
+    const sibCwd = join(hubCwd, slug);
+    const res = revertAndReplay(d.runnerFor(sibCwd), topic, b.sha, b.branch, shasBySlug.get(slug)!);
+    if (res.outcome === "ok") { log.ok(`perform sibling-rescue: rescued ${slug} (${res.rescue})`); resultRows.push(`${slug}\trescued`); }
+    else { log.warn(`perform sibling-rescue: rescue failed for ${slug} (${res.outcome})`); resultRows.push(`${slug}\trescue-failed`); }
+  }
+  appendFileSync(join(art, "sibling-rescue.txt"), resultRows.length ? resultRows.join("\n") + "\n" : "");
   return 0;
 }
 
