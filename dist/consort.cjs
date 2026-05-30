@@ -16584,8 +16584,8 @@ function scrapeSpawnResults(text) {
   }
   return out;
 }
-function scrapeLogs(text, basename4) {
-  return text.split("\n").filter((l) => l.includes("[error]") || l.includes("log_error")).map((l) => ({ source: "session_log", key: l.trim(), context: basename4 }));
+function scrapeLogs(text, basename5) {
+  return text.split("\n").filter((l) => l.includes("[error]") || l.includes("log_error")).map((l) => ({ source: "session_log", key: l.trim(), context: basename5 }));
 }
 function scrapeArtDir(artDir) {
   const out = [];
@@ -18282,28 +18282,7 @@ function parseDagLine(line) {
   if (d) return { step, repo, path: path6, desc: d[1], deps: d[2].replace(/ /g, "") };
   return { step, repo, path: path6, desc: rest, deps: "none" };
 }
-function checkDagSection(docText) {
-  const lines = docText.split("\n");
-  let inDag = false;
-  const body = [];
-  for (const l of lines) {
-    if (/^## Execution DAG[ \t]*$/.test(l)) {
-      inDag = true;
-      continue;
-    }
-    if (/^## /.test(l)) {
-      inDag = false;
-      continue;
-    }
-    if (inDag) body.push(l);
-  }
-  for (const l of body) {
-    if (!/^[ \t]*\d+\./.test(l)) continue;
-    if (parseDagLine(l) === null) return false;
-  }
-  return true;
-}
-function dagMalformedLines(docText) {
+function dagSectionBody(docText) {
   const body = [];
   let inDag = false;
   for (const l of docText.split("\n")) {
@@ -18317,12 +18296,69 @@ function dagMalformedLines(docText) {
     }
     if (inDag) body.push(l);
   }
-  return body.filter((l) => /^[ \t]*\d+\./.test(l) && parseDagLine(l) === null);
+  return body;
+}
+function checkDagSection(docText) {
+  for (const l of dagSectionBody(docText)) {
+    if (!/^[ \t]*\d+\./.test(l)) continue;
+    if (parseDagLine(l) === null) return false;
+  }
+  return true;
+}
+function dagMalformedLines(docText) {
+  return dagSectionBody(docText).filter((l) => /^[ \t]*\d+\./.test(l) && parseDagLine(l) === null);
 }
 function emitSoftDag(rows) {
   return rows.filter((r) => r.step.length > 0).map(
     (r) => r.deps === "none" || r.deps === "" ? `${r.step}. ${r.repo} \u2014 ${r.desc}` : `${r.step}. ${r.repo} \u2014 ${r.desc} (depends on ${r.deps.replace(/,/g, ", ")})`
   ).join("\n");
+}
+function dagTopological(edges, nodes) {
+  const indegree = /* @__PURE__ */ new Map();
+  const children = /* @__PURE__ */ new Map();
+  for (const n2 of nodes) {
+    indegree.set(n2, 0);
+    children.set(n2, []);
+  }
+  for (const [from, to] of edges) {
+    if (!from || !to) continue;
+    const cur = indegree.get(to);
+    indegree.set(to, (typeof cur === "number" ? cur : 0) + 1);
+    const kids = children.get(from) ?? [];
+    kids.push(to);
+    children.set(from, kids);
+  }
+  const out = [];
+  let wave = 1;
+  let emitted = 0;
+  const total = nodes.length;
+  while (emitted < total) {
+    const currentWave = [];
+    for (const [n2, deg] of indegree) {
+      if (deg !== 0) continue;
+      currentWave.push(n2);
+    }
+    if (currentWave.length === 0) {
+      process.stderr.write(
+        `dagTopological: cycle detected (no zero-indegree nodes left, ${emitted}/${total} processed)
+`
+      );
+      return null;
+    }
+    const sorted = [...currentWave].sort((a2, b) => Number(a2) - Number(b));
+    for (const n2 of sorted) {
+      out.push(`${wave}	${n2}`);
+      indegree.set(n2, "DONE");
+      emitted += 1;
+      for (const c3 of children.get(n2) ?? []) {
+        const cd = indegree.get(c3);
+        if (cd === void 0 || cd === "DONE") continue;
+        indegree.set(c3, cd - 1);
+      }
+    }
+    wave += 1;
+  }
+  return out;
 }
 var LINE_RE, DEPS_RE;
 var init_dag = __esm({
@@ -19954,6 +19990,41 @@ function composeRound1Prompt2(args) {
     BLOCKERS2
   ].join("\n");
 }
+function composeDagUnitPrompt(args) {
+  const { slug, designPath, step, total } = args;
+  const upstream = !args.upstreamCsv || args.upstreamCsv === "none" ? "none (this is a wave-1 / root sub-repo)" : args.upstreamCsv.split(",").join(", ");
+  return [
+    `Read ${designPath}. Your sub-repo is "${slug}".`,
+    "",
+    `Multi-repo design docs use \`### ${slug}\` subsection headings inside the`,
+    "Architecture and Components sections \u2014 focus on the subsections matching",
+    `your slug. The DAG context (Step ${step} of ${total}) is in the`,
+    `"## Execution DAG" section; you depend on: ${upstream}.`,
+    "",
+    "Run the full superpowers ceremony for your sub-repo:",
+    "1. superpowers:writing-plans \u2014 produce an implementation plan from the",
+    `   design-doc's slice for "${slug}", saved to`,
+    `   docs/superpowers/plans/YYYY-MM-DD-${slug}-plan.md`,
+    "2. superpowers:subagent-driven-development \u2014 execute the plan task-by-",
+    "   task, two-stage review per task",
+    "3. superpowers:verification-before-completion \u2014 confirm tests pass,",
+    "   diff matches the plan, no half-finished work, before reporting done",
+    "",
+    'Report status via outbox: emit {"event":"done"} when all tasks are',
+    'complete and verified. Emit {"event":"error", "reason":"..."} on any',
+    "unrecoverable failure.",
+    "",
+    "BRANCH DISCIPLINE (hard rule):",
+    `- You are operating on the current branch in sub-repo "${slug}".`,
+    "  Do NOT run 'git checkout', 'git switch', 'git branch -m', or",
+    "  create new branches.",
+    "- Commit per task with Conventional Commits prefixes on the current",
+    "  branch.",
+    "- If your work genuinely needs a fresh branch, abort with",
+    '  {"event":"error","reason":"branch-discipline: needed new branch"}',
+    "  and let the conductor decide."
+  ].join("\n");
+}
 function composeFixPrompt2(round, bundleText, verifyPath) {
   const testLog = `${(0, import_node_path25.dirname)(verifyPath)}/test-output-${round}.log`;
   return [
@@ -20059,15 +20130,19 @@ var perform_exports = {};
 __export(perform_exports, {
   archiveRun: () => archiveRun2,
   branchWith: () => branchWith2,
+  dagParseWith: () => dagParseWith,
   finishWith: () => finishWith2,
   initWith: () => initWith3,
   kvFileField: () => kvFileField,
+  multiInitWith: () => multiInitWith,
   preSnapshotWith: () => preSnapshotWith,
   run: () => run11,
   scopeCheckWith: () => scopeCheckWith,
+  sendUnitWith: () => sendUnitWith,
   summaryWith: () => summaryWith,
   turnSendWith: () => turnSendWith2,
-  turnWaitWith: () => turnWaitWith2
+  turnWaitWith: () => turnWaitWith2,
+  waveWaitWith: () => waveWaitWith
 });
 function partModel(art) {
   const p = (0, import_node_path26.join)(art, "provider.txt");
@@ -20077,7 +20152,7 @@ function detectRouting(docText) {
   return /^\*\*Target Sub-Project\(s\):\*\*/m.test(docText) && /^## Execution DAG[ \t]*$/m.test(docText) ? "multi" : "single";
 }
 function usage3() {
-  log.error("usage: perform <init|pre-snapshot|branch|turn-send|turn-wait|scope-check|summary|finish|forensics|archive> ...");
+  log.error("usage: perform <init|pre-snapshot|branch|turn-send|turn-wait|scope-check|summary|finish|forensics|archive|dag-parse|wave-wait|multi-init|send-unit> ...");
   return 2;
 }
 async function run11(args) {
@@ -20104,6 +20179,14 @@ async function run11(args) {
       return forensicsRun2(rest);
     case "archive":
       return archiveRun2(rest);
+    case "dag-parse":
+      return dagParseRun(rest);
+    case "wave-wait":
+      return waveWaitRun(rest);
+    case "multi-init":
+      return multiInitRun(rest);
+    case "send-unit":
+      return sendUnitRun(rest);
     default:
       return usage3();
   }
@@ -20176,7 +20259,6 @@ async function initWith3(tokens, d) {
   atomicWrite((0, import_node_path26.join)(art, "target_cwd.txt"), targetCwd + "\n");
   atomicWrite((0, import_node_path26.join)(art, "provider.txt"), provider + "\n");
   atomicWrite((0, import_node_path26.join)(art, "multi-repo.txt"), (routing === "multi" ? "multi" : "single") + "\n");
-  if (routing === "multi") log.warn("perform init: multi-repo routing recorded; multi-repo execution is a later phase (Phase C)");
   log.ok(`perform init: topic=${topic} routing=${routing} provider=${provider}`);
   process.stdout.write(`ART=${art}
 TOPIC=${topic}
@@ -20577,7 +20659,210 @@ async function archiveRun2(rest) {
   log.ok(`perform archive: archived _perform for ${topic}`);
   return 0;
 }
-var import_node_fs30, import_node_path26, PART, PERFORM_TURN_TIMEOUT, liveInitDeps3, liveSendDeps, liveWaitDeps, liveScopeDeps, liveSummaryDeps, liveFinishDeps;
+async function dagParseRun(rest) {
+  if (rest.length !== 1 || !rest[0]) {
+    log.error("usage: perform dag-parse <topic>");
+    return 2;
+  }
+  return dagParseWith(rest[0], liveDagParseDeps);
+}
+async function dagParseWith(topic, d) {
+  const art = d.artDir(topic);
+  const docPath = (0, import_node_path26.join)(art, "design.md");
+  if (!(0, import_node_fs30.existsSync)(docPath)) {
+    log.error(`perform dag-parse: design.md not found under ${art} (run perform init first)`);
+    return 1;
+  }
+  const body = dagSectionBody((0, import_node_fs30.readFileSync)(docPath, "utf8"));
+  if (body.length === 0) {
+    log.error("perform dag-parse: design doc missing '## Execution DAG' section");
+    return 1;
+  }
+  const nodes = [];
+  const rows = /* @__PURE__ */ new Map();
+  const edges = [];
+  for (const line of body) {
+    if (line.trim() === "") continue;
+    if (!/^[ \t]*\d+\./.test(line)) continue;
+    const node = parseDagLine(line);
+    if (node === null) {
+      log.error(`perform dag-parse: malformed DAG line: ${line}`);
+      return 1;
+    }
+    nodes.push(node.step);
+    rows.set(node.step, { repo: node.repo, path: node.path, desc: node.desc });
+    if (node.deps !== "none" && node.deps !== "") for (const dep of node.deps.split(",")) edges.push([dep, node.step]);
+  }
+  if (nodes.length === 0) {
+    log.error("perform dag-parse: no DAG lines parsed from '## Execution DAG' section");
+    return 1;
+  }
+  const topo = dagTopological(edges, nodes);
+  if (topo === null) return 1;
+  const wavesText = topo.map((r) => {
+    const [w, s] = r.split("	");
+    const x = rows.get(s);
+    return `${w}	${s}	${x.repo}	${x.path}	${x.desc}`;
+  }).join("\n") + "\n";
+  const edgesText = edges.length ? edges.map(([f, t]) => `${f}	${t}`).join("\n") + "\n" : "";
+  atomicWrite((0, import_node_path26.join)(art, "dag-waves.txt"), wavesText);
+  atomicWrite((0, import_node_path26.join)(art, "dag-edges.txt"), edgesText);
+  const waveCount = Number(topo[topo.length - 1].split("	")[0]);
+  log.ok(`perform dag-parse: ${nodes.length} steps in ${waveCount} wave(s)`);
+  process.stdout.write(`WAVES=${waveCount}
+STEPS=${nodes.length}
+`);
+  return 0;
+}
+async function waveWaitRun(rest) {
+  const [topic, instrument, provider] = rest;
+  if (!topic || !instrument || !provider) {
+    log.error("usage: perform wave-wait <topic> <instrument> <provider>");
+    return 2;
+  }
+  if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(topic) || !/^[a-z0-9_-]+$/.test(instrument) || !/^[a-z0-9_-]+$/.test(provider)) {
+    log.error("perform wave-wait: bad topic/instrument/provider");
+    return 2;
+  }
+  return waveWaitWith(topic, instrument, provider, liveWaitDeps);
+}
+async function waveWaitWith(topic, instrument, provider, d) {
+  const art = performArtDir(topic);
+  if (!(0, import_node_fs30.existsSync)(art)) {
+    log.error(`perform wave-wait: _perform art-dir missing for ${topic}`);
+    return 1;
+  }
+  const timeout = scaledTimeout(PERFORM_WAVE_TIMEOUT(), d.multiplier(provider));
+  log.info(`[wave-wait] ${instrument} timeout=${timeout}s`);
+  const ev = await d.wait(instrument, provider, topic, 0, ["done", "error"], timeout);
+  let ts;
+  const extra = [];
+  if (ev === null) {
+    ts = "timeout";
+    extra.push(`TIMEOUT_S=${timeout}`);
+    log.warn(`[wave-wait] ${instrument} TS=timeout`);
+  } else if (ev.event === "done") {
+    ts = "ok";
+    extra.push("EVENT=done");
+    log.ok(`[wave-wait] ${instrument} TS=ok`);
+  } else if (ev.event === "error") {
+    ts = "failed";
+    extra.push("EVENT=error", `REASON=${typeof ev.reason === "string" ? ev.reason : ""}`);
+    log.error(`[wave-wait] ${instrument} TS=failed`);
+  } else {
+    ts = "failed";
+    extra.push("EVENT=unknown");
+    log.error(`[wave-wait] ${instrument} TS=failed (unknown event)`);
+  }
+  atomicWrite((0, import_node_path26.join)(art, `wave-${instrument}.txt`), `TS=${ts}
+INSTRUMENT=${instrument}
+PROVIDER=${provider}
+TOPIC=${topic}
+` + extra.map((l) => l + "\n").join(""));
+  (0, import_node_fs30.writeFileSync)((0, import_node_path26.join)(art, `wave-${instrument}.done`), "");
+  return 0;
+}
+async function multiInitRun(rest) {
+  if (rest.length !== 2) {
+    log.error("usage: perform multi-init <topic> <hub-cwd>");
+    return 2;
+  }
+  return multiInitWith(rest[0], rest[1], liveMultiInitDeps);
+}
+async function multiInitWith(topic, hubCwd, d) {
+  const art = performArtDir(topic);
+  const wavesFile = (0, import_node_path26.join)(art, "dag-waves.txt");
+  if (!(0, import_node_fs30.existsSync)(wavesFile)) {
+    log.error(`perform multi-init: dag-waves.txt not found at ${wavesFile} (run perform dag-parse first)`);
+    return 1;
+  }
+  const reposOrdered = [];
+  const seen = /* @__PURE__ */ new Set();
+  const repoToPath = /* @__PURE__ */ new Map();
+  for (const line of (0, import_node_fs30.readFileSync)(wavesFile, "utf8").split("\n")) {
+    const cols = line.split("	");
+    const repo = cols[2];
+    if (!repo) continue;
+    if (!seen.has(repo)) {
+      seen.add(repo);
+      reposOrdered.push(repo);
+      repoToPath.set(repo, cols[3] || "none");
+    }
+  }
+  if (reposOrdered.length === 0) {
+    log.error("perform multi-init: no repos in dag-waves.txt");
+    return 1;
+  }
+  const instruments = d.pickInstruments(topic, reposOrdered.length);
+  if (instruments.length < reposOrdered.length) {
+    log.error(`perform multi-init: instrument pool exhausted (need ${reposOrdered.length}, got ${instruments.length})`);
+    return 1;
+  }
+  const rows = [];
+  for (let i2 = 0; i2 < reposOrdered.length; i2++) {
+    const repo = reposOrdered[i2];
+    const p = repoToPath.get(repo);
+    const cwd = p !== "none" && p !== "" ? p : (0, import_node_path26.join)(hubCwd, repo);
+    if (!(0, import_node_fs30.existsSync)(cwd) || !(0, import_node_fs30.statSync)(cwd).isDirectory()) {
+      log.error(`perform multi-init: sub-repo '${repo}' not found at ${cwd}`);
+      return 1;
+    }
+    if (!(0, import_node_fs30.existsSync)((0, import_node_path26.join)(cwd, "CLAUDE.md")) && !(0, import_node_fs30.existsSync)((0, import_node_path26.join)(cwd, "AGENTS.md"))) {
+      log.error(`perform multi-init: sub-repo '${repo}' has no CLAUDE.md or AGENTS.md at ${cwd}`);
+      return 1;
+    }
+    const provider = d.detectProvider(cwd);
+    const instrument = instruments[i2];
+    rows.push(`${instrument}	${cwd}	${provider}`);
+    const sha = d.runnerFor(cwd).run("git", ["rev-parse", "HEAD"]).stdout.trim();
+    atomicWrite((0, import_node_path26.join)(art, `${instrument}-branch-base.sha`), sha + "\n");
+  }
+  atomicWrite((0, import_node_path26.join)(art, "parts.txt"), rows.join("\n") + "\n");
+  log.ok(`perform multi-init: ${reposOrdered.length} part(s) assigned for ${topic}`);
+  return 0;
+}
+async function sendUnitRun(rest) {
+  if (rest.length !== 2) {
+    log.error("usage: perform send-unit <topic> <repo>");
+    return 2;
+  }
+  return sendUnitWith(rest[0], rest[1], liveSendUnitDeps);
+}
+async function sendUnitWith(topic, repo, d) {
+  const art = performArtDir(topic);
+  let instrument = "";
+  const partsFile = (0, import_node_path26.join)(art, "parts.txt");
+  for (const line of (0, import_node_fs30.existsSync)(partsFile) ? (0, import_node_fs30.readFileSync)(partsFile, "utf8").split("\n") : []) {
+    const c3 = line.split("	");
+    if (c3[1] && (0, import_node_path26.basename)(c3[1]) === repo) {
+      instrument = c3[0];
+      break;
+    }
+  }
+  if (!instrument) {
+    log.error(`perform send-unit: no part for repo '${repo}' in parts.txt`);
+    return 1;
+  }
+  const waves = (0, import_node_fs30.readFileSync)((0, import_node_path26.join)(art, "dag-waves.txt"), "utf8").split("\n").filter(Boolean).map((l) => l.split("	"));
+  const total = new Set(waves.map((w) => w[2])).size;
+  const myStep = waves.find((w) => w[2] === repo)?.[1] ?? "";
+  const stepToRepo = new Map(waves.map((w) => [w[1], w[2]]));
+  const edgesFile = (0, import_node_path26.join)(art, "dag-edges.txt");
+  const edges = ((0, import_node_fs30.existsSync)(edgesFile) ? (0, import_node_fs30.readFileSync)(edgesFile, "utf8") : "").split("\n").filter(Boolean).map((l) => l.split("	"));
+  const upstreamRepos = edges.filter(([, to]) => to === myStep).map(([from]) => stepToRepo.get(from)).filter((x) => Boolean(x));
+  const upstreamCsv = upstreamRepos.join(",");
+  const prompt = composeDagUnitPrompt({ slug: repo, designPath: (0, import_node_path26.join)(art, "design.md"), step: myStep, total, upstreamCsv });
+  const promptFile = (0, import_node_path26.join)(art, `${instrument}_dag_unit_prompt.md`);
+  atomicWrite(promptFile, prompt);
+  const rc = await d.send(["--from", "maestro", instrument, topic, `@${promptFile}`]);
+  if (rc !== 0) {
+    log.error(`perform send-unit: send failed (rc=${rc}) for ${repo}`);
+    return 1;
+  }
+  log.info(`[send-unit] ${instrument} -> ${repo} (step ${myStep}/${total}, upstream: ${upstreamCsv || "none"})`);
+  return 0;
+}
+var import_node_fs30, import_node_path26, PART, PERFORM_TURN_TIMEOUT, liveInitDeps3, liveSendDeps, liveWaitDeps, liveScopeDeps, liveSummaryDeps, liveFinishDeps, liveDagParseDeps, PERFORM_WAVE_TIMEOUT, liveMultiInitDeps, liveSendUnitDeps;
 var init_perform2 = __esm({
   "src/commands/perform.ts"() {
     "use strict";
@@ -20595,10 +20880,12 @@ var init_perform2 = __esm({
     init_forensics();
     init_deps();
     init_performTurn();
+    init_instruments();
     init_performQuestions();
     init_ipc();
     init_contracts();
     init_scoreTurn();
+    init_dag();
     init_send2();
     PART = "cody";
     PERFORM_TURN_TIMEOUT = () => Number(process.env.CONSORT_PERFORM_TURN_TIMEOUT_S) || 14400;
@@ -20608,6 +20895,10 @@ var init_perform2 = __esm({
     liveScopeDeps = { runnerFor: runnerAt };
     liveSummaryDeps = { runnerFor: runnerAt, now: () => isoUtc() };
     liveFinishDeps = { runnerFor: runnerAt, hasGh: haveCmd("gh") };
+    liveDagParseDeps = { artDir: (t) => performArtDir(t) };
+    PERFORM_WAVE_TIMEOUT = () => Number(process.env.CONSORT_PERFORM_WAVE_TIMEOUT_OVERRIDE) || Number(process.env.CONSORT_PERFORM_TURN_TIMEOUT_S) || 14400;
+    liveMultiInitDeps = { detectProvider: (c3) => detectProvider(c3), pickInstruments, runnerFor: runnerAt };
+    liveSendUnitDeps = { send: run2 };
   }
 });
 

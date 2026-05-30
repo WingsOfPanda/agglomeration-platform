@@ -100,7 +100,6 @@ export async function initWith(tokens: string[], d: PerformInitDeps): Promise<nu
   atomicWrite(join(art, "target_cwd.txt"), targetCwd + "\n");
   atomicWrite(join(art, "provider.txt"), provider + "\n");
   atomicWrite(join(art, "multi-repo.txt"), (routing === "multi" ? "multi" : "single") + "\n");
-  if (routing === "multi") log.warn("perform init: multi-repo routing recorded; multi-repo execution is a later phase (Phase C)");
 
   log.ok(`perform init: topic=${topic} routing=${routing} provider=${provider}`);
   process.stdout.write(`ART=${art}\nTOPIC=${topic}\nROUTING=${routing}\nPROVIDER=${provider}\nTARGET_CWD=${targetCwd}\n`);

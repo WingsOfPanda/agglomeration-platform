@@ -133,15 +133,15 @@ describe("perform init", () => {
     expect(outSpy.text()).toContain("TOPIC=custom");
   });
 
-  it("multi-repo doc → rc 0, multi-repo.txt=multi, ROUTING=multi, log.warn fired, no dag/parts files", async () => {
+  it("multi-repo doc → rc 0, multi-repo.txt=multi, ROUTING=multi; init writes no dag/parts files (the directive's dag-parse/multi-init do)", async () => {
     const p = docFile("2026-05-30-refactor-design.md", MULTI_DOC);
     const rc = await initWith([p], deps);
     expect(rc).toBe(0);
     const art = performArtDir("refactor");
     expect(readFileSync(join(art, "multi-repo.txt"), "utf8")).toBe("multi\n");
     expect(outSpy.text()).toContain("ROUTING=multi");
-    expect(errSpy.text()).toMatch(/\[WARN\]/); // log.warn went to stderr
+    // init only records routing; it no longer warns (the multi-repo flow is the directive's job now).
     expect(existsSync(join(art, "parts.txt"))).toBe(false);
-    expect(existsSync(join(art, "dag-1.txt"))).toBe(false);
+    expect(existsSync(join(art, "dag-waves.txt"))).toBe(false);
   });
 });
