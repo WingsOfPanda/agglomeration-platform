@@ -60,3 +60,56 @@ export function validateResult(json: unknown, opts: ValidateOpts = {}): Validate
   }
   return { ok: true };
 }
+
+const NUM_RE = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+
+/** Render the value-bearing tail of one scoreboard row:
+ *  "<metric%.4f|verbatim> | <status> | <runtime%.2fs|verbatim> | <approach> | <metric_name>". */
+export function renderScoreboardRow(
+  metric: string, runtime: string, metricName: string, status: string, approach: string,
+): string {
+  const metricFmt = NUM_RE.test(metric) ? parseFloat(metric).toFixed(4) : metric;
+  const runtimeFmt = NUM_RE.test(runtime) ? `${parseFloat(runtime).toFixed(2)}s` : runtime;
+  return `${metricFmt} | ${status} | ${runtimeFmt} | ${approach} | ${metricName}`;
+}
+
+export interface ScoreRow {
+  expId: string; instrument: string; metric: string;
+  status: string; runtime: string; approach: string; metricName: string;
+}
+
+function expNum(expId: string): number {
+  const n = parseInt(expId.replace(/^exp-/, ""), 10);
+  return Number.isNaN(n) ? Number.POSITIVE_INFINITY : n;
+}
+
+/** Build the full scoreboard.md. OK rows sorted metric-desc / runtime-asc / exp-id;
+ *  fail+partial grouped below sorted by exp-id; rank counter continuous; partial -> ~ rank. */
+export function buildScoreboard(rows: ScoreRow[]): string {
+  const ok = rows.filter((r) => r.status === "ok");
+  const fail = rows.filter((r) => r.status !== "ok");
+  ok.sort((a, b) =>
+    (parseFloat(b.metric) - parseFloat(a.metric)) ||
+    (parseFloat(a.runtime) - parseFloat(b.runtime)) ||
+    (expNum(a.expId) - expNum(b.expId)));
+  fail.sort((a, b) => expNum(a.expId) - expNum(b.expId));
+
+  const lines: string[] = [
+    "<!-- scoreboard schema_version=2 -->",
+    "# Scoreboard",
+    "",
+    "| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |",
+    "|---|---|---|---|---|---|---|---|",
+  ];
+  let rank = 1;
+  for (const r of ok) {
+    lines.push(`| ${rank} | ${r.expId} | ${r.instrument} | ${renderScoreboardRow(r.metric, r.runtime, r.metricName, r.status, r.approach)} |`);
+    rank++;
+  }
+  for (const r of fail) {
+    const rankCell = r.status === "partial" ? `~${rank}` : `${rank}`;
+    lines.push(`| ${rankCell} | ${r.expId} | ${r.instrument} | ${renderScoreboardRow("n/a", r.runtime, r.metricName, r.status, r.approach)} |`);
+    rank++;
+  }
+  return lines.join("\n") + "\n";
+}
