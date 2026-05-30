@@ -201,7 +201,7 @@ summary keyed off `ROUTING`.
         identity.md  inbox.md  outbox.jsonl  status.json  pane.json
     _perform/                          # art dir (was _deploy/)
         topic.txt  provider.txt  target_cwd.txt  multi-repo.txt
-        troopers.txt                   # FROZEN filename — the part roster (instrument\tcwd\tprovider)
+        parts.txt                      # multi-repo roster (slug\tcwd[\tprovider]) — rebranded from deploy's troopers.txt
         branch-base.sha  <instr>-branch-base.sha   deploy-branches.tsv  baselines/<slug>.tsv
         dag-waves.txt  dag-edges.txt   multi-repo-targets.txt          # executor state (FROZEN names)
         turn-<part>-<round>.txt  turn-<part>-<round>.done  question-<part>-<round>.txt
@@ -320,10 +320,11 @@ exhaustion the directive offers Continue+1 / Hand-off (write `RESUME.md`) / Abor
 | `cw_deploy_*` fn prefix / `CW_DEPLOY_*` env | dropped / `CONSORT_PERFORM_*` |
 | teardown banner "MISSION ACCOMPLISHED" | "FINE" |
 | PR title `deploy: <branch>` | `perform: <branch>` |
+| multi-repo roster `troopers.txt` | `parts.txt` — **not frozen** (it is an internal conductor roster the model binaries never read; the stale-token gate bans the `trooper` substring in shipped src, so the literal `troopers.txt` cannot appear in code — the gate wins) |
 
 **Frozen — never rename** (drop-in compatibility): event names `ready/ack/progress/done/error/
 question`; sentinel `END_OF_INSTRUCTION`; JSON fields `ts/summary/artifacts/note/message/fatal/
-task_summary/model/topic`; state filenames `troopers.txt`, `target_cwd.txt`, `dag-waves.txt`,
+task_summary/model/topic`; state filenames `target_cwd.txt`, `dag-waves.txt`,
 `dag-edges.txt`, `status.json`, `pane.json`, the `baselines/` layout; status fields
 `state/archived/archived_ts`; `CLAUDE_CODE_SESSION_ID`; `contracts.yaml` keys. The
 `tests/stale-tokens.test.ts` gate (bans `clone-wars`/`cw_`/`master-yoda`/`MISSION ACCOMPLISHED`/
