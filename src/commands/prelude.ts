@@ -1,7 +1,7 @@
 // src/commands/prelude.ts — /consort:prelude CLI verbs (port of meditate). Built on score's DI
 // pattern + IPC/wait/archive helpers; meditate-specific logic lives in src/core/prelude*.ts.
 // NOTE: verbs are added task-by-task; the dispatcher's switch grows as each verb lands.
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile } from "../args.js";
@@ -15,8 +15,12 @@ import {
 import { readProviderList } from "../core/providers.js";
 import { activeProvidersPath, repoRoot } from "../core/paths.js";
 import { pickInstruments } from "../core/instruments.js";
-import { instrumentConsultValidated } from "../core/contracts.js";
+import { instrumentConsultValidated, consultTimeout, instrumentTimeoutMultiplier } from "../core/contracts.js";
 import { classifyTopic } from "../core/preludeLit.js";
+import { outboxOffset, outboxPath, outboxWaitSince, type OutboxEvent } from "../core/ipc.js";
+import { parseLatestOffset, scaledTimeout, researchState } from "../core/scoreTurn.js";
+import { composePreludeResearchPrompt, litGuidance } from "../core/preludeTurn.js";
+import { run as sendRun } from "./send.js";
 import { run as spawnRun } from "./spawn.js";
 import { run as preflightRun } from "./preflight.js";
 
@@ -33,6 +37,8 @@ export async function run(args: string[]): Promise<number> {
     case "init": return initRun(applyArgsFile(rest));
     case "classify": return classifyRun(rest);
     case "spawn-all": return spawnAllRun(rest);
+    case "research-send": return researchSendRun(rest);
+    case "research-wait": return researchWaitRun(rest);
     default: return usage();
   }
 }
@@ -141,4 +147,77 @@ export async function spawnAllWith(topic: string, d: PreludeSpawnAllDeps): Promi
   if (rc === 0) log.ok(`prelude spawn-all: ${nOk}/${rows.length} parts ready`);
   else log.warn(`prelude spawn-all: ${nOk}/${rows.length} parts ready (rc=${rc})`);
   return rc;
+}
+
+// ---- research-send / research-wait ----
+export interface ResearchSendDeps {
+  offsetFor(instrument: string, model: string, topic: string): number;
+  send(args: string[]): Promise<number>;
+}
+const liveResearchSendDeps: ResearchSendDeps = {
+  offsetFor: (i, m, t) => outboxOffset(outboxPath(i, m, t)),
+  send: sendRun,
+};
+async function researchSendRun(rest: string[]): Promise<number> {
+  const [topic, instrument, provider] = rest;
+  if (!topic || !instrument || !provider) { log.error("usage: prelude research-send <topic> <instrument> <provider>"); return 2; }
+  return researchSendWith(topic, instrument, provider, liveResearchSendDeps);
+}
+export async function researchSendWith(topic: string, instrument: string, provider: string, d: ResearchSendDeps): Promise<number> {
+  const art = preludeArtDir(topic);
+  const stateFile = join(art, `research-${instrument}.txt`);
+  if (existsSync(stateFile)) { log.error(`prelude research-send: ${stateFile} exists; rm to retry`); return 1; }
+  const topicText = readIf(join(art, "topic.txt")).trim();
+  if (!topicText) { log.error(`prelude research-send: topic.txt missing/empty at ${art} (run prelude init)`); return 1; }
+
+  const track = readIf(join(art, "lit-track.txt")).startsWith("ON") ? "ON" : "OFF";
+  const findingsPath = join(art, `findings-${instrument}.md`); // art-dir-flat (faithful to meditate)
+  const promptFile = join(art, `${instrument}_research_prompt.md`);
+  atomicWrite(promptFile, composePreludeResearchPrompt(topicText, findingsPath, litGuidance(track)));
+
+  const offset = d.offsetFor(instrument, provider, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}\n`);
+  const rc = await d.send(["--from", "maestro", instrument, topic, `@${promptFile}`]);
+  if (rc !== 0) { log.error(`prelude research-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`); return 1; }
+  log.ok(`prelude research-send: ${instrument} offset=${offset}`);
+  return 0;
+}
+
+export interface ResearchWaitDeps {
+  wait(instrument: string, model: string, topic: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null>;
+  multiplier(provider: string): string;
+}
+const liveResearchWaitDeps: ResearchWaitDeps = {
+  wait: (i, m, t, off, ev, to) => outboxWaitSince(i, m, t, off, ev, to),
+  multiplier: instrumentTimeoutMultiplier,
+};
+async function researchWaitRun(rest: string[]): Promise<number> {
+  const [topic, instrument, provider] = rest;
+  if (!topic || !instrument || !provider) { log.error("usage: prelude research-wait <topic> <instrument> <provider>"); return 2; }
+  return researchWaitWith(topic, instrument, provider, liveResearchWaitDeps);
+}
+export async function researchWaitWith(topic: string, instrument: string, provider: string, d: ResearchWaitDeps): Promise<number> {
+  const art = preludeArtDir(topic);
+  const stateFile = join(art, `research-${instrument}.txt`);
+  if (!existsSync(stateFile)) { log.error(`prelude research-wait: ${stateFile} missing (run prelude research-send first)`); return 1; }
+  const offset = parseLatestOffset(readFileSync(stateFile, "utf8"));
+  if (offset === null) { log.error(`prelude research-wait: OFFSET not set in ${stateFile}`); return 1; }
+
+  const timeout = scaledTimeout(consultTimeout("research"), d.multiplier(provider));
+  log.info(`prelude research-wait: ${instrument} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(instrument, provider, topic, offset, ["done", "error", "question"], timeout);
+
+  const findingsPath = join(art, `findings-${instrument}.md`);
+  const findingsText = existsSync(findingsPath) ? readFileSync(findingsPath, "utf8") : null;
+  const fs = researchState(ev, findingsText);
+  if (fs === "question" && ev) {
+    atomicWrite(join(art, `question-${instrument}.txt`), JSON.stringify(ev) + "\n");
+    const bumped = outboxOffset(outboxPath(instrument, provider, topic));
+    appendFileSync(stateFile, `OFFSET=${bumped}\nFS=question\n`);
+  } else {
+    appendFileSync(stateFile, `FS=${fs}\n`);
+  }
+  writeFileSync(join(art, `research-${instrument}.done`), "");
+  log.ok(`prelude research-wait: ${instrument} FS=${fs}`);
+  return 0;
 }
