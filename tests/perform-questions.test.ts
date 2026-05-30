@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { percentDecode, parseQuestionPayload, verifyClaim, formatReply } from "../src/core/performQuestions.js";
+import { percentDecode, parseQuestionPayload, verifyClaim, formatReply, extractQuestionPayload } from "../src/core/performQuestions.js";
 import type { QuestionRunner, RunResult } from "../src/core/performQuestions.js";
 
 function fakeRunner(replies: Record<string, RunResult>) {
@@ -160,6 +160,26 @@ describe("formatReply", () => {
   });
   it("non-test kind has no NOTE block", () => { expect(formatReply("env", "HOME", 0, "/home/x")).not.toContain("NOTE: kind=test"); });
   it("uses the rebranded From: maestro sender", () => { expect(formatReply("path", "v", 0, "e")).toContain("From: maestro"); });
+});
+
+describe("extractQuestionPayload", () => {
+  it("message + claim → verify-route KV payload", () => {
+    expect(extractQuestionPayload({ event: "question", message: "need X", claim: { kind: "path", value: "/x" } }, 1700000000))
+      .toBe("TEXT=need X\nCLAIM_KIND=path\nCLAIM_VALUE=/x\nROUTE=verify\nASKED_AT=1700000000\n");
+  });
+  it("message, no claim → escalate route, empty kind/value", () => {
+    expect(extractQuestionPayload({ event: "question", message: "should I keep the fallback?" }, 42))
+      .toBe("TEXT=should I keep the fallback?\nCLAIM_KIND=\nCLAIM_VALUE=\nROUTE=escalate\nASKED_AT=42\n");
+  });
+  it("multiline message → %0A encoded, round-trips through parseQuestionPayload", () => {
+    const payload = extractQuestionPayload({ event: "question", message: "line1\nline2" }, 7)!;
+    expect(payload).toContain("TEXT=line1%0Aline2\n");
+    expect(parseQuestionPayload(payload).text).toBe("line1\nline2");
+  });
+  it("empty/absent message → null", () => {
+    expect(extractQuestionPayload({ event: "question", message: "" }, 1)).toBeNull();
+    expect(extractQuestionPayload({ event: "question" }, 1)).toBeNull();
+  });
 });
 
 describe("round-trip: parse then verify then reply", () => {
