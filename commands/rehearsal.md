@@ -201,6 +201,11 @@ Lane-D abandon (per part, at Step 5 -- ALL THREE must hold):
      surface in chat. (experiment-send refuses an abandoned lane with rc 2.)
 ```
 
+**Optional — consensus for asymmetric framing (advisory, §6).** When the soft-stop rules are close and the parts
+disagree, run `$CS rehearsal consensus <TOPIC>` → writes `$ART/consensus.md` (advisory; gates nothing). Its
+`## Contested` section shows where the parts' latest-ok `result.json` fields diverge; read it to frame the next
+direction or a clarifying user question. On-demand only — never auto-run by `score` / `finalize` / the loop.
+
 ### Step 5 — Dispatch round
 For **each** part with `phase=idle` and no `$ART/halt.flag`:
 1. **Lane-D abandon check FIRST** (the frozen block above — all three criteria must hold). When all hold,
