@@ -1,13 +1,16 @@
 // src/commands/prelude.ts — /consort:prelude CLI verbs (port of meditate). Built on score's DI
 // pattern + IPC/wait/archive helpers; meditate-specific logic lives in src/core/prelude*.ts.
 // NOTE: verbs are added task-by-task; the dispatcher's switch grows as each verb lands.
-import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
-import { isoUtc } from "../core/archive.js";
+import { isoUtc, archiveTopic } from "../core/archive.js";
 import { preludeArtDir, deriveSlug } from "../core/prelude.js";
+import { extractHandoffData } from "../core/preludeHandoff.js";
+import { captureArtDir } from "../core/forensics.js";
+import { killNow } from "../core/tmux.js";
 import {
   type RosterRow, formatRosterFile, parseRosterFile, spawnRosterArg, spawnResultsTsv, spawnTally,
   parsePanesFile, type SpawnResult,
@@ -44,6 +47,10 @@ export async function run(args: string[]): Promise<number> {
     case "confidence": return confidenceRun(rest);
     case "adversary-send": return adversarySendRun(rest);
     case "adversary-wait": return adversaryWaitRun(rest);
+    case "synth-final": return synthFinalRun(rest);
+    case "forensics": return forensicsRun(rest);
+    case "teardown": return teardownRun(rest);
+    case "handoff-extract": return handoffExtractRun(rest);
     default: return usage();
   }
 }
@@ -334,5 +341,84 @@ export async function adversaryWaitWith(topic: string, instrument: string, provi
   }
   writeFileSync(join(art, `adversary-${instrument}.done`), "");
   log.ok(`prelude adversary-wait: ${instrument} AS=${as}`);
+  return 0;
+}
+
+// ---- synth-final (input validator) ----
+export async function synthFinalRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: prelude synth-final <topic>"); return 2; }
+  const art = preludeArtDir(topic);
+  if (!existsSync(art)) { log.error(`prelude synth-final: ${art} not found`); return 1; }
+  if (!readIf(join(art, "landscape-draft.md")).trim()) { log.error("prelude synth-final: landscape-draft.md missing"); return 1; }
+  if (!readIf(join(art, "topic.txt")).trim()) { log.error("prelude synth-final: topic.txt missing"); return 1; }
+
+  const skipped = /^user_decision: skip$/m.test(readIf(join(art, "adversary-skip.txt")));
+  if (!skipped) {
+    const rows = parseRosterFile(readIf(join(art, "roster.txt")));
+    const missing = rows.filter((r) => !readIf(join(art, `adversary-${r.instrument}.md`)).trim()).map((r) => `adversary-${r.instrument}.md`);
+    if (missing.length) {
+      log.error("prelude synth-final: blocked — adversary ran but critiques missing:");
+      for (const m of missing) log.error(`  - ${join(art, m)}`);
+      return 1;
+    }
+  }
+  const today = isoUtc().slice(0, 10);
+  const out = join(art, `landscape-${today}-${topic}.md`);
+  log.ok(`prelude synth-final: inputs validated for ${topic} (adversary_ran=${skipped ? 0 : 1})`);
+  process.stdout.write(out + "\n");
+  return 0;
+}
+
+// ---- forensics (thin captureArtDir wrapper) ----
+export async function forensicsRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: prelude forensics <topic>"); return 2; }
+  const path = captureArtDir({ artDir: preludeArtDir(topic), command: "prelude" });
+  if (path) { log.ok(`prelude forensics: captured ${path}`); process.stdout.write(path + "\n"); }
+  else log.info("prelude forensics: no mechanical findings (no file written)");
+  return 0; // best-effort
+}
+
+// ---- teardown (orphan kill + archive; panes torn down by the directive's coda --pairs) ----
+export interface PreludeTeardownDeps {
+  killPane(pane: string): Promise<void>;
+  archiveTopic(topic: string, suite: "prelude"): string | null;
+  stdout?: (l: string) => void;
+}
+const livePreludeTeardownDeps: PreludeTeardownDeps = {
+  killPane: (p) => killNow(p),
+  archiveTopic: (t, s) => archiveTopic(t, s),
+};
+async function teardownRun(rest: string[]): Promise<number> { return teardownWith(rest, livePreludeTeardownDeps); }
+
+export async function teardownWith(args: string[], deps: PreludeTeardownDeps): Promise<number> {
+  const out = deps.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
+  const topic = args[0];
+  if (!topic) { log.error("prelude teardown: topic required"); return 2; }
+  const art = preludeArtDir(topic);
+  if (!existsSync(art) || !statSync(art).isDirectory()) { log.error(`${art} not found`); return 1; }
+
+  const pf = join(art, "preflight-panes.txt");
+  if (existsSync(pf)) {
+    for (const line of readFileSync(pf, "utf8").split("\n")) {
+      const pane = line.trim();
+      if (!pane) continue;
+      try { await deps.killPane(pane); } catch { /* best-effort */ }
+    }
+  }
+  const dest = deps.archiveTopic(topic, "prelude");
+  if (dest) { out(dest); log.ok(`[teardown] archived ${topic} -> ${dest}`); }
+  return 0;
+}
+
+// ---- handoff-extract (runs against the archived art-dir) ----
+export async function handoffExtractRun(rest: string[]): Promise<number> {
+  const artDir = rest[0];
+  if (!artDir) { log.error("usage: prelude handoff-extract <art-dir>"); return 2; }
+  const path = extractHandoffData(artDir);
+  if (!path) { log.error(`prelude handoff-extract: art-dir or topic.txt missing under ${artDir}`); return 2; }
+  log.ok(`prelude handoff-extract: wrote ${path}`);
+  process.stdout.write(path + "\n");
   return 0;
 }
