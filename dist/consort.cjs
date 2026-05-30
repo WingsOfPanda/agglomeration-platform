@@ -325,8 +325,8 @@ function haveCmd(name) {
     return false;
   }
 }
-function tmuxVersionString(run13) {
-  if (run13) return run13();
+function tmuxVersionString(run14) {
+  if (run14) return run14();
   if (!haveCmd("tmux")) return null;
   try {
     return (0, import_node_child_process2.execFileSync)("tmux", ["-V"], { encoding: "utf8" }).trim();
@@ -432,9 +432,10 @@ function archiveTopic(topic, suite, opts) {
   const td = topicDir(topic);
   finalizeArchived(td, opts);
   const art = (0, import_node_path2.join)(td, `_${suite}`);
+  let dest = null;
   if ((0, import_node_fs4.existsSync)(art)) {
     const base = (0, import_node_path2.join)(globalRoot(), "archive", repoHash(), topic, `_${suite}-${archiveTs(opts?.now)}`);
-    const dest = uniqueDest(base);
+    dest = uniqueDest(base);
     (0, import_node_fs4.mkdirSync)((0, import_node_path2.dirname)(dest), { recursive: true });
     (0, import_node_fs4.renameSync)(art, dest);
   }
@@ -442,6 +443,7 @@ function archiveTopic(topic, suite, opts) {
     (0, import_node_fs4.rmSync)(td, { recursive: false, force: false });
   } catch {
   }
+  return dest;
 }
 var import_node_fs4, import_node_path2, STALE;
 var init_archive = __esm({
@@ -596,6 +598,13 @@ function paneMetaModel(i2, modelHint, t) {
     }
   }
   return modelHint;
+}
+function resolveModel(instrument, topic) {
+  const td = topicDir(topic);
+  if (!(0, import_node_fs5.existsSync)(td)) return null;
+  const d = (0, import_node_fs5.readdirSync)(td, { withFileTypes: true }).find((e) => e.isDirectory() && e.name.startsWith(`${instrument}-`));
+  if (!d) return null;
+  return paneMetaModel(instrument, d.name.slice(instrument.length + 1), topic);
 }
 var import_node_fs5, import_node_path3, SENDER_RE, sleep;
 var init_ipc = __esm({
@@ -1555,13 +1564,13 @@ var require_Collection = __commonJS({
 var require_stringifyComment = __commonJS({
   "node_modules/yaml/dist/stringify/stringifyComment.js"(exports2) {
     "use strict";
-    var stringifyComment = (str) => str.replace(/^(?!$)(?: $)?/gm, "#");
+    var stringifyComment = (str2) => str2.replace(/^(?!$)(?: $)?/gm, "#");
     function indentComment(comment, indent) {
       if (/^\n+$/.test(comment))
         return comment.substring(1);
       return indent ? comment.replace(/^(?! *$)/gm, indent) : comment;
     }
-    var lineComment = (str, indent, comment) => str.endsWith("\n") ? indentComment(comment, indent) : comment.includes("\n") ? "\n" + indentComment(comment, indent) : (str.endsWith(" ") ? "" : " ") + comment;
+    var lineComment = (str2, indent, comment) => str2.endsWith("\n") ? indentComment(comment, indent) : comment.includes("\n") ? "\n" + indentComment(comment, indent) : (str2.endsWith(" ") ? "" : " ") + comment;
     exports2.indentComment = indentComment;
     exports2.lineComment = lineComment;
     exports2.stringifyComment = stringifyComment;
@@ -1715,16 +1724,16 @@ var require_stringifyString = __commonJS({
       lineWidth: ctx.options.lineWidth,
       minContentWidth: ctx.options.minContentWidth
     });
-    var containsDocumentMarker = (str) => /^(%|---|\.\.\.)/m.test(str);
-    function lineLengthOverLimit(str, lineWidth, indentLength) {
+    var containsDocumentMarker = (str2) => /^(%|---|\.\.\.)/m.test(str2);
+    function lineLengthOverLimit(str2, lineWidth, indentLength) {
       if (!lineWidth || lineWidth < 0)
         return false;
       const limit = lineWidth - indentLength;
-      const strLen = str.length;
+      const strLen = str2.length;
       if (strLen <= limit)
         return false;
       for (let i2 = 0, start = 0; i2 < strLen; ++i2) {
-        if (str[i2] === "\n") {
+        if (str2[i2] === "\n") {
           if (i2 - start > limit)
             return true;
           start = i2 + 1;
@@ -1741,11 +1750,11 @@ var require_stringifyString = __commonJS({
       const { implicitKey } = ctx;
       const minMultiLineLength = ctx.options.doubleQuotedMinMultiLineLength;
       const indent = ctx.indent || (containsDocumentMarker(value) ? "  " : "");
-      let str = "";
+      let str2 = "";
       let start = 0;
       for (let i2 = 0, ch = json[i2]; ch; ch = json[++i2]) {
         if (ch === " " && json[i2 + 1] === "\\" && json[i2 + 2] === "n") {
-          str += json.slice(start, i2) + "\\ ";
+          str2 += json.slice(start, i2) + "\\ ";
           i2 += 1;
           start = i2;
           ch = "\\";
@@ -1754,38 +1763,38 @@ var require_stringifyString = __commonJS({
           switch (json[i2 + 1]) {
             case "u":
               {
-                str += json.slice(start, i2);
+                str2 += json.slice(start, i2);
                 const code = json.substr(i2 + 2, 4);
                 switch (code) {
                   case "0000":
-                    str += "\\0";
+                    str2 += "\\0";
                     break;
                   case "0007":
-                    str += "\\a";
+                    str2 += "\\a";
                     break;
                   case "000b":
-                    str += "\\v";
+                    str2 += "\\v";
                     break;
                   case "001b":
-                    str += "\\e";
+                    str2 += "\\e";
                     break;
                   case "0085":
-                    str += "\\N";
+                    str2 += "\\N";
                     break;
                   case "00a0":
-                    str += "\\_";
+                    str2 += "\\_";
                     break;
                   case "2028":
-                    str += "\\L";
+                    str2 += "\\L";
                     break;
                   case "2029":
-                    str += "\\P";
+                    str2 += "\\P";
                     break;
                   default:
                     if (code.substr(0, 2) === "00")
-                      str += "\\x" + code.substr(2);
+                      str2 += "\\x" + code.substr(2);
                     else
-                      str += json.substr(i2, 6);
+                      str2 += json.substr(i2, 6);
                 }
                 i2 += 5;
                 start = i2 + 1;
@@ -1795,14 +1804,14 @@ var require_stringifyString = __commonJS({
               if (implicitKey || json[i2 + 2] === '"' || json.length < minMultiLineLength) {
                 i2 += 1;
               } else {
-                str += json.slice(start, i2) + "\n\n";
+                str2 += json.slice(start, i2) + "\n\n";
                 while (json[i2 + 2] === "\\" && json[i2 + 3] === "n" && json[i2 + 4] !== '"') {
-                  str += "\n";
+                  str2 += "\n";
                   i2 += 2;
                 }
-                str += indent;
+                str2 += indent;
                 if (json[i2 + 2] === " ")
-                  str += "\\";
+                  str2 += "\\";
                 i2 += 1;
                 start = i2 + 1;
               }
@@ -1811,8 +1820,8 @@ var require_stringifyString = __commonJS({
               i2 += 1;
           }
       }
-      str = start ? str + json.slice(start) : json;
-      return implicitKey ? str : foldFlowLines.foldFlowLines(str, indent, foldFlowLines.FOLD_QUOTED, getFoldOptions(ctx, false));
+      str2 = start ? str2 + json.slice(start) : json;
+      return implicitKey ? str2 : foldFlowLines.foldFlowLines(str2, indent, foldFlowLines.FOLD_QUOTED, getFoldOptions(ctx, false));
     }
     function singleQuotedString(value, ctx) {
       if (ctx.options.singleQuote === false || ctx.implicitKey && value.includes("\n") || /[ \t]\n|\n[ \t]/.test(value))
@@ -1940,15 +1949,15 @@ ${indent}${start}${value}${end}`;
           return quotedString(value, ctx);
         }
       }
-      const str = value.replace(/\n+/g, `$&
+      const str2 = value.replace(/\n+/g, `$&
 ${indent}`);
       if (actualString) {
-        const test = (tag) => tag.default && tag.tag !== "tag:yaml.org,2002:str" && tag.test?.test(str);
+        const test = (tag) => tag.default && tag.tag !== "tag:yaml.org,2002:str" && tag.test?.test(str2);
         const { compat, tags } = ctx.doc.schema;
         if (tags.some(test) || compat?.some(test))
           return quotedString(value, ctx);
       }
-      return implicitKey ? str : foldFlowLines.foldFlowLines(str, indent, foldFlowLines.FOLD_FLOW, getFoldOptions(ctx, false));
+      return implicitKey ? str2 : foldFlowLines.foldFlowLines(str2, indent, foldFlowLines.FOLD_FLOW, getFoldOptions(ctx, false));
     }
     function stringifyString(item, ctx, onComment, onChompKeep) {
       const { implicitKey, inFlow } = ctx;
@@ -2100,11 +2109,11 @@ var require_stringify = __commonJS({
       const props = stringifyProps(node, tagObj, ctx);
       if (props.length > 0)
         ctx.indentAtStart = (ctx.indentAtStart ?? 0) + props.length + 1;
-      const str = typeof tagObj.stringify === "function" ? tagObj.stringify(node, ctx, onComment, onChompKeep) : identity3.isScalar(node) ? stringifyString.stringifyString(node, ctx, onComment, onChompKeep) : node.toString(ctx, onComment, onChompKeep);
+      const str2 = typeof tagObj.stringify === "function" ? tagObj.stringify(node, ctx, onComment, onChompKeep) : identity3.isScalar(node) ? stringifyString.stringifyString(node, ctx, onComment, onChompKeep) : node.toString(ctx, onComment, onChompKeep);
       if (!props)
-        return str;
-      return identity3.isScalar(node) || str[0] === "{" || str[0] === "[" ? `${props} ${str}` : `${props}
-${ctx.indent}${str}`;
+        return str2;
+      return identity3.isScalar(node) || str2[0] === "{" || str2[0] === "[" ? `${props} ${str2}` : `${props}
+${ctx.indent}${str2}`;
     }
     exports2.createStringifyContext = createStringifyContext;
     exports2.stringify = stringify;
@@ -2139,8 +2148,8 @@ var require_stringifyPair = __commonJS({
       });
       let keyCommentDone = false;
       let chompKeep = false;
-      let str = stringify.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
-      if (!explicitKey && !ctx.inFlow && str.length > 1024) {
+      let str2 = stringify.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
+      if (!explicitKey && !ctx.inFlow && str2.length > 1024) {
         if (simpleKeys)
           throw new Error("With simple keys, single line scalar must not span more than 1024 characters");
         explicitKey = true;
@@ -2149,27 +2158,27 @@ var require_stringifyPair = __commonJS({
         if (allNullValues || value == null) {
           if (keyCommentDone && onComment)
             onComment();
-          return str === "" ? "?" : explicitKey ? `? ${str}` : str;
+          return str2 === "" ? "?" : explicitKey ? `? ${str2}` : str2;
         }
       } else if (allNullValues && !simpleKeys || value == null && explicitKey) {
-        str = `? ${str}`;
+        str2 = `? ${str2}`;
         if (keyComment && !keyCommentDone) {
-          str += stringifyComment.lineComment(str, ctx.indent, commentString(keyComment));
+          str2 += stringifyComment.lineComment(str2, ctx.indent, commentString(keyComment));
         } else if (chompKeep && onChompKeep)
           onChompKeep();
-        return str;
+        return str2;
       }
       if (keyCommentDone)
         keyComment = null;
       if (explicitKey) {
         if (keyComment)
-          str += stringifyComment.lineComment(str, ctx.indent, commentString(keyComment));
-        str = `? ${str}
+          str2 += stringifyComment.lineComment(str2, ctx.indent, commentString(keyComment));
+        str2 = `? ${str2}
 ${indent}:`;
       } else {
-        str = `${str}:`;
+        str2 = `${str2}:`;
         if (keyComment)
-          str += stringifyComment.lineComment(str, ctx.indent, commentString(keyComment));
+          str2 += stringifyComment.lineComment(str2, ctx.indent, commentString(keyComment));
       }
       let vsb, vcb, valueComment;
       if (identity3.isNode(value)) {
@@ -2185,7 +2194,7 @@ ${indent}:`;
       }
       ctx.implicitKey = false;
       if (!explicitKey && !keyComment && identity3.isScalar(value))
-        ctx.indentAtStart = str.length + 1;
+        ctx.indentAtStart = str2.length + 1;
       chompKeep = false;
       if (!indentSeq && indentStep.length >= 2 && !ctx.inFlow && !explicitKey && identity3.isSeq(value) && !value.flow && !value.tag && !value.anchor) {
         ctx.indent = ctx.indent.substring(2);
@@ -2229,16 +2238,16 @@ ${ctx.indent}`;
       } else if (valueStr === "" || valueStr[0] === "\n") {
         ws = "";
       }
-      str += ws + valueStr;
+      str2 += ws + valueStr;
       if (ctx.inFlow) {
         if (valueCommentDone && onComment)
           onComment();
       } else if (valueComment && !valueCommentDone) {
-        str += stringifyComment.lineComment(str, ctx.indent, commentString(valueComment));
+        str2 += stringifyComment.lineComment(str2, ctx.indent, commentString(valueComment));
       } else if (chompKeep && onChompKeep) {
         onChompKeep();
       }
-      return str;
+      return str2;
     }
     exports2.stringifyPair = stringifyPair;
   }
@@ -2465,31 +2474,31 @@ var require_stringifyCollection = __commonJS({
           }
         }
         chompKeep = false;
-        let str2 = stringify.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
+        let str3 = stringify.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
         if (comment2)
-          str2 += stringifyComment.lineComment(str2, itemIndent, commentString(comment2));
+          str3 += stringifyComment.lineComment(str3, itemIndent, commentString(comment2));
         if (chompKeep && comment2)
           chompKeep = false;
-        lines.push(blockItemPrefix + str2);
+        lines.push(blockItemPrefix + str3);
       }
-      let str;
+      let str2;
       if (lines.length === 0) {
-        str = flowChars.start + flowChars.end;
+        str2 = flowChars.start + flowChars.end;
       } else {
-        str = lines[0];
+        str2 = lines[0];
         for (let i2 = 1; i2 < lines.length; ++i2) {
           const line = lines[i2];
-          str += line ? `
+          str2 += line ? `
 ${indent}${line}` : "\n";
         }
       }
       if (comment) {
-        str += "\n" + stringifyComment.indentComment(commentString(comment), indent);
+        str2 += "\n" + stringifyComment.indentComment(commentString(comment), indent);
         if (onComment)
           onComment();
       } else if (chompKeep && onChompKeep)
         onChompKeep();
-      return str;
+      return str2;
     }
     function stringifyFlowCollection({ items }, ctx, { flowChars, itemIndent }) {
       const { indent, indentStep, flowCollectionPadding: fcPadding, options: { commentString } } = ctx;
@@ -2532,21 +2541,21 @@ ${indent}${line}` : "\n";
         }
         if (comment)
           reqNewline = true;
-        let str = stringify.stringify(item, itemCtx, () => comment = null);
-        reqNewline || (reqNewline = lines.length > linesAtValue || str.includes("\n"));
+        let str2 = stringify.stringify(item, itemCtx, () => comment = null);
+        reqNewline || (reqNewline = lines.length > linesAtValue || str2.includes("\n"));
         if (i2 < items.length - 1) {
-          str += ",";
+          str2 += ",";
         } else if (ctx.options.trailingComma) {
           if (ctx.options.lineWidth > 0) {
-            reqNewline || (reqNewline = lines.reduce((sum, line) => sum + line.length + 2, 2) + (str.length + 2) > ctx.options.lineWidth);
+            reqNewline || (reqNewline = lines.reduce((sum, line) => sum + line.length + 2, 2) + (str2.length + 2) > ctx.options.lineWidth);
           }
           if (reqNewline) {
-            str += ",";
+            str2 += ",";
           }
         }
         if (comment)
-          str += stringifyComment.lineComment(str, itemIndent, commentString(comment));
-        lines.push(str);
+          str2 += stringifyComment.lineComment(str2, itemIndent, commentString(comment));
+        lines.push(str2);
         linesAtValue = lines.length;
       }
       const { start, end } = flowChars;
@@ -2558,11 +2567,11 @@ ${indent}${line}` : "\n";
           reqNewline = ctx.options.lineWidth > 0 && len > ctx.options.lineWidth;
         }
         if (reqNewline) {
-          let str = start;
+          let str2 = start;
           for (const line of lines)
-            str += line ? `
+            str2 += line ? `
 ${indentStep}${indent}${line}` : "\n";
-          return `${str}
+          return `${str2}
 ${indent}${end}`;
         } else {
           return `${start}${fcPadding}${lines.join(" ")}${fcPadding}${end}`;
@@ -2894,7 +2903,7 @@ var require_string = __commonJS({
       identify: (value) => typeof value === "string",
       default: true,
       tag: "tag:yaml.org,2002:str",
-      resolve: (str) => str,
+      resolve: (str2) => str2,
       stringify(item, ctx, onComment, onChompKeep) {
         ctx = Object.assign({ actualString: true }, ctx);
         return stringifyString.stringifyString(item, ctx, onComment, onChompKeep);
@@ -2932,7 +2941,7 @@ var require_bool = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:bool",
       test: /^(?:[Tt]rue|TRUE|[Ff]alse|FALSE)$/,
-      resolve: (str) => new Scalar.Scalar(str[0] === "t" || str[0] === "T"),
+      resolve: (str2) => new Scalar.Scalar(str2[0] === "t" || str2[0] === "T"),
       stringify({ source, value }, ctx) {
         if (source && boolTag.test.test(source)) {
           const sv = source[0] === "t" || source[0] === "T";
@@ -2984,7 +2993,7 @@ var require_float = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:float",
       test: /^(?:[-+]?\.(?:inf|Inf|INF)|\.nan|\.NaN|\.NAN)$/,
-      resolve: (str) => str.slice(-3).toLowerCase() === "nan" ? NaN : str[0] === "-" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
+      resolve: (str2) => str2.slice(-3).toLowerCase() === "nan" ? NaN : str2[0] === "-" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
       stringify: stringifyNumber.stringifyNumber
     };
     var floatExp = {
@@ -2993,7 +3002,7 @@ var require_float = __commonJS({
       tag: "tag:yaml.org,2002:float",
       format: "EXP",
       test: /^[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)[eE][-+]?[0-9]+$/,
-      resolve: (str) => parseFloat(str),
+      resolve: (str2) => parseFloat(str2),
       stringify(node) {
         const num = Number(node.value);
         return isFinite(num) ? num.toExponential() : stringifyNumber.stringifyNumber(node);
@@ -3004,11 +3013,11 @@ var require_float = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:float",
       test: /^[-+]?(?:\.[0-9]+|[0-9]+\.[0-9]*)$/,
-      resolve(str) {
-        const node = new Scalar.Scalar(parseFloat(str));
-        const dot = str.indexOf(".");
-        if (dot !== -1 && str[str.length - 1] === "0")
-          node.minFractionDigits = str.length - dot - 1;
+      resolve(str2) {
+        const node = new Scalar.Scalar(parseFloat(str2));
+        const dot = str2.indexOf(".");
+        if (dot !== -1 && str2[str2.length - 1] === "0")
+          node.minFractionDigits = str2.length - dot - 1;
         return node;
       },
       stringify: stringifyNumber.stringifyNumber
@@ -3025,7 +3034,7 @@ var require_int = __commonJS({
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
-    var intResolve = (str, offset, radix, { intAsBigInt }) => intAsBigInt ? BigInt(str) : parseInt(str.substring(offset), radix);
+    var intResolve = (str2, offset, radix, { intAsBigInt }) => intAsBigInt ? BigInt(str2) : parseInt(str2.substring(offset), radix);
     function intStringify(node, radix, prefix) {
       const { value } = node;
       if (intIdentify(value) && value >= 0)
@@ -3038,7 +3047,7 @@ var require_int = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "OCT",
       test: /^0o[0-7]+$/,
-      resolve: (str, _onError, opt) => intResolve(str, 2, 8, opt),
+      resolve: (str2, _onError, opt) => intResolve(str2, 2, 8, opt),
       stringify: (node) => intStringify(node, 8, "0o")
     };
     var int = {
@@ -3046,7 +3055,7 @@ var require_int = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:int",
       test: /^[-+]?[0-9]+$/,
-      resolve: (str, _onError, opt) => intResolve(str, 0, 10, opt),
+      resolve: (str2, _onError, opt) => intResolve(str2, 0, 10, opt),
       stringify: stringifyNumber.stringifyNumber
     };
     var intHex = {
@@ -3055,7 +3064,7 @@ var require_int = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "HEX",
       test: /^0x[0-9a-fA-F]+$/,
-      resolve: (str, _onError, opt) => intResolve(str, 2, 16, opt),
+      resolve: (str2, _onError, opt) => intResolve(str2, 2, 16, opt),
       stringify: (node) => intStringify(node, 16, "0x")
     };
     exports2.int = int;
@@ -3108,7 +3117,7 @@ var require_schema2 = __commonJS({
         identify: (value) => typeof value === "string",
         default: true,
         tag: "tag:yaml.org,2002:str",
-        resolve: (str) => str,
+        resolve: (str2) => str2,
         stringify: stringifyJSON
       },
       {
@@ -3125,7 +3134,7 @@ var require_schema2 = __commonJS({
         default: true,
         tag: "tag:yaml.org,2002:bool",
         test: /^true$|^false$/,
-        resolve: (str) => str === "true",
+        resolve: (str2) => str2 === "true",
         stringify: stringifyJSON
       },
       {
@@ -3133,7 +3142,7 @@ var require_schema2 = __commonJS({
         default: true,
         tag: "tag:yaml.org,2002:int",
         test: /^-?(?:0|[1-9][0-9]*)$/,
-        resolve: (str, _onError, { intAsBigInt }) => intAsBigInt ? BigInt(str) : parseInt(str, 10),
+        resolve: (str2, _onError, { intAsBigInt }) => intAsBigInt ? BigInt(str2) : parseInt(str2, 10),
         stringify: ({ value }) => intIdentify(value) ? value.toString() : JSON.stringify(value)
       },
       {
@@ -3141,7 +3150,7 @@ var require_schema2 = __commonJS({
         default: true,
         tag: "tag:yaml.org,2002:float",
         test: /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]*)?(?:[eE][-+]?[0-9]+)?$/,
-        resolve: (str) => parseFloat(str),
+        resolve: (str2) => parseFloat(str2),
         stringify: stringifyJSON
       }
     ];
@@ -3149,9 +3158,9 @@ var require_schema2 = __commonJS({
       default: true,
       tag: "",
       test: /^/,
-      resolve(str, onError) {
-        onError(`Unresolved plain scalar ${JSON.stringify(str)}`);
-        return str;
+      resolve(str2, onError) {
+        onError(`Unresolved plain scalar ${JSON.stringify(str2)}`);
+        return str2;
       }
     };
     var schema = [map.map, seq.seq].concat(jsonScalars, jsonError);
@@ -3183,10 +3192,10 @@ var require_binary = __commonJS({
         if (typeof node_buffer.Buffer === "function") {
           return node_buffer.Buffer.from(src, "base64");
         } else if (typeof atob === "function") {
-          const str = atob(src.replace(/[\n\r]/g, ""));
-          const buffer = new Uint8Array(str.length);
-          for (let i2 = 0; i2 < str.length; ++i2)
-            buffer[i2] = str.charCodeAt(i2);
+          const str2 = atob(src.replace(/[\n\r]/g, ""));
+          const buffer = new Uint8Array(str2.length);
+          for (let i2 = 0; i2 < str2.length; ++i2)
+            buffer[i2] = str2.charCodeAt(i2);
           return buffer;
         } else {
           onError("This environment does not support reading binary tags; either Buffer or atob is required");
@@ -3197,28 +3206,28 @@ var require_binary = __commonJS({
         if (!value)
           return "";
         const buf = value;
-        let str;
+        let str2;
         if (typeof node_buffer.Buffer === "function") {
-          str = buf instanceof node_buffer.Buffer ? buf.toString("base64") : node_buffer.Buffer.from(buf.buffer).toString("base64");
+          str2 = buf instanceof node_buffer.Buffer ? buf.toString("base64") : node_buffer.Buffer.from(buf.buffer).toString("base64");
         } else if (typeof btoa === "function") {
           let s = "";
           for (let i2 = 0; i2 < buf.length; ++i2)
             s += String.fromCharCode(buf[i2]);
-          str = btoa(s);
+          str2 = btoa(s);
         } else {
           throw new Error("This environment does not support writing binary tags; either Buffer or btoa is required");
         }
         type ?? (type = Scalar.Scalar.BLOCK_LITERAL);
         if (type !== Scalar.Scalar.QUOTE_DOUBLE) {
           const lineWidth = Math.max(ctx.options.lineWidth - ctx.indent.length, ctx.options.minContentWidth);
-          const n2 = Math.ceil(str.length / lineWidth);
+          const n2 = Math.ceil(str2.length / lineWidth);
           const lines = new Array(n2);
           for (let i2 = 0, o2 = 0; i2 < n2; ++i2, o2 += lineWidth) {
-            lines[i2] = str.substr(o2, lineWidth);
+            lines[i2] = str2.substr(o2, lineWidth);
           }
-          str = lines.join(type === Scalar.Scalar.BLOCK_LITERAL ? "\n" : " ");
+          str2 = lines.join(type === Scalar.Scalar.BLOCK_LITERAL ? "\n" : " ");
         }
-        return stringifyString.stringifyString({ comment, type, value: str }, ctx, onComment, onChompKeep);
+        return stringifyString.stringifyString({ comment, type, value: str2 }, ctx, onComment, onChompKeep);
       }
     };
     exports2.binary = binary;
@@ -3424,7 +3433,7 @@ var require_float2 = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:float",
       test: /^(?:[-+]?\.(?:inf|Inf|INF)|\.nan|\.NaN|\.NAN)$/,
-      resolve: (str) => str.slice(-3).toLowerCase() === "nan" ? NaN : str[0] === "-" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
+      resolve: (str2) => str2.slice(-3).toLowerCase() === "nan" ? NaN : str2[0] === "-" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
       stringify: stringifyNumber.stringifyNumber
     };
     var floatExp = {
@@ -3433,7 +3442,7 @@ var require_float2 = __commonJS({
       tag: "tag:yaml.org,2002:float",
       format: "EXP",
       test: /^[-+]?(?:[0-9][0-9_]*)?(?:\.[0-9_]*)?[eE][-+]?[0-9]+$/,
-      resolve: (str) => parseFloat(str.replace(/_/g, "")),
+      resolve: (str2) => parseFloat(str2.replace(/_/g, "")),
       stringify(node) {
         const num = Number(node.value);
         return isFinite(num) ? num.toExponential() : stringifyNumber.stringifyNumber(node);
@@ -3444,11 +3453,11 @@ var require_float2 = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:float",
       test: /^[-+]?(?:[0-9][0-9_]*)?\.[0-9_]*$/,
-      resolve(str) {
-        const node = new Scalar.Scalar(parseFloat(str.replace(/_/g, "")));
-        const dot = str.indexOf(".");
+      resolve(str2) {
+        const node = new Scalar.Scalar(parseFloat(str2.replace(/_/g, "")));
+        const dot = str2.indexOf(".");
         if (dot !== -1) {
-          const f = str.substring(dot + 1).replace(/_/g, "");
+          const f = str2.substring(dot + 1).replace(/_/g, "");
           if (f[f.length - 1] === "0")
             node.minFractionDigits = f.length;
         }
@@ -3468,34 +3477,34 @@ var require_int2 = __commonJS({
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
-    function intResolve(str, offset, radix, { intAsBigInt }) {
-      const sign = str[0];
+    function intResolve(str2, offset, radix, { intAsBigInt }) {
+      const sign = str2[0];
       if (sign === "-" || sign === "+")
         offset += 1;
-      str = str.substring(offset).replace(/_/g, "");
+      str2 = str2.substring(offset).replace(/_/g, "");
       if (intAsBigInt) {
         switch (radix) {
           case 2:
-            str = `0b${str}`;
+            str2 = `0b${str2}`;
             break;
           case 8:
-            str = `0o${str}`;
+            str2 = `0o${str2}`;
             break;
           case 16:
-            str = `0x${str}`;
+            str2 = `0x${str2}`;
             break;
         }
-        const n3 = BigInt(str);
+        const n3 = BigInt(str2);
         return sign === "-" ? BigInt(-1) * n3 : n3;
       }
-      const n2 = parseInt(str, radix);
+      const n2 = parseInt(str2, radix);
       return sign === "-" ? -1 * n2 : n2;
     }
     function intStringify(node, radix, prefix) {
       const { value } = node;
       if (intIdentify(value)) {
-        const str = value.toString(radix);
-        return value < 0 ? "-" + prefix + str.substr(1) : prefix + str;
+        const str2 = value.toString(radix);
+        return value < 0 ? "-" + prefix + str2.substr(1) : prefix + str2;
       }
       return stringifyNumber.stringifyNumber(node);
     }
@@ -3505,7 +3514,7 @@ var require_int2 = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "BIN",
       test: /^[-+]?0b[0-1_]+$/,
-      resolve: (str, _onError, opt) => intResolve(str, 2, 2, opt),
+      resolve: (str2, _onError, opt) => intResolve(str2, 2, 2, opt),
       stringify: (node) => intStringify(node, 2, "0b")
     };
     var intOct = {
@@ -3514,7 +3523,7 @@ var require_int2 = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "OCT",
       test: /^[-+]?0[0-7_]+$/,
-      resolve: (str, _onError, opt) => intResolve(str, 1, 8, opt),
+      resolve: (str2, _onError, opt) => intResolve(str2, 1, 8, opt),
       stringify: (node) => intStringify(node, 8, "0")
     };
     var int = {
@@ -3522,7 +3531,7 @@ var require_int2 = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:int",
       test: /^[-+]?[0-9][0-9_]*$/,
-      resolve: (str, _onError, opt) => intResolve(str, 0, 10, opt),
+      resolve: (str2, _onError, opt) => intResolve(str2, 0, 10, opt),
       stringify: stringifyNumber.stringifyNumber
     };
     var intHex = {
@@ -3531,7 +3540,7 @@ var require_int2 = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "HEX",
       test: /^[-+]?0x[0-9a-fA-F_]+$/,
-      resolve: (str, _onError, opt) => intResolve(str, 2, 16, opt),
+      resolve: (str2, _onError, opt) => intResolve(str2, 2, 16, opt),
       stringify: (node) => intStringify(node, 16, "0x")
     };
     exports2.int = int;
@@ -3635,9 +3644,9 @@ var require_timestamp = __commonJS({
   "node_modules/yaml/dist/schema/yaml-1.1/timestamp.js"(exports2) {
     "use strict";
     var stringifyNumber = require_stringifyNumber();
-    function parseSexagesimal(str, asBigInt) {
-      const sign = str[0];
-      const parts = sign === "-" || sign === "+" ? str.substring(1) : str;
+    function parseSexagesimal(str2, asBigInt) {
+      const sign = str2[0];
+      const parts = sign === "-" || sign === "+" ? str2.substring(1) : str2;
       const num = (n2) => asBigInt ? BigInt(n2) : Number(n2);
       const res = parts.replace(/_/g, "").split(":").reduce((res2, p) => res2 * num(60) + num(p), num(0));
       return sign === "-" ? num(-1) * res : res;
@@ -3674,7 +3683,7 @@ var require_timestamp = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "TIME",
       test: /^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+$/,
-      resolve: (str, _onError, { intAsBigInt }) => parseSexagesimal(str, intAsBigInt),
+      resolve: (str2, _onError, { intAsBigInt }) => parseSexagesimal(str2, intAsBigInt),
       stringify: stringifySexagesimal
     };
     var floatTime = {
@@ -3683,7 +3692,7 @@ var require_timestamp = __commonJS({
       tag: "tag:yaml.org,2002:float",
       format: "TIME",
       test: /^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*$/,
-      resolve: (str) => parseSexagesimal(str, false),
+      resolve: (str2) => parseSexagesimal(str2, false),
       stringify: stringifySexagesimal
     };
     var timestamp = {
@@ -3694,8 +3703,8 @@ var require_timestamp = __commonJS({
       // may be omitted altogether, resulting in a date format. In such a case, the time part is
       // assumed to be 00:00:00Z (start of day, UTC).
       test: RegExp("^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})(?:(?:t|T|[ \\t]+)([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2}(\\.[0-9]+)?)(?:[ \\t]*(Z|[-+][012]?[0-9](?::[0-9]{2})?))?)?$"),
-      resolve(str) {
-        const match = str.match(timestamp.test);
+      resolve(str2) {
+        const match = str2.match(timestamp.test);
         if (!match)
           throw new Error("!!timestamp expects a date, starting with yyyy-mm-dd");
         const [, year, month, day, hour, minute, second] = match.map(Number);
@@ -9152,12 +9161,12 @@ var require_isexe = __commonJS({
         if (typeof Promise !== "function") {
           throw new TypeError("callback not provided");
         }
-        return new Promise(function(resolve, reject) {
+        return new Promise(function(resolve2, reject) {
           isexe(path6, options || {}, function(er, is) {
             if (er) {
               reject(er);
             } else {
-              resolve(is);
+              resolve2(is);
             }
           });
         });
@@ -9223,27 +9232,27 @@ var require_which = __commonJS({
         opt = {};
       const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
       const found = [];
-      const step = (i2) => new Promise((resolve, reject) => {
+      const step = (i2) => new Promise((resolve2, reject) => {
         if (i2 === pathEnv.length)
-          return opt.all && found.length ? resolve(found) : reject(getNotFoundError(cmd));
+          return opt.all && found.length ? resolve2(found) : reject(getNotFoundError(cmd));
         const ppRaw = pathEnv[i2];
         const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
         const pCmd = path6.join(pathPart, cmd);
         const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve(subStep(p, i2, 0));
+        resolve2(subStep(p, i2, 0));
       });
-      const subStep = (p, i2, ii) => new Promise((resolve, reject) => {
+      const subStep = (p, i2, ii) => new Promise((resolve2, reject) => {
         if (ii === pathExt.length)
-          return resolve(step(i2 + 1));
+          return resolve2(step(i2 + 1));
         const ext = pathExt[ii];
         isexe(p + ext, { pathExt: pathExtExe }, (er, is) => {
           if (!er && is) {
             if (opt.all)
               found.push(p + ext);
             else
-              return resolve(p + ext);
+              return resolve2(p + ext);
           }
-          return resolve(subStep(p, i2, ii + 1));
+          return resolve2(subStep(p, i2, ii + 1));
         });
       });
       return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
@@ -10323,8 +10332,8 @@ var init_deferred = __esm({
   "node_modules/execa/lib/utils/deferred.js"() {
     createDeferred = () => {
       const methods = {};
-      const promise = new Promise((resolve, reject) => {
-        Object.assign(methods, { resolve, reject });
+      const promise = new Promise((resolve2, reject) => {
+        Object.assign(methods, { resolve: resolve2, reject });
       });
       return Object.assign(promise, methods);
     };
@@ -15617,11 +15626,11 @@ var init_concurrent = __esm({
       const promises = weakMap.get(stream);
       const promise = createDeferred();
       promises.push(promise);
-      const resolve = promise.resolve.bind(promise);
-      return { resolve, promises };
+      const resolve2 = promise.resolve.bind(promise);
+      return { resolve: resolve2, promises };
     };
-    waitForConcurrentStreams = async ({ resolve, promises }, subprocess) => {
-      resolve();
+    waitForConcurrentStreams = async ({ resolve: resolve2, promises }, subprocess) => {
+      resolve2();
       const [isSubprocessExit] = await Promise.race([
         Promise.allSettled([true, subprocess]),
         Promise.all([false, ...promises])
@@ -16933,7 +16942,7 @@ var collect_exports = {};
 __export(collect_exports, {
   run: () => run3
 });
-function resolveModel(instrument, topic) {
+function resolveModel2(instrument, topic) {
   const td = topicDir(topic);
   if (!(0, import_node_fs17.existsSync)(td)) return null;
   const dir = (0, import_node_fs17.readdirSync)(td, { withFileTypes: true }).find((e) => e.isDirectory() && e.name.startsWith(`${instrument}-`));
@@ -16959,7 +16968,7 @@ async function run3(args) {
       return 2;
     }
   }
-  const model = resolveModel(instrument, topic);
+  const model = resolveModel2(instrument, topic);
   if (!model) {
     log.error(`no part '${instrument}' on topic '${topic}'`);
     return 1;
@@ -21504,12 +21513,2410 @@ var init_playback2 = __esm({
   }
 });
 
+// src/core/rehearsalMetric.ts
+function extractMetric(topic) {
+  if (!topic) return "";
+  const lowerRaw = topic.toLowerCase();
+  const lowerPadded = ` ${lowerRaw} `;
+  let bestPos = Infinity;
+  let bestWord = "";
+  for (const word of METRIC_VOCAB) {
+    if (!new RegExp(`[^a-z0-9]${word}[^a-z0-9]`).test(lowerPadded)) continue;
+    const pos = lowerRaw.indexOf(word);
+    if (pos < bestPos) {
+      bestPos = pos;
+      bestWord = word;
+    }
+  }
+  return bestWord;
+}
+function formatMetricBlock(fields) {
+  const primary = fields.primary_metric ?? "";
+  const direction = fields.direction ?? "";
+  if (!primary) throw new Error("missing required key: primary_metric");
+  if (!direction) throw new Error("missing required key: direction");
+  if (direction !== "maximize" && direction !== "minimize") {
+    throw new Error(`direction must be 'maximize' or 'minimize'; got '${direction}'`);
+  }
+  const min = fields.min_acceptable || "(not set)";
+  const K = fields.K_corroboration || "1";
+  const pw = fields.plateau_window || "5";
+  const pt = fields.plateau_threshold || "0.01";
+  const lines = ["# Research goal", ""];
+  lines.push(`**Primary metric:** ${primary}`);
+  lines.push(`**Direction:** ${direction}`);
+  lines.push(`**min_acceptable:** ${min}`);
+  if (fields.target) lines.push(`**target:** ${fields.target}`);
+  lines.push(`**K_corroboration:** ${K}`);
+  lines.push(`**plateau_window:** ${pw}`);
+  lines.push(`**plateau_threshold:** ${pt}`);
+  if (fields.acceptable) lines.push(`**acceptable (legacy):** ${fields.acceptable}`);
+  if (fields.hard_constraints) lines.push(`**Hard constraints:** ${fields.hard_constraints}`);
+  let out = lines.join("\n") + "\n";
+  if (fields.notes) out += `
+**Notes:** ${fields.notes}
+`;
+  return out;
+}
+function parseMetricMd(text) {
+  let primaryMetric = "";
+  let minOp, minVal;
+  let tgtOp, tgtVal;
+  let kRequired = 1, plateauWindow = 5, plateauThreshold = 0.01;
+  const opVal = (s) => {
+    const parts = s.trim().split(/\s+/);
+    return [parts[0] ?? "", parts.slice(1).join(" ")];
+  };
+  for (const line of text.split("\n")) {
+    let m;
+    if (m = line.match(/^\*\*Primary metric:\*\*\s+(.*)$/)) {
+      primaryMetric = m[1].trim();
+    } else if (m = line.match(/^\*\*min_acceptable:\*\*\s+(.*)$/)) {
+      [minOp, minVal] = opVal(m[1]);
+    } else if (m = line.match(/^\*\*target:\*\*\s+(.*)$/)) {
+      [tgtOp, tgtVal] = opVal(m[1]);
+    } else if (m = line.match(/^\*\*K_corroboration:\*\*\s+(.*)$/)) {
+      kRequired = parseInt(m[1].trim(), 10) || 1;
+    } else if (m = line.match(/^\*\*plateau_window:\*\*\s+(.*)$/)) {
+      plateauWindow = parseInt(m[1].trim(), 10) || 5;
+    } else if (m = line.match(/^\*\*plateau_threshold:\*\*\s+(.*)$/)) {
+      plateauThreshold = parseFloat(m[1].trim()) || 0.01;
+    }
+  }
+  return { primaryMetric, minOp, minVal, tgtOp, tgtVal, kRequired, plateauWindow, plateauThreshold };
+}
+function formatSotaBlock(input) {
+  if (!input.topic) throw new Error("missing required key: topic");
+  if (!input.metric) throw new Error("missing required key: metric");
+  if (!input.sweep_date) throw new Error("missing required key: sweep_date");
+  const lines = [];
+  lines.push(`# SOTA reference \u2014 ${input.topic}`, "");
+  lines.push(`> **Sweep date:** ${input.sweep_date}`);
+  lines.push(`> **Optimizing for:** ${input.metric}`);
+  if (input.queries) lines.push(`> **Queries fired:** ${input.queries}`);
+  lines.push("");
+  lines.push("| Approach family | Best known | Constraint compliance | Source | Notes |");
+  lines.push("|---|---|---|---|---|");
+  let rendered = 0;
+  for (const row of input.refs.slice(0, 7)) {
+    if (!row) continue;
+    const [family = "", best = "", compliance = "", source = "", ...rest] = row.split("|");
+    const notes = rest.join("|");
+    lines.push(`| ${family} | ${best} | ${compliance} | ${source} | ${notes} |`);
+    rendered++;
+  }
+  let out = lines.join("\n") + "\n";
+  if (rendered === 0) {
+    out += "\n_Note: sweep returned no usable references; part-side web search remains available._\n";
+  }
+  return out;
+}
+var METRIC_VOCAB;
+var init_rehearsalMetric = __esm({
+  "src/core/rehearsalMetric.ts"() {
+    "use strict";
+    METRIC_VOCAB = [
+      "accuracy",
+      "auc",
+      "cost",
+      "f1",
+      "latency",
+      "loss",
+      "memory",
+      "params",
+      "precision",
+      "recall",
+      "throughput"
+    ];
+  }
+});
+
+// src/core/rehearsal.ts
+function rehearsalArtDir(topic, opts) {
+  return (0, import_node_path29.join)(topicDir(topic, opts), "_rehearsal");
+}
+function partsDir(artDir) {
+  return (0, import_node_path29.join)(artDir, "parts");
+}
+function partStateDir(artDir, instrument) {
+  return (0, import_node_path29.join)(partsDir(artDir), instrument);
+}
+function experimentsDir(artDir, instrument) {
+  return (0, import_node_path29.join)(partStateDir(artDir, instrument), "experiments");
+}
+function experimentDir(artDir, instrument, expId) {
+  return (0, import_node_path29.join)(experimentsDir(artDir, instrument), expId);
+}
+var import_node_path29;
+var init_rehearsal = __esm({
+  "src/core/rehearsal.ts"() {
+    "use strict";
+    import_node_path29 = require("node:path");
+    init_paths();
+  }
+});
+
+// src/core/rehearsalResult.ts
+function validateResult(json, opts = {}) {
+  if (json === null || typeof json !== "object" || Array.isArray(json)) {
+    return { ok: false, error: "malformed JSON" };
+  }
+  const o2 = json;
+  for (const f of REQUIRED_FIELDS) {
+    if (!(f in o2)) return { ok: false, error: `missing required field: ${f}` };
+  }
+  if (typeof o2.status !== "string" || !STATUS_ENUM.includes(o2.status)) {
+    return { ok: false, error: `invalid status: ${String(o2.status)}` };
+  }
+  const isNull = o2.metric_value === null;
+  if (o2.status === "ok" && isNull) return { ok: false, error: "status=ok requires non-null metric_value" };
+  if (o2.status !== "ok" && !isNull) return { ok: false, error: `status=${o2.status} requires null metric_value` };
+  if (!Array.isArray(o2.log_paths)) return { ok: false, error: "log_paths must be an array" };
+  const exists = opts.logPathExists ?? (() => true);
+  for (const p of o2.log_paths) {
+    if (!exists(String(p))) return { ok: false, error: `log_path missing: ${String(p)}` };
+  }
+  if (opts.expectedMetric !== void 0 && o2.metric_name !== opts.expectedMetric) {
+    return { ok: false, error: `metric_name '${String(o2.metric_name)}' != metric.md primary '${opts.expectedMetric}'` };
+  }
+  return { ok: true };
+}
+function renderScoreboardRow(metric, runtime, metricName, status, approach) {
+  const metricFmt = NUM_RE.test(metric) ? parseFloat(metric).toFixed(4) : metric;
+  const runtimeFmt = NUM_RE.test(runtime) ? `${parseFloat(runtime).toFixed(2)}s` : runtime;
+  return `${metricFmt} | ${status} | ${runtimeFmt} | ${approach} | ${metricName}`;
+}
+function expNum(expId) {
+  const n2 = parseInt(expId.replace(/^exp-/, ""), 10);
+  return Number.isNaN(n2) ? Number.POSITIVE_INFINITY : n2;
+}
+function buildScoreboard(rows) {
+  const ok = rows.filter((r) => r.status === "ok");
+  const fail = rows.filter((r) => r.status !== "ok");
+  ok.sort((a2, b) => parseFloat(b.metric) - parseFloat(a2.metric) || parseFloat(a2.runtime) - parseFloat(b.runtime) || expNum(a2.expId) - expNum(b.expId));
+  fail.sort((a2, b) => expNum(a2.expId) - expNum(b.expId));
+  const lines = [
+    "<!-- scoreboard schema_version=2 -->",
+    "# Scoreboard",
+    "",
+    "| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |",
+    "|---|---|---|---|---|---|---|---|"
+  ];
+  let rank = 1;
+  for (const r of ok) {
+    lines.push(`| ${rank} | ${r.expId} | ${r.instrument} | ${renderScoreboardRow(r.metric, r.runtime, r.metricName, r.status, r.approach)} |`);
+    rank++;
+  }
+  for (const r of fail) {
+    const rankCell = r.status === "partial" ? `~${rank}` : `${rank}`;
+    lines.push(`| ${rankCell} | ${r.expId} | ${r.instrument} | ${renderScoreboardRow("n/a", r.runtime, r.metricName, r.status, r.approach)} |`);
+    rank++;
+  }
+  return lines.join("\n") + "\n";
+}
+function normalizeResult(json) {
+  const { status, metric_value: mv, self_reported_ratio: srr } = json;
+  if (status === "ok" && (mv === null || mv === void 0)) {
+    return { ...json, status: "partial" };
+  }
+  if (status === "fail" && srr !== void 0 && srr !== null) {
+    const out = { ...json, status: "partial" };
+    if (mv === null || mv === void 0) out.metric_value = srr;
+    return out;
+  }
+  return json;
+}
+var REQUIRED_FIELDS, STATUS_ENUM, NUM_RE;
+var init_rehearsalResult = __esm({
+  "src/core/rehearsalResult.ts"() {
+    "use strict";
+    REQUIRED_FIELDS = [
+      "branch_id",
+      "approach_label",
+      "metric_name",
+      "metric_value",
+      "status",
+      "runtime_s",
+      "log_paths"
+    ];
+    STATUS_ENUM = ["ok", "fail", "timeout", "cost_blown"];
+    NUM_RE = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+  }
+});
+
+// src/core/rehearsalState.ts
+function parseState(text) {
+  const kv = {};
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    kv[line.slice(0, eq)] = line.slice(eq + 1).replace(/\\n/g, "\n");
+  }
+  return kv;
+}
+function renderState(kv) {
+  const lines = [];
+  for (const [k, v] of Object.entries(kv)) {
+    if (!k) continue;
+    lines.push(`${k}=${v.replace(/\n/g, "\\n")}`);
+  }
+  return lines.join("\n") + "\n";
+}
+function mergeState(existing, updates) {
+  const kv = existing ? parseState(existing) : {};
+  for (const [k, v] of Object.entries(updates)) if (k) kv[k] = v;
+  return renderState(kv);
+}
+function reconcileFromOutbox(outboxTail, doneResultExists) {
+  let sawDone = false, sawError = false;
+  for (const line of outboxTail.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    try {
+      const o2 = JSON.parse(t);
+      if (o2.event === "done") sawDone = true;
+      else if (o2.event === "error") sawError = true;
+    } catch {
+    }
+  }
+  if (sawError) return "failed";
+  if (sawDone) return doneResultExists ? "idle" : null;
+  return null;
+}
+function readHaltFlag(body) {
+  if (body === null || body.trim() === "") return { format: "missing" };
+  const firstLine = body.split("\n").find((l) => l.trim() !== "") ?? "";
+  if (firstLine.startsWith("halted_by=")) {
+    const fields = {};
+    for (const line of body.split("\n")) {
+      const eq = line.indexOf("=");
+      if (eq > 0) fields[line.slice(0, eq)] = line.slice(eq + 1);
+    }
+    return { format: "structured", fields };
+  }
+  return { format: "prose", reason: body.split("\n").join(" ").replace(/\s+$/, "") };
+}
+var init_rehearsalState = __esm({
+  "src/core/rehearsalState.ts"() {
+    "use strict";
+  }
+});
+
+// src/core/rehearsalScore.ts
+function buildResultsTsv(rows) {
+  return TSV_HEADER + rows.map((r) => `${r.expId}	${r.instrument}	${r.approach}	${r.metric}	${r.status}	${r.runtime}	${r.metricName}
+`).join("");
+}
+function str(v) {
+  return v === null || v === void 0 ? "" : String(v);
+}
+function computeScore(art, fs, now) {
+  const metricMd = fs.read((0, import_node_path30.join)(art, "metric.md"));
+  const primary = metricMd ? parseMetricMd(metricMd).primaryMetric : "";
+  const expectedMetric = primary ? primary : void 0;
+  const rows = [];
+  const tsvRows = [];
+  const sidecars = [];
+  const staleSidecars = [];
+  const warnings = [];
+  const parts = fs.listDir(partsDir(art));
+  for (const instrument of parts) {
+    const exps = fs.listDir(experimentsDir(art, instrument));
+    for (const expId of exps) {
+      const branchDir = experimentDir(art, instrument, expId);
+      const resultPath = (0, import_node_path30.join)(branchDir, "result.json");
+      if (!fs.exists(resultPath)) continue;
+      const sidecar = (0, import_node_path30.join)(branchDir, "result-validation.txt");
+      let json;
+      try {
+        json = JSON.parse(fs.read(resultPath) ?? "");
+      } catch {
+        json = null;
+      }
+      const v = validateResult(json, {
+        expectedMetric,
+        logPathExists: (p) => p.startsWith("./") ? fs.exists((0, import_node_path30.join)(branchDir, p)) : true
+      });
+      if (!v.ok) {
+        sidecars.push({ path: sidecar, body: `FAILED at ${now()}: ${v.error}
+` });
+        warnings.push(`result.json invalid: ${resultPath} (${v.error})`);
+        continue;
+      }
+      if (fs.exists(sidecar)) staleSidecars.push(sidecar);
+      const o2 = json;
+      rows.push({
+        expId,
+        instrument,
+        metric: str(o2.metric_value),
+        status: str(o2.status),
+        runtime: str(o2.runtime_s),
+        approach: str(o2.approach_label),
+        metricName: str(o2.metric_name)
+      });
+      tsvRows.push({
+        expId,
+        instrument,
+        approach: str(o2.approach_label),
+        metric: str(o2.metric_value),
+        status: str(o2.status),
+        runtime: str(o2.runtime_s),
+        metricName: str(o2.metric_name)
+      });
+    }
+  }
+  const phaseClears = [];
+  for (const instrument of parts) {
+    const statePath = (0, import_node_path30.join)(partStateDir(art, instrument), "state.txt");
+    const stateTxt = fs.read(statePath);
+    if (stateTxt === null) continue;
+    const cur = parseState(stateTxt).current_exp_id ?? "";
+    if (!cur) continue;
+    if (!fs.exists((0, import_node_path30.join)(experimentDir(art, instrument, cur), "result.json"))) continue;
+    phaseClears.push({ statePath, merged: mergeState(stateTxt, {
+      last_event: "scored",
+      last_event_ts: now(),
+      phase: "idle",
+      current_exp_id: ""
+    }) });
+  }
+  return {
+    scoreboardMd: buildScoreboard(rows),
+    resultsTsv: buildResultsTsv(tsvRows),
+    sidecars,
+    staleSidecars,
+    phaseClears,
+    warnings
+  };
+}
+var import_node_path30, TSV_HEADER;
+var init_rehearsalScore = __esm({
+  "src/core/rehearsalScore.ts"() {
+    "use strict";
+    import_node_path30 = require("node:path");
+    init_rehearsalResult();
+    init_rehearsalState();
+    init_rehearsalMetric();
+    init_rehearsal();
+    TSV_HEADER = "exp_id	instrument	approach	metric	status	runtime_s	metric_name\n";
+  }
+});
+
+// src/core/rehearsalComplete.ts
+function cmp(a2, op, b) {
+  if (!op || b === void 0) return false;
+  const x = parseFloat(a2), y = parseFloat(b);
+  if (Number.isNaN(x) || Number.isNaN(y)) return false;
+  switch (op) {
+    case ">=":
+      return x >= y;
+    case "<=":
+      return x <= y;
+    case ">":
+      return x > y;
+    case "<":
+      return x < y;
+    case "==":
+      return x === y;
+    default:
+      return false;
+  }
+}
+function parseRows(scoreboardMd) {
+  const out = [];
+  for (const line of scoreboardMd.split("\n")) {
+    if (!/^\|\s+\d+\s+\|\s+exp-/.test(line)) continue;
+    const c3 = line.split("|").map((s) => s.trim());
+    out.push({ exp: c3[2], instrument: c3[3], metric: c3[4], status: c3[5], metricName: c3[8] ?? "" });
+  }
+  return out;
+}
+function checkCompletion(scoreboardMd, metricMd) {
+  const t = parseMetricMd(metricMd);
+  const matchesMetric = (r) => !(t.primaryMetric && r.metricName && r.metricName !== t.primaryMetric);
+  const allRows = parseRows(scoreboardMd).filter(matchesMetric);
+  const okRows = allRows.filter((r) => r.status === "ok" && NUM.test(r.metric));
+  let floorMet = false, targetMet = false;
+  const metrics = [];
+  for (const r of okRows) {
+    metrics.push(parseFloat(r.metric));
+    if (cmp(r.metric, t.minOp, t.minVal)) floorMet = true;
+    if (cmp(r.metric, t.tgtOp, t.tgtVal)) targetMet = true;
+  }
+  const tuples = [...allRows].sort((a2, b) => (a2.instrument < b.instrument ? -1 : a2.instrument > b.instrument ? 1 : 0) || (a2.exp < b.exp ? -1 : a2.exp > b.exp ? 1 : 0));
+  let kSoFar = 0, chain = 0, best = -Infinity, prevInst = "";
+  for (const r of tuples) {
+    if (r.instrument !== prevInst) {
+      if (chain > kSoFar) kSoFar = chain;
+      chain = 0;
+      best = -Infinity;
+      prevInst = r.instrument;
+    }
+    const mv = parseFloat(r.metric);
+    const atTarget = cmp(r.metric, t.tgtOp, t.tgtVal);
+    const improving = best === -Infinity || mv > best;
+    if (r.status === "ok" && NUM.test(r.metric) && atTarget && improving) {
+      chain += 1;
+      best = mv;
+    } else {
+      if (chain > kSoFar) kSoFar = chain;
+      chain = 0;
+      best = -Infinity;
+    }
+  }
+  if (chain > kSoFar) kSoFar = chain;
+  let plateau = false;
+  if (metrics.length >= t.plateauWindow) {
+    const lastN = metrics.slice(-t.plateauWindow);
+    if (Math.max(...lastN) - Math.min(...lastN) < t.plateauThreshold) plateau = true;
+  }
+  if (kSoFar > t.kRequired) kSoFar = t.kRequired;
+  return { floorMet, targetMet, kSoFar, kRequired: t.kRequired, plateau };
+}
+function checkTimeBudget(budget, sessionStartIso, nowEpochS) {
+  const b = budget.replace(/\s/g, "");
+  if (b === "none") return false;
+  if (!/^[1-9][0-9]*$/.test(b)) throw new Error(`malformed budget: '${b}' (expected 'none' or positive integer)`);
+  const startMs = Date.parse(sessionStartIso.replace(/\s/g, ""));
+  if (Number.isNaN(startMs)) throw new Error(`could not parse session-start: '${sessionStartIso}'`);
+  return nowEpochS - Math.floor(startMs / 1e3) >= parseInt(b, 10);
+}
+var NUM;
+var init_rehearsalComplete = __esm({
+  "src/core/rehearsalComplete.ts"() {
+    "use strict";
+    init_rehearsalMetric();
+    NUM = /^[0-9.]+$/;
+  }
+});
+
+// src/core/rehearsalSummary.ts
+function renderHaltSection(halt, finalizedIso) {
+  if (halt.format === "structured" && halt.fields) {
+    const body = Object.entries(halt.fields).filter(([k]) => k !== "format").map(([k, v]) => `${k}=${v}`).join("\n");
+    return `
+## Halt
+
+\`\`\`
+${body}
+\`\`\`
+Finalized: ${finalizedIso}
+`;
+  }
+  if (halt.format === "prose") {
+    return `
+## Halt
+
+- Reason: ${halt.reason ?? ""}
+- Finalized: ${finalizedIso}
+`;
+  }
+  return "";
+}
+function renderSessionSummary(s) {
+  const out = [];
+  out.push(`# Research session \u2014 ${s.topic}`);
+  out.push(`Updated: ${s.updatedIso}`);
+  out.push(`Started: ${s.startedIso}`);
+  out.push(`Time budget: ${s.budget}`, "");
+  out.push("## Status", "");
+  out.push("| Part | Phase | Current | Last event |");
+  out.push("|---|---|---|---|");
+  for (const r of s.statusRows) {
+    out.push(`| ${r.instrument} | ${r.phase} | ${r.current || "\u2014"} | ${r.lastTs} ${r.lastEvent} |`);
+  }
+  out.push("");
+  out.push("## Scoreboard top 5", "");
+  if (s.scoreboardMd) {
+    out.push("| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |");
+    out.push("|---|---|---|---|---|---|---|---|");
+    const data = s.scoreboardMd.split("\n").filter((l) => SB_DATA_RE.test(l)).slice(0, 5);
+    for (const l of data) out.push(l);
+  } else {
+    out.push("_(scoreboard empty)_");
+  }
+  out.push("");
+  out.push("## Completion check", "");
+  if (s.completion) {
+    out.push(`- Floor: ${s.completion.floorMet ? "MET" : "not met"}`);
+    out.push(`- Target: ${s.completion.targetMet ? "MET" : "not met"}`);
+    out.push(`- K corroboration: ${s.completion.kSoFar}/${s.completion.kRequired}`);
+    out.push(`- Plateau: ${s.completion.plateau ? "YES" : "no"}`);
+    if (s.hardCap !== null) out.push(`- Hard cap: ${s.hardCap ? "YES" : "NO"}`);
+  } else {
+    out.push("_(missing scoreboard or metric)_");
+  }
+  out.push("");
+  out.push("## Recent events", "");
+  if (s.recentEvents.length > 0) {
+    for (const e of s.recentEvents) out.push(`- ${e.ts} ${e.instrument}/${e.event}`);
+  } else {
+    out.push("_(no events yet)_");
+  }
+  if (s.warnings.length > 0) {
+    out.push("", "## Warnings", "");
+    for (const w of s.warnings) out.push(w);
+  }
+  return out.join("\n") + "\n" + renderHaltSection(s.halt, s.finalizedIso);
+}
+var SB_DATA_RE;
+var init_rehearsalSummary = __esm({
+  "src/core/rehearsalSummary.ts"() {
+    "use strict";
+    SB_DATA_RE = /^\|\s*~?\d+\s*\|\s*exp-/;
+  }
+});
+
+// src/core/rehearsalFinalize.ts
+function finalizePhase(cur) {
+  if (cur === "working" || cur === "stale" || cur === "stuck" || cur === "blocked") return "incomplete";
+  if (cur === "idle" || cur === "complete") return "complete";
+  return null;
+}
+function parseHardConstraints(promptMd) {
+  const lines = promptMd.split("\n");
+  const start = lines.findIndex((l) => l.trim() === "**Hard constraints:**");
+  if (start < 0) return [];
+  const out = [];
+  for (let i2 = start + 1; i2 < lines.length; i2++) {
+    if (lines[i2].trim() === "") break;
+    const m = HC_RE.exec(lines[i2]);
+    if (m) out.push({ key: m[1], value: m[2] });
+  }
+  return out;
+}
+var HC_RE;
+var init_rehearsalFinalize = __esm({
+  "src/core/rehearsalFinalize.ts"() {
+    "use strict";
+    HC_RE = /^\s*([a-z_]+)\s*=\s*([0-9]+(?:\.[0-9]+)?)\b/;
+  }
+});
+
+// src/core/rehearsalBrief.ts
+function parseTopRows(scoreboardMd) {
+  const out = [];
+  for (const line of scoreboardMd.split("\n")) {
+    if (!/^\|\s+\d+\s+\|\s+exp-/.test(line)) continue;
+    const c3 = line.split("|").map((s) => s.trim());
+    out.push({ rank: c3[1], exp: c3[2], instrument: c3[3], metric: c3[4], metricName: c3[8] ?? "" });
+  }
+  return out;
+}
+function yn(b) {
+  return b ? "yes" : "no";
+}
+function buildStatusBrief(input) {
+  const sections = [];
+  if (input.latest) {
+    sections.push(`## Experiment status \u2014 ${input.latest.exp} (${input.latest.instrument}) just landed`);
+  } else {
+    sections.push("## Experiment status");
+  }
+  const table = [
+    "| Part | Phase | Current/last | Approach | Metric |",
+    "|---|---|---|---|---|"
+  ];
+  for (const p of input.parts) {
+    table.push(`| ${p.instrument} | ${p.phase} | ${p.currentOrLast} | ${p.approach} | ${p.metric} |`);
+  }
+  sections.push(table.join("\n"));
+  const sb = ["**Scoreboard top 3:**"];
+  if (input.scoreboardMd === null) {
+    sb.push("_(scoreboard absent)_");
+  } else {
+    const rows = parseTopRows(input.scoreboardMd).slice(0, 3);
+    if (rows.length === 0) {
+      sb.push("_(no scored experiments yet)_");
+    } else {
+      for (const r of rows) {
+        sb.push(`${r.rank}. ${r.instrument}/${r.exp} \u2014 ${r.metric} \u2014 ${r.metricName}`);
+      }
+    }
+  }
+  sections.push(sb.join("\n"));
+  const c3 = input.completion;
+  if (c3 === null) {
+    sections.push("**Completion check:** _(scoreboard or metric absent)_");
+  } else {
+    sections.push(
+      `**Completion check:** floor_met=${yn(c3.floorMet)} target_met=${yn(c3.targetMet)} K_so_far=${c3.kSoFar} K_required=${c3.kRequired} plateau=${yn(c3.plateau)}`
+    );
+  }
+  return sections.join("\n\n") + "\n";
+}
+var init_rehearsalBrief = __esm({
+  "src/core/rehearsalBrief.ts"() {
+    "use strict";
+  }
+});
+
+// src/core/rehearsalMonitor.ts
+function eventOf(line) {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return {};
+  }
+}
+function initScanState(size, fullText, persistedCursor, persistedRescan) {
+  const c3 = persistedCursor?.replace(/\s+/g, "") ?? "";
+  const offset = /^[0-9]+$/.test(c3) && Number(c3) <= size ? Number(c3) : size;
+  const rescanEmitted = new Set(persistedRescan ? persistedRescan.split("\n").filter(Boolean) : []);
+  if (offset > 0) {
+    let bytesSeen = 0;
+    let lineNum = 0;
+    for (const line of fullText.split("\n")) {
+      if (bytesSeen >= offset) break;
+      lineNum++;
+      bytesSeen += Buffer.byteLength(line) + 1;
+      const ev = eventOf(line).event;
+      if (ev && RESCAN_EVENTS.has(ev)) rescanEmitted.add(`${lineNum}	${ev}`);
+    }
+  }
+  return { offset, rescanEmitted, lastStaleTs: 0, lastStuckTs: 0, lastRescan: 0 };
+}
+function monitorScan(_outboxPath, part, prev, d) {
+  const notifications = [];
+  const emit = (event, summary) => {
+    notifications.push({ part, event, summary, ts: d.nowIso });
+  };
+  const state = { ...prev, rescanEmitted: new Set(prev.rescanEmitted) };
+  if (d.outboxSize > state.offset && d.outboxText) {
+    for (const line of d.outboxText.split("\n")) {
+      if (!line) continue;
+      const { event, summary } = eventOf(line);
+      if (event && TAIL_EVENTS.has(event)) emit(event, summary ?? "");
+    }
+    state.offset = d.outboxSize;
+  }
+  if (d.phase === "working" && d.outboxMtime > 0) {
+    const delta = d.now - d.outboxMtime;
+    if (delta >= d.thresholds.stuckS && d.now - state.lastStuckTs >= d.thresholds.stuckS) {
+      emit("stuck", `outbox mtime ${delta}s old (>= ${d.thresholds.stuckS}s threshold)`);
+      state.lastStuckTs = d.now;
+    } else if (delta >= d.thresholds.probeS && d.now - state.lastStaleTs >= d.thresholds.probeS) {
+      emit("stale", `outbox mtime ${delta}s old (>= ${d.thresholds.probeS}s threshold)`);
+      state.lastStaleTs = d.now;
+    }
+  }
+  if (d.now - state.lastRescan >= d.thresholds.rescanEveryS && d.outboxFullText) {
+    let lineNum = 0;
+    for (const line of d.outboxFullText.split("\n")) {
+      if (!line) {
+        lineNum++;
+        continue;
+      }
+      lineNum++;
+      const { event, summary } = eventOf(line);
+      if (event && RESCAN_EVENTS.has(event)) {
+        const key = `${lineNum}	${event}`;
+        if (!state.rescanEmitted.has(key)) {
+          emit(event, `${summary ?? ""} (rescan)`);
+          state.rescanEmitted.add(key);
+        }
+      }
+    }
+    state.lastRescan = d.now;
+  }
+  return { notifications, state };
+}
+var TAIL_EVENTS, RESCAN_EVENTS;
+var init_rehearsalMonitor = __esm({
+  "src/core/rehearsalMonitor.ts"() {
+    "use strict";
+    TAIL_EVENTS = /* @__PURE__ */ new Set(["done", "error", "question", "heartbeat"]);
+    RESCAN_EVENTS = /* @__PURE__ */ new Set(["done", "error", "question"]);
+  }
+});
+
+// src/core/rehearsalExperiment.ts
+function renderExperimentPrompt(template, f) {
+  let out = template;
+  for (const [token, key] of TOKENS) out = out.split(token).join(f[key]);
+  const leftover = out.match(/\{\{[A-Z_]+\}\}/);
+  if (leftover) throw new Error(`renderExperimentPrompt: unrendered placeholder ${leftover[0]}`);
+  return out;
+}
+function buildSotaBlock(sotaMd) {
+  if (!sotaMd || sotaMd.trim() === "") return "";
+  return `## Reference: SOTA
+
+${sotaMd}
+
+${SOTA_AFFORDANCE}`;
+}
+function assembleHardwareBlock(probeText, alertText) {
+  return alertText ? `${probeText}
+${alertText}` : probeText;
+}
+function parseGpus(probe) {
+  const m = /* @__PURE__ */ new Map();
+  if (!probe) return m;
+  for (const line of probe.split("\n")) {
+    const c3 = line.split("	");
+    if (c3[0] === "gpu" && c3.length >= 4) m.set(c3[1], { name: c3[1], free: Number(c3[3]) });
+  }
+  return m;
+}
+function hardwareDiffAlert(baseline, current) {
+  const base = parseGpus(baseline);
+  const cur = parseGpus(current);
+  const out = [];
+  for (const [name, b] of base) {
+    const c3 = cur.get(name);
+    if (!c3 || !(b.free > 0) || !(c3.free < b.free * 0.5)) continue;
+    const dropPct = Math.trunc((1 - c3.free / b.free) * 100);
+    out.push(`ALERT: gpu '${name}' memory.free ${b.free} -> ${c3.free} MiB (-${dropPct}%)`);
+  }
+  return out.join("\n");
+}
+function formatPeersBlock(peers) {
+  if (peers.length === 0) return "";
+  const lines = [
+    "## Peers",
+    "",
+    "Other parts are exploring this objective in parallel. Diverge from their approaches \u2014",
+    "do not duplicate a pipeline a peer is already running. Use their results to decide where",
+    "the unexplored, promising region of the design space is.",
+    "",
+    "| Part | Phase | Current/last | Approach | Best metric | Notes |",
+    "|---|---|---|---|---|---|"
+  ];
+  for (const p of peers) {
+    const metric = p.metric === "" ? "" : p.status ? `${p.metric} (${p.status})` : p.metric;
+    const flat = p.notes.replace(/\s+/g, " ").trim();
+    const notes = flat.length > 80 ? flat.slice(0, 77) + "..." : flat;
+    lines.push(`| ${p.instrument} | ${p.phase} | ${p.currentExp} | ${p.approach} | ${metric} | ${notes} |`);
+  }
+  return lines.join("\n");
+}
+function buildDispatchState(existing, expId, nowIso) {
+  const prevCounter = existing?.split("\n").find((l) => l.startsWith("exp_counter="))?.slice("exp_counter=".length) ?? "";
+  const n2 = /^[0-9]+$/.test(prevCounter.trim()) ? parseInt(prevCounter, 10) : 0;
+  return mergeState(existing, {
+    phase: "working",
+    current_exp_id: expId,
+    exp_counter: String(n2 + 1),
+    last_event: "dispatched",
+    last_event_ts: nowIso
+  });
+}
+var EXP_ID_RE, INSTRUMENT_RE, TOKENS, SOTA_AFFORDANCE;
+var init_rehearsalExperiment = __esm({
+  "src/core/rehearsalExperiment.ts"() {
+    "use strict";
+    init_rehearsalState();
+    EXP_ID_RE = /^exp-[0-9]+$/;
+    INSTRUMENT_RE = /^[a-z][a-z0-9-]*$/;
+    TOKENS = [
+      ["{{METRIC_BLOCK}}", "metricBlock"],
+      ["{{HARDWARE_BLOCK}}", "hardwareBlock"],
+      ["{{OUTBOX_PATH}}", "outboxPath"],
+      ["{{TOPIC}}", "topicText"],
+      ["{{EXP_ID}}", "expId"],
+      ["{{APPROACH_LABEL}}", "approachLabel"],
+      ["{{APPROACH_BRIEF}}", "approachBrief"],
+      ["{{BRANCH_DIR}}", "branchDir"],
+      ["{{METRIC_NAME}}", "metricName"],
+      ["{{TIME_BUDGET_S}}", "timeBudgetS"],
+      ["{{TASK_CONTEXT}}", "taskContext"],
+      ["{{SOTA_BLOCK}}", "sotaBlock"],
+      ["{{PEERS_BLOCK}}", "peersBlock"],
+      ["{{ART_DIR}}", "artDir"]
+    ];
+    SOTA_AFFORDANCE = "### Web search affordance\n\nConsult this reference before starting. Web search (curl / pip install / arXiv / HuggingFace / etc.) is allowed when you hit a plateau or before scaling up. Record any consulted source in notes.md under a `## Sources consulted` heading.";
+  }
+});
+
+// src/core/rehearsalHandoff.ts
+function parseScoreboard(md) {
+  const rows = [];
+  for (const line of md.split("\n")) {
+    if (!/^\|\s*~?\d+\s*\|\s*exp-\d+\s*\|/.test(line)) continue;
+    const c3 = line.split("|").map((s) => s.trim());
+    rows.push({ rank: c3[1], expId: c3[2], instrument: c3[3], metric: c3[4], status: c3[5] });
+  }
+  const ok = rows.filter((r) => r.status === "ok");
+  const winner = ok[0] ?? null;
+  const runnerUps = ok.slice(1, 4);
+  return { rows, winner, runnerUps };
+}
+function buildHandoffKv(i2) {
+  const L = [];
+  if (!i2.winner) {
+    L.push("mode=rehearsal-no-winner", `topic=${i2.topic}`);
+    if (i2.landscapeDoc) L.push(`landscape_doc=${i2.landscapeDoc}`);
+    if (i2.hasMetricMd) L.push("mandates_block_path=metric.md");
+    L.push("session_path=.", "topic_txt_path=topic.txt", `generated_ts=${i2.generatedTs}`);
+    return L.join("\n") + "\n";
+  }
+  const w = i2.winner;
+  L.push("mode=rehearsal", `topic=${i2.topic}`);
+  if (i2.landscapeDoc) L.push(`landscape_doc=${i2.landscapeDoc}`);
+  L.push(
+    `winner_instrument=${w.instrument}`,
+    `winner_exp=${w.exp}`,
+    `winner_approach=${w.approach || "unknown"}`,
+    `winner_metric=${w.metric}`
+  );
+  if (w.checkpoint) L.push(`winner_checkpoint=${w.checkpoint}`);
+  if (w.notes) L.push(`winner_notes=${w.notes}`);
+  L.push(`winner_code_dir=${w.codeDir}`);
+  i2.runnerUps.forEach((r, n2) => L.push(`runner_up_${n2 + 1}=${r.instrument}/${r.exp}:${r.metric}:${r.approach || "unknown"}`));
+  if (i2.hasMetricMd) L.push("mandates_block_path=metric.md");
+  L.push("session_path=.", "topic_txt_path=topic.txt", `generated_ts=${i2.generatedTs}`);
+  return L.join("\n") + "\n";
+}
+var init_rehearsalHandoff = __esm({
+  "src/core/rehearsalHandoff.ts"() {
+    "use strict";
+  }
+});
+
+// src/core/rehearsalConsensus.ts
+function buildConsensus(latestOk, opts) {
+  const epsilon = opts.epsilon ?? 0.01;
+  const instruments = Object.keys(latestOk).sort();
+  const field = (inst2, k) => {
+    const v = latestOk[inst2]?.[k];
+    return v === void 0 || v === null ? "" : String(v);
+  };
+  const numEq = (a2, b) => Math.abs(parseFloat(a2) - parseFloat(b)) <= epsilon;
+  const agreed = [];
+  const contested = [];
+  const missing = [];
+  for (const f of FIELDS) {
+    const present = [];
+    const srcs = [];
+    let miss = 0;
+    for (const inst2 of instruments) {
+      const v = field(inst2, f);
+      if (v === "") miss++;
+      else {
+        present.push(v);
+        srcs.push(inst2);
+      }
+    }
+    if (miss === instruments.length) {
+      missing.push(`- ${f}`);
+      continue;
+    }
+    let allAgree = true;
+    const first = present[0];
+    const firstNumeric = NUMERIC.test(first);
+    for (const v of present.slice(1)) {
+      if (firstNumeric && NUMERIC.test(v)) {
+        if (!numEq(first, v)) {
+          allAgree = false;
+          break;
+        }
+      } else if (v !== first) {
+        allAgree = false;
+        break;
+      }
+    }
+    if (miss > 0) allAgree = false;
+    if (allAgree) {
+      agreed.push(`| ${f} | ${first} | ${srcs.join(", ")} |`);
+    } else {
+      let row = `| ${f}`;
+      for (const inst2 of instruments) row += ` | ${field(inst2, f) || "\u2014"}`;
+      contested.push(`${row} |`);
+    }
+  }
+  const out = [
+    `# Consensus \u2014 ${opts.topic}`,
+    "",
+    `Generated: ${opts.nowIso}`,
+    `Epsilon for metric_value: ${epsilon}`,
+    "",
+    "## Agreed",
+    ""
+  ];
+  if (agreed.length) out.push("| Field | Value | Proposed by |", "|---|---|---|", ...agreed);
+  else out.push("_(none)_");
+  out.push("", "## Contested", "");
+  if (contested.length) {
+    let header = "| Field", sep = "|---";
+    for (const inst2 of instruments) {
+      header += ` | ${inst2}'s value`;
+      sep += "|---";
+    }
+    out.push(`${header} |`, `${sep}|`, ...contested);
+  } else out.push("_(none)_");
+  out.push("", "## All-missing", "");
+  if (missing.length) out.push(...missing);
+  else out.push("_(none)_");
+  return out.join("\n") + "\n";
+}
+var FIELDS, NUMERIC;
+var init_rehearsalConsensus = __esm({
+  "src/core/rehearsalConsensus.ts"() {
+    "use strict";
+    FIELDS = ["branch_id", "approach_label", "metric_name", "metric_value", "status", "runtime_s", "notes"];
+    NUMERIC = /^-?[0-9.eE+-]+$/;
+  }
+});
+
+// src/commands/rehearsal.ts
+var rehearsal_exports = {};
+__export(rehearsal_exports, {
+  abortWith: () => abortWith,
+  consensusWith: () => consensusWith,
+  experimentSendWith: () => experimentSendWith,
+  finalizeWith: () => finalizeWith,
+  forensicsRun: () => forensicsRun3,
+  freshPartWith: () => freshPartWith,
+  handoffExtractWith: () => handoffExtractWith,
+  initWith: () => initWith4,
+  liveScoreDeps: () => liveScoreDeps,
+  metricWith: () => metricWith,
+  monitorRun: () => monitorRun,
+  refineWith: () => refineWith,
+  run: () => run13,
+  scoreWith: () => scoreWith,
+  sotaWith: () => sotaWith,
+  spawnAllWith: () => spawnAllWith2,
+  statusBriefWith: () => statusBriefWith,
+  teardownWith: () => teardownWith
+});
+function parseInitArgs(args) {
+  let topic = "";
+  let seedFrom, timeBudget, metric, slug, badFlag;
+  for (let i2 = 0; i2 < args.length; i2++) {
+    const a2 = args[i2];
+    if (a2.startsWith("--")) {
+      const eq = a2.indexOf("=");
+      const flag = eq > 0 ? a2.slice(0, eq) : a2;
+      const inline = eq > 0 ? a2.slice(eq + 1) : void 0;
+      const val = () => inline ?? args[++i2];
+      if (flag === "--seed-from") seedFrom = val();
+      else if (flag === "--time-budget") timeBudget = val();
+      else if (flag === "--metric") metric = val();
+      else if (flag === "--slug") slug = val();
+      else {
+        badFlag = a2;
+      }
+    } else {
+      topic = args.slice(i2).join(" ");
+      break;
+    }
+  }
+  return { topic, seedFrom, timeBudget, metric, slug, badFlag };
+}
+function resolveTimeBudget(v) {
+  if (v === "none") return "none";
+  if (/^[1-9][0-9]*h$/.test(v)) return String(parseInt(v, 10) * 3600);
+  if (/^[1-9][0-9]*s$/.test(v)) return String(parseInt(v, 10));
+  if (/^[1-9][0-9]*$/.test(v)) return v;
+  throw new Error(`invalid --time-budget: '${v}' (expected 'none', '<N>h', '<N>s', or positive seconds)`);
+}
+async function initWith4(args, deps) {
+  const out = deps.stdout ?? ((l) => {
+    process.stdout.write(l + "\n");
+  });
+  const p = parseInitArgs(args);
+  if (p.badFlag) {
+    log.error(`rehearsal init: unknown flag: ${p.badFlag}`);
+    return 2;
+  }
+  if (!p.topic) {
+    log.error("rehearsal init: topic required");
+    return 2;
+  }
+  let resolvedBudget;
+  if (p.timeBudget !== void 0) {
+    try {
+      resolvedBudget = resolveTimeBudget(p.timeBudget);
+    } catch (e) {
+      log.error(`rehearsal init: ${e.message}`);
+      return 2;
+    }
+  }
+  const binary = deps.instrumentBinary("codex");
+  if (!binary) {
+    log.error("rehearsal init: codex has no entry in contracts.yaml");
+    return 3;
+  }
+  if (!deps.haveCmd(binary)) {
+    log.error("rehearsal init: codex binary not on PATH; install codex and run /consort:soundcheck");
+    return 3;
+  }
+  let slug;
+  if (p.slug !== void 0) {
+    if (!/^[a-z][a-z0-9-]{0,19}$/.test(p.slug)) {
+      log.error(`rehearsal init: --slug must match ^[a-z][a-z0-9-]{0,19}$; got '${p.slug}'`);
+      return 2;
+    }
+    slug = p.slug;
+  } else {
+    slug = deriveSlug(p.topic);
+  }
+  if (!slug) {
+    log.error("rehearsal init: topic produced an empty slug; provide alphanumerics");
+    return 2;
+  }
+  const art = rehearsalArtDir(slug, deps.opts);
+  if ((0, import_node_fs33.existsSync)(art)) {
+    log.error(`rehearsal init: topic already in flight: ${art}`);
+    return 2;
+  }
+  if (p.seedFrom && !(0, import_node_fs33.existsSync)(p.seedFrom)) {
+    log.error(`rehearsal init: --seed-from not found: ${p.seedFrom}`);
+    return 1;
+  }
+  (0, import_node_fs33.mkdirSync)(art, { recursive: true });
+  atomicWrite((0, import_node_path31.join)(art, "topic.txt"), p.topic);
+  atomicWrite((0, import_node_path31.join)(art, "metric.txt"), extractMetric(p.topic) + "\n");
+  if (p.seedFrom) atomicWrite((0, import_node_path31.join)(art, "seed-from.txt"), p.seedFrom + "\n");
+  (deps.probeHardware ?? (() => {
+  }))((0, import_node_path31.join)(art, "hardware.txt"));
+  if (p.metric !== void 0) {
+    try {
+      atomicWrite((0, import_node_path31.join)(art, "metric.md"), formatMetricBlock(parseKv(p.metric)));
+    } catch (e) {
+      log.error(`rehearsal init: --metric: ${e.message}`);
+      return 2;
+    }
+  }
+  if (resolvedBudget !== void 0) {
+    atomicWrite((0, import_node_path31.join)(art, "time-budget.txt"), resolvedBudget + "\n");
+    atomicWrite((0, import_node_path31.join)(art, "session-start.txt"), deps.now() + "\n");
+  }
+  out(`TOPIC=${slug}`);
+  out(`ART=${art}`);
+  return 0;
+}
+function parseKv(s) {
+  const o2 = {};
+  for (const pair of s.split(",")) {
+    const i2 = pair.indexOf("=");
+    if (i2 > 0) o2[pair.slice(0, i2)] = pair.slice(i2 + 1);
+  }
+  return o2;
+}
+function takeKvFlag(args) {
+  let topic = "", kv = "";
+  for (let i2 = 0; i2 < args.length; i2++) {
+    if (args[i2] === "--kv") {
+      kv = args[++i2] ?? "";
+    } else if (!args[i2].startsWith("--") && !topic) {
+      topic = args[i2];
+    }
+  }
+  return { topic, kv };
+}
+async function metricWith(args, v = {}) {
+  const { topic, kv } = takeKvFlag(args);
+  if (!topic) {
+    log.error("rehearsal metric: topic required");
+    return 2;
+  }
+  try {
+    atomicWrite((0, import_node_path31.join)(rehearsalArtDir(topic, v.opts), "metric.md"), formatMetricBlock(parseKv(kv)));
+  } catch (e) {
+    log.error(`rehearsal metric: ${e.message}`);
+    return 2;
+  }
+  return 0;
+}
+async function sotaWith(args, v = {}) {
+  const { topic, kv } = takeKvFlag(args);
+  if (!topic) {
+    log.error("rehearsal sota: topic required");
+    return 2;
+  }
+  const f = parseKv(kv);
+  const refs = [];
+  for (let i2 = 1; i2 <= 7; i2++) {
+    if (f[`ref_${i2}`]) refs.push(f[`ref_${i2}`]);
+  }
+  try {
+    atomicWrite(
+      (0, import_node_path31.join)(rehearsalArtDir(topic, v.opts), "sota.md"),
+      formatSotaBlock({ topic: f.topic ?? "", metric: f.metric ?? "", sweep_date: f.sweep_date ?? "", queries: f.queries, refs })
+    );
+  } catch (e) {
+    log.error(`rehearsal sota: ${e.message}`);
+    return 2;
+  }
+  return 0;
+}
+async function spawnAllWith2(args, deps, opts) {
+  const topic = args.find((a2) => !a2.startsWith("--") && !/^\d+$/.test(a2)) ?? "";
+  const n2 = parseInt(args.find((a2) => /^\d+$/.test(a2)) ?? "2", 10);
+  if (!topic) {
+    log.error("rehearsal spawn-all: topic required");
+    return 2;
+  }
+  const art = rehearsalArtDir(topic, opts);
+  const instruments = deps.pickInstruments(topic, n2);
+  if (instruments.length < 2) {
+    log.error(`rehearsal spawn-all: need >= 2 codex parts; picked ${instruments.length}`);
+    return 2;
+  }
+  const rows = instruments.map((instrument) => ({ instrument, provider: "codex" }));
+  atomicWrite((0, import_node_path31.join)(art, "parts.txt"), instruments.join("\n") + "\n");
+  const prc = await deps.preflight([topic, String(rows.length), "--roster", spawnRosterArg(rows), "--art-dir", art]);
+  if (prc !== 0) {
+    log.error(`rehearsal spawn-all: preflight failed (rc ${prc})`);
+    return 2;
+  }
+  const panes = parsePanesFile((0, import_node_fs33.readFileSync)((0, import_node_path31.join)(art, "preflight-panes.txt"), "utf8"));
+  const orphans = rows.filter((r) => !panes.has(r.instrument));
+  if (orphans.length) {
+    log.error(`rehearsal spawn-all: parts missing a preflight pane: ${orphans.map((r) => r.instrument).join(", ")}`);
+    return 2;
+  }
+  const cwd = deps.repoRoot();
+  const results = await Promise.all(rows.map(async (r) => ({
+    instrument: r.instrument,
+    provider: r.provider,
+    rc: await deps.spawn([r.instrument, r.provider, topic, "--target-pane", panes.get(r.instrument), "--cwd", cwd])
+  })));
+  atomicWrite((0, import_node_path31.join)(art, "spawn-results.tsv"), spawnResultsTsv(results));
+  const rc = spawnTally(results.map((r) => r.rc));
+  const nOk = results.filter((r) => r.rc === 0).length;
+  if (rc === 0) log.ok(`rehearsal spawn-all: ${nOk}/${rows.length} codex parts ready`);
+  else log.warn(`rehearsal spawn-all: ${nOk}/${rows.length} codex parts ready (rc=${rc})`);
+  return rc;
+}
+function parseExperimentSendArgs(args) {
+  let inputs, contextFile, smokeTest, timeout;
+  let i2 = 0;
+  for (; i2 < args.length; i2++) {
+    const a2 = args[i2];
+    if (!a2.startsWith("--")) break;
+    if (a2 === "--inputs" || a2.startsWith("--inputs=")) {
+      const r = kvParse(a2, args[i2 + 1]);
+      inputs = r.value;
+      i2 += r.shift - 1;
+    } else if (a2 === "--context-file" || a2.startsWith("--context-file=")) {
+      const r = kvParse(a2, args[i2 + 1]);
+      contextFile = r.value;
+      i2 += r.shift - 1;
+    } else if (a2 === "--smoke-test" || a2.startsWith("--smoke-test=")) {
+      const r = kvParse(a2, args[i2 + 1]);
+      smokeTest = r.value;
+      i2 += r.shift - 1;
+    } else if (a2 === "--timeout" || a2.startsWith("--timeout=")) {
+      const r = kvParse(a2, args[i2 + 1]);
+      timeout = r.value;
+      i2 += r.shift - 1;
+    } else {
+      return { topic: "", instrument: "", expId: "", approachLabel: "", approachBrief: "", badArgs: true };
+    }
+  }
+  const pos = args.slice(i2);
+  if (pos.length !== 5) return { topic: "", instrument: "", expId: "", approachLabel: "", approachBrief: "", badArgs: true };
+  const [topic, instrument, expId, approachLabel, approachBrief] = pos;
+  return { topic, instrument, expId, approachLabel, approachBrief, inputs, contextFile, smokeTest, timeout };
+}
+function gatherPeers(art, self) {
+  const partsFile = (0, import_node_path31.join)(art, "parts.txt");
+  if (!(0, import_node_fs33.existsSync)(partsFile)) return [];
+  const peers = (0, import_node_fs33.readFileSync)(partsFile, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && l !== self);
+  const rows = [];
+  for (const peer of peers) {
+    const peerDir = partStateDir(art, peer);
+    if (!(0, import_node_fs33.existsSync)(peerDir)) continue;
+    let phase = "", currentExp = "";
+    const statePath = (0, import_node_path31.join)(peerDir, "state.txt");
+    if ((0, import_node_fs33.existsSync)(statePath)) {
+      const kv = parseState((0, import_node_fs33.readFileSync)(statePath, "utf8"));
+      phase = kv.phase ?? "";
+      currentExp = kv.current_exp_id ?? "";
+    }
+    let latest = currentExp;
+    const expsDir = (0, import_node_path31.join)(peerDir, "experiments");
+    if (!latest && (0, import_node_fs33.existsSync)(expsDir)) {
+      for (const name of (0, import_node_fs33.readdirSync)(expsDir)) {
+        if (EXP_ID_RE.test(name) && name > latest) latest = name;
+      }
+    }
+    let approach = "", metric = "", status = "", notes = "";
+    if (latest) {
+      const resultPath = (0, import_node_path31.join)(expsDir, latest, "result.json");
+      if ((0, import_node_fs33.existsSync)(resultPath)) {
+        try {
+          const r = JSON.parse((0, import_node_fs33.readFileSync)(resultPath, "utf8"));
+          approach = r.approach_label != null ? String(r.approach_label) : "";
+          metric = r.metric_value != null ? String(r.metric_value) : "";
+          status = r.status != null ? String(r.status) : "";
+          notes = r.notes != null ? String(r.notes) : "";
+        } catch {
+        }
+      }
+    }
+    rows.push({ instrument: peer, phase, currentExp: latest, approach, metric, status, notes });
+  }
+  return rows;
+}
+async function experimentSendWith(args, deps) {
+  const out = deps.stdout ?? ((l) => {
+    process.stdout.write(l + "\n");
+  });
+  const opts = deps.opts;
+  const p = parseExperimentSendArgs(args);
+  if (p.badArgs) {
+    log.error("rehearsal experiment-send: usage: [--inputs csv] [--context-file path] [--smoke-test script] [--timeout N] <topic> <instrument> <exp-id> <approach-label> <approach-brief>");
+    return 2;
+  }
+  const { topic, instrument, expId, approachLabel, approachBrief } = p;
+  if (!EXP_ID_RE.test(expId)) {
+    log.error(`rehearsal experiment-send: exp-id must match exp-[0-9]+; got '${expId}'`);
+    return 2;
+  }
+  if (!INSTRUMENT_RE.test(instrument)) {
+    log.error(`rehearsal experiment-send: instrument must match [a-z][a-z0-9-]*; got '${instrument}'`);
+    return 2;
+  }
+  if (p.inputs) {
+    for (const path6 of p.inputs.split(",")) {
+      if (!path6) continue;
+      try {
+        (0, import_node_fs33.accessSync)(path6, import_node_fs33.constants.R_OK);
+      } catch {
+        log.error(`rehearsal experiment-send: cannot read input path '${path6}'`);
+        return 2;
+      }
+    }
+  }
+  if (p.timeout !== void 0 && !/^[1-9][0-9]*$/.test(p.timeout)) {
+    log.error(`rehearsal experiment-send: --timeout must be a positive integer (seconds); got '${p.timeout}'`);
+    return 2;
+  }
+  if (p.smokeTest) {
+    try {
+      (0, import_node_fs33.accessSync)(p.smokeTest, import_node_fs33.constants.X_OK);
+    } catch {
+      log.error(`rehearsal experiment-send: smoke-test script not executable: ${p.smokeTest}`);
+      return 2;
+    }
+  }
+  let taskContext = "";
+  if (p.contextFile) {
+    try {
+      taskContext = (0, import_node_fs33.readFileSync)(p.contextFile, "utf8");
+    } catch {
+      log.error(`rehearsal experiment-send: cannot read --context-file: ${p.contextFile}`);
+      return 2;
+    }
+  }
+  const art = rehearsalArtDir(topic, opts);
+  if (!(0, import_node_fs33.existsSync)(art)) {
+    log.error(`rehearsal experiment-send: topic state dir missing: ${art} (was rehearsal init run?)`);
+    return 1;
+  }
+  const metricMd = (0, import_node_path31.join)(art, "metric.md");
+  if (!(0, import_node_fs33.existsSync)(metricMd)) {
+    log.error(`rehearsal experiment-send: metric.md missing at ${metricMd}`);
+    return 1;
+  }
+  const stateDir = partStateDir(art, instrument);
+  const stateTxt = (0, import_node_path31.join)(stateDir, "state.txt");
+  if (!(0, import_node_fs33.existsSync)(stateTxt)) {
+    log.error(`rehearsal experiment-send: part state.txt missing: ${stateTxt}`);
+    return 1;
+  }
+  const phase = parseState((0, import_node_fs33.readFileSync)(stateTxt, "utf8")).phase ?? "";
+  if (phase === "abandoned") {
+    log.error(`rehearsal experiment-send: part ${instrument} lane is abandoned; not dispatching`);
+    return 2;
+  }
+  if (phase !== "idle") {
+    log.error(`rehearsal experiment-send: part ${instrument} not idle (phase=${phase}); wait or finalize first`);
+    return 1;
+  }
+  const branchDir = experimentDir(art, instrument, expId);
+  (0, import_node_fs33.mkdirSync)((0, import_node_path31.join)(branchDir, "code"), { recursive: true });
+  if (p.smokeTest) {
+    const r = deps.runSmokeTest(p.smokeTest, (0, import_node_path31.join)(branchDir, "code"), deps.smokeTimeoutSec ?? 60);
+    if (!r.ok) {
+      atomicWrite((0, import_node_path31.join)(branchDir, "smoke-test.err"), r.stderr);
+      log.error(`rehearsal experiment-send: smoke-test failed for ${instrument}/${expId}; stderr -> ${(0, import_node_path31.join)(branchDir, "smoke-test.err")}`);
+      return 2;
+    }
+  }
+  const model = resolveModel(instrument, topic);
+  if (!model) {
+    log.error(`rehearsal experiment-send: no part '${instrument}' on topic '${topic}' (resolveModel null)`);
+    return 1;
+  }
+  const outbox = outboxPath(instrument, model, topic);
+  if (!(0, import_node_fs33.existsSync)(outbox)) {
+    log.error(`rehearsal experiment-send: part outbox missing: ${outbox} (was spawn run for ${instrument}?)`);
+    return 1;
+  }
+  const metricBlock = (0, import_node_fs33.readFileSync)(metricMd, "utf8");
+  const metricName = parseMetricMd(metricBlock).primaryMetric;
+  if (!metricName) {
+    log.error(`rehearsal experiment-send: could not parse Primary metric from ${metricMd}`);
+    return 1;
+  }
+  const probe = deps.probeHardware();
+  const baselinePath = (0, import_node_path31.join)(art, "hardware.txt");
+  const baseline = (0, import_node_fs33.existsSync)(baselinePath) ? (0, import_node_fs33.readFileSync)(baselinePath, "utf8") : null;
+  const hardwareBlock = assembleHardwareBlock(probe, hardwareDiffAlert(baseline, probe));
+  const topicTextPath = (0, import_node_path31.join)(art, "topic.txt");
+  const topicText = (0, import_node_fs33.existsSync)(topicTextPath) ? (0, import_node_fs33.readFileSync)(topicTextPath, "utf8") : "";
+  const sotaPath = (0, import_node_path31.join)(art, "sota.md");
+  const sotaBlock = buildSotaBlock((0, import_node_fs33.existsSync)(sotaPath) ? (0, import_node_fs33.readFileSync)(sotaPath, "utf8") : null);
+  const peersBlock = formatPeersBlock(gatherPeers(art, instrument));
+  const timeBudgetS = String(p.timeout ?? deps.consultTimeout());
+  const pluginRoot6 = process.env.CLAUDE_PLUGIN_ROOT ?? process.cwd();
+  const templatePath = (0, import_node_path31.join)(pluginRoot6, "config", "prompt-templates", "rehearsal", "experiment.md");
+  if (!(0, import_node_fs33.existsSync)(templatePath)) {
+    log.error(`rehearsal experiment-send: template missing: ${templatePath}`);
+    return 1;
+  }
+  const template = (0, import_node_fs33.readFileSync)(templatePath, "utf8");
+  let prompt;
+  try {
+    prompt = renderExperimentPrompt(template, {
+      metricBlock,
+      hardwareBlock,
+      outboxPath: outbox,
+      topicText,
+      expId,
+      approachLabel,
+      approachBrief,
+      branchDir,
+      metricName,
+      timeBudgetS,
+      taskContext,
+      sotaBlock,
+      peersBlock,
+      artDir: art
+    });
+  } catch (e) {
+    log.error(`rehearsal experiment-send: ${e.message}`);
+    return 1;
+  }
+  if (prompt.trim() === "") {
+    log.error(`rehearsal experiment-send: prompt rendered empty (template substitution failed)`);
+    return 1;
+  }
+  atomicWrite((0, import_node_path31.join)(branchDir, "prompt.md"), prompt);
+  inboxWrite(instrument, model, topic, prompt, { from: "maestro" });
+  atomicWrite(stateTxt, buildDispatchState((0, import_node_fs33.readFileSync)(stateTxt, "utf8"), expId, deps.now()));
+  if (!deps.dryRun) {
+    const pane = paneMetaRead(instrument, model, topic);
+    if (pane) {
+      try {
+        await deps.paneSend(pane, `Read ${inboxPath(instrument, model, topic)} and execute the task. Reply when done.`);
+      } catch (e) {
+        log.warn(`rehearsal experiment-send: pane nudge failed (${e.message}); part may not have noticed inbox`);
+      }
+    }
+  }
+  out(`dispatched ${expId} -> ${instrument}`);
+  return 0;
+}
+function liveProbeHardware() {
+  try {
+    const csv = (0, import_node_child_process9.execFileSync)("nvidia-smi", [
+      "--query-gpu=name,memory.total,memory.free,driver_version",
+      "--format=csv,noheader,nounits"
+    ], { encoding: "utf8" }).trim();
+    if (!csv) return "no-gpu";
+    const lines = csv.split("\n").map((l) => {
+      const [name = "", total = "", free = "", driver = ""] = l.split(",").map((c3) => c3.trim());
+      return `gpu	${name}	${total}	${free}	${driver}`;
+    });
+    return [`detected_at	${isoUtc()}`, ...lines].join("\n");
+  } catch {
+    return "no-gpu";
+  }
+}
+async function scoreWith(args, deps) {
+  const positionals = args.filter((a2) => !a2.startsWith("--"));
+  if (positionals.length !== 1) {
+    log.error("usage: rehearsal score <topic>");
+    return 2;
+  }
+  const topic = positionals[0];
+  const art = rehearsalArtDir(topic, deps.opts);
+  const partsRoot = partsDir(art);
+  if (!(0, import_node_fs33.existsSync)(partsRoot)) {
+    log.error(`rehearsal score: parts dir missing: ${partsRoot}`);
+    return 1;
+  }
+  const c3 = deps.computeScore(art, deps.fs, deps.now);
+  deps.writeAtomic((0, import_node_path31.join)(art, "scoreboard.md"), c3.scoreboardMd);
+  log.ok(`[score] scoreboard at ${(0, import_node_path31.join)(art, "scoreboard.md")}`);
+  deps.writeAtomic((0, import_node_path31.join)(art, "results.tsv"), c3.resultsTsv);
+  for (const s of c3.sidecars) deps.writeAtomic(s.path, s.body);
+  for (const p of c3.staleSidecars) deps.removeFile(p);
+  for (const pc of c3.phaseClears) deps.writeAtomic(pc.statePath, pc.merged);
+  for (const w of c3.warnings) log.warn(w);
+  return 0;
+}
+async function monitorRun(args, opts) {
+  const once9 = args.includes("--once");
+  const pos = args.filter((a2) => a2 !== "--once");
+  if (pos.length !== 2) {
+    log.error("rehearsal monitor: usage: <topic> <instrument> [--once]");
+    return 2;
+  }
+  const [topic, instrument] = pos;
+  const art = rehearsalArtDir(topic, opts);
+  if (!(0, import_node_fs33.existsSync)(art)) {
+    log.error(`rehearsal monitor: art dir missing: ${art}`);
+    return 2;
+  }
+  const model = resolveModel(instrument, topic);
+  if (!model) {
+    log.error(`rehearsal monitor: no part '${instrument}' on topic '${topic}' (resolveModel null)`);
+    return 1;
+  }
+  const outbox = outboxPath(instrument, model, topic);
+  const stateDir = partStateDir(art, instrument);
+  (0, import_node_fs33.mkdirSync)(stateDir, { recursive: true });
+  const cursorFile = (0, import_node_path31.join)(stateDir, "liveness-cursor.txt");
+  const rescanFile = (0, import_node_path31.join)(stateDir, "liveness-rescan-emitted.txt");
+  const stateTxt = (0, import_node_path31.join)(stateDir, "state.txt");
+  const thresholds = {
+    probeS: Number(process.env.CONSORT_PROBE_S ?? 900),
+    stuckS: Number(process.env.CONSORT_STUCK_S ?? 1800),
+    rescanEveryS: Number(process.env.CONSORT_RESCAN_EVERY_S ?? 30)
+  };
+  const persist = (state2) => {
+    (0, import_node_fs33.writeFileSync)(cursorFile, String(state2.offset));
+    (0, import_node_fs33.writeFileSync)(rescanFile, [...state2.rescanEmitted].join("\n"));
+  };
+  const initBuf = (0, import_node_fs33.existsSync)(outbox) ? (0, import_node_fs33.readFileSync)(outbox) : Buffer.alloc(0);
+  let state = initScanState(
+    initBuf.length,
+    initBuf.toString("utf8"),
+    (0, import_node_fs33.existsSync)(cursorFile) ? (0, import_node_fs33.readFileSync)(cursorFile, "utf8") : null,
+    (0, import_node_fs33.existsSync)(rescanFile) ? (0, import_node_fs33.readFileSync)(rescanFile, "utf8") : null
+  );
+  persist(state);
+  do {
+    const buf = (0, import_node_fs33.existsSync)(outbox) ? (0, import_node_fs33.readFileSync)(outbox) : Buffer.alloc(0);
+    const size = buf.length;
+    const full = buf.toString("utf8");
+    const text = buf.subarray(state.offset).toString("utf8");
+    const mtime = (0, import_node_fs33.existsSync)(outbox) ? Math.floor((0, import_node_fs33.statSync)(outbox).mtimeMs / 1e3) : 0;
+    const phase = ((0, import_node_fs33.existsSync)(stateTxt) ? parseState((0, import_node_fs33.readFileSync)(stateTxt, "utf8")).phase : "") ?? "";
+    const r = monitorScan(outbox, instrument, state, {
+      outboxText: text,
+      outboxFullText: full,
+      outboxSize: size,
+      outboxMtime: mtime,
+      phase,
+      now: Math.floor(Date.now() / 1e3),
+      nowIso: isoUtc(),
+      thresholds
+    });
+    for (const n2 of r.notifications) process.stdout.write(JSON.stringify(n2) + "\n");
+    state = r.state;
+    persist(state);
+    if (once9) break;
+    await sleep4(2e3);
+  } while (!once9);
+  return 0;
+}
+function approachFromPrompt(promptPath) {
+  if (!(0, import_node_fs33.existsSync)(promptPath)) return "";
+  for (const line of (0, import_node_fs33.readFileSync)(promptPath, "utf8").split("\n")) {
+    const m = /^\s*Approach label:\s+(.*?)\s*$/.exec(line);
+    if (m) return m[1];
+  }
+  return "";
+}
+function readResultCells(resultPath) {
+  if (!(0, import_node_fs33.existsSync)(resultPath)) return { approach: "", metric: "\u2014" };
+  try {
+    const r = JSON.parse((0, import_node_fs33.readFileSync)(resultPath, "utf8"));
+    const approach = r.approach_label != null ? String(r.approach_label) : "";
+    const m = r.metric_value != null ? String(r.metric_value) : "";
+    const s = r.status != null ? String(r.status) : "";
+    const metric = `${m} ${s}`.trim() || "\u2014";
+    return { approach, metric };
+  } catch {
+    return { approach: "", metric: "\u2014" };
+  }
+}
+function parseStatusBriefArgs(args) {
+  let topic = "", latestInstrument, latestExp;
+  for (let i2 = 0; i2 < args.length; i2++) {
+    const a2 = args[i2];
+    if (a2 === "--latest-instrument") latestInstrument = args[++i2];
+    else if (a2 === "--latest-exp") latestExp = args[++i2];
+    else if (!a2.startsWith("--") && !topic) topic = a2;
+  }
+  return { topic, latestInstrument, latestExp };
+}
+async function statusBriefWith(args, v = {}) {
+  const out = v.stdout ?? ((l) => {
+    process.stdout.write(l + "\n");
+  });
+  const p = parseStatusBriefArgs(args);
+  if (!p.topic) {
+    log.error("rehearsal status-brief: topic required");
+    return 2;
+  }
+  const art = rehearsalArtDir(p.topic, v.opts);
+  const parts = [];
+  const partsFile = (0, import_node_path31.join)(art, "parts.txt");
+  if ((0, import_node_fs33.existsSync)(partsFile)) {
+    const instruments = (0, import_node_fs33.readFileSync)(partsFile, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+    for (const instrument of instruments) {
+      let phase = "?", currentOrLast = "\u2014";
+      const stateTxt = (0, import_node_path31.join)(partStateDir(art, instrument), "state.txt");
+      let curExp = "";
+      if ((0, import_node_fs33.existsSync)(stateTxt)) {
+        const kv = parseState((0, import_node_fs33.readFileSync)(stateTxt, "utf8"));
+        phase = kv.phase || "?";
+        curExp = kv.current_exp_id ?? "";
+      }
+      if (curExp) {
+        currentOrLast = curExp;
+      } else {
+        const expsRoot = experimentsDir(art, instrument);
+        if ((0, import_node_fs33.existsSync)(expsRoot)) {
+          let newest = "";
+          for (const name of (0, import_node_fs33.readdirSync)(expsRoot)) {
+            if (EXP_ID_RE.test(name) && name > newest) newest = name;
+          }
+          if (newest) currentOrLast = newest;
+        }
+      }
+      const expForFiles = curExp || (currentOrLast !== "\u2014" ? currentOrLast : "");
+      const promptPath = expForFiles ? (0, import_node_path31.join)(experimentDir(art, instrument, expForFiles), "prompt.md") : "";
+      const resultPath = expForFiles ? (0, import_node_path31.join)(experimentDir(art, instrument, expForFiles), "result.json") : "";
+      let approach, metric;
+      if (phase === "working") {
+        approach = promptPath && approachFromPrompt(promptPath) || "\u2014";
+        metric = "(running)";
+      } else {
+        const cells = resultPath ? readResultCells(resultPath) : { approach: "", metric: "\u2014" };
+        approach = cells.approach || promptPath && approachFromPrompt(promptPath) || "\u2014";
+        metric = cells.metric;
+      }
+      parts.push({ instrument, phase, currentOrLast, approach, metric });
+    }
+  }
+  const sbPath = (0, import_node_path31.join)(art, "scoreboard.md");
+  const scoreboardMd = (0, import_node_fs33.existsSync)(sbPath) ? (0, import_node_fs33.readFileSync)(sbPath, "utf8") : null;
+  const metricPath = (0, import_node_path31.join)(art, "metric.md");
+  const completion = scoreboardMd !== null && (0, import_node_fs33.existsSync)(metricPath) ? checkCompletion(scoreboardMd, (0, import_node_fs33.readFileSync)(metricPath, "utf8")) : null;
+  const latest = p.latestInstrument && p.latestExp ? { instrument: p.latestInstrument, exp: p.latestExp } : void 0;
+  out(buildStatusBrief({ parts, scoreboardMd, completion, latest }));
+  return 0;
+}
+function readOr(path6, fallback = "") {
+  try {
+    return (0, import_node_fs33.readFileSync)(path6, "utf8");
+  } catch {
+    return fallback;
+  }
+}
+function listExpDirs(expsRoot) {
+  try {
+    return (0, import_node_fs33.readdirSync)(expsRoot, { withFileTypes: true }).filter((e) => e.isDirectory() && EXP_ID_RE.test(e.name)).map((e) => e.name).sort();
+  } catch {
+    return [];
+  }
+}
+function dirByteSize(dir) {
+  let total = 0;
+  let entries;
+  try {
+    entries = (0, import_node_fs33.readdirSync)(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const e of entries) {
+    const p = (0, import_node_path31.join)(dir, e.name);
+    if (e.isDirectory()) total += dirByteSize(p);
+    else if (e.isFile()) {
+      try {
+        total += (0, import_node_fs33.statSync)(p).size;
+      } catch {
+      }
+    }
+  }
+  return total;
+}
+function fileCountDepth1(dir) {
+  try {
+    return (0, import_node_fs33.readdirSync)(dir, { withFileTypes: true }).filter((e) => e.isFile()).length;
+  } catch {
+    return 0;
+  }
+}
+async function finalizeWith(args, deps) {
+  const opts = deps.opts;
+  let keep = deps.keepIntermediate ?? false;
+  let rest = args;
+  if (rest[0] === "--keep-intermediate") {
+    keep = true;
+    rest = rest.slice(1);
+  }
+  if (rest.length !== 1 || rest[0].startsWith("--")) {
+    log.error("usage: rehearsal finalize [--keep-intermediate] <topic>");
+    return 2;
+  }
+  const topic = rest[0];
+  const art = rehearsalArtDir(topic, opts);
+  if (!(0, import_node_fs33.existsSync)(art) || !(0, import_node_fs33.statSync)(art).isDirectory()) {
+    log.error(`finalize: art-dir missing: ${art}`);
+    return 1;
+  }
+  const partsFile = (0, import_node_path31.join)(art, "parts.txt");
+  const instruments = (0, import_node_fs33.existsSync)(partsFile) ? (0, import_node_fs33.readFileSync)(partsFile, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#")) : [];
+  for (const instrument of instruments) {
+    const stateDir = partStateDir(art, instrument);
+    const stateTxt = (0, import_node_path31.join)(stateDir, "state.txt");
+    if (!(0, import_node_fs33.existsSync)(stateTxt)) continue;
+    const cursorRaw = readOr((0, import_node_path31.join)(stateDir, "liveness-cursor.txt"));
+    const offset = Number.parseInt(cursorRaw.trim(), 10) || 0;
+    const model = resolveModel(instrument, topic);
+    const ob = model ? outboxPath(instrument, model, topic) : "";
+    let tail = "";
+    if (ob && (0, import_node_fs33.existsSync)(ob)) {
+      try {
+        tail = (0, import_node_fs33.readFileSync)(ob).subarray(offset).toString("utf8");
+      } catch {
+        tail = "";
+      }
+    }
+    const curExp = parseState(readOr(stateTxt)).current_exp_id ?? "";
+    const doneResultExists = !!curExp && (0, import_node_fs33.existsSync)((0, import_node_path31.join)(experimentDir(art, instrument, curExp), "result.json"));
+    const recon = reconcileFromOutbox(tail, doneResultExists);
+    if (recon === "failed" || recon === "idle") {
+      atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: recon }));
+    }
+    const phase = parseState(readOr(stateTxt)).phase ?? "";
+    const np = finalizePhase(phase);
+    if (np) atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: np }));
+  }
+  for (const instrument of instruments) {
+    const expsRoot = experimentsDir(art, instrument);
+    for (const expId of listExpDirs(expsRoot)) {
+      const resultPath = (0, import_node_path31.join)(expsRoot, expId, "result.json");
+      if (!(0, import_node_fs33.existsSync)(resultPath)) continue;
+      let parsed;
+      try {
+        parsed = JSON.parse((0, import_node_fs33.readFileSync)(resultPath, "utf8"));
+      } catch {
+        continue;
+      }
+      const norm = normalizeResult(parsed);
+      if (norm.status !== parsed.status || norm.metric_value !== parsed.metric_value) {
+        atomicWrite(resultPath, JSON.stringify(norm));
+        log.info(`normalize: ${instrument}/${expId} -> ${norm.status}`);
+      }
+    }
+  }
+  if (!keep) {
+    for (const instrument of instruments) {
+      const expsRoot = experimentsDir(art, instrument);
+      for (const expId of listExpDirs(expsRoot)) {
+        const expDir = (0, import_node_path31.join)(expsRoot, expId);
+        const resultPath = (0, import_node_path31.join)(expDir, "result.json");
+        if (!(0, import_node_fs33.existsSync)(resultPath)) continue;
+        let keptRel;
+        try {
+          const r = JSON.parse((0, import_node_fs33.readFileSync)(resultPath, "utf8"));
+          keptRel = r.checkpoint_path != null ? String(r.checkpoint_path) : "";
+        } catch {
+          continue;
+        }
+        if (!keptRel || keptRel === "null") continue;
+        const keptAbs = (0, import_node_path31.resolve)(expDir, keptRel);
+        if (keptAbs !== expDir && !keptAbs.startsWith(expDir + "/")) {
+          log.warn(`prune: checkpoint_path escapes exp dir: ${keptRel} (in ${expDir}); skipping`);
+          continue;
+        }
+        let entries;
+        try {
+          entries = (0, import_node_fs33.readdirSync)(expDir);
+        } catch {
+          continue;
+        }
+        for (const name of entries) {
+          if (!name.endsWith(".pt")) continue;
+          const pt = (0, import_node_path31.join)(expDir, name);
+          if (pt === keptAbs) continue;
+          try {
+            if ((0, import_node_fs33.statSync)(pt).isFile()) (0, import_node_fs33.rmSync)(pt, { force: true });
+          } catch {
+          }
+        }
+      }
+    }
+  }
+  for (const instrument of instruments) {
+    const model = resolveModel(instrument, topic);
+    if (!model) continue;
+    const targetDir = partStateDir(art, instrument);
+    (0, import_node_fs33.mkdirSync)(targetDir, { recursive: true });
+    const paneFiles = [
+      ["outbox.jsonl", outboxPath(instrument, model, topic)],
+      ["inbox.md", inboxPath(instrument, model, topic)]
+    ];
+    for (const [name, src] of paneFiles) {
+      if (!(0, import_node_fs33.existsSync)(src)) {
+        log.warn(`link_pane_artifacts: pane file missing for ${instrument}: ${name}`);
+        continue;
+      }
+      const linkPath = (0, import_node_path31.join)(targetDir, name);
+      const rel = (0, import_node_path31.relative)(targetDir, src);
+      try {
+        try {
+          if ((0, import_node_fs33.lstatSync)(linkPath)) (0, import_node_fs33.unlinkSync)(linkPath);
+        } catch {
+        }
+        (0, import_node_fs33.symlinkSync)(rel, linkPath);
+      } catch {
+      }
+    }
+  }
+  const warningsPath = (0, import_node_path31.join)(art, "warnings.txt");
+  const threshold = (deps.sizeWarnGb ?? 2) * GIB;
+  const sizeLines = [];
+  for (const instrument of instruments) {
+    const expsRoot = experimentsDir(art, instrument);
+    for (const expId of listExpDirs(expsRoot)) {
+      const expDir = (0, import_node_path31.join)(expsRoot, expId);
+      const bytes = dirByteSize(expDir);
+      if (bytes >= threshold) {
+        const gb = (bytes / GIB).toFixed(1);
+        sizeLines.push(`size_warn	${instrument}/${expId}	${gb}	${fileCountDepth1(expDir)}`);
+      }
+    }
+  }
+  atomicWrite(warningsPath, sizeLines.length ? sizeLines.join("\n") + "\n" : "");
+  const auditLines = [];
+  for (const instrument of instruments) {
+    const expsRoot = experimentsDir(art, instrument);
+    for (const expId of listExpDirs(expsRoot)) {
+      const expDir = (0, import_node_path31.join)(expsRoot, expId);
+      const promptMd = (0, import_node_path31.join)(expDir, "prompt.md");
+      const auditJson = (0, import_node_path31.join)(expDir, "audit.json");
+      if (!(0, import_node_fs33.existsSync)(promptMd) || !(0, import_node_fs33.existsSync)(auditJson)) continue;
+      let audit;
+      try {
+        audit = JSON.parse((0, import_node_fs33.readFileSync)(auditJson, "utf8"));
+      } catch {
+        continue;
+      }
+      for (const { key, value } of parseHardConstraints((0, import_node_fs33.readFileSync)(promptMd, "utf8"))) {
+        const actual = audit[key];
+        if (actual == null || String(actual) === "null") continue;
+        if (String(value) !== String(actual)) {
+          auditLines.push(`audit_warn	${instrument}/${expId}	${key}	prompt=${value}  actual=${String(actual)}`);
+        }
+      }
+    }
+  }
+  if (auditLines.length) {
+    const existing = readOr(warningsPath);
+    atomicWrite(warningsPath, existing + auditLines.join("\n") + "\n");
+  }
+  const statusRows = [];
+  for (const instrument of instruments) {
+    const stateTxt = (0, import_node_path31.join)(partStateDir(art, instrument), "state.txt");
+    if ((0, import_node_fs33.existsSync)(stateTxt)) {
+      const kv = parseState(readOr(stateTxt));
+      statusRows.push({
+        instrument,
+        phase: kv.phase ?? "?",
+        current: kv.current_exp_id ?? "",
+        lastTs: kv.last_event_ts ?? "?",
+        lastEvent: kv.last_event ?? "?"
+      });
+    } else {
+      statusRows.push({ instrument, phase: "?", current: "", lastTs: "?", lastEvent: "?" });
+    }
+  }
+  const scoreboardPath = (0, import_node_path31.join)(art, "scoreboard.md");
+  const scoreboardMd = (0, import_node_fs33.existsSync)(scoreboardPath) ? (0, import_node_fs33.readFileSync)(scoreboardPath, "utf8") : null;
+  const metricPath = (0, import_node_path31.join)(art, "metric.md");
+  const completion = scoreboardMd !== null && (0, import_node_fs33.existsSync)(metricPath) ? checkCompletion(scoreboardMd, (0, import_node_fs33.readFileSync)(metricPath, "utf8")) : null;
+  const budgetPath = (0, import_node_path31.join)(art, "time-budget.txt");
+  const startPath = (0, import_node_path31.join)(art, "session-start.txt");
+  let hardCap = null;
+  if ((0, import_node_fs33.existsSync)(budgetPath) && (0, import_node_fs33.existsSync)(startPath)) {
+    try {
+      hardCap = checkTimeBudget(
+        (0, import_node_fs33.readFileSync)(budgetPath, "utf8").trim(),
+        (0, import_node_fs33.readFileSync)(startPath, "utf8").trim(),
+        Math.floor(Date.parse(deps.now()) / 1e3)
+      );
+    } catch {
+      hardCap = null;
+    }
+  }
+  const allEvents = [];
+  for (const instrument of instruments) {
+    const model = resolveModel(instrument, topic);
+    if (!model) continue;
+    const ob = outboxPath(instrument, model, topic);
+    if (!(0, import_node_fs33.existsSync)(ob)) continue;
+    const lines = readOr(ob).split("\n").filter((l) => l.trim() !== "").slice(-10);
+    for (const line of lines) {
+      try {
+        const o2 = JSON.parse(line);
+        allEvents.push({ ts: o2.ts != null ? String(o2.ts) : "", instrument, event: o2.event != null ? String(o2.event) : "" });
+      } catch {
+      }
+    }
+  }
+  allEvents.sort((a2, b) => a2.ts < b.ts ? 1 : a2.ts > b.ts ? -1 : 0);
+  const recentEvents = allEvents.slice(0, 10);
+  const warnings = [];
+  for (const line of readOr(warningsPath).split("\n")) {
+    if (!line.trim()) continue;
+    const f = line.split("	");
+    if (f[0] === "size_warn") {
+      warnings.push(`- size_warn: ${f[1]} ${f[2]} GB (${f[3]} files)`);
+    } else if (f[0] === "audit_warn") {
+      warnings.push(`- audit_warn: ${f[1]} ${f[2]} (${f[3]})`);
+    }
+  }
+  const haltPath = (0, import_node_path31.join)(art, "halt.flag");
+  const halt = readHaltFlag((0, import_node_fs33.existsSync)(haltPath) ? (0, import_node_fs33.readFileSync)(haltPath, "utf8") : null);
+  const startedIso = (0, import_node_fs33.existsSync)(startPath) ? (0, import_node_fs33.readFileSync)(startPath, "utf8").trim() : "(unknown)";
+  const budget = (0, import_node_fs33.existsSync)(budgetPath) ? (0, import_node_fs33.readFileSync)(budgetPath, "utf8").trim() : "none";
+  const summary = renderSessionSummary({
+    topic,
+    updatedIso: deps.now(),
+    startedIso,
+    budget,
+    statusRows,
+    scoreboardMd,
+    completion,
+    hardCap,
+    recentEvents,
+    warnings,
+    halt,
+    finalizedIso: deps.now()
+  });
+  atomicWrite((0, import_node_path31.join)(art, "session-summary.md"), summary);
+  log.ok("finalize: cleanup complete");
+  return 0;
+}
+function parseRefineArgs(args) {
+  if (args.length !== 4) return { topic: "", instrument: "", expId: "", text: "", ok: false };
+  const [topic, instrument, expId, text] = args;
+  return { topic, instrument, expId, text, ok: true };
+}
+async function refineWith(args, deps) {
+  const p = parseRefineArgs(args);
+  if (!p.ok) {
+    log.error("rehearsal refine: usage: <topic> <instrument> <exp-id> <refinement-text>");
+    return 2;
+  }
+  const { topic, instrument, expId, text } = p;
+  if (!INSTRUMENT_RE.test(instrument)) {
+    log.error(`instrument must match [a-z][a-z0-9-]*; got '${instrument}'`);
+    return 2;
+  }
+  if (!EXP_ID_RE.test(expId)) {
+    log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`);
+    return 2;
+  }
+  const art = rehearsalArtDir(topic, deps.opts);
+  const branchDir = experimentDir(art, instrument, expId);
+  if (!(0, import_node_fs33.existsSync)(branchDir) || !(0, import_node_fs33.statSync)(branchDir).isDirectory()) {
+    log.error(`branch dir missing: ${branchDir}`);
+    return 1;
+  }
+  let n2 = 1;
+  while ((0, import_node_fs33.existsSync)((0, import_node_path31.join)(branchDir, `refine-${n2}.md`))) n2++;
+  const refinePath = (0, import_node_path31.join)(branchDir, `refine-${n2}.md`);
+  atomicWrite(refinePath, text + "\n");
+  log.info(`[refine] wrote ${refinePath}`);
+  if (!deps.dryRun) {
+    const msg = `REFINE: read ${refinePath} before continuing your current experiment (${expId}).`;
+    try {
+      const rc = await deps.send(["--from", "maestro", instrument, topic, msg]);
+      if (rc !== 0) log.warn(`[refine] send nudge failed; part may not have noticed refine-${n2}.md`);
+    } catch {
+      log.warn(`[refine] send nudge failed; part may not have noticed refine-${n2}.md`);
+    }
+  }
+  log.ok(`[refine] ${instrument}/${expId} refine-${n2}.md sent`);
+  return 0;
+}
+function readResultJson(path6) {
+  if (!(0, import_node_fs33.existsSync)(path6)) return {};
+  try {
+    return JSON.parse((0, import_node_fs33.readFileSync)(path6, "utf8"));
+  } catch {
+    return {};
+  }
+}
+async function handoffExtractWith(args, deps) {
+  const art = args[0];
+  if (!art || !(0, import_node_fs33.existsSync)(art) || !(0, import_node_fs33.statSync)(art).isDirectory()) {
+    log.error(`rehearsal handoff-extract: art-dir required (got '${art ?? ""}')`);
+    return 2;
+  }
+  const topicTxt = (0, import_node_path31.join)(art, "topic.txt");
+  if (!(0, import_node_fs33.existsSync)(topicTxt)) {
+    log.error(`rehearsal handoff-extract: topic.txt missing under ${art}`);
+    return 2;
+  }
+  const topic = (0, import_node_fs33.readFileSync)(topicTxt, "utf8").replace(/\n/g, " ").replace(/\s+$/, "");
+  const sbPath = (0, import_node_path31.join)(art, "scoreboard.md");
+  const { winner, runnerUps } = parseScoreboard((0, import_node_fs33.existsSync)(sbPath) ? (0, import_node_fs33.readFileSync)(sbPath, "utf8") : "");
+  let landscapeDoc;
+  for (const name of (0, import_node_fs33.readdirSync)(art).sort()) {
+    if (/^rehearsal-.*\.md$/.test(name) && (0, import_node_fs33.statSync)((0, import_node_path31.join)(art, name)).isFile()) {
+      landscapeDoc = name;
+      break;
+    }
+  }
+  const hasMetricMd = (0, import_node_fs33.existsSync)((0, import_node_path31.join)(art, "metric.md"));
+  const generatedTs = deps.now();
+  let input;
+  if (!winner) {
+    input = { topic, landscapeDoc, hasMetricMd, generatedTs, winner: null, runnerUps: [] };
+  } else {
+    const expRel = `parts/${winner.instrument}/experiments/${winner.expId}`;
+    const result = readResultJson((0, import_node_path31.join)(art, expRel, "result.json"));
+    const approach = result.approach_label != null ? String(result.approach_label) : "";
+    const notes = String(result.notes ?? "").replace(/\n/g, " ");
+    let checkpoint;
+    const ckptRaw = result.checkpoint_path != null ? String(result.checkpoint_path) : "";
+    if (ckptRaw && ckptRaw !== "null") {
+      checkpoint = ckptRaw.startsWith("/") ? ckptRaw : `${expRel}/${ckptRaw}`;
+    }
+    const runners = runnerUps.map((r) => {
+      const rr = readResultJson((0, import_node_path31.join)(art, `parts/${r.instrument}/experiments/${r.expId}`, "result.json"));
+      return { instrument: r.instrument, exp: r.expId, metric: r.metric, approach: rr.approach_label != null ? String(rr.approach_label) : "" };
+    });
+    input = {
+      topic,
+      landscapeDoc,
+      hasMetricMd,
+      generatedTs,
+      winner: {
+        instrument: winner.instrument,
+        exp: winner.expId,
+        approach,
+        metric: winner.metric,
+        checkpoint,
+        notes: notes || void 0,
+        codeDir: `${expRel}/code/`
+      },
+      runnerUps: runners
+    };
+  }
+  atomicWrite((0, import_node_path31.join)(art, "handoff-data.kv"), buildHandoffKv(input));
+  log.ok(`handoff-data.kv written: ${(0, import_node_path31.join)(art, "handoff-data.kv")}`);
+  return 0;
+}
+function sweepTmpLock(dir, depth) {
+  if (depth < 0) return;
+  let entries;
+  try {
+    entries = (0, import_node_fs33.readdirSync)(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const e of entries) {
+    const p = (0, import_node_path31.join)(dir, e.name);
+    if (e.isDirectory()) {
+      sweepTmpLock(p, depth - 1);
+    } else if (e.isFile() && (e.name.endsWith(".tmp") || e.name.endsWith(".lock"))) {
+      try {
+        (0, import_node_fs33.rmSync)(p, { force: true });
+      } catch {
+      }
+    }
+  }
+}
+async function teardownWith(args, deps) {
+  const out = deps.stdout ?? ((l) => {
+    process.stdout.write(l + "\n");
+  });
+  const topic = args[0];
+  if (!topic) {
+    log.error("rehearsal teardown: topic required");
+    return 2;
+  }
+  const art = rehearsalArtDir(topic, deps.opts);
+  if (!(0, import_node_fs33.existsSync)(art) || !(0, import_node_fs33.statSync)(art).isDirectory()) {
+    log.error(`${art} not found`);
+    return 1;
+  }
+  const pf = (0, import_node_path31.join)(art, "preflight-panes.txt");
+  if ((0, import_node_fs33.existsSync)(pf)) {
+    for (const line of (0, import_node_fs33.readFileSync)(pf, "utf8").split("\n")) {
+      const pane = line.trim();
+      if (!pane) continue;
+      try {
+        await deps.killPane(pane);
+      } catch {
+      }
+    }
+  }
+  const shared = (0, import_node_path31.join)(art, "shared");
+  if ((0, import_node_fs33.existsSync)(shared) && (0, import_node_fs33.statSync)(shared).isDirectory()) sweepTmpLock(shared, 2);
+  const sbPath = (0, import_node_path31.join)(art, "scoreboard.md");
+  if ((0, import_node_fs33.existsSync)(sbPath)) {
+    const { winner } = parseScoreboard((0, import_node_fs33.readFileSync)(sbPath, "utf8"));
+    if (winner) {
+      const rel = `parts/${winner.instrument}/experiments/${winner.expId}/code`;
+      if ((0, import_node_fs33.existsSync)((0, import_node_path31.join)(art, rel)) && (0, import_node_fs33.statSync)((0, import_node_path31.join)(art, rel)).isDirectory()) {
+        const link = (0, import_node_path31.join)(art, "winner");
+        try {
+          (0, import_node_fs33.rmSync)(link, { force: true });
+        } catch {
+        }
+        (0, import_node_fs33.symlinkSync)(rel, link);
+        log.ok(`[teardown] winner symlink -> ${rel} (${winner.instrument}/${winner.expId})`);
+      } else {
+        log.warn(`[teardown] scoreboard top-1 dir missing: ${(0, import_node_path31.join)(art, rel)}; no symlink`);
+      }
+    } else {
+      log.info("[teardown] scoreboard has no ok rows; no winner symlink");
+    }
+  }
+  const dest = deps.archiveTopic(topic, "rehearsal");
+  if (dest) {
+    out(dest);
+    log.ok(`[teardown] archived ${topic} -> ${dest}`);
+  }
+  return 0;
+}
+async function forensicsRun3(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("rehearsal forensics: topic required");
+    return 2;
+  }
+  const path6 = captureArtDir({ artDir: rehearsalArtDir(topic), command: "rehearsal" });
+  if (path6) {
+    log.ok(`forensics captured: ${path6}`);
+    process.stdout.write(path6 + "\n");
+  } else log.info("rehearsal forensics: no mechanical findings");
+  return 0;
+}
+async function freshPartWith(args, deps) {
+  if (args.length !== 2) {
+    log.error("rehearsal fresh-part: usage: <topic> <instrument>");
+    return 2;
+  }
+  const [topic, instrument] = args;
+  if (!INSTRUMENT_RE.test(instrument)) {
+    log.error(`instrument must match [a-z][a-z0-9-]*; got '${instrument}'`);
+    return 2;
+  }
+  const art = rehearsalArtDir(topic, deps.opts);
+  const stateTxt = (0, import_node_path31.join)(partStateDir(art, instrument), "state.txt");
+  if (!(0, import_node_fs33.existsSync)(stateTxt)) {
+    log.error(`part state.txt missing: ${stateTxt}`);
+    return 1;
+  }
+  const prev = parseState((0, import_node_fs33.readFileSync)(stateTxt, "utf8"));
+  if (prev.phase === "working") {
+    log.error(`part ${instrument} is mid-experiment (phase=working); abort or wait for done before fresh-part.`);
+    return 1;
+  }
+  const prevCounter = /^[0-9]+$/.test(prev.exp_counter ?? "") ? prev.exp_counter : "0";
+  log.info(`[fresh-part] tearing down ${instrument}'s pane on ${topic} ...`);
+  try {
+    await deps.teardown(topic, instrument);
+  } catch {
+  }
+  log.info(`[fresh-part] respawning ${instrument} ...`);
+  const rc = await deps.spawn([instrument, "codex", topic]);
+  if (rc !== 0) {
+    log.error(`spawn failed for ${instrument} on ${topic}`);
+    return 1;
+  }
+  atomicWrite(stateTxt, mergeState((0, import_node_fs33.readFileSync)(stateTxt, "utf8"), {
+    last_event: "fresh-part-respawn",
+    last_event_ts: deps.now(),
+    phase: "idle",
+    current_exp_id: "",
+    exp_counter: prevCounter,
+    probe_sent_ts: ""
+  }));
+  log.ok(`[fresh-part] ${instrument} respawned on ${topic}; state preserved (exp_counter=${prevCounter})`);
+  return 0;
+}
+async function abortWith(args, deps) {
+  if (args.length < 1 || args.length > 2) {
+    log.error("rehearsal abort: usage: <topic> [reason]");
+    return 2;
+  }
+  const topic = args[0];
+  const reason = args[1] ?? "unspecified";
+  const art = rehearsalArtDir(topic, deps.opts);
+  if (!(0, import_node_fs33.existsSync)(art) || !(0, import_node_fs33.statSync)(art).isDirectory()) {
+    log.error(`no active rehearsal session for topic: ${topic} (art-dir ${art} missing)`);
+    return 1;
+  }
+  const mt = (0, import_node_path31.join)(art, "monitor-tasks.txt");
+  const ids = (0, import_node_fs33.existsSync)(mt) ? (0, import_node_fs33.readFileSync)(mt, "utf8").split("\n").map((l) => l.trim()).filter(Boolean) : [];
+  (0, import_node_fs33.writeFileSync)((0, import_node_path31.join)(art, "halt.flag"), `halted_by=user
+halted_at=${deps.now()}
+reason=${reason}
+`);
+  log.info(`halt.flag written (${reason})`);
+  const frc = await deps.finalize(topic);
+  if (frc !== 0) {
+    log.error("finalize failed");
+    return 1;
+  }
+  const trc = await deps.teardown(topic);
+  if (trc !== 0) {
+    log.error("teardown failed");
+    return 1;
+  }
+  if (ids.length > 0) {
+    log.info(`note: ${ids.length} Monitor task(s) still active; will TaskStop on next Maestro turn (halt.flag detected):`);
+    for (const id of ids) log.info(`  - ${id}`);
+  } else {
+    log.info("no Monitor tasks to stop");
+  }
+  log.ok(`rehearsal session ${topic} aborted`);
+  return 0;
+}
+function parseConsensusArgs(args) {
+  let epsilon = 0.01, topic = "", badArgs = false;
+  for (let i2 = 0; i2 < args.length; i2++) {
+    const a2 = args[i2];
+    if (a2 === "--epsilon" || a2.startsWith("--epsilon=")) {
+      const r = kvParse(a2, args[i2 + 1]);
+      epsilon = parseFloat(r.value);
+      i2 += r.shift - 1;
+    } else if (a2.startsWith("-")) {
+      badArgs = true;
+    } else {
+      topic = a2;
+    }
+  }
+  return { topic, epsilon, badArgs };
+}
+async function consensusWith(args, deps) {
+  const p = parseConsensusArgs(args);
+  if (p.badArgs) {
+    log.error("rehearsal consensus: unknown flag");
+    return 2;
+  }
+  if (!p.topic) {
+    log.error("rehearsal consensus: topic required");
+    return 2;
+  }
+  const epsilon = deps.epsilon ?? p.epsilon;
+  const art = rehearsalArtDir(p.topic, deps.opts);
+  const partsRoot = partsDir(art);
+  if (!(0, import_node_fs33.existsSync)(partsRoot)) {
+    log.error(`rehearsal consensus: no parts dir under ${art}`);
+    return 1;
+  }
+  const latestOk = {};
+  let instruments;
+  try {
+    instruments = (0, import_node_fs33.readdirSync)(partsRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+  } catch {
+    instruments = [];
+  }
+  for (const instrument of instruments) {
+    const expsRoot = experimentsDir(art, instrument);
+    let names;
+    try {
+      names = (0, import_node_fs33.readdirSync)(expsRoot).filter((n2) => EXP_ID_RE.test(n2)).sort();
+    } catch {
+      continue;
+    }
+    let newest = "";
+    for (const exp of names) {
+      const resultPath = (0, import_node_path31.join)(experimentDir(art, instrument, exp), "result.json");
+      if (!(0, import_node_fs33.existsSync)(resultPath)) continue;
+      let parsed;
+      try {
+        parsed = JSON.parse((0, import_node_fs33.readFileSync)(resultPath, "utf8"));
+      } catch {
+        continue;
+      }
+      if (parsed.status !== "ok") continue;
+      if (exp > newest) {
+        newest = exp;
+        latestOk[instrument] = parsed;
+      }
+    }
+  }
+  if (Object.keys(latestOk).length === 0) {
+    log.error("rehearsal consensus: no ok result.json files found");
+    return 1;
+  }
+  const md = buildConsensus(latestOk, { topic: p.topic, nowIso: deps.now(), epsilon });
+  atomicWrite((0, import_node_path31.join)(art, "consensus.md"), md);
+  log.ok(`[consensus] wrote ${(0, import_node_path31.join)(art, "consensus.md")} (${Object.keys(latestOk).length} parts)`);
+  return 0;
+}
+async function run13(args) {
+  const [verb, ...rest] = args;
+  switch (verb) {
+    case "init":
+      return initWith4(applyArgsFile(rest), liveInitDeps4);
+    case "metric":
+      return metricWith(rest);
+    case "sota":
+      return sotaWith(rest);
+    case "spawn-all":
+      return spawnAllWith2(rest, liveSpawnAllDeps2);
+    case "experiment-send":
+      return experimentSendWith(applyArgsFile(rest), liveExperimentSendDeps);
+    case "score":
+      return scoreWith(rest, liveScoreDeps);
+    case "monitor":
+      return monitorRun(rest);
+    case "status-brief":
+      return statusBriefWith(rest);
+    case "finalize":
+      return finalizeWith(rest, liveFinalizeDeps);
+    case "refine":
+      return refineWith(applyArgsFile(rest), liveRefineDeps);
+    case "handoff-extract":
+      return handoffExtractWith(rest, liveHandoffDeps);
+    case "teardown":
+      return teardownWith(rest, liveTeardownDeps);
+    case "fresh-part":
+      return freshPartWith(rest, liveFreshPartDeps);
+    case "forensics":
+      return forensicsRun3(rest);
+    case "abort":
+      return abortWith(applyArgsFile(rest), liveAbortDeps);
+    case "consensus":
+      return consensusWith(rest, liveConsensusDeps);
+    default:
+      log.error(`rehearsal: unknown verb: ${verb ?? "(none)"}`);
+      return 2;
+  }
+}
+var import_node_fs33, import_node_child_process9, import_node_path31, liveInitDeps4, liveSpawnAllDeps2, liveExperimentSendDeps, liveScoreDeps, sleep4, GIB, liveFinalizeDeps, liveRefineDeps, liveHandoffDeps, liveTeardownDeps, liveFreshPartDeps, liveAbortDeps, liveConsensusDeps;
+var init_rehearsal2 = __esm({
+  "src/commands/rehearsal.ts"() {
+    "use strict";
+    import_node_fs33 = require("node:fs");
+    import_node_child_process9 = require("node:child_process");
+    import_node_path31 = require("node:path");
+    init_log();
+    init_args();
+    init_atomic();
+    init_archive();
+    init_solo();
+    init_rehearsalMetric();
+    init_rehearsal();
+    init_rehearsalScore();
+    init_rehearsalState();
+    init_rehearsalComplete();
+    init_rehearsalResult();
+    init_rehearsalSummary();
+    init_rehearsalFinalize();
+    init_rehearsalBrief();
+    init_rehearsalMonitor();
+    init_rehearsalExperiment();
+    init_forensics();
+    init_rehearsalHandoff();
+    init_rehearsalConsensus();
+    init_contracts();
+    init_ipc();
+    init_tmux();
+    init_deps();
+    init_score();
+    init_instruments();
+    init_paths();
+    init_spawn();
+    init_preflight();
+    init_send2();
+    init_coda();
+    liveInitDeps4 = {
+      haveCmd,
+      instrumentBinary,
+      now: () => isoUtc()
+    };
+    liveSpawnAllDeps2 = { preflight: run7, spawn: run, repoRoot, pickInstruments };
+    liveExperimentSendDeps = {
+      now: () => isoUtc(),
+      probeHardware: liveProbeHardware,
+      paneSend,
+      consultTimeout: () => consultTimeout("experiment"),
+      runSmokeTest: (script, cwd, timeoutSec) => {
+        try {
+          (0, import_node_child_process9.execFileSync)(script, [], { cwd, timeout: timeoutSec * 1e3, encoding: "utf8" });
+          return { ok: true, stderr: "" };
+        } catch (e) {
+          const err = e;
+          return { ok: false, stderr: err.stderr ?? err.message ?? "" };
+        }
+      },
+      dryRun: process.env.CONSORT_DRY_RUN === "1"
+    };
+    liveScoreDeps = {
+      computeScore,
+      fs: {
+        exists: import_node_fs33.existsSync,
+        read: (p) => (0, import_node_fs33.existsSync)(p) ? (0, import_node_fs33.readFileSync)(p, "utf8") : null,
+        listDir: (p) => {
+          try {
+            return (0, import_node_fs33.readdirSync)(p).sort();
+          } catch {
+            return [];
+          }
+        }
+        // ENOENT-safe, per ScoreFs contract
+      },
+      writeAtomic: atomicWrite,
+      removeFile: (p) => {
+        try {
+          (0, import_node_fs33.rmSync)(p, { force: true });
+        } catch {
+        }
+      },
+      now: () => isoUtc()
+    };
+    sleep4 = (ms) => new Promise((r) => setTimeout(r, ms));
+    GIB = 1073741824;
+    liveFinalizeDeps = {
+      now: () => isoUtc(),
+      keepIntermediate: process.env.CONSORT_REHEARSAL_KEEP_INTERMEDIATE ? true : void 0,
+      sizeWarnGb: Number(process.env.CONSORT_REHEARSAL_SIZE_WARN_GB) || 2
+    };
+    liveRefineDeps = {
+      send: (a2) => run2(a2),
+      dryRun: process.env.CONSORT_DRY_RUN === "1"
+    };
+    liveHandoffDeps = { now: () => isoUtc() };
+    liveTeardownDeps = {
+      killPane: (p) => killNow(p),
+      archiveTopic: (t, s) => archiveTopic(t, s),
+      now: () => isoUtc()
+    };
+    liveFreshPartDeps = {
+      teardown: (t, i2) => run5(["--pairs", t, i2]).then(() => void 0),
+      spawn: (a2) => run(a2),
+      now: () => isoUtc()
+    };
+    liveAbortDeps = {
+      finalize: (t) => finalizeWith([t], liveFinalizeDeps),
+      teardown: (t) => teardownWith([t], liveTeardownDeps),
+      now: () => isoUtc()
+    };
+    liveConsensusDeps = { now: () => isoUtc() };
+  }
+});
+
 // src/consort.ts
 init_args();
 init_paths();
 init_colors();
 async function loadHandlers() {
-  const [spawn2, send, collect, roster, coda, soundcheck, preflight, hook, solo, score, perform, playback] = await Promise.all([
+  const [spawn2, send, collect, roster, coda, soundcheck, preflight, hook, solo, score, perform, playback, rehearsal] = await Promise.all([
     Promise.resolve().then(() => (init_spawn(), spawn_exports)),
     Promise.resolve().then(() => (init_send2(), send_exports)),
     Promise.resolve().then(() => (init_collect(), collect_exports)),
@@ -21521,7 +23928,8 @@ async function loadHandlers() {
     Promise.resolve().then(() => (init_solo2(), solo_exports)),
     Promise.resolve().then(() => (init_score2(), score_exports)),
     Promise.resolve().then(() => (init_perform2(), perform_exports)),
-    Promise.resolve().then(() => (init_playback2(), playback_exports))
+    Promise.resolve().then(() => (init_playback2(), playback_exports)),
+    Promise.resolve().then(() => (init_rehearsal2(), rehearsal_exports))
   ]);
   return {
     spawn: spawn2.run,
@@ -21535,7 +23943,8 @@ async function loadHandlers() {
     solo: solo.run,
     score: score.run,
     perform: perform.run,
-    playback: playback.run
+    playback: playback.run,
+    rehearsal: rehearsal.run
   };
 }
 async function banner(label, color) {

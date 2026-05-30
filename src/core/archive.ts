@@ -53,15 +53,21 @@ export function finalizeArchived(td: string, opts?: { now?: Date }): void {
   }
 }
 
-export function archiveTopic(topic: string, suite: "consult" | "deploy" | "meditate" | "score" | "perform", opts?: { now?: Date }): void {
+export function archiveTopic(
+  topic: string,
+  suite: "consult" | "deploy" | "meditate" | "score" | "perform" | "rehearsal",
+  opts?: { now?: Date },
+): string | null {
   const td = topicDir(topic);
   finalizeArchived(td, opts);
   const art = join(td, `_${suite}`);
+  let dest: string | null = null;
   if (existsSync(art)) {
     const base = join(globalRoot(), "archive", repoHash(), topic, `_${suite}-${archiveTs(opts?.now)}`);
-    const dest = uniqueDest(base);
+    dest = uniqueDest(base);
     mkdirSync(dirname(dest), { recursive: true });
     renameSync(art, dest);
   }
-  try { rmSync(td, { recursive: false, force: false }); } catch { /* rmdir-if-empty equivalent; tolerate non-empty */ }
+  try { rmSync(td, { recursive: false, force: false }); } catch { /* rmdir-if-empty; tolerate non-empty */ }
+  return dest;
 }
