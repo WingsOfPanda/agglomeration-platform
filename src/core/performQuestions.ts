@@ -69,7 +69,8 @@ export function questionRunnerAt(cwd: string): QuestionRunner {
   };
 }
 
-/** Strip a single trailing newline, matching bash `$(...)` capture (which trims) + printf '%s\n'. */
+/** Strip trailing newline(s), matching bash `$(...)` capture (which strips all trailing newlines)
+ *  + the reply's own printf '%s\n'. */
 function trimTrailingNewline(s: string): string { return s.replace(/\n+$/, ""); }
 
 /** Verify a claim of `kind` carrying `value`. rc=0 confirmed / rc=1 refuted / rc=2 unverifiable
