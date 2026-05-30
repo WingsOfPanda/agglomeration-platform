@@ -325,8 +325,8 @@ function haveCmd(name) {
     return false;
   }
 }
-function tmuxVersionString(run13) {
-  if (run13) return run13();
+function tmuxVersionString(run14) {
+  if (run14) return run14();
   if (!haveCmd("tmux")) return null;
   try {
     return (0, import_node_child_process2.execFileSync)("tmux", ["-V"], { encoding: "utf8" }).trim();
@@ -21504,12 +21504,371 @@ var init_playback2 = __esm({
   }
 });
 
+// src/core/rehearsalMetric.ts
+function extractMetric(topic) {
+  if (!topic) return "";
+  const lowerRaw = topic.toLowerCase();
+  const lowerPadded = ` ${lowerRaw} `;
+  let bestPos = Infinity;
+  let bestWord = "";
+  for (const word of METRIC_VOCAB) {
+    if (!new RegExp(`[^a-z0-9]${word}[^a-z0-9]`).test(lowerPadded)) continue;
+    const pos = lowerRaw.indexOf(word);
+    if (pos < bestPos) {
+      bestPos = pos;
+      bestWord = word;
+    }
+  }
+  return bestWord;
+}
+function formatMetricBlock(fields) {
+  const primary = fields.primary_metric ?? "";
+  const direction = fields.direction ?? "";
+  if (!primary) throw new Error("missing required key: primary_metric");
+  if (!direction) throw new Error("missing required key: direction");
+  if (direction !== "maximize" && direction !== "minimize") {
+    throw new Error(`direction must be 'maximize' or 'minimize'; got '${direction}'`);
+  }
+  const min = fields.min_acceptable || "(not set)";
+  const K = fields.K_corroboration || "1";
+  const pw = fields.plateau_window || "5";
+  const pt = fields.plateau_threshold || "0.01";
+  const lines = ["# Research goal", ""];
+  lines.push(`**Primary metric:** ${primary}`);
+  lines.push(`**Direction:** ${direction}`);
+  lines.push(`**min_acceptable:** ${min}`);
+  if (fields.target) lines.push(`**target:** ${fields.target}`);
+  lines.push(`**K_corroboration:** ${K}`);
+  lines.push(`**plateau_window:** ${pw}`);
+  lines.push(`**plateau_threshold:** ${pt}`);
+  if (fields.acceptable) lines.push(`**acceptable (legacy):** ${fields.acceptable}`);
+  if (fields.hard_constraints) lines.push(`**Hard constraints:** ${fields.hard_constraints}`);
+  let out = lines.join("\n") + "\n";
+  if (fields.notes) out += `
+**Notes:** ${fields.notes}
+`;
+  return out;
+}
+function formatSotaBlock(input) {
+  if (!input.topic) throw new Error("missing required key: topic");
+  if (!input.metric) throw new Error("missing required key: metric");
+  if (!input.sweep_date) throw new Error("missing required key: sweep_date");
+  const lines = [];
+  lines.push(`# SOTA reference \u2014 ${input.topic}`, "");
+  lines.push(`> **Sweep date:** ${input.sweep_date}`);
+  lines.push(`> **Optimizing for:** ${input.metric}`);
+  if (input.queries) lines.push(`> **Queries fired:** ${input.queries}`);
+  lines.push("");
+  lines.push("| Approach family | Best known | Constraint compliance | Source | Notes |");
+  lines.push("|---|---|---|---|---|");
+  let rendered = 0;
+  for (const row of input.refs.slice(0, 7)) {
+    if (!row) continue;
+    const [family = "", best = "", compliance = "", source = "", ...rest] = row.split("|");
+    const notes = rest.join("|");
+    lines.push(`| ${family} | ${best} | ${compliance} | ${source} | ${notes} |`);
+    rendered++;
+  }
+  let out = lines.join("\n") + "\n";
+  if (rendered === 0) {
+    out += "\n_Note: sweep returned no usable references; part-side web search remains available._\n";
+  }
+  return out;
+}
+var METRIC_VOCAB;
+var init_rehearsalMetric = __esm({
+  "src/core/rehearsalMetric.ts"() {
+    "use strict";
+    METRIC_VOCAB = [
+      "accuracy",
+      "auc",
+      "cost",
+      "f1",
+      "latency",
+      "loss",
+      "memory",
+      "params",
+      "precision",
+      "recall",
+      "throughput"
+    ];
+  }
+});
+
+// src/core/rehearsal.ts
+function rehearsalArtDir(topic, opts) {
+  return (0, import_node_path29.join)(topicDir(topic, opts), "_rehearsal");
+}
+var import_node_path29;
+var init_rehearsal = __esm({
+  "src/core/rehearsal.ts"() {
+    "use strict";
+    import_node_path29 = require("node:path");
+    init_paths();
+  }
+});
+
+// src/commands/rehearsal.ts
+var rehearsal_exports = {};
+__export(rehearsal_exports, {
+  initWith: () => initWith4,
+  metricWith: () => metricWith,
+  run: () => run13,
+  sotaWith: () => sotaWith,
+  spawnAllWith: () => spawnAllWith2
+});
+function parseInitArgs(args) {
+  let topic = "";
+  let seedFrom, timeBudget, metric, slug, badFlag;
+  for (let i2 = 0; i2 < args.length; i2++) {
+    const a2 = args[i2];
+    if (a2.startsWith("--")) {
+      const eq = a2.indexOf("=");
+      const flag = eq > 0 ? a2.slice(0, eq) : a2;
+      const inline = eq > 0 ? a2.slice(eq + 1) : void 0;
+      const val = () => inline ?? args[++i2];
+      if (flag === "--seed-from") seedFrom = val();
+      else if (flag === "--time-budget") timeBudget = val();
+      else if (flag === "--metric") metric = val();
+      else if (flag === "--slug") slug = val();
+      else {
+        badFlag = a2;
+      }
+    } else {
+      topic = args.slice(i2).join(" ");
+      break;
+    }
+  }
+  return { topic, seedFrom, timeBudget, metric, slug, badFlag };
+}
+function resolveTimeBudget(v) {
+  if (v === "none") return "none";
+  if (/^[1-9][0-9]*h$/.test(v)) return String(parseInt(v, 10) * 3600);
+  if (/^[1-9][0-9]*s$/.test(v)) return String(parseInt(v, 10));
+  if (/^[1-9][0-9]*$/.test(v)) return v;
+  throw new Error(`invalid --time-budget: '${v}' (expected 'none', '<N>h', '<N>s', or positive seconds)`);
+}
+async function initWith4(args, deps) {
+  const out = deps.stdout ?? ((l) => {
+    process.stdout.write(l + "\n");
+  });
+  const p = parseInitArgs(args);
+  if (p.badFlag) {
+    log.error(`rehearsal init: unknown flag: ${p.badFlag}`);
+    return 2;
+  }
+  if (!p.topic) {
+    log.error("rehearsal init: topic required");
+    return 2;
+  }
+  let resolvedBudget;
+  if (p.timeBudget !== void 0) {
+    try {
+      resolvedBudget = resolveTimeBudget(p.timeBudget);
+    } catch (e) {
+      log.error(`rehearsal init: ${e.message}`);
+      return 2;
+    }
+  }
+  const binary = deps.instrumentBinary("codex");
+  if (!binary) {
+    log.error("rehearsal init: codex has no entry in contracts.yaml");
+    return 3;
+  }
+  if (!deps.haveCmd(binary)) {
+    log.error("rehearsal init: codex binary not on PATH; install codex and run /consort:soundcheck");
+    return 3;
+  }
+  let slug;
+  if (p.slug !== void 0) {
+    if (!/^[a-z][a-z0-9-]{0,19}$/.test(p.slug)) {
+      log.error(`rehearsal init: --slug must match ^[a-z][a-z0-9-]{0,19}$; got '${p.slug}'`);
+      return 2;
+    }
+    slug = p.slug;
+  } else {
+    slug = deriveSlug(p.topic);
+  }
+  if (!slug) {
+    log.error("rehearsal init: topic produced an empty slug; provide alphanumerics");
+    return 2;
+  }
+  const art = rehearsalArtDir(slug, deps.opts);
+  if ((0, import_node_fs33.existsSync)(art)) {
+    log.error(`rehearsal init: topic already in flight: ${art}`);
+    return 2;
+  }
+  if (p.seedFrom && !(0, import_node_fs33.existsSync)(p.seedFrom)) {
+    log.error(`rehearsal init: --seed-from not found: ${p.seedFrom}`);
+    return 1;
+  }
+  (0, import_node_fs33.mkdirSync)(art, { recursive: true });
+  atomicWrite((0, import_node_path30.join)(art, "topic.txt"), p.topic);
+  atomicWrite((0, import_node_path30.join)(art, "metric.txt"), extractMetric(p.topic) + "\n");
+  if (p.seedFrom) atomicWrite((0, import_node_path30.join)(art, "seed-from.txt"), p.seedFrom + "\n");
+  (deps.probeHardware ?? (() => {
+  }))((0, import_node_path30.join)(art, "hardware.txt"));
+  if (p.metric !== void 0) {
+    try {
+      atomicWrite((0, import_node_path30.join)(art, "metric.md"), formatMetricBlock(parseKv(p.metric)));
+    } catch (e) {
+      log.error(`rehearsal init: --metric: ${e.message}`);
+      return 2;
+    }
+  }
+  if (resolvedBudget !== void 0) {
+    atomicWrite((0, import_node_path30.join)(art, "time-budget.txt"), resolvedBudget + "\n");
+    atomicWrite((0, import_node_path30.join)(art, "session-start.txt"), deps.now() + "\n");
+  }
+  out(`TOPIC=${slug}`);
+  out(`ART=${art}`);
+  return 0;
+}
+function parseKv(s) {
+  const o2 = {};
+  for (const pair of s.split(",")) {
+    const i2 = pair.indexOf("=");
+    if (i2 > 0) o2[pair.slice(0, i2)] = pair.slice(i2 + 1);
+  }
+  return o2;
+}
+function takeKvFlag(args) {
+  let topic = "", kv = "";
+  for (let i2 = 0; i2 < args.length; i2++) {
+    if (args[i2] === "--kv") {
+      kv = args[++i2] ?? "";
+    } else if (!args[i2].startsWith("--") && !topic) {
+      topic = args[i2];
+    }
+  }
+  return { topic, kv };
+}
+async function metricWith(args, v = {}) {
+  const { topic, kv } = takeKvFlag(args);
+  if (!topic) {
+    log.error("rehearsal metric: topic required");
+    return 2;
+  }
+  try {
+    atomicWrite((0, import_node_path30.join)(rehearsalArtDir(topic, v.opts), "metric.md"), formatMetricBlock(parseKv(kv)));
+  } catch (e) {
+    log.error(`rehearsal metric: ${e.message}`);
+    return 2;
+  }
+  return 0;
+}
+async function sotaWith(args, v = {}) {
+  const { topic, kv } = takeKvFlag(args);
+  if (!topic) {
+    log.error("rehearsal sota: topic required");
+    return 2;
+  }
+  const f = parseKv(kv);
+  const refs = [];
+  for (let i2 = 1; i2 <= 7; i2++) {
+    if (f[`ref_${i2}`]) refs.push(f[`ref_${i2}`]);
+  }
+  try {
+    atomicWrite(
+      (0, import_node_path30.join)(rehearsalArtDir(topic, v.opts), "sota.md"),
+      formatSotaBlock({ topic: f.topic ?? "", metric: f.metric ?? "", sweep_date: f.sweep_date ?? "", queries: f.queries, refs })
+    );
+  } catch (e) {
+    log.error(`rehearsal sota: ${e.message}`);
+    return 2;
+  }
+  return 0;
+}
+async function spawnAllWith2(args, deps, opts) {
+  const topic = args.find((a2) => !a2.startsWith("--") && !/^\d+$/.test(a2)) ?? "";
+  const n2 = parseInt(args.find((a2) => /^\d+$/.test(a2)) ?? "2", 10);
+  if (!topic) {
+    log.error("rehearsal spawn-all: topic required");
+    return 2;
+  }
+  const art = rehearsalArtDir(topic, opts);
+  const instruments = deps.pickInstruments(topic, n2);
+  if (instruments.length < 2) {
+    log.error(`rehearsal spawn-all: need >= 2 codex parts; picked ${instruments.length}`);
+    return 2;
+  }
+  const rows = instruments.map((instrument) => ({ instrument, provider: "codex" }));
+  atomicWrite((0, import_node_path30.join)(art, "parts.txt"), instruments.join("\n") + "\n");
+  const prc = await deps.preflight([topic, String(rows.length), "--roster", spawnRosterArg(rows), "--art-dir", art]);
+  if (prc !== 0) {
+    log.error(`rehearsal spawn-all: preflight failed (rc ${prc})`);
+    return 2;
+  }
+  const panes = parsePanesFile((0, import_node_fs33.readFileSync)((0, import_node_path30.join)(art, "preflight-panes.txt"), "utf8"));
+  const orphans = rows.filter((r) => !panes.has(r.instrument));
+  if (orphans.length) {
+    log.error(`rehearsal spawn-all: parts missing a preflight pane: ${orphans.map((r) => r.instrument).join(", ")}`);
+    return 2;
+  }
+  const cwd = deps.repoRoot();
+  const results = await Promise.all(rows.map(async (r) => ({
+    instrument: r.instrument,
+    provider: r.provider,
+    rc: await deps.spawn([r.instrument, r.provider, topic, "--target-pane", panes.get(r.instrument), "--cwd", cwd])
+  })));
+  atomicWrite((0, import_node_path30.join)(art, "spawn-results.tsv"), spawnResultsTsv(results));
+  const rc = spawnTally(results.map((r) => r.rc));
+  const nOk = results.filter((r) => r.rc === 0).length;
+  if (rc === 0) log.ok(`rehearsal spawn-all: ${nOk}/${rows.length} codex parts ready`);
+  else log.warn(`rehearsal spawn-all: ${nOk}/${rows.length} codex parts ready (rc=${rc})`);
+  return rc;
+}
+async function run13(args) {
+  const [verb, ...rest] = args;
+  switch (verb) {
+    case "init":
+      return initWith4(applyArgsFile(rest), liveInitDeps4);
+    case "metric":
+      return metricWith(rest);
+    case "sota":
+      return sotaWith(rest);
+    case "spawn-all":
+      return spawnAllWith2(rest, liveSpawnAllDeps2);
+    default:
+      log.error(`rehearsal: unknown verb: ${verb ?? "(none)"}`);
+      return 2;
+  }
+}
+var import_node_fs33, import_node_path30, liveInitDeps4, liveSpawnAllDeps2;
+var init_rehearsal2 = __esm({
+  "src/commands/rehearsal.ts"() {
+    "use strict";
+    import_node_fs33 = require("node:fs");
+    import_node_path30 = require("node:path");
+    init_log();
+    init_args();
+    init_atomic();
+    init_archive();
+    init_solo();
+    init_rehearsalMetric();
+    init_rehearsal();
+    init_contracts();
+    init_deps();
+    init_score();
+    init_instruments();
+    init_paths();
+    init_spawn();
+    init_preflight();
+    liveInitDeps4 = {
+      haveCmd,
+      instrumentBinary,
+      now: () => isoUtc()
+    };
+    liveSpawnAllDeps2 = { preflight: run7, spawn: run, repoRoot, pickInstruments };
+  }
+});
+
 // src/consort.ts
 init_args();
 init_paths();
 init_colors();
 async function loadHandlers() {
-  const [spawn2, send, collect, roster, coda, soundcheck, preflight, hook, solo, score, perform, playback] = await Promise.all([
+  const [spawn2, send, collect, roster, coda, soundcheck, preflight, hook, solo, score, perform, playback, rehearsal] = await Promise.all([
     Promise.resolve().then(() => (init_spawn(), spawn_exports)),
     Promise.resolve().then(() => (init_send2(), send_exports)),
     Promise.resolve().then(() => (init_collect(), collect_exports)),
@@ -21521,7 +21880,8 @@ async function loadHandlers() {
     Promise.resolve().then(() => (init_solo2(), solo_exports)),
     Promise.resolve().then(() => (init_score2(), score_exports)),
     Promise.resolve().then(() => (init_perform2(), perform_exports)),
-    Promise.resolve().then(() => (init_playback2(), playback_exports))
+    Promise.resolve().then(() => (init_playback2(), playback_exports)),
+    Promise.resolve().then(() => (init_rehearsal2(), rehearsal_exports))
   ]);
   return {
     spawn: spawn2.run,
@@ -21535,7 +21895,8 @@ async function loadHandlers() {
     solo: solo.run,
     score: score.run,
     perform: perform.run,
-    playback: playback.run
+    playback: playback.run,
+    rehearsal: rehearsal.run
   };
 }
 async function banner(label, color) {
