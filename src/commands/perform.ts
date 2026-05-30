@@ -43,7 +43,7 @@ function detectRouting(docText: string): "single" | "multi" {
   return /^\*\*Target Sub-Project\(s\):\*\*/m.test(docText) && /^## Execution DAG[ \t]*$/m.test(docText) ? "multi" : "single";
 }
 function usage(): number {
-  log.error("usage: perform <init|pre-snapshot|branch|turn-send|turn-wait|scope-check|sibling-baseline|sibling-verify|sibling-rescue|cross-signal|summary|finish|forensics|archive|dag-parse|wave-wait|multi-init|send-unit> ...");
+  log.error("usage: perform <init|pre-snapshot|branch|turn-send|turn-wait|scope-check|sibling-baseline|sibling-verify|sibling-rescue|cross-signal|summary|finish|finish-one|forensics|archive|dag-parse|wave-wait|multi-init|send-unit> ...");
   return 2;
 }
 
@@ -62,6 +62,7 @@ export async function run(args: string[]): Promise<number> {
     case "cross-signal":     return crossSignalRun(rest);
     case "summary":      return summaryRun(rest);
     case "finish":       return finishRun(rest);
+    case "finish-one":   return finishOneRun(rest);
     case "forensics":    return forensicsRun(rest);
     case "archive":      return archiveRun(rest);
     case "dag-parse":    return dagParseRun(rest);
@@ -485,6 +486,14 @@ async function finishRun(rest: string[]): Promise<number> {
   if (!["merge", "pr", "keep", "discard"].includes(action)) { log.error(`perform finish: unknown action '${action}'`); return 2; }
   return finishWith(topic, action as "merge" | "pr" | "keep" | "discard", liveFinishDeps);
 }
+// Shared per-target finish body (deploy-finish.sh:1398-1419 / deploy.md:1398-1419). Resolves the
+// part's feat branch + start branch, then delegates the branch action. Used by both finishWith
+// (apply-to-all, truncate) and finishOneWith (single target, append).
+function applyFinish(art: string, t: { slug: string; cwd: string }, action: "merge" | "pr" | "keep" | "discard", d: FinishDeps): string {
+  const branch = branchMapField(join(art, "perform-branches.tsv"), t.slug);
+  const startBranch = kvFileField(join(art, "baselines", `${t.slug}.tsv`), "branch");
+  return finishBranchAction(d.runnerFor(t.cwd), { branch, startBranch, action, hasGh: d.hasGh });
+}
 export async function finishWith(topic: string, action: "merge" | "pr" | "keep" | "discard", d: FinishDeps): Promise<number> {
   const art = performArtDir(topic);
   if (!existsSync(art)) { log.error(`perform finish: art-dir missing: ${art}`); return 1; }
@@ -492,13 +501,29 @@ export async function finishWith(topic: string, action: "merge" | "pr" | "keep" 
   let n = 0;
   for (const t of iterTargets(topic)) {
     if (!t.slug || !t.cwd) continue;
-    const branch = branchMapField(join(art, "perform-branches.tsv"), t.slug);
-    const startBranch = kvFileField(join(art, "baselines", `${t.slug}.tsv`), "branch");
-    const outcome = finishBranchAction(d.runnerFor(t.cwd), { branch, startBranch, action, hasGh: d.hasGh });
+    const outcome = applyFinish(art, { slug: t.slug, cwd: t.cwd }, action, d);
     appendFileSync(results, `${t.slug}\t${action}\t${outcome}\n`);
     log.info(`finish: ${t.slug} -> ${action} -> ${outcome}`); n++;
   }
   log.ok(`perform finish: ${n} target(s) completed`); return 0;
+}
+// Per-repo finish-one (deploy-finish.sh:1398-1419 / deploy.md:1398-1419, per-target granularity):
+// finishes a SINGLE target by slug and APPENDS to finish-results.tsv (no truncate). The multi-repo
+// directive truncates finish-results.tsv once, then calls finish-one per repo (finish menu per target).
+async function finishOneRun(rest: string[]): Promise<number> {
+  const [topic, slug, action] = rest;
+  if (!topic || !slug || !action) { log.error("usage: perform finish-one <topic> <slug> <merge|pr|keep|discard>"); return 2; }
+  if (!["merge", "pr", "keep", "discard"].includes(action)) { log.error(`perform finish-one: unknown action '${action}'`); return 2; }
+  return finishOneWith(topic, slug, action as "merge" | "pr" | "keep" | "discard", liveFinishDeps);
+}
+export async function finishOneWith(topic: string, slug: string, action: "merge" | "pr" | "keep" | "discard", d: FinishDeps): Promise<number> {
+  const art = performArtDir(topic);
+  if (!existsSync(art)) { log.error(`perform finish-one: art-dir missing: ${art}`); return 1; }
+  const target = iterTargets(topic).find((t) => t.slug === slug);
+  if (!target || !target.cwd) { log.error(`perform finish-one: no target slug=${slug}`); return 1; }
+  const outcome = applyFinish(art, { slug: target.slug, cwd: target.cwd }, action, d);
+  appendFileSync(join(art, "finish-results.tsv"), `${slug}\t${action}\t${outcome}\n`);
+  log.info(`finish: ${slug} -> ${action} -> ${outcome}`); return 0;
 }
 
 // ---- forensics (best-effort) + archive (deploy-archive.sh) ----
