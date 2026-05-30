@@ -1,6 +1,6 @@
 // /consort:rehearsal CLI verbs (Phase B front half). Ports deep-research-init.sh
 // (slug/codex-gate/flags/scaffolding) + the deep-research.md Phase 0-3 surface.
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
 import { atomicWrite } from "../core/atomic.js";
@@ -10,6 +10,11 @@ import { extractMetric, formatMetricBlock, formatSotaBlock } from "../core/rehea
 import { rehearsalArtDir } from "../core/rehearsal.js";
 import { instrumentBinary } from "../core/contracts.js";
 import { haveCmd } from "../core/deps.js";
+import { spawnRosterArg, parsePanesFile, spawnResultsTsv, spawnTally, type SpawnResult } from "../core/score.js";
+import { pickInstruments } from "../core/instruments.js";
+import { repoRoot } from "../core/paths.js";
+import { run as spawnRun } from "./spawn.js";
+import { run as preflightRun } from "./preflight.js";
 
 type PathOpts = { home?: string; cwd?: string };
 
@@ -152,12 +157,57 @@ export async function sotaWith(args: string[], v: VerbOpts = {}): Promise<number
   return 0;
 }
 
+// ---- Phase B: spawn-all — pick N codex parts + batch-spawn them, reusing score's machinery ----
+
+export interface SpawnAllDeps {
+  preflight(args: string[]): Promise<number>;
+  spawn(args: string[]): Promise<number>;
+  repoRoot(): string;
+  pickInstruments(topic: string, n: number): string[];
+}
+const liveSpawnAllDeps: SpawnAllDeps = { preflight: preflightRun, spawn: spawnRun, repoRoot, pickInstruments };
+
+/** Pick N distinct codex parts for <topic>, preflight + batch-spawn them (port of score spawn-all,
+ *  fixed to the codex provider). Writes parts.txt (one instrument per line) + spawn-results.tsv;
+ *  returns spawnTally (all ok 0 / partial 1 / none ok 2; setup failures also 2). */
+export async function spawnAllWith(args: string[], deps: SpawnAllDeps, opts?: PathOpts): Promise<number> {
+  const topic = args.find((a) => !a.startsWith("--") && !/^\d+$/.test(a)) ?? "";
+  const n = parseInt(args.find((a) => /^\d+$/.test(a)) ?? "2", 10);
+  if (!topic) { log.error("rehearsal spawn-all: topic required"); return 2; }
+  const art = rehearsalArtDir(topic, opts);
+
+  const instruments = deps.pickInstruments(topic, n);
+  if (instruments.length < 2) { log.error(`rehearsal spawn-all: need >= 2 codex parts; picked ${instruments.length}`); return 2; }
+  const rows = instruments.map((instrument) => ({ instrument, provider: "codex" }));
+  atomicWrite(join(art, "parts.txt"), instruments.join("\n") + "\n");
+
+  const prc = await deps.preflight([topic, String(rows.length), "--roster", spawnRosterArg(rows), "--art-dir", art]);
+  if (prc !== 0) { log.error(`rehearsal spawn-all: preflight failed (rc ${prc})`); return 2; }
+  const panes = parsePanesFile(readFileSync(join(art, "preflight-panes.txt"), "utf8"));
+  const orphans = rows.filter((r) => !panes.has(r.instrument));
+  if (orphans.length) { log.error(`rehearsal spawn-all: parts missing a preflight pane: ${orphans.map((r) => r.instrument).join(", ")}`); return 2; }
+
+  const cwd = deps.repoRoot();
+  const results: SpawnResult[] = await Promise.all(rows.map(async (r) => ({
+    instrument: r.instrument, provider: r.provider,
+    rc: await deps.spawn([r.instrument, r.provider, topic, "--target-pane", panes.get(r.instrument)!, "--cwd", cwd]),
+  })));
+  atomicWrite(join(art, "spawn-results.tsv"), spawnResultsTsv(results));
+
+  const rc = spawnTally(results.map((r) => r.rc));
+  const nOk = results.filter((r) => r.rc === 0).length;
+  if (rc === 0) log.ok(`rehearsal spawn-all: ${nOk}/${rows.length} codex parts ready`);
+  else log.warn(`rehearsal spawn-all: ${nOk}/${rows.length} codex parts ready (rc=${rc})`);
+  return rc;
+}
+
 export async function run(args: string[]): Promise<number> {
   const [verb, ...rest] = args;
   switch (verb) {
     case "init": return initWith(rest, liveInitDeps);
     case "metric": return metricWith(rest);
     case "sota": return sotaWith(rest);
+    case "spawn-all": return spawnAllWith(rest, liveSpawnAllDeps);
     default: log.error(`rehearsal: unknown verb: ${verb ?? "(none)"}`); return 2;
   }
 }

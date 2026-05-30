@@ -4,6 +4,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { freshHome } from "./helpers/tmpHome.js";
 import { initWith, type RehearsalInitDeps } from "../src/commands/rehearsal.js";
 import { metricWith, sotaWith } from "../src/commands/rehearsal.js";
+import { spawnAllWith, type SpawnAllDeps } from "../src/commands/rehearsal.js";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { rehearsalArtDir } from "../src/core/rehearsal.js";
 
 const cleanups: Array<() => void> = [];
@@ -134,5 +136,59 @@ describe("rehearsal metric / sota verbs", () => {
     const md = readFileSync(`${art}/sota.md`, "utf8");
     expect(md).toContain("# SOTA reference — mnist");
     expect(md).toContain("| cnn | 0.99 | fits | url | note |");
+  });
+});
+
+describe("rehearsal spawn-all", () => {
+  function deps(over: Partial<SpawnAllDeps> = {}): SpawnAllDeps {
+    return {
+      preflight: async (a) => {
+        const art = a[a.indexOf("--art-dir") + 1];
+        const roster = a[a.indexOf("--roster") + 1]; // "inst:codex,inst2:codex"
+        const lines = roster.split(",").map((e, i) => `${e.split(":")[0]}\t%${i + 1}`).join("\n");
+        mkdirSync(art, { recursive: true });
+        writeFileSync(`${art}/preflight-panes.txt`, lines + "\n");
+        return 0;
+      },
+      spawn: async () => 0,
+      repoRoot: () => "/repo",
+      pickInstruments: (_t, n) => Array.from({ length: n }, (_, i) => `inst${i + 1}`),
+      ...over,
+    };
+  }
+  it("picks N codex parts, spawns them, writes parts.txt + spawn-results.tsv, rc 0", async () => {
+    const h = home();
+    await initWith(["--slug", "s1", "spawn topic"], okDeps({ opts: { home: h.home, cwd: h.home } }));
+    const rc = await spawnAllWith(["s1", "2"], deps(), { home: h.home, cwd: h.home });
+    expect(rc).toBe(0);
+    const art = rehearsalArtDir("s1", { home: h.home, cwd: h.home });
+    expect(readFileSync(`${art}/parts.txt`, "utf8").trim().split("\n")).toEqual(["inst1", "inst2"]);
+    expect(readFileSync(`${art}/spawn-results.tsv`, "utf8")).toContain("inst1\tcodex\t0");
+  });
+  it("rc 1 when one part fails to come up", async () => {
+    const h = home();
+    await initWith(["--slug", "s2", "spawn topic 2"], okDeps({ opts: { home: h.home, cwd: h.home } }));
+    const rc = await spawnAllWith(["s2", "2"], deps({ spawn: async (a) => (a[0] === "inst2" ? 1 : 0) }), { home: h.home, cwd: h.home });
+    expect(rc).toBe(1);
+  });
+  it("rc 2 when fewer than 2 instruments can be picked", async () => {
+    const h = home();
+    await initWith(["--slug", "s3", "spawn topic 3"], okDeps({ opts: { home: h.home, cwd: h.home } }));
+    const rc = await spawnAllWith(["s3", "2"], deps({ pickInstruments: () => ["only1"] }), { home: h.home, cwd: h.home });
+    expect(rc).toBe(2);
+  });
+  it("rc 2 when preflight omits a pane for some part (orphan guard)", async () => {
+    const h = home();
+    await initWith(["--slug", "s4", "spawn topic 4"], okDeps({ opts: { home: h.home, cwd: h.home } }));
+    const d = deps({
+      preflight: async (a) => {
+        const art = a[a.indexOf("--art-dir") + 1];
+        mkdirSync(art, { recursive: true });
+        // only allocate a pane for inst1, omit inst2 -> orphan
+        writeFileSync(`${art}/preflight-panes.txt`, "inst1\t%1\n");
+        return 0;
+      },
+    });
+    expect(await spawnAllWith(["s4", "2"], d, { home: h.home, cwd: h.home })).toBe(2);
   });
 });
