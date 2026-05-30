@@ -325,8 +325,8 @@ function haveCmd(name) {
     return false;
   }
 }
-function tmuxVersionString(run11) {
-  if (run11) return run11();
+function tmuxVersionString(run12) {
+  if (run12) return run12();
   if (!haveCmd("tmux")) return null;
   try {
     return (0, import_node_child_process2.execFileSync)("tmux", ["-V"], { encoding: "utf8" }).trim();
@@ -464,6 +464,9 @@ function outboxPath(i2, m, t) {
 }
 function identityPath(i2, m, t) {
   return (0, import_node_path3.join)(partDir(i2, m, t), "identity.md");
+}
+function statusPath(i2, m, t) {
+  return (0, import_node_path3.join)(partDir(i2, m, t), "status.json");
 }
 function paneMetaPath(i2, m, t) {
   return (0, import_node_path3.join)(partDir(i2, m, t), "pane.json");
@@ -16581,8 +16584,8 @@ function scrapeSpawnResults(text) {
   }
   return out;
 }
-function scrapeLogs(text, basename3) {
-  return text.split("\n").filter((l) => l.includes("[error]") || l.includes("log_error")).map((l) => ({ source: "session_log", key: l.trim(), context: basename3 }));
+function scrapeLogs(text, basename4) {
+  return text.split("\n").filter((l) => l.includes("[error]") || l.includes("log_error")).map((l) => ({ source: "session_log", key: l.trim(), context: basename4 }));
 }
 function scrapeArtDir(artDir) {
   const out = [];
@@ -17680,6 +17683,9 @@ function createOrResumeBranch(r, name) {
   }
   return r.run("git", ["checkout", "-q", "-b", name]).code === 0;
 }
+function shortstat(r, base) {
+  return r.run("git", ["diff", "--shortstat", `${base}..HEAD`]).stdout.trim();
+}
 function finishBranch(r, o2) {
   const action = finishAutoAction(r.run("git", ["remote"]).stdout);
   if (action === "keep") {
@@ -17701,6 +17707,51 @@ function finishBranch(r, o2) {
   }
   r.run("git", ["checkout", "-q", o2.startBranch]);
   return { action, outcome };
+}
+function finishBranchAction(r, o2) {
+  if (!o2.branch || o2.branch === o2.startBranch || r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${o2.branch}`]).code !== 0) return "no-branch";
+  switch (o2.action) {
+    case "merge":
+      r.run("git", ["checkout", "-q", o2.startBranch]);
+      if (r.run("git", ["merge", "--no-edit", "-q", o2.branch]).code === 0) {
+        r.run("git", ["branch", "-q", "-D", o2.branch]);
+        return "merged";
+      }
+      r.run("git", ["merge", "--abort"]);
+      return "merge-conflict-left";
+    case "keep":
+      r.run("git", ["checkout", "-q", o2.startBranch]);
+      return "kept";
+    case "discard":
+      r.run("git", ["checkout", "-q", o2.startBranch]);
+      r.run("git", ["branch", "-q", "-D", o2.branch]);
+      return "discarded";
+    case "pr": {
+      let outcome;
+      if (r.run("git", ["push", "-q", "-u", "origin", o2.branch]).code === 0) {
+        const url = o2.originUrl ?? r.run("git", ["remote", "get-url", "origin"]).stdout.trim();
+        if (o2.hasGh && r.run("gh", [
+          "pr",
+          "create",
+          "--repo",
+          url,
+          "--base",
+          o2.startBranch,
+          "--head",
+          o2.branch,
+          "--title",
+          o2.title ?? `perform: ${o2.branch}`,
+          "--body",
+          o2.body ?? `Automated perform branch. Review and merge into ${o2.startBranch}.`
+        ]).code === 0) outcome = "pr-opened";
+        else outcome = "pr-pushed-no-gh";
+      } else outcome = "pr-failed-kept";
+      r.run("git", ["checkout", "-q", o2.startBranch]);
+      return outcome;
+    }
+    default:
+      return "no-branch";
+  }
 }
 var import_node_child_process8;
 var init_gitwork = __esm({
@@ -19631,12 +19682,941 @@ var init_score2 = __esm({
   }
 });
 
+// src/core/perform.ts
+function performArtDir(topic, opts) {
+  const override = process.env.CONSORT_PERFORM_ART_DIR_OVERRIDE;
+  if (override) return override;
+  return (0, import_node_path24.join)(topicDir(topic, opts), "_perform");
+}
+function deriveTopicFromPath(p) {
+  if (!p) return "";
+  let base = (0, import_node_path24.basename)(p);
+  base = base.replace(/^\d{4}-\d{2}-\d{2}-/, "");
+  if (base.endsWith("-design.md")) base = base.slice(0, -"-design.md".length);
+  else if (base.endsWith(".md")) base = base.slice(0, -".md".length);
+  return base;
+}
+function parsePerformArgs(tokens) {
+  let branchMode = "branch";
+  let branchName;
+  let topic;
+  let targets = [];
+  const rest = [];
+  for (let i2 = 0; i2 < tokens.length; i2++) {
+    const t = tokens[i2];
+    if (t === "--max-rounds" || t.startsWith("--max-rounds=")) {
+      throw new PerformArgError("--max-rounds must be stripped by the directive before init");
+    }
+    if (t === "--no-branch") {
+      branchMode = "no-branch";
+      continue;
+    }
+    if (t === "--branch" || t.startsWith("--branch=")) {
+      const { value, shift } = kvParse(t, tokens[i2 + 1]);
+      branchName = value;
+      if (shift === 2) i2++;
+      continue;
+    }
+    if (t === "--topic" || t.startsWith("--topic=")) {
+      const { value, shift } = kvParse(t, tokens[i2 + 1]);
+      topic = value;
+      if (shift === 2) i2++;
+      continue;
+    }
+    if (t === "--targets" || t.startsWith("--targets=")) {
+      const { value, shift } = kvParse(t, tokens[i2 + 1]);
+      targets = value.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+      if (shift === 2) i2++;
+      continue;
+    }
+    rest.push(t);
+  }
+  return { rest: rest.join(" "), branchMode, branchName, topic, targets };
+}
+function hasGitDir(dir) {
+  const dotgit = (0, import_node_path24.join)(dir, ".git");
+  if (!(0, import_node_fs29.existsSync)(dotgit)) return false;
+  try {
+    const st = (0, import_node_fs29.statSync)(dotgit);
+    return st.isDirectory() || st.isFile();
+  } catch {
+    return false;
+  }
+}
+function resolveTarget(docPath, cwd) {
+  let docText;
+  try {
+    docText = (0, import_node_fs29.readFileSync)(docPath, "utf8");
+  } catch {
+    throw new PerformResolveError(`resolveTarget: doc unreadable: ${docPath}`);
+  }
+  const t = extractTarget(docText);
+  if (t.present && !t.valid) {
+    throw new PerformResolveError(`resolveTarget: invalid or ambiguous Target Sub-Project header in ${docPath}`);
+  }
+  if (!t.present) return cwd;
+  const slug = t.slug;
+  const sub = (0, import_node_path24.join)(cwd, slug);
+  let isDir2 = false;
+  try {
+    isDir2 = (0, import_node_fs29.statSync)(sub).isDirectory();
+  } catch {
+    isDir2 = false;
+  }
+  if (!isDir2) {
+    throw new PerformResolveError(`target sub-project '${slug}' not found at ${sub} (no directory; check spelling or that the sub-repo is checked out)`);
+  }
+  if (!hasGitDir(sub)) {
+    throw new PerformResolveError(`target sub-project '${slug}' is a directory but not a git repo (no .git/ at ${sub})`);
+  }
+  return sub;
+}
+function detectProvider(repoRoot2, override) {
+  if (override) {
+    if (override === "codex" || override === "claude") return override;
+    if (override === "opencode") {
+      throw new ProviderError("perform: opencode is not a supported provider; use codex (default) or claude (plugin-dev)");
+    }
+    throw new ProviderError(`perform: unknown provider override '${override}' (allowed: codex, claude)`);
+  }
+  return (0, import_node_fs29.existsSync)((0, import_node_path24.join)(repoRoot2, ".claude-plugin", "plugin.json")) ? "claude" : "codex";
+}
+function iterTargets(topic, opts) {
+  const art = performArtDir(topic, opts);
+  const partsFile = (0, import_node_path24.join)(art, "parts.txt");
+  if ((0, import_node_fs29.existsSync)(partsFile)) {
+    const out = [];
+    for (const line of (0, import_node_fs29.readFileSync)(partsFile, "utf8").split("\n")) {
+      if (line.length === 0) continue;
+      const cols = line.split("	");
+      out.push({ slug: cols[0] ?? "", cwd: cols[1] ?? "" });
+    }
+    return out;
+  }
+  const targetCwdFile = (0, import_node_path24.join)(art, "target_cwd.txt");
+  if ((0, import_node_fs29.existsSync)(targetCwdFile)) {
+    const cwd = (0, import_node_fs29.readFileSync)(targetCwdFile, "utf8").replace(/\n$/, "");
+    return [{ slug: "main", cwd }];
+  }
+  return [];
+}
+var import_node_path24, import_node_fs29, PerformArgError, PerformResolveError, ProviderError;
+var init_perform = __esm({
+  "src/core/perform.ts"() {
+    "use strict";
+    import_node_path24 = require("node:path");
+    import_node_fs29 = require("node:fs");
+    init_paths();
+    init_audit();
+    init_args();
+    init_audit();
+    PerformArgError = class extends Error {
+      code = 2;
+    };
+    PerformResolveError = class extends Error {
+      code = 1;
+      constructor(message) {
+        super(message);
+      }
+    };
+    ProviderError = class extends Error {
+      code = 1;
+      constructor(message) {
+        super(message);
+      }
+    };
+  }
+});
+
+// src/core/performScope.ts
+function extractComponentsPaths(docText) {
+  const out = [];
+  let inSection = false;
+  for (const record of docText.split("\n")) {
+    if (COMPONENTS_HEADER.test(record)) {
+      inSection = true;
+      continue;
+    }
+    if (OTHER_H2.test(record) && !ANY_COMPONENTS_PREFIX.test(record)) {
+      inSection = false;
+      continue;
+    }
+    if (inSection && TABLE_ROW.test(record)) {
+      if (SEPARATOR_ROW.test(record)) continue;
+      let line = record;
+      line = line.replace(/^[ \t]*\|[ \t]*/, "");
+      line = line.replace(/[ \t]*\|.*$/, "");
+      line = line.replace(/`/g, "");
+      line = line.replace(/^[ \t]+/, "");
+      line = line.replace(/[ \t]+$/, "");
+      if (HEADER_CELL.test(line)) continue;
+      if (HAS_SLASH.test(line) || ENDS_WITH_EXT.test(line)) out.push(line);
+    }
+  }
+  return out;
+}
+function matchDiffAgainstComponents(diffPaths, compPaths) {
+  const comp = [];
+  for (const raw of compPaths) {
+    const line = raw.replace(/^[ \t]+/, "").replace(/[ \t]+$/, "");
+    if (line === "") continue;
+    comp.push(line);
+  }
+  const out = [];
+  for (const raw of diffPaths) {
+    const path6 = raw.replace(/^[ \t]+/, "").replace(/[ \t]+$/, "");
+    if (path6 === "") continue;
+    let inScope = false;
+    for (const c3 of comp) {
+      if (path6 === c3) {
+        inScope = true;
+        break;
+      }
+      if (c3.charAt(c3.length - 1) === "/" && path6.indexOf(c3) === 0) {
+        inScope = true;
+        break;
+      }
+      if (c3.charAt(c3.length - 1) !== "/" && path6.indexOf(c3 + "/") === 0) {
+        inScope = true;
+        break;
+      }
+    }
+    if (!inScope) out.push(path6);
+  }
+  return out;
+}
+var COMPONENTS_HEADER, OTHER_H2, ANY_COMPONENTS_PREFIX, TABLE_ROW, SEPARATOR_ROW, HEADER_CELL, HAS_SLASH, ENDS_WITH_EXT;
+var init_performScope = __esm({
+  "src/core/performScope.ts"() {
+    "use strict";
+    init_audit();
+    COMPONENTS_HEADER = /^## Components[ \t]*$/;
+    OTHER_H2 = /^## [^ ]/;
+    ANY_COMPONENTS_PREFIX = /^## Components/;
+    TABLE_ROW = /^[ \t]*\|/;
+    SEPARATOR_ROW = /^[ \t]*\|([ \t]*[:-]+[ \t]*\|)+[ \t]*$/;
+    HEADER_CELL = /^(File|Path|Name|Files?[ \t]+(edited|moved|touched))$/;
+    HAS_SLASH = /\//;
+    ENDS_WITH_EXT = /\.[a-zA-Z]+$/;
+  }
+});
+
+// src/core/performTurn.ts
+function performState(ev, verifyText) {
+  if (!ev) return "timeout";
+  if (ev.event === "question") return "question";
+  if (ev.event === "done") return verifyText !== null && verifyText.length > 0 ? "ok" : "failed";
+  return "failed";
+}
+function composeRound1Prompt2(args) {
+  const { designPath, planPath, verifyPath } = args;
+  const round = args.round ?? 1;
+  const testLog = `${(0, import_node_path25.dirname)(verifyPath)}/test-output-${round}.log`;
+  return [
+    `You are entering ROUND ${round} of /consort:perform.`,
+    "",
+    "This is a single-turn workflow: you will write the implementation plan,",
+    "implement it, run the test suite, and write the verify report \u2014 all in",
+    "one autonomous run. The conductor will only re-engage when you emit done.",
+    "",
+    "RESUME CHECK (do this BEFORE starting):",
+    `- If ${planPath} already exists, skip the planning phase \u2014 read the`,
+    "  existing plan and proceed to implementation.",
+    "- If `git log --oneline` shows commits past the design-doc commit on",
+    `  this branch, identify the next pending task from ${planPath}'s checkbox`,
+    "  state and continue from there. Do not redo already-committed tasks.",
+    `- If ${verifyPath} already exists, you previously completed implementation`,
+    `  \u2014 re-run the test suite and update ${verifyPath} if test outcomes changed.`,
+    "",
+    `PHASE 1: Plan (skip if ${planPath} exists)`,
+    "  Use the superpowers:writing-plans skill. Read the design doc at:",
+    `    ${designPath}`,
+    "  Produce a comprehensive implementation plan and write it to:",
+    `    ${planPath}`,
+    "",
+    "PHASE 2: Implement",
+    `  Use the superpowers:subagent-driven-development skill. Walk ${planPath}`,
+    "  task-by-task. Commit per task (Conventional Commits prefix). Run the",
+    "  full test suite (`bash tests/run.sh`) after each task and confirm green.",
+    "",
+    "PHASE 3: Self-verify",
+    "  Use the superpowers:verification-before-completion skill. Run the full",
+    "  test suite, tee output to:",
+    `    ${testLog}`,
+    "  Write a structured verify report to:",
+    `    ${verifyPath}`,
+    "",
+    "  The report MUST start with `VERDICT: PASS|PARTIAL|FAIL` on the first",
+    "  line, followed by per-requirement evidence (file:line citations) and a",
+    "  short summary.",
+    "",
+    BRANCH_DISCIPLINE2,
+    BLOCKERS2
+  ].join("\n");
+}
+function composeFixPrompt2(round, bundleText, verifyPath) {
+  const testLog = `${(0, import_node_path25.dirname)(verifyPath)}/test-output-${round}.log`;
+  return [
+    `You are entering ROUND ${round} of /consort:perform (fix loop).`,
+    "",
+    "This is a single-turn workflow: address each issue below, re-run the test",
+    "suite, and write the verify report \u2014 all in one autonomous run.",
+    "",
+    "RESUME CHECK (do this BEFORE starting):",
+    "- Check `git log --oneline` for commits since the previous round's",
+    "  verify report was written. If some issues already have addressing",
+    "  commits, identify which remain unaddressed and start from those.",
+    `- If ${verifyPath} already exists, re-run tests and update it if outcomes`,
+    "  changed.",
+    "",
+    "ISSUES TO ADDRESS:",
+    "",
+    bundleText,
+    "",
+    "ROUTING:",
+    "- For each issue tagged [bug] or [regression]: use the",
+    "  superpowers:systematic-debugging skill.",
+    "- For each issue tagged [spec-gap]: use the superpowers:writing-plans",
+    "  skill (re-plan the gap, then implement).",
+    "- After EACH fix commit: dispatch a code-review subagent via the",
+    "  superpowers:requesting-code-review skill with the fix commit's SHA as",
+    "  scope. Address Critical and Important findings before moving to the next",
+    "  issue. Round 1's subagent-driven-development walks code review per-task",
+    "  automatically; fix rounds need this explicit invocation.",
+    "",
+    "For EACH issue: implement the fix, commit per fix (Conventional Commits",
+    "prefix `fix:`, `feat:`, or `test:` as appropriate), run the",
+    "code-review subagent on the new commit, then re-run the full test suite.",
+    "Do NOT skip any listed issue.",
+    "",
+    "After all issues are addressed AND the test suite is green:",
+    "  Run the full test suite, tee output to:",
+    `    ${testLog}`,
+    "  Write the verify report to:",
+    `    ${verifyPath}`,
+    "  The report MUST start with `VERDICT: PASS|PARTIAL|FAIL`.",
+    "",
+    BRANCH_DISCIPLINE2,
+    BLOCKERS2
+  ].join("\n");
+}
+var import_node_path25, BRANCH_DISCIPLINE2, BLOCKERS2;
+var init_performTurn = __esm({
+  "src/core/performTurn.ts"() {
+    "use strict";
+    import_node_path25 = require("node:path");
+    BRANCH_DISCIPLINE2 = `BRANCH DISCIPLINE (hard rule):
+- You are operating on the conductor's current branch in the target
+  repository. Do NOT run 'git checkout', 'git switch',
+  'git branch -m', or create new branches.
+- Commit per task with Conventional Commits prefixes on the current
+  branch (rule already stated above).
+- If your work genuinely needs a fresh branch, abort with
+  {"event":"error","reason":"branch-discipline: needed new branch"}
+  and let the conductor decide.
+`;
+    BLOCKERS2 = `BLOCKERS / QUESTIONS (read carefully):
+- If a referenced path, file, checkpoint, git ref, env var, or
+  command is NOT where the notes say it is, DO NOT search the
+  filesystem yourself, DO NOT invent a workaround. Halt and ask by
+  appending ONE question event to your outbox.jsonl, then stop:
+    {"event":"question","message":"<why you are asking>","claim":{"kind":"<path|git|env|cmd|test>","value":"<the value to check>"},"ts":"<iso>"}
+  Omit the "claim" object for a judgment question (no ground-truth to check).
+- The Maestro verifies the claim and replies via your inbox.md, then re-engages you.
+- After reading any inbox.md reply, acknowledge by appending an ack event:
+    {"event":"ack","task_summary":"<what you read>","ts":"<iso>"}
+- The 'test' kind runs a diagnostic command under a 30s timeout \u2014 it
+  is NOT for running your test suite. Running 'bash tests/run.sh' is
+  your job. Banned values fail with rc=2.
+`;
+  }
+});
+
+// src/core/performQuestions.ts
+function extractQuestionPayload(ev, askedAt) {
+  const message = typeof ev.message === "string" ? ev.message : "";
+  if (message === "") return null;
+  const encoded = message.split("\n").join("%0A");
+  const claim = ev.claim;
+  const kind = claim && typeof claim.kind === "string" ? claim.kind : "";
+  const value = claim && typeof claim.value === "string" ? claim.value : "";
+  const route = claim ? "verify" : "escalate";
+  return `TEXT=${encoded}
+CLAIM_KIND=${kind}
+CLAIM_VALUE=${value}
+ROUTE=${route}
+ASKED_AT=${askedAt}
+`;
+}
+var init_performQuestions = __esm({
+  "src/core/performQuestions.ts"() {
+    "use strict";
+  }
+});
+
+// src/commands/perform.ts
+var perform_exports = {};
+__export(perform_exports, {
+  archiveRun: () => archiveRun2,
+  branchWith: () => branchWith2,
+  finishWith: () => finishWith2,
+  initWith: () => initWith3,
+  kvFileField: () => kvFileField,
+  preSnapshotWith: () => preSnapshotWith,
+  run: () => run11,
+  scopeCheckWith: () => scopeCheckWith,
+  summaryWith: () => summaryWith,
+  turnSendWith: () => turnSendWith2,
+  turnWaitWith: () => turnWaitWith2
+});
+function partModel(art) {
+  const p = (0, import_node_path26.join)(art, "provider.txt");
+  return (0, import_node_fs30.existsSync)(p) ? (0, import_node_fs30.readFileSync)(p, "utf8").trim() || "codex" : "codex";
+}
+function detectRouting(docText) {
+  return /^\*\*Target Sub-Project\(s\):\*\*/m.test(docText) && /^## Execution DAG[ \t]*$/m.test(docText) ? "multi" : "single";
+}
+function usage3() {
+  log.error("usage: perform <init|pre-snapshot|branch|turn-send|turn-wait|scope-check|summary|finish|forensics|archive> ...");
+  return 2;
+}
+async function run11(args) {
+  const verb = args[0];
+  const rest = args.slice(1);
+  switch (verb) {
+    case "init":
+      return initRun3(applyArgsFile(rest));
+    case "turn-send":
+      return turnSendRun2(rest);
+    case "turn-wait":
+      return turnWaitRun2(rest);
+    case "pre-snapshot":
+      return preSnapshotRun(rest);
+    case "branch":
+      return branchRun2(applyArgsFile(rest));
+    case "scope-check":
+      return scopeCheckRun(rest);
+    case "summary":
+      return summaryRun2(rest);
+    case "finish":
+      return finishRun2(rest);
+    case "forensics":
+      return forensicsRun2(rest);
+    case "archive":
+      return archiveRun2(rest);
+    default:
+      return usage3();
+  }
+}
+async function initRun3(tokens) {
+  return initWith3(tokens, liveInitDeps3);
+}
+async function initWith3(tokens, d) {
+  let parsed;
+  try {
+    parsed = parsePerformArgs(tokens);
+  } catch (e) {
+    if (e instanceof PerformArgError) {
+      log.error(e.message);
+      return e.code;
+    }
+    throw e;
+  }
+  const designPath = parsed.rest.trim();
+  if (!designPath || designPath.includes(" ")) {
+    log.error("perform init: exactly one design-doc path is required");
+    return 2;
+  }
+  if (!(0, import_node_fs30.existsSync)(designPath)) {
+    log.error(`perform init: design doc unreadable: ${designPath}`);
+    return 1;
+  }
+  const text = (0, import_node_fs30.readFileSync)(designPath, "utf8");
+  const topic = parsed.topic || deriveTopicFromPath(designPath);
+  if (!topic) {
+    log.error("perform init: could not derive topic; pass --topic <slug>");
+    return 1;
+  }
+  const ad = auditDoc(text);
+  if (ad.verdict === "FAIL") {
+    for (const i2 of ad.issues) process.stderr.write(`ISSUE=${i2}
+`);
+    log.error(`perform init: audit FAILED on ${designPath}`);
+    return 1;
+  }
+  const art = performArtDir(topic);
+  if ((0, import_node_fs30.existsSync)(art)) {
+    log.error(`perform init: topic already in flight: ${art} (run /consort:coda or pick a different --topic)`);
+    return 2;
+  }
+  let targetCwd;
+  try {
+    targetCwd = resolveTarget(designPath, d.repoRoot());
+  } catch (e) {
+    if (e instanceof PerformResolveError) {
+      log.error(e.message);
+      return e.code;
+    }
+    throw e;
+  }
+  const routing = parsed.targets.length > 0 ? "multi" : detectRouting(text);
+  let provider;
+  try {
+    provider = detectProvider(targetCwd);
+  } catch (e) {
+    if (e instanceof ProviderError) {
+      log.error(e.message);
+      return e.code;
+    }
+    throw e;
+  }
+  (0, import_node_fs30.mkdirSync)(art, { recursive: true });
+  atomicWrite((0, import_node_path26.join)(art, "design.md"), text);
+  atomicWrite((0, import_node_path26.join)(art, "topic.txt"), topic);
+  atomicWrite((0, import_node_path26.join)(art, "target_cwd.txt"), targetCwd + "\n");
+  atomicWrite((0, import_node_path26.join)(art, "provider.txt"), provider + "\n");
+  atomicWrite((0, import_node_path26.join)(art, "multi-repo.txt"), (routing === "multi" ? "multi" : "single") + "\n");
+  if (routing === "multi") log.warn("perform init: multi-repo routing recorded; multi-repo execution is a later phase (Phase C)");
+  log.ok(`perform init: topic=${topic} routing=${routing} provider=${provider}`);
+  process.stdout.write(`ART=${art}
+TOPIC=${topic}
+ROUTING=${routing}
+PROVIDER=${provider}
+TARGET_CWD=${targetCwd}
+`);
+  return 0;
+}
+async function turnSendRun2(rest) {
+  const [topic, roundStr] = rest;
+  if (!topic || !roundStr) {
+    log.error("usage: perform turn-send <topic> <round>");
+    return 2;
+  }
+  if (!/^[1-9][0-9]*$/.test(roundStr)) {
+    log.error(`perform turn-send: round must be a positive integer (got: ${roundStr})`);
+    return 1;
+  }
+  return turnSendWith2(topic, Number(roundStr), liveSendDeps);
+}
+async function turnSendWith2(topic, round, d) {
+  const art = performArtDir(topic);
+  if (!(0, import_node_fs30.existsSync)(art)) {
+    log.error(`perform turn-send: ${art} not found \u2014 run perform init first`);
+    return 1;
+  }
+  const model = partModel(art);
+  const stateFile = (0, import_node_path26.join)(art, `turn-cody-${round}.txt`);
+  if ((0, import_node_fs30.existsSync)(stateFile)) {
+    log.error(`perform turn-send: ${stateFile} already exists; rm to retry`);
+    return 1;
+  }
+  const outbox = outboxPath(PART, model, topic);
+  if (!(0, import_node_fs30.existsSync)(outbox)) {
+    log.error(`perform turn-send: outbox not found at ${outbox} \u2014 was cody spawned?`);
+    return 1;
+  }
+  const sp = statusPath(PART, model, topic);
+  if ((0, import_node_fs30.existsSync)(sp)) {
+    const m = (0, import_node_fs30.readFileSync)(sp, "utf8").match(/"state":"([^"]*)"/);
+    if (m && m[1] && m[1] !== "idle") {
+      log.error(`perform turn-send: part not idle (state=${m[1]}); previous turn still in flight`);
+      return 1;
+    }
+  }
+  const promptFile = (0, import_node_path26.join)(art, `cody_turn_prompt_${round}.md`);
+  if (round === 1) atomicWrite(promptFile, composeRound1Prompt2({ designPath: (0, import_node_path26.join)(art, "design.md"), planPath: (0, import_node_path26.join)(art, "plan.md"), verifyPath: (0, import_node_path26.join)(art, "verify-report-1.md"), round }));
+  else {
+    const bundle = (0, import_node_path26.join)(art, `fix-prompt-${round}.md`);
+    if (!(0, import_node_fs30.existsSync)(bundle)) {
+      log.error(`perform turn-send: fix-prompt-${round}.md not found at ${bundle}; the directive must write it first`);
+      return 1;
+    }
+    atomicWrite(promptFile, composeFixPrompt2(round, (0, import_node_fs30.readFileSync)(bundle, "utf8"), (0, import_node_path26.join)(art, `verify-report-${round}.md`)));
+  }
+  const offset = d.offsetFor(PART, model, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}
+`);
+  const rc = await d.send(["--from", "maestro", PART, topic, `@${promptFile}`]);
+  if (rc !== 0) {
+    log.error(`perform turn-send: send failed (rc=${rc}); ${stateFile} kept (rm to retry)`);
+    return 1;
+  }
+  log.info(`[turn-send] cody round=${round} offset=${offset}`);
+  return 0;
+}
+async function turnWaitRun2(rest) {
+  const [topic, roundStr] = rest;
+  if (!topic || !roundStr) {
+    log.error("usage: perform turn-wait <topic> <round>");
+    return 2;
+  }
+  if (!/^[1-9][0-9]*$/.test(roundStr)) {
+    log.error(`perform turn-wait: round must be a positive integer (got: ${roundStr})`);
+    return 1;
+  }
+  return turnWaitWith2(topic, Number(roundStr), liveWaitDeps);
+}
+async function turnWaitWith2(topic, round, d) {
+  const art = performArtDir(topic);
+  const model = partModel(art);
+  const stateFile = (0, import_node_path26.join)(art, `turn-cody-${round}.txt`);
+  if (!(0, import_node_fs30.existsSync)(stateFile)) {
+    log.error(`perform turn-wait: ${stateFile} missing \u2014 run perform turn-send first`);
+    return 1;
+  }
+  const offset = parseLatestOffset((0, import_node_fs30.readFileSync)(stateFile, "utf8"));
+  if (offset === null) {
+    log.error(`perform turn-wait: OFFSET not set in ${stateFile}`);
+    return 1;
+  }
+  const timeout = scaledTimeout(PERFORM_TURN_TIMEOUT(), d.multiplier(model));
+  log.info(`[turn-wait] cody round=${round} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(PART, model, topic, offset, ["done", "error", "question"], timeout);
+  const verifyPath = (0, import_node_path26.join)(art, `verify-report-${round}.md`);
+  const verifyText = (0, import_node_fs30.existsSync)(verifyPath) ? (0, import_node_fs30.readFileSync)(verifyPath, "utf8") : null;
+  let ts = performState(ev, verifyText);
+  if (ts === "question" && ev) {
+    const payload = extractQuestionPayload(ev, d.now());
+    if (payload !== null) {
+      atomicWrite((0, import_node_path26.join)(art, `question-cody-${round}.txt`), payload);
+      const bumped = outboxOffset(outboxPath(PART, model, topic));
+      (0, import_node_fs30.appendFileSync)(stateFile, `OFFSET=${bumped}
+TS=question
+`);
+    } else {
+      ts = "failed";
+      (0, import_node_fs30.appendFileSync)(stateFile, "TS=failed\n");
+      log.warn("[turn-wait] malformed question (no message); downgraded to failed");
+    }
+  } else (0, import_node_fs30.appendFileSync)(stateFile, `TS=${ts}
+`);
+  (0, import_node_fs30.writeFileSync)((0, import_node_path26.join)(art, `turn-cody-${round}.done`), "");
+  log.ok(`[turn-wait] cody round=${round} TS=${ts}`);
+  return 0;
+}
+function kvFileField(file, key) {
+  if (!(0, import_node_fs30.existsSync)(file)) return "";
+  for (const line of (0, import_node_fs30.readFileSync)(file, "utf8").split("\n")) {
+    const eq = line.indexOf("=");
+    if (eq > 0 && line.slice(0, eq) === key) return line.slice(eq + 1);
+  }
+  return "";
+}
+function branchMapField(map, slug) {
+  if (!(0, import_node_fs30.existsSync)(map)) return "";
+  for (const line of (0, import_node_fs30.readFileSync)(map, "utf8").split("\n")) {
+    const [s, b] = line.split("	");
+    if (s === slug) return b ?? "";
+  }
+  return "";
+}
+function isDir(p) {
+  try {
+    return (0, import_node_fs30.statSync)(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+async function preSnapshotRun(rest) {
+  if (rest.length !== 1) {
+    log.error("usage: perform pre-snapshot <topic>");
+    return 2;
+  }
+  return preSnapshotWith(rest[0], {}, runnerAt);
+}
+async function preSnapshotWith(topic, opts, runnerFor) {
+  const art = performArtDir(topic, opts);
+  if (!(0, import_node_fs30.existsSync)(art)) {
+    log.error(`perform pre-snapshot: art-dir missing: ${art} (run perform init first)`);
+    return 1;
+  }
+  (0, import_node_fs30.mkdirSync)((0, import_node_path26.join)(art, "baselines"), { recursive: true });
+  let clean = 0, committed = 0, blocked = 0;
+  for (const { slug, cwd } of iterTargets(topic, opts)) {
+    if (!slug || !cwd) continue;
+    const snap = preSnapshot(runnerFor(cwd), topic);
+    if (snap.state === "not-git") {
+      log.error(`perform pre-snapshot: not a git repository: ${cwd}`);
+      return 2;
+    }
+    atomicWrite(
+      (0, import_node_path26.join)(art, "baselines", `${slug}.tsv`),
+      `slug=${slug}
+cwd=${cwd}
+branch=${snap.branch}
+baseline_sha=${snap.baseSha}
+state=${snap.state}
+snapshot_ts=${isoUtc()}
+`
+    );
+    if (snap.state === "clean") clean++;
+    else if (snap.state === "wip-committed") committed++;
+    else if (snap.state === "hook-blocked") blocked++;
+  }
+  log.ok(`perform pre-snapshot: ${clean} clean, ${committed} committed, ${blocked} hook-blocked`);
+  return 0;
+}
+async function branchRun2(rest) {
+  let noBranch = false, branchName;
+  const pos = [];
+  for (let i2 = 0; i2 < rest.length; i2++) {
+    const t = rest[i2];
+    if (t === "--no-branch") {
+      noBranch = true;
+      continue;
+    }
+    if (t === "--branch" || t.startsWith("--branch=")) {
+      const { value, shift } = kvParse(t, rest[i2 + 1]);
+      branchName = value;
+      if (shift === 2) i2++;
+      continue;
+    }
+    pos.push(t);
+  }
+  if (pos.length !== 1) {
+    log.error("usage: perform branch [--no-branch] [--branch <name>] <topic>");
+    return 2;
+  }
+  return branchWith2({ topic: pos[0], noBranch, branchName }, {}, runnerAt);
+}
+async function branchWith2(a2, opts, runnerFor) {
+  const art = performArtDir(a2.topic, opts);
+  if (!(0, import_node_fs30.existsSync)(art)) {
+    log.error(`perform branch: art-dir missing: ${art} (run perform init first)`);
+    return 1;
+  }
+  const defaultBranch = a2.branchName ?? `feat/perform-${a2.topic}`;
+  const rows = [];
+  for (const { slug, cwd } of iterTargets(a2.topic, opts)) {
+    if (!slug || !cwd) continue;
+    const r = runnerFor(cwd);
+    let recorded;
+    if (a2.noBranch) {
+      recorded = r.run("git", ["symbolic-ref", "--short", "HEAD"]).stdout.trim() || "(detached)";
+      log.info(`branch: (--no-branch) staying on ${recorded} in ${cwd}`);
+    } else if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${defaultBranch}`]).code === 0) {
+      createOrResumeBranch(r, defaultBranch);
+      log.info(`branch: resumed ${defaultBranch} in ${cwd}`);
+      recorded = defaultBranch;
+    } else if (createOrResumeBranch(r, defaultBranch)) {
+      log.info(`branch: created ${defaultBranch} in ${cwd}`);
+      recorded = defaultBranch;
+    } else {
+      recorded = r.run("git", ["symbolic-ref", "--short", "HEAD"]).stdout.trim() || "(detached)";
+      log.warn(`branch: checkout -b failed in ${cwd}; staying on current branch`);
+    }
+    rows.push(`${slug}	${recorded}`);
+    const baseline = (0, import_node_path26.join)(art, "baselines", `${slug}.tsv`);
+    if ((0, import_node_fs30.existsSync)(baseline)) {
+      const m = (0, import_node_fs30.readFileSync)(baseline, "utf8").match(/^baseline_sha=(.*)$/m);
+      if (m) atomicWrite((0, import_node_path26.join)(art, "branch-base.sha"), m[1] + "\n");
+    }
+  }
+  atomicWrite((0, import_node_path26.join)(art, "perform-branches.tsv"), rows.length ? rows.join("\n") + "\n" : "");
+  log.ok(`perform branch: ${rows.length} target(s) recorded`);
+  return 0;
+}
+async function scopeCheckRun(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("usage: perform scope-check <topic>");
+    return 2;
+  }
+  return scopeCheckWith(topic, liveScopeDeps);
+}
+async function scopeCheckWith(topic, d) {
+  const art = performArtDir(topic);
+  const targetFile = (0, import_node_path26.join)(art, "target_cwd.txt"), baseFile = (0, import_node_path26.join)(art, "branch-base.sha"), designFile = (0, import_node_path26.join)(art, "design.md");
+  if (!(0, import_node_fs30.existsSync)(targetFile) || !(0, import_node_fs30.existsSync)(baseFile)) {
+    log.error(`perform scope-check: target_cwd.txt/branch-base.sha missing under ${art}`);
+    return 1;
+  }
+  if (!(0, import_node_fs30.existsSync)(designFile)) {
+    log.error(`perform scope-check: design.md missing under ${art}`);
+    return 1;
+  }
+  const targetCwd = (0, import_node_fs30.readFileSync)(targetFile, "utf8").split("\n")[0].trim();
+  const base = (0, import_node_fs30.readFileSync)(baseFile, "utf8").split("\n")[0].trim();
+  const diffPaths = d.runnerFor(targetCwd).run("git", ["diff", "--name-only", `${base}..HEAD`]).stdout.split("\n").filter((x) => x.length > 0);
+  atomicWrite((0, import_node_path26.join)(art, "diff-paths.txt"), diffPaths.length ? diffPaths.join("\n") + "\n" : "");
+  const compPaths = extractComponentsPaths((0, import_node_fs30.readFileSync)(designFile, "utf8"));
+  atomicWrite((0, import_node_path26.join)(art, "components-paths.txt"), compPaths.length ? compPaths.join("\n") + "\n" : "");
+  const oos = matchDiffAgainstComponents(diffPaths, compPaths);
+  const oosPath = (0, import_node_path26.join)(art, "scope-out-of-scope.txt");
+  atomicWrite(oosPath, oos.length ? oos.join("\n") + "\n" : "");
+  if (oos.length > 0) log.warn(`scope conformance: ${oos.length} out-of-scope path(s) detected`);
+  process.stdout.write(`OOS_COUNT=${oos.length}
+OOS_PATH=${oosPath}
+`);
+  return 0;
+}
+async function summaryRun2(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("usage: perform summary <topic>");
+    return 2;
+  }
+  return summaryWith(topic, liveSummaryDeps);
+}
+async function summaryWith(topic, d) {
+  const art = performArtDir(topic);
+  if (!(0, import_node_fs30.existsSync)(art)) {
+    log.error(`perform summary: art-dir missing: ${art}`);
+    return 1;
+  }
+  (0, import_node_fs30.mkdirSync)((0, import_node_path26.join)(art, "posts"), { recursive: true });
+  for (const t of iterTargets(topic)) {
+    if (!t.slug || !t.cwd) continue;
+    const baseline = (0, import_node_path26.join)(art, "baselines", `${t.slug}.tsv`), post = (0, import_node_path26.join)(art, "posts", `${t.slug}.tsv`);
+    if (!(0, import_node_fs30.existsSync)(baseline)) {
+      log.error(`perform summary: baseline missing for slug=${t.slug} (${baseline})`);
+      continue;
+    }
+    if (!isDir(t.cwd)) {
+      log.warn(`perform summary: target gone for slug=${t.slug} (cwd=${t.cwd}); omitting block`);
+      continue;
+    }
+    const r = d.runnerFor(t.cwd);
+    postSweep(r, topic, baseline, post, d.now());
+    process.stdout.write(formatSummaryBlock(r, baseline, post) + "\n\n");
+  }
+  return 0;
+}
+function postSweep(r, topic, baseline, post, ts) {
+  const slug = kvFileField(baseline, "slug"), cwd = kvFileField(baseline, "cwd"), base = kvFileField(baseline, "branch");
+  const postBranch = r.run("git", ["symbolic-ref", "--short", "HEAD"]).stdout.trim() || "(detached)";
+  const dirty = r.run("git", ["status", "--porcelain"]).stdout.trim();
+  let state;
+  if (!dirty) state = "no-leftovers";
+  else {
+    r.run("git", ["add", "-A"]);
+    state = r.run("git", ["commit", "-q", "-m", `chore: post-perform leftovers for ${topic}`]).code === 0 ? "swept" : (log.warn(`perform post-sweep: commit hook blocked sweep in ${cwd}`), "sweep-failed");
+  }
+  const postSha = r.run("git", ["rev-parse", "HEAD"]).stdout.trim();
+  atomicWrite(post, `slug=${slug}
+cwd=${cwd}
+branch=${postBranch}
+post_sha=${postSha}
+state=${state}
+branch_changed=${base === postBranch ? "false" : "true"}
+sweep_ts=${ts}
+`);
+}
+function formatSummaryBlock(r, baseline, post) {
+  const slug = kvFileField(baseline, "slug"), cwd = kvFileField(baseline, "cwd"), baseBranch = kvFileField(baseline, "branch"), baselineSha = kvFileField(baseline, "baseline_sha"), baseState = kvFileField(baseline, "state");
+  const postBranch = kvFileField(post, "branch"), postSha = kvFileField(post, "post_sha"), postState = kvFileField(post, "state"), changed = kvFileField(post, "branch_changed");
+  const L = [`=== ${slug} [${cwd}] ===`];
+  if (changed === "true") L.push(`  [WARNING: branch changed from ${baseBranch} to ${postBranch}]`);
+  if (baseState === "hook-blocked") L.push("  [WARNING: pre-perform snapshot hook-blocked; baseline = pre-attempt HEAD]");
+  if (postState === "sweep-failed") L.push("  [WARNING: post-perform sweep hook-blocked; leftovers remain in working tree]");
+  if (baseBranch === "(detached)") L.push("  [WARNING: baseline branch detached]");
+  L.push(`  branch:     ${postBranch}`);
+  L.push(`  baseline:   ${baselineSha}   ${baseBranch}   (${baseState})`);
+  L.push(`  HEAD:       ${postSha}   ${postBranch}`);
+  const stat = shortstat(r, baselineSha);
+  L.push(stat ? `  diff stat:  ${stat}` : "  diff stat:  (no changes since baseline)");
+  L.push("  commits (oldest -> newest):");
+  const commits = r.run("git", ["log", "--reverse", "--oneline", `${baselineSha}..HEAD`]).stdout.replace(/\n+$/, "");
+  L.push(commits ? commits.split("\n").map((c3) => "    " + c3).join("\n") : "    (no commits since baseline)");
+  return L.join("\n");
+}
+async function finishRun2(rest) {
+  const topic = rest[0], action = rest[1];
+  if (!topic || !action) {
+    log.error("usage: perform finish <topic> <merge|pr|keep|discard>");
+    return 2;
+  }
+  if (!["merge", "pr", "keep", "discard"].includes(action)) {
+    log.error(`perform finish: unknown action '${action}'`);
+    return 2;
+  }
+  return finishWith2(topic, action, liveFinishDeps);
+}
+async function finishWith2(topic, action, d) {
+  const art = performArtDir(topic);
+  if (!(0, import_node_fs30.existsSync)(art)) {
+    log.error(`perform finish: art-dir missing: ${art}`);
+    return 1;
+  }
+  const results = (0, import_node_path26.join)(art, "finish-results.tsv");
+  (0, import_node_fs30.writeFileSync)(results, "");
+  let n2 = 0;
+  for (const t of iterTargets(topic)) {
+    if (!t.slug || !t.cwd) continue;
+    const branch = branchMapField((0, import_node_path26.join)(art, "perform-branches.tsv"), t.slug);
+    const startBranch = kvFileField((0, import_node_path26.join)(art, "baselines", `${t.slug}.tsv`), "branch");
+    const outcome = finishBranchAction(d.runnerFor(t.cwd), { branch, startBranch, action, hasGh: d.hasGh });
+    (0, import_node_fs30.appendFileSync)(results, `${t.slug}	${action}	${outcome}
+`);
+    log.info(`finish: ${t.slug} -> ${action} -> ${outcome}`);
+    n2++;
+  }
+  log.ok(`perform finish: ${n2} target(s) completed`);
+  return 0;
+}
+async function forensicsRun2(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("usage: perform forensics <topic>");
+    return 2;
+  }
+  const path6 = captureArtDir({ artDir: performArtDir(topic), command: "perform" });
+  if (path6) {
+    log.ok(`perform forensics: captured ${path6}`);
+    process.stdout.write(path6 + "\n");
+  } else log.info("perform forensics: no mechanical findings (no file written)");
+  return 0;
+}
+async function archiveRun2(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("usage: perform archive <topic>");
+    return 2;
+  }
+  archiveTopic(topic, "perform");
+  log.ok(`perform archive: archived _perform for ${topic}`);
+  return 0;
+}
+var import_node_fs30, import_node_path26, PART, PERFORM_TURN_TIMEOUT, liveInitDeps3, liveSendDeps, liveWaitDeps, liveScopeDeps, liveSummaryDeps, liveFinishDeps;
+var init_perform2 = __esm({
+  "src/commands/perform.ts"() {
+    "use strict";
+    import_node_fs30 = require("node:fs");
+    import_node_path26 = require("node:path");
+    init_log();
+    init_args();
+    init_atomic();
+    init_paths();
+    init_audit();
+    init_perform();
+    init_archive();
+    init_performScope();
+    init_gitwork();
+    init_forensics();
+    init_deps();
+    init_performTurn();
+    init_performQuestions();
+    init_ipc();
+    init_contracts();
+    init_scoreTurn();
+    init_send2();
+    PART = "cody";
+    PERFORM_TURN_TIMEOUT = () => Number(process.env.CONSORT_PERFORM_TURN_TIMEOUT_S) || 14400;
+    liveInitDeps3 = { repoRoot };
+    liveSendDeps = { offsetFor: (i2, m, t) => outboxOffset(outboxPath(i2, m, t)), send: run2 };
+    liveWaitDeps = { wait: outboxWaitSince, multiplier: instrumentTimeoutMultiplier, now: () => Math.floor(Date.now() / 1e3) };
+    liveScopeDeps = { runnerFor: runnerAt };
+    liveSummaryDeps = { runnerFor: runnerAt, now: () => isoUtc() };
+    liveFinishDeps = { runnerFor: runnerAt, hasGh: haveCmd("gh") };
+  }
+});
+
 // src/consort.ts
 init_args();
 init_paths();
 init_colors();
 async function loadHandlers() {
-  const [spawn2, send, collect, roster, coda, soundcheck, preflight, hook, solo, score] = await Promise.all([
+  const [spawn2, send, collect, roster, coda, soundcheck, preflight, hook, solo, score, perform] = await Promise.all([
     Promise.resolve().then(() => (init_spawn(), spawn_exports)),
     Promise.resolve().then(() => (init_send2(), send_exports)),
     Promise.resolve().then(() => (init_collect(), collect_exports)),
@@ -19646,7 +20626,8 @@ async function loadHandlers() {
     Promise.resolve().then(() => (init_preflight(), preflight_exports)),
     Promise.resolve().then(() => (init_hook(), hook_exports)),
     Promise.resolve().then(() => (init_solo2(), solo_exports)),
-    Promise.resolve().then(() => (init_score2(), score_exports))
+    Promise.resolve().then(() => (init_score2(), score_exports)),
+    Promise.resolve().then(() => (init_perform2(), perform_exports))
   ]);
   return {
     spawn: spawn2.run,
@@ -19658,7 +20639,8 @@ async function loadHandlers() {
     preflight: preflight.run,
     hook: hook.run,
     solo: solo.run,
-    score: score.run
+    score: score.run,
+    perform: perform.run
   };
 }
 async function banner(label, color) {
