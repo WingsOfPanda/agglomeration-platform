@@ -698,7 +698,7 @@ export async function scoreWith(args: string[], deps: RehearsalScoreDeps): Promi
 }
 ```
 
-`liveScoreDeps`: `computeScore` (the core fn), `fs: { exists: existsSync, read: (p) => existsSync(p) ? readFileSync(p,"utf8") : null, listDir: (p) => readdirSync(p).sort() }`, `writeAtomic: atomicWrite`, `removeFile: (p) => { try { rmSync(p, { force: true }); } catch { /* */ } }`, `now: isoUtc`.
+`liveScoreDeps`: `computeScore` (the core fn), `fs: { exists: existsSync, read: (p) => existsSync(p) ? readFileSync(p,"utf8") : null, listDir: (p) => { try { return readdirSync(p).sort(); } catch { return []; } } }` (the `try/catch → []` is **load-bearing** — `computeScore` calls `listDir` on possibly-missing `parts/`/`experiments/` dirs without a guard, relying on the nullglob-equivalent empty return; mirrors `scoreWalk.ts:28-29`), `writeAtomic: atomicWrite`, `removeFile: (p) => { try { rmSync(p, { force: true }); } catch { /* */ } }`, `now: isoUtc`.
 
 `run()` case: `case "score": return scoreWith(rest, liveScoreDeps);`
 
