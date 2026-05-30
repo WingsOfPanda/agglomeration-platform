@@ -1,9 +1,9 @@
 // /consort:rehearsal CLI verbs (Phase B front half). Ports deep-research-init.sh
 // (slug/codex-gate/flags/scaffolding) + the deep-research.md Phase 0-3 surface.
 // Phase C: experiment-send (dispatch ONE experiment to a persistent codex part).
-import { accessSync, constants as fsConstants, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile, kvParse } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
@@ -12,8 +12,11 @@ import { deriveSlug } from "../core/solo.js";
 import { extractMetric, formatMetricBlock, formatSotaBlock, parseMetricMd } from "../core/rehearsalMetric.js";
 import { rehearsalArtDir, partsDir, partStateDir, experimentsDir, experimentDir } from "../core/rehearsal.js";
 import { computeScore, type ScoreFs, type ScoreComputation } from "../core/rehearsalScore.js";
-import { parseState } from "../core/rehearsalState.js";
-import { checkCompletion } from "../core/rehearsalComplete.js";
+import { parseState, mergeState, reconcileFromOutbox, readHaltFlag } from "../core/rehearsalState.js";
+import { checkCompletion, checkTimeBudget } from "../core/rehearsalComplete.js";
+import { normalizeResult, type ResultJson } from "../core/rehearsalResult.js";
+import { renderSessionSummary, type StatusRow, type EventRow } from "../core/rehearsalSummary.js";
+import { finalizePhase, parseHardConstraints } from "../core/rehearsalFinalize.js";
 import { buildStatusBrief, type PartBrief } from "../core/rehearsalBrief.js";
 import { initScanState, monitorScan, type MonitorScanState } from "../core/rehearsalMonitor.js";
 import {
@@ -686,6 +689,312 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
   return 0;
 }
 
+// ---- Phase D: finalize — Phase 4->5 wind-down. Idempotent FS orchestration. ----
+// Ports deep-research-finalize.sh: per-part reconcile + phase normalization,
+// result.json normalization, intermediate-checkpoint prune, pane-artifact link,
+// size + audit warnings, and a wholesale session-summary.md re-render. consort
+// adaptations: NO active-marker lifecycle (omit the rm -f active-<sid>.txt step;
+// hook.ts is a no-op), and session-summary.md is the FULL renderSessionSummary.
+
+export interface RehearsalFinalizeDeps {
+  now(): string;
+  keepIntermediate?: boolean;
+  sizeWarnGb?: number;
+  stdout?: (l: string) => void;
+  opts?: PathOpts;
+}
+
+const GIB = 1073741824;
+
+/** Read a file as utf8, or "" when absent/unreadable. */
+function readOr(path: string, fallback = ""): string {
+  try { return readFileSync(path, "utf8"); } catch { return fallback; }
+}
+
+/** List the exp-NNN dirs directly under a part's experiments root (ENOENT-safe). */
+function listExpDirs(expsRoot: string): string[] {
+  try {
+    return readdirSync(expsRoot, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && EXP_ID_RE.test(e.name))
+      .map((e) => e.name).sort();
+  } catch { return []; }
+}
+
+/** Recursive byte size (sum of regular-file sizes) under dir. */
+function dirByteSize(dir: string): number {
+  let total = 0;
+  let entries: import("node:fs").Dirent[];
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return 0; }
+  for (const e of entries) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) total += dirByteSize(p);
+    else if (e.isFile()) { try { total += statSync(p).size; } catch { /* skip */ } }
+  }
+  return total;
+}
+
+/** Count regular files at depth 1 of dir. */
+function fileCountDepth1(dir: string): number {
+  try {
+    return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile()).length;
+  } catch { return 0; }
+}
+
+export async function finalizeWith(args: string[], deps: RehearsalFinalizeDeps): Promise<number> {
+  const opts = deps.opts;
+  // Argument parse: finalize [--keep-intermediate] <topic>.
+  let keep = deps.keepIntermediate ?? false;
+  let rest = args;
+  if (rest[0] === "--keep-intermediate") { keep = true; rest = rest.slice(1); }
+  if (rest.length !== 1 || rest[0].startsWith("--")) {
+    log.error("usage: rehearsal finalize [--keep-intermediate] <topic>"); return 2;
+  }
+  const topic = rest[0];
+
+  // 1. art dir must exist.
+  const art = rehearsalArtDir(topic, opts);
+  if (!existsSync(art) || !statSync(art).isDirectory()) {
+    log.error(`finalize: art-dir missing: ${art}`); return 1;
+  }
+
+  // Parts list (one instrument per non-blank line). Used in steps 2 + 9.
+  const partsFile = join(art, "parts.txt");
+  const instruments = existsSync(partsFile)
+    ? readFileSync(partsFile, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"))
+    : [];
+
+  // 2. Per-part reconcile + phase normalization.
+  for (const instrument of instruments) {
+    const stateDir = partStateDir(art, instrument);
+    const stateTxt = join(stateDir, "state.txt");
+    if (!existsSync(stateTxt)) continue;
+
+    // (a) reconcile: replay the PANE outbox tail past the liveness cursor.
+    const cursorRaw = readOr(join(stateDir, "liveness-cursor.txt"));
+    const offset = Number.parseInt(cursorRaw.trim(), 10) || 0;
+    const model = resolveModel(instrument, topic);
+    const ob = model ? outboxPath(instrument, model, topic) : "";
+    let tail = "";
+    if (ob && existsSync(ob)) {
+      try { tail = readFileSync(ob).subarray(offset).toString("utf8"); } catch { tail = ""; }
+    }
+    const curExp = parseState(readOr(stateTxt)).current_exp_id ?? "";
+    const doneResultExists = !!curExp && existsSync(join(experimentDir(art, instrument, curExp), "result.json"));
+    const recon = reconcileFromOutbox(tail, doneResultExists);
+    if (recon === "failed" || recon === "idle") {
+      atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: recon }));
+    }
+
+    // (b) phase case-map.
+    const phase = parseState(readOr(stateTxt)).phase ?? "";
+    const np = finalizePhase(phase);
+    if (np) atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: np }));
+  }
+
+  // 3. (OMIT active-marker removal — consort has no active-marker lifecycle.)
+
+  // 4. normalize_result: enforce status/metric_value joint validity per exp.
+  for (const instrument of instruments) {
+    const expsRoot = experimentsDir(art, instrument);
+    for (const expId of listExpDirs(expsRoot)) {
+      const resultPath = join(expsRoot, expId, "result.json");
+      if (!existsSync(resultPath)) continue;
+      let parsed: ResultJson;
+      try { parsed = JSON.parse(readFileSync(resultPath, "utf8")) as ResultJson; } catch { continue; }
+      const norm = normalizeResult(parsed);
+      if (norm.status !== parsed.status || norm.metric_value !== parsed.metric_value) {
+        atomicWrite(resultPath, JSON.stringify(norm));
+        log.info(`normalize: ${instrument}/${expId} -> ${norm.status}`);
+      }
+    }
+  }
+
+  // 5. prune intermediate checkpoints (skip if --keep-intermediate).
+  if (!keep) {
+    for (const instrument of instruments) {
+      const expsRoot = experimentsDir(art, instrument);
+      for (const expId of listExpDirs(expsRoot)) {
+        const expDir = join(expsRoot, expId);
+        const resultPath = join(expDir, "result.json");
+        if (!existsSync(resultPath)) continue;
+        let keptRel: string;
+        try {
+          const r = JSON.parse(readFileSync(resultPath, "utf8")) as { checkpoint_path?: unknown };
+          keptRel = r.checkpoint_path != null ? String(r.checkpoint_path) : "";
+        } catch { continue; }
+        if (!keptRel || keptRel === "null") continue;
+        // Resolve relative to the exp dir; reject paths that escape it.
+        const keptAbs = resolve(expDir, keptRel);
+        if (keptAbs !== expDir && !keptAbs.startsWith(expDir + "/")) {
+          log.warn(`prune: checkpoint_path escapes exp dir: ${keptRel} (in ${expDir}); skipping`);
+          continue;
+        }
+        let entries: string[];
+        try { entries = readdirSync(expDir); } catch { continue; }
+        for (const name of entries) {
+          if (!name.endsWith(".pt")) continue;
+          const pt = join(expDir, name);
+          if (pt === keptAbs) continue;
+          try { if (statSync(pt).isFile()) rmSync(pt, { force: true }); } catch { /* best-effort */ }
+        }
+      }
+    }
+  }
+
+  // 6. link pane artifacts: relative symlinks of the pane outbox/inbox into the art tree.
+  for (const instrument of instruments) {
+    const model = resolveModel(instrument, topic);
+    if (!model) continue;
+    const targetDir = partStateDir(art, instrument);
+    mkdirSync(targetDir, { recursive: true });
+    const paneFiles: Array<[string, string]> = [
+      ["outbox.jsonl", outboxPath(instrument, model, topic)],
+      ["inbox.md", inboxPath(instrument, model, topic)],
+    ];
+    for (const [name, src] of paneFiles) {
+      if (!existsSync(src)) { log.warn(`link_pane_artifacts: pane file missing for ${instrument}: ${name}`); continue; }
+      const linkPath = join(targetDir, name);
+      const rel = relative(targetDir, src);
+      try {
+        try { if (lstatSync(linkPath)) unlinkSync(linkPath); } catch { /* nothing to replace */ }
+        symlinkSync(rel, linkPath);
+      } catch { /* best-effort */ }
+    }
+  }
+
+  // 7. compute size warnings (post-prune). TRUNCATE warnings.txt first.
+  const warningsPath = join(art, "warnings.txt");
+  const threshold = (deps.sizeWarnGb ?? 2) * GIB;
+  const sizeLines: string[] = [];
+  for (const instrument of instruments) {
+    const expsRoot = experimentsDir(art, instrument);
+    for (const expId of listExpDirs(expsRoot)) {
+      const expDir = join(expsRoot, expId);
+      const bytes = dirByteSize(expDir);
+      if (bytes >= threshold) {
+        const gb = (bytes / GIB).toFixed(1);
+        sizeLines.push(`size_warn\t${instrument}/${expId}\t${gb}\t${fileCountDepth1(expDir)}`);
+      }
+    }
+  }
+  atomicWrite(warningsPath, sizeLines.length ? sizeLines.join("\n") + "\n" : "");
+
+  // 8. audit diff: append audit_warn rows for prompt/audit knob mismatches (AFTER size).
+  const auditLines: string[] = [];
+  for (const instrument of instruments) {
+    const expsRoot = experimentsDir(art, instrument);
+    for (const expId of listExpDirs(expsRoot)) {
+      const expDir = join(expsRoot, expId);
+      const promptMd = join(expDir, "prompt.md");
+      const auditJson = join(expDir, "audit.json");
+      if (!existsSync(promptMd) || !existsSync(auditJson)) continue;
+      let audit: Record<string, unknown>;
+      try { audit = JSON.parse(readFileSync(auditJson, "utf8")) as Record<string, unknown>; } catch { continue; }
+      for (const { key, value } of parseHardConstraints(readFileSync(promptMd, "utf8"))) {
+        const actual = audit[key];
+        if (actual == null || String(actual) === "null") continue;
+        if (String(value) !== String(actual)) {
+          auditLines.push(`audit_warn\t${instrument}/${expId}\t${key}\tprompt=${value}  actual=${String(actual)}`);
+        }
+      }
+    }
+  }
+  if (auditLines.length) {
+    const existing = readOr(warningsPath);
+    atomicWrite(warningsPath, existing + auditLines.join("\n") + "\n");
+  }
+
+  // 9. render session-summary.md (FULL re-render; wholesale atomic replace).
+  const statusRows: StatusRow[] = [];
+  for (const instrument of instruments) {
+    const stateTxt = join(partStateDir(art, instrument), "state.txt");
+    if (existsSync(stateTxt)) {
+      const kv = parseState(readOr(stateTxt));
+      statusRows.push({
+        instrument,
+        phase: kv.phase ?? "?",
+        current: kv.current_exp_id ?? "",
+        lastTs: kv.last_event_ts ?? "?",
+        lastEvent: kv.last_event ?? "?",
+      });
+    } else {
+      statusRows.push({ instrument, phase: "?", current: "", lastTs: "?", lastEvent: "?" });
+    }
+  }
+
+  const scoreboardPath = join(art, "scoreboard.md");
+  const scoreboardMd = existsSync(scoreboardPath) ? readFileSync(scoreboardPath, "utf8") : null;
+  const metricPath = join(art, "metric.md");
+  const completion = scoreboardMd !== null && existsSync(metricPath)
+    ? checkCompletion(scoreboardMd, readFileSync(metricPath, "utf8"))
+    : null;
+
+  const budgetPath = join(art, "time-budget.txt");
+  const startPath = join(art, "session-start.txt");
+  let hardCap: boolean | null = null;
+  if (existsSync(budgetPath) && existsSync(startPath)) {
+    try {
+      hardCap = checkTimeBudget(
+        readFileSync(budgetPath, "utf8").trim(),
+        readFileSync(startPath, "utf8").trim(),
+        Math.floor(Date.parse(deps.now()) / 1000),
+      );
+    } catch { hardCap = null; }
+  }
+
+  // Recent events: tail-10 of EACH part's PANE outbox, merged + sorted desc by ts, capped 10.
+  const allEvents: EventRow[] = [];
+  for (const instrument of instruments) {
+    const model = resolveModel(instrument, topic);
+    if (!model) continue;
+    const ob = outboxPath(instrument, model, topic);
+    if (!existsSync(ob)) continue;
+    const lines = readOr(ob).split("\n").filter((l) => l.trim() !== "").slice(-10);
+    for (const line of lines) {
+      try {
+        const o = JSON.parse(line) as { ts?: unknown; event?: unknown };
+        allEvents.push({ ts: o.ts != null ? String(o.ts) : "", instrument, event: o.event != null ? String(o.event) : "" });
+      } catch { /* skip non-JSON */ }
+    }
+  }
+  allEvents.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
+  const recentEvents = allEvents.slice(0, 10);
+
+  // Warnings -> bullet lines (faithful to render_summary's Warnings section).
+  const warnings: string[] = [];
+  for (const line of readOr(warningsPath).split("\n")) {
+    if (!line.trim()) continue;
+    const f = line.split("\t");
+    if (f[0] === "size_warn") {
+      warnings.push(`- size_warn: ${f[1]} ${f[2]} GB (${f[3]} files)`);
+    } else if (f[0] === "audit_warn") {
+      warnings.push(`- audit_warn: ${f[1]} ${f[2]} (${f[3]})`);
+    }
+  }
+
+  const haltPath = join(art, "halt.flag");
+  const halt = readHaltFlag(existsSync(haltPath) ? readFileSync(haltPath, "utf8") : null);
+
+  const startedIso = existsSync(startPath) ? readFileSync(startPath, "utf8").trim() : "(unknown)";
+  const budget = existsSync(budgetPath) ? readFileSync(budgetPath, "utf8").trim() : "none";
+
+  const summary = renderSessionSummary({
+    topic, updatedIso: deps.now(), startedIso, budget,
+    statusRows, scoreboardMd, completion, hardCap, recentEvents, warnings, halt,
+    finalizedIso: deps.now(),
+  });
+  atomicWrite(join(art, "session-summary.md"), summary);
+
+  log.ok("finalize: cleanup complete");
+  return 0;
+}
+
+const liveFinalizeDeps: RehearsalFinalizeDeps = {
+  now: () => isoUtc(),
+  keepIntermediate: process.env.CONSORT_REHEARSAL_KEEP_INTERMEDIATE ? true : undefined,
+  sizeWarnGb: Number(process.env.CONSORT_REHEARSAL_SIZE_WARN_GB) || 2,
+};
+
 export async function run(args: string[]): Promise<number> {
   const [verb, ...rest] = args;
   switch (verb) {
@@ -697,6 +1006,7 @@ export async function run(args: string[]): Promise<number> {
     case "score": return scoreWith(rest, liveScoreDeps);
     case "monitor": return monitorRun(rest);
     case "status-brief": return statusBriefWith(rest);
+    case "finalize": return finalizeWith(rest, liveFinalizeDeps);
     default: log.error(`rehearsal: unknown verb: ${verb ?? "(none)"}`); return 2;
   }
 }
