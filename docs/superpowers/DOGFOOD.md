@@ -473,3 +473,46 @@ git/IPC state. All of Phase B's new logic — the `turn-wait` state machine + ve
 - Phase B built subagent-driven: 3 implementers (B1 core extensions / B2a init+turn / B2b git+wind-down),
   each through two-stage review (spec → quality), all SPEC PASS / QUALITY APPROVED. Single-repo
   `perform` is complete; multi-repo DAG execution (Phase C) + verify/fix/finish (Phase D) remain.
+
+---
+
+# Consort `perform` — Phase C (multi-repo DAG) Dogfood Result
+
+**Date:** 2026-05-30 · **Branch:** `feat/perform` · **Verdict:** ✅ PASS (multi-repo executor validated live)
+
+2-repo / 2-wave run against a throwaway hub with two sibling sub-repos (`api/`, `web/`, each a real
+`git init` + a commit + a `CLAUDE.md` marker) and a design doc with `**Target Sub-Project(s):** api,
+web` + a `## Execution DAG` (`1. api — build`; `2. web — consume (depends on 1)`).
+
+## Run
+
+| Stage | Result |
+|---|---|
+| `perform init` | ✅ `ROUTING=multi`, `TARGET_CWD=<hub>`, `provider=codex` (hub no plugin.json) |
+| `perform dag-parse` | ✅ `WAVES=2 STEPS=2`; `dag-waves.txt` = `1\t1\tapi\tnone\tbuild the lib` / `2\t2\tweb\tnone\tconsume it` (correct topological order), `dag-edges.txt` = `1\t2` |
+| `perform multi-init <hub>` | ✅ `parts.txt` = `oboe\t<hub>/api\tcodex` / `viola\t<hub>/web\tcodex` (instruments in DAG first-occurrence order, per-repo provider), per-part `oboe/viola-branch-base.sha` = each sub-repo's HEAD |
+| `perform pre-snapshot` | ✅ 2 clean; `baselines/oboe.tsv` + `baselines/viola.tsv` |
+| `perform branch` | ✅ `feat/perform-perf-c` created in BOTH sub-repos; `perform-branches.tsv` 2 rows |
+| `perform send-unit api` / `web` | ✅ prompt composition exact — api: "Step 1 of 2 … depend on: none (wave-1 root)"; web: "Step 2 of 2 … depend on: api" |
+| `perform wave-wait <instr> codex` | ✅ read each part's `done` → `wave-<instr>.txt` `TS=ok`/`EVENT=done` + `.done` sentinel |
+
+## Scope of the live run
+
+`init → dag-parse → multi-init → pre-snapshot → branch` ran **fully live against real git** — the
+multi-repo materialization (DAG → waves → one part per repo in DAG order → per-repo baseline + branch)
+is byte-verified. The **wave dispatch** (`send-unit` per repo, `wave-wait` barrier per part) was
+validated against real IPC by standing in for the parts' `done` events — the live `spawn` of each
+sub-repo's part is blocked by codex 0.135.0's directory-trust prompt (Phase B finding; each sub-repo
+cwd would need to be codex-trusted). `send-unit`'s `send` step failed (no live pane) but it writes the
+per-repo prompt first, so the composition — the Phase C deliverable — is verified.
+
+## Verification context
+
+- **574 vitest unit tests green** (+ the dag-parse / wave-wait / multi-init / composeDagUnitPrompt /
+  dagSectionBody suites); `tsc` 0, eslint 0, stale-tokens (incl. the rewritten `commands/perform.md`
+  Stages 3a/3b/3z) green; `dist/consort.cjs` rebuilt (752.9kb) + committed.
+- Phase C built subagent-driven: 3 implementers (C1 core / C2 dag-parse+wave-wait / C3
+  multi-init+send-unit), each through two-stage review — all SPEC PASS / QUALITY APPROVED. Multi-repo
+  **dispatch** is complete; cross-repo verify + per-repo fix-loop + per-repo finish (Phase D) remain
+  (the `dagFanInRepos` "feels unsafe" heuristic is wired and unit-tested, ready for Phase D's
+  cross-verify).
