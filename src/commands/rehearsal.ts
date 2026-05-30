@@ -23,6 +23,8 @@ import {
   renderExperimentPrompt, buildSotaBlock, assembleHardwareBlock, hardwareDiffAlert,
   formatPeersBlock, buildDispatchState, EXP_ID_RE, INSTRUMENT_RE, type PeerRow,
 } from "../core/rehearsalExperiment.js";
+import { captureArtDir } from "../core/forensics.js";
+import { parseScoreboard, buildHandoffKv, type HandoffInput } from "../core/rehearsalHandoff.js";
 import { instrumentBinary, consultTimeout } from "../core/contracts.js";
 import { inboxWrite, inboxPath, outboxPath, paneMetaRead, resolveModel } from "../core/ipc.js";
 import { paneSend } from "../core/tmux.js";
@@ -1058,6 +1060,89 @@ const liveRefineDeps: RehearsalRefineDeps = {
   dryRun: process.env.CONSORT_DRY_RUN === "1",
 };
 
+// ---- Phase D: handoff-extract — write handoff-data.kv from the archived art dir. ----
+// Ports deep-research-handoff-extract.sh + its extract-handoff-data helper.
+// Takes the ART-DIR path DIRECTLY (the directive reruns post-archive with the rebound
+// $ART), so the positional is the art dir itself; per-experiment result.json is resolved
+// RELATIVE to that art dir — do NOT call rehearsalArtDir on it.
+
+export interface RehearsalHandoffDeps {
+  now(): string;
+  stdout?: (line: string) => void;
+  opts?: PathOpts;
+}
+
+/** Read result.json under art and parse it; {} on any failure. */
+function readResultJson(path: string): Record<string, unknown> {
+  if (!existsSync(path)) return {};
+  try { return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>; } catch { return {}; }
+}
+
+export async function handoffExtractWith(args: string[], deps: RehearsalHandoffDeps): Promise<number> {
+  const art = args[0];
+  if (!art || !existsSync(art) || !statSync(art).isDirectory()) {
+    log.error(`rehearsal handoff-extract: art-dir required (got '${art ?? ""}')`); return 2;
+  }
+  const topicTxt = join(art, "topic.txt");
+  if (!existsSync(topicTxt)) { log.error(`rehearsal handoff-extract: topic.txt missing under ${art}`); return 2; }
+  const topic = readFileSync(topicTxt, "utf8").replace(/\n/g, " ").replace(/\s+$/, "");
+
+  const sbPath = join(art, "scoreboard.md");
+  const { winner, runnerUps } = parseScoreboard(existsSync(sbPath) ? readFileSync(sbPath, "utf8") : "");
+
+  // Landscape doc: first rehearsal-*.md under art -> its basename (omit if none).
+  let landscapeDoc: string | undefined;
+  for (const name of readdirSync(art).sort()) {
+    if (/^rehearsal-.*\.md$/.test(name) && statSync(join(art, name)).isFile()) { landscapeDoc = name; break; }
+  }
+  const hasMetricMd = existsSync(join(art, "metric.md"));
+  const generatedTs = deps.now();
+
+  let input: HandoffInput;
+  if (!winner) {
+    input = { topic, landscapeDoc, hasMetricMd, generatedTs, winner: null, runnerUps: [] };
+  } else {
+    const expRel = `parts/${winner.instrument}/experiments/${winner.expId}`;
+    const result = readResultJson(join(art, expRel, "result.json"));
+    const approach = result.approach_label != null ? String(result.approach_label) : "";
+    const notes = String(result.notes ?? "").replace(/\n/g, " ");
+    let checkpoint: string | undefined;
+    const ckptRaw = result.checkpoint_path != null ? String(result.checkpoint_path) : "";
+    if (ckptRaw && ckptRaw !== "null") {
+      checkpoint = ckptRaw.startsWith("/") ? ckptRaw : `${expRel}/${ckptRaw}`;
+    }
+    const runners = runnerUps.map((r) => {
+      const rr = readResultJson(join(art, `parts/${r.instrument}/experiments/${r.expId}`, "result.json"));
+      return { instrument: r.instrument, exp: r.expId, metric: r.metric, approach: rr.approach_label != null ? String(rr.approach_label) : "" };
+    });
+    input = {
+      topic, landscapeDoc, hasMetricMd, generatedTs,
+      winner: {
+        instrument: winner.instrument, exp: winner.expId, approach, metric: winner.metric,
+        checkpoint, notes: notes || undefined, codeDir: `${expRel}/code/`,
+      },
+      runnerUps: runners,
+    };
+  }
+
+  atomicWrite(join(art, "handoff-data.kv"), buildHandoffKv(input));
+  log.ok(`handoff-data.kv written: ${join(art, "handoff-data.kv")}`);
+  return 0;
+}
+
+const liveHandoffDeps: RehearsalHandoffDeps = { now: () => isoUtc() };
+
+// ---- Phase D: forensics — thin captureArtDir wrapper (mirrors score.ts::forensicsRun). ----
+
+export async function forensicsRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("rehearsal forensics: topic required"); return 2; }
+  const path = captureArtDir({ artDir: rehearsalArtDir(topic), command: "rehearsal" });
+  if (path) { log.ok(`forensics captured: ${path}`); process.stdout.write(path + "\n"); }
+  else log.info("rehearsal forensics: no mechanical findings");
+  return 0;
+}
+
 export async function run(args: string[]): Promise<number> {
   const [verb, ...rest] = args;
   switch (verb) {
@@ -1071,6 +1156,8 @@ export async function run(args: string[]): Promise<number> {
     case "status-brief": return statusBriefWith(rest);
     case "finalize": return finalizeWith(rest, liveFinalizeDeps);
     case "refine": return refineWith(applyArgsFile(rest), liveRefineDeps);
+    case "handoff-extract": return handoffExtractWith(rest, liveHandoffDeps);
+    case "forensics": return forensicsRun(rest);
     default: log.error(`rehearsal: unknown verb: ${verb ?? "(none)"}`); return 2;
   }
 }

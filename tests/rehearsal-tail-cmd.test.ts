@@ -4,7 +4,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
-import { refineWith, type RehearsalRefineDeps } from "../src/commands/rehearsal.js";
+import { refineWith, handoffExtractWith, forensicsRun, type RehearsalRefineDeps } from "../src/commands/rehearsal.js";
 import { experimentDir, rehearsalArtDir } from "../src/core/rehearsal.js";
 
 const cleanups: Array<() => void> = [];
@@ -137,5 +137,147 @@ describe("refine", () => {
     expect(await refineWith([TOPIC, INST, EXP, "must not touch state"], deps(h.home))).toBe(0);
     const after = readFileSync(stateTxt);
     expect(after.equals(before)).toBe(true);
+  });
+});
+
+describe("handoff-extract", () => {
+  // Parse handoff-data.kv body into a record (k=v per line).
+  function parseKvBody(body: string): Record<string, string> {
+    const o: Record<string, string> = {};
+    for (const line of body.split("\n")) {
+      if (!line) continue;
+      const i = line.indexOf("=");
+      if (i > 0) o[line.slice(0, i)] = line.slice(i + 1);
+    }
+    return o;
+  }
+
+  // Write a result.json under <art>/parts/<inst>/experiments/<exp>/.
+  function writeResult(art: string, inst: string, exp: string, obj: unknown): void {
+    const dir = experimentDir(art, inst, exp);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "result.json"), JSON.stringify(obj));
+  }
+
+  const WINNER_SB =
+    "| rank | exp | instrument | metric | status |\n" +
+    "| --- | --- | --- | --- | --- |\n" +
+    "| 1 | exp-003 | violin | 0.9950 | ok |\n" +
+    "| 2 | exp-002 | viola | 0.9100 | ok |\n";
+
+  it("winner branch: full handoff-data.kv", async () => {
+    home();
+    const art = rehearsalArtDir("tune-model");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "topic.txt"), "Tune the model\nfor accuracy\n");
+    writeFileSync(join(art, "scoreboard.md"), WINNER_SB);
+    writeFileSync(join(art, "metric.md"), "Primary metric: acc\n");
+    writeFileSync(join(art, "rehearsal-2026-05-30-landscape.md"), "# landscape\n");
+    writeResult(art, "violin", "exp-003", { approach_label: "deep-net", notes: "best run", checkpoint_path: "ckpt.pt" });
+    writeResult(art, "viola", "exp-002", { approach_label: "wide-net" });
+
+    expect(await handoffExtractWith([art], { now: () => "T" })).toBe(0);
+    const kv = parseKvBody(readFileSync(join(art, "handoff-data.kv"), "utf8"));
+    expect(kv.mode).toBe("rehearsal");
+    expect(kv.topic).toBe("Tune the model for accuracy");
+    expect(kv.winner_instrument).toBe("violin");
+    expect(kv.winner_exp).toBe("exp-003");
+    expect(kv.winner_metric).toBe("0.9950");
+    expect(kv.winner_approach).toBe("deep-net");
+    expect(kv.winner_notes).toBe("best run");
+    expect(kv.winner_checkpoint).toBe("parts/violin/experiments/exp-003/ckpt.pt");
+    expect(kv.winner_code_dir).toBe("parts/violin/experiments/exp-003/code/");
+    expect(kv.runner_up_1).toBe("viola/exp-002:0.9100:wide-net");
+    expect(kv.landscape_doc).toBe("rehearsal-2026-05-30-landscape.md");
+    expect(kv.mandates_block_path).toBe("metric.md");
+    expect(kv.generated_ts).toBe("T");
+  });
+
+  it("no-winner branch: mode=rehearsal-no-winner", async () => {
+    home();
+    const art = rehearsalArtDir("no-win");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "topic.txt"), "nothing worked");
+    writeFileSync(join(art, "scoreboard.md"),
+      "| rank | exp | instrument | metric | status |\n| 1 | exp-001 | violin | n/a | fail |\n");
+    expect(await handoffExtractWith([art], { now: () => "T" })).toBe(0);
+    const kv = parseKvBody(readFileSync(join(art, "handoff-data.kv"), "utf8"));
+    expect(kv.mode).toBe("rehearsal-no-winner");
+    expect(kv.winner_instrument).toBeUndefined();
+  });
+
+  it("checkpoint: absolute path passes through verbatim; relative is prefixed", async () => {
+    home();
+    // absolute
+    const artA = rehearsalArtDir("abs-ckpt");
+    mkdirSync(artA, { recursive: true });
+    writeFileSync(join(artA, "topic.txt"), "abs");
+    writeFileSync(join(artA, "scoreboard.md"), WINNER_SB);
+    writeResult(artA, "violin", "exp-003", { approach_label: "a", checkpoint_path: "/abs/x.pt" });
+    writeResult(artA, "viola", "exp-002", {});
+    expect(await handoffExtractWith([artA], { now: () => "T" })).toBe(0);
+    const kvA = parseKvBody(readFileSync(join(artA, "handoff-data.kv"), "utf8"));
+    expect(kvA.winner_checkpoint).toBe("/abs/x.pt");
+
+    // relative
+    const artR = rehearsalArtDir("rel-ckpt");
+    mkdirSync(artR, { recursive: true });
+    writeFileSync(join(artR, "topic.txt"), "rel");
+    writeFileSync(join(artR, "scoreboard.md"), WINNER_SB);
+    writeResult(artR, "violin", "exp-003", { approach_label: "a", checkpoint_path: "best.pt" });
+    writeResult(artR, "viola", "exp-002", {});
+    expect(await handoffExtractWith([artR], { now: () => "T" })).toBe(0);
+    const kvR = parseKvBody(readFileSync(join(artR, "handoff-data.kv"), "utf8"));
+    expect(kvR.winner_checkpoint).toBe("parts/violin/experiments/exp-003/best.pt");
+  });
+
+  it("rc 2 on missing art-dir arg", async () => {
+    home();
+    expect(await handoffExtractWith([], { now: () => "T" })).toBe(2);
+    expect(await handoffExtractWith([rehearsalArtDir("nope")], { now: () => "T" })).toBe(2);
+  });
+
+  it("rc 2 when topic.txt is missing under the art dir", async () => {
+    home();
+    const art = rehearsalArtDir("no-topic");
+    mkdirSync(art, { recursive: true });
+    expect(await handoffExtractWith([art], { now: () => "T" })).toBe(2);
+  });
+});
+
+describe("forensics", () => {
+  it("rc 2 when no topic", async () => {
+    home();
+    expect(await forensicsRun([])).toBe(2);
+  });
+
+  it("rc 0 with no findings (empty art) -> log.info, no stdout path", async () => {
+    home();
+    const art = rehearsalArtDir("clean");
+    mkdirSync(art, { recursive: true });
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      expect(await forensicsRun(["clean"])).toBe(0);
+    } finally { stdout.mockRestore(); }
+    expect(stdout).not.toHaveBeenCalled();
+  });
+
+  it("rc 0 + stdout path when scrapeable findings exist", async () => {
+    home();
+    const topic = "buggy";
+    const art = rehearsalArtDir(topic);
+    mkdirSync(art, { recursive: true });
+    // Sibling part dir under the topic dir carries an error event in its outbox.
+    const partDir = join(art, "..", "violin-codex");
+    mkdirSync(partDir, { recursive: true });
+    writeFileSync(join(partDir, "outbox.jsonl"), '{"event":"error","reason":"boom"}\n');
+
+    const lines: string[] = [];
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation((c: unknown): boolean => { lines.push(String(c)); return true; });
+    try {
+      expect(await forensicsRun([topic])).toBe(0);
+    } finally { stdout.mockRestore(); }
+    expect(lines.length).toBe(1);
+    expect(lines[0].trim()).toMatch(/forensics\/.*-rehearsal-buggy\.md$/);
   });
 });
