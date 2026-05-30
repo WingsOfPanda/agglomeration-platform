@@ -12,10 +12,11 @@ whole run; `tmux select-pane` to watch.
 
 Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs"`.
 
-> **Scope (this build):** single-repo **and multi-repo DAG execution**. A multi-repo doc (a
-> `**Target Sub-Project(s):**` header plus a `## Execution DAG` section) routes through Stages 3a/3b
-> (preflight panes → wave-by-wave dispatch). Cross-repo verify / per-repo fix-loop / per-repo finish
-> are a later phase; the multi-repo path here ends after all waves complete plus a per-repo summary.
+> **Scope (this build):** single-repo **and multi-repo DAG execution, end to end**. A multi-repo doc
+> (a `**Target Sub-Project(s):**` header plus a `## Execution DAG` section) routes through Stages
+> 3a/3b (preflight panes → wave-by-wave dispatch), then 3c/3d/4 (cross-repo verify → per-repo
+> fix-loop → per-repo finish + teardown). Both paths end at a per-target finish menu and
+> teardown/archive.
 
 ## Stage 0 — args-file + init + route + branch
 
@@ -184,6 +185,17 @@ If `N > 4`, dispatch the first 4 parts' panes and tell the user wider intra-wave
 supported (the DAG still serializes by wave; only the per-wave pane budget is capped). Load
 `preflight-panes.txt` into an `instrument → pane` map for Stage 3b.
 
+**Sibling baseline.** Before dispatching any wave, snapshot every **undeclared** sibling git repo of
+the hub (`$TARGET_CWD`) so Stage 4 can detect rogue commits that land on their main branches during
+the run:
+
+```bash
+$CS perform sibling-baseline <TOPIC> "$TARGET_CWD"
+```
+
+This writes `$ART/sibling-baseline.txt` (`<slug>\t<sha>\t<branch>` per qualifying sibling; empty if
+the hub has none — declared sub-repos from `parts.txt` are excluded).
+
 ## Stage 3b — DAG wave dispatch (ROUTING=multi only)
 
 Build the lookup tables once — for each `parts.txt` row `<instrument>\t<cwd>\t<provider>`, the repo is
@@ -217,14 +229,92 @@ For each wave, for each repo in it:
 
 When the last wave's parts all report `TS=ok`, multi-repo execution is complete.
 
-## Stage 3z — per-repo summary + teardown (ROUTING=multi; end of this build)
+## Stage 3c — final cross-repo verification (ROUTING=multi only)
 
-`$CS perform summary <TOPIC>` — `iterTargets` reads `parts.txt`, so it emits one block per part
-(branch, baseline/HEAD, diff stat, commit list). Surface every block verbatim.
+After every wave's parts report `TS=ok`, the **Maestro** runs its own cross-repo verification. First
+compute the deterministic "feels unsafe" signal:
 
-> **Deferred to a later phase:** cross-repo verify (the Maestro's own cross-repo invariant check,
-> escalated on a fan-in / shared-path "feels unsafe" signal), the per-repo fix-loop, and the per-repo
-> finish menu are **not built here** — they will be inserted between the summary and teardown. For now,
-> tear down + archive: `$CS coda --pairs <TOPIC> <instrument…>` (closes every part pane; prints the
-> **FINE** banner) then `$CS perform archive <TOPIC>`. Print the per-part commit counts + the archive
-> path as the final summary.
+```bash
+$CS perform cross-signal <TOPIC>   # prints WAVE_COUNT / FAN_IN_REPOS / SHARED_PATHS / UNSAFE
+```
+
+- **`UNSAFE=0`** (default) — cross-repo invariants only: read the design's `## Architecture` section
+  and verify every declared cross-repo interface is implemented consistently across sub-repos. If
+  none are declared, this is a no-op.
+- **`UNSAFE=1`** (wave count >= 3, OR a fan-in repo, OR a path touched by >= 2 parts) — escalate to a
+  full check: per sub-repo `git -C <cwd> status --short` (no uncommitted leftovers), run each
+  sub-repo's test entrypoint if present, and evaluate every `- [ ]` in the design's `## Success
+  Criteria` against the diffs. Treat the `FAN_IN_REPOS` repos with extra scrutiny.
+
+**Bugs contract.** Truncate `$ART/multi-verify-bugs.txt`, then append one TSV row per bug found
+(`<repo>\t<bug-description>`). When the pass is done this file is the authoritative bug list for
+Stage 3d. If it is **empty**, all green → skip to Stage 4. If non-empty → Stage 3d.
+
+## Stage 3d — multi-repo fix-loop (ROUTING=multi only; only if Stage 3c found bugs)
+
+Read `$ART/multi-verify-bugs.txt` (`<repo>\t<bug>` rows). `MAX_FIX_ROUNDS=3` per repo. For each
+`(REPO, BUG)` row:
+
+1. **Find the owning part** — the `parts.txt` row whose `basename(cwd) == REPO` gives the
+   `<instrument>` (col 1) and `<provider>` (col 3). If none, log and skip.
+2. **Send the fix** — write the bug as a fix prompt to `$ART/<instrument>_fix_round_<n>.md` (tagged
+   bullets; **no** `END_OF_INSTRUCTION` / done-line — the `send` primitive's `@file` form does not
+   add the fence, so include neither preamble nor sentinel), then deliver it:
+   ```bash
+   $CS send "<instrument>" "<TOPIC>" "@$ART/<instrument>_fix_round_<n>.md"
+   ```
+3. **Barrier** — one background `wave-wait` per dispatched part:
+   ```
+   Bash(command='$CS perform wave-wait "<TOPIC>" "<instrument>" "<provider>"', run_in_background: true,
+        description="maestro await <instrument> fix-round <n>")
+   ```
+   On completion read `$ART/wave-<instrument>.txt`. `TS=ok` → re-run Stage 3c verification for THIS
+   sub-repo; still buggy and `n < MAX_FIX_ROUNDS` → bump `n` and re-loop step 1.
+4. **Exhaustion** (`n >= MAX_FIX_ROUNDS`, still buggy) — **AskUserQuestion**: "Give up on this
+   sub-repo" (record `<REPO>` as FAILED, continue the others) / "Continue more rounds" (bump `n`) /
+   "Escalate" (pick another instrument, fresh `$CS spawn <instrument> <provider> <TOPIC> --cwd
+   <sub-repo>`, reset `n=0`).
+
+When all bugs are resolved or given up, proceed to Stage 4.
+
+## Stage 4 — sibling guard + scope + summary + finish + teardown (ROUTING=multi)
+
+1. **Sibling rogue-commit intercept.** Re-read each sibling's HEAD vs the Stage-3a baseline:
+   ```bash
+   [ -f "$ART/sibling-baseline.txt" ] && $CS perform sibling-verify <TOPIC> "$TARGET_CWD"
+   ```
+   If `$ART/sibling-rogue.txt` is non-empty (`<slug>\t<sha>\t<subject>` per rogue commit), render it
+   as an inline markdown table and **AskUserQuestion** ("Rogue commits on undeclared sibling main
+   branches — pick a recovery path"):
+   - *Revert + replay on feat branch* (Recommended) — `$CS perform sibling-rescue <TOPIC>
+     "$TARGET_CWD"` (leaves `feat/perform-<TOPIC>-rescue` in each rescued sibling; records
+     `$ART/sibling-rescue.txt`).
+   - *Keep on main (accept)* — append `$ART/sibling-rogue.txt` to `$ART/sibling-rogue-accepted.txt`.
+   - *Send back as a fix-loop bug* — append the rogue commits as a bug to `$ART/multi-verify-bugs.txt`
+     and re-enter Stage 3d.
+2. **Scope conformance.** `$CS perform scope-check <TOPIC>` (multi-aware: per-sub-repo diff prefixed
+   `<repo>/`). If `OOS_COUNT > 0`, read `$ART/scope-out-of-scope.txt` and **AskUserQuestion** ("Amend
+   the design / Send back to the part / Force-keep"):
+   - *Amend* — draft the new Components-table rows, present them, **Edit** `$ART/design.md` to insert
+     them, record `amended-rows=<n>` to `$ART/scope-amended.txt`.
+   - *Send back* — append the out-of-scope paths as a bug to `$ART/multi-verify-bugs.txt`, re-enter
+     Stage 3d.
+   - *Force-keep* — append the paths to `$ART/scope-overrides.txt` and proceed.
+3. **Per-repo summary.** `$CS perform summary <TOPIC>` — `iterTargets` reads `parts.txt`, so it emits
+   one block per part (branch, baseline/HEAD, diff stat, commit list). Surface every block verbatim.
+4. **Finish menu per target.** Truncate once: `: > "$ART/finish-results.tsv"`. Then for each
+   `slug<TAB>cwd` from `iterTargets` (`parts.txt`): recommend **Push + PR** if `git -C "$cwd" remote`
+   is non-empty else **Merge**; **AskUserQuestion** per repo (offer an "apply to all" convenience on
+   the first answer when there are >= 2 targets); apply with `$CS perform finish-one <TOPIC> <slug>
+   <merge|pr|keep|discard>`. Read each outcome from `$ART/finish-results.tsv`; on `merge-conflict-left`,
+   tell the user the branch was preserved and the repo restored to the start branch (resolve `git
+   merge feat/perform-<TOPIC>` by hand).
+5. **Forensics + reflection.** `$CS perform forensics <TOPIC>`; if it printed a path, use the
+   **Edit/Write tool** to APPEND an idempotent `## Maestro reflection` section (3-5 short bullets
+   interpreting the mechanical findings) to that file.
+6. **Teardown + archive.** `$CS coda --pairs <TOPIC> <instrument…>` (closes every part pane; prints
+   the **FINE** banner) then `$CS perform archive <TOPIC>`.
+7. **Final summary (multi).** Print one line per part — `<instrument> (<provider>) -> <cwd>: N
+   commit(s) on top of branch base` (`N = git -C <cwd> log --oneline <baseline_sha>..HEAD | wc -l`,
+   `baseline_sha` from `$ART/baselines/<slug>.tsv`) — plus "Final cross-verify verdict: see
+   `_perform/multi-verify-bugs.txt` (empty = PASS)" and the archive path.
