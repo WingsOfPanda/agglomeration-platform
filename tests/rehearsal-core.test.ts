@@ -363,6 +363,7 @@ import {
   parseState, renderState, mergeState, reconcileFromOutbox, readHaltFlag,
 } from "../src/core/rehearsalState.js";
 import { buildResultsTsv, computeScore, type ScoreFs } from "../src/core/rehearsalScore.js";
+import { initScanState, monitorScan, type MonitorScanState, type MonitorDeps } from "../src/core/rehearsalMonitor.js";
 
 describe("state KV round-trip", () => {
   it("parses and renders KV, preserving '=' in values and escaping newlines", () => {
@@ -663,3 +664,117 @@ function fakeFs(files: Record<string, string>): ScoreFs {
   };
   return { exists: has, read: (p) => (p in files ? files[p] : null), listDir: (p) => dirsUnder(p) };
 }
+
+describe("rehearsalMonitor", () => {
+  const TH = { probeS: 900, stuckS: 1800, rescanEveryS: 30 };
+  const mkDeps = (over: Partial<MonitorDeps>): MonitorDeps => ({
+    outboxText: "", outboxFullText: "", outboxSize: 0, outboxMtime: 0, phase: "working",
+    now: 1000, nowIso: "T", thresholds: TH, ...over });
+
+  it("initScanState fresh start skips prior events (offset = EOF) and pre-seeds rescan set", () => {
+    const full = '{"event":"done","summary":"x"}\n';
+    const s = initScanState(Buffer.byteLength(full), full, null, null);
+    expect(s.offset).toBe(Buffer.byteLength(full));
+    expect(s.rescanEmitted.has("1\tdone")).toBe(true);
+  });
+
+  it("initScanState honors a valid persisted cursor <= size, resets on overshoot/junk", () => {
+    expect(initScanState(100, "", "40", null).offset).toBe(40);
+    expect(initScanState(100, "", "400", null).offset).toBe(100);
+    expect(initScanState(100, "", "junk", null).offset).toBe(100);
+  });
+
+  it("byte-tail emits done/error/question/heartbeat for new lines, advances offset, uses 'part' key", () => {
+    const newText = '{"event":"progress","summary":"p"}\n{"event":"done","summary":"finished"}\n';
+    const s: MonitorScanState = { offset: 0, rescanEmitted: new Set(), lastStaleTs: 0, lastStuckTs: 0, lastRescan: 0 };
+    const r = monitorScan("/o", "viola", s, mkDeps({ outboxText: newText, outboxFullText: newText,
+      outboxSize: Buffer.byteLength(newText), phase: "idle" }));
+    const evs = r.notifications.map((n) => n.event);
+    expect(evs).toContain("done");
+    expect(evs).not.toContain("progress");
+    expect(r.notifications.find((n) => n.event === "done")!.part).toBe("viola");
+    expect(r.state.offset).toBe(Buffer.byteLength(newText));
+  });
+
+  it("stuck fires before stale, mutually exclusive, when working + mtime very old", () => {
+    const s: MonitorScanState = { offset: 0, rescanEmitted: new Set(), lastStaleTs: 0, lastStuckTs: 0, lastRescan: 0 };
+    const r = monitorScan("/o", "viola", s, mkDeps({ now: 100000, outboxMtime: 100000 - 2000 }));
+    expect(r.notifications.map((n) => n.event)).toContain("stuck");
+    expect(r.notifications.map((n) => n.event)).not.toContain("stale");
+    expect(r.state.lastStuckTs).toBe(100000);
+  });
+
+  it("stale fires when delta in [probeS, stuckS)", () => {
+    const s: MonitorScanState = { offset: 0, rescanEmitted: new Set(), lastStaleTs: 0, lastStuckTs: 0, lastRescan: 0 };
+    const r = monitorScan("/o", "viola", s, mkDeps({ now: 100000, outboxMtime: 100000 - 1000 }));
+    expect(r.notifications.map((n) => n.event)).toContain("stale");
+  });
+
+  it("no stale/stuck when phase != working", () => {
+    const s: MonitorScanState = { offset: 0, rescanEmitted: new Set(), lastStaleTs: 0, lastStuckTs: 0, lastRescan: 0 };
+    const r = monitorScan("/o", "viola", s, mkDeps({ now: 100000, outboxMtime: 0, phase: "idle" }));
+    expect(r.notifications).toHaveLength(0);
+  });
+
+  it("stale is rate-limited by probeS across scans", () => {
+    let s: MonitorScanState = { offset: 0, rescanEmitted: new Set(), lastStaleTs: 0, lastStuckTs: 0, lastRescan: 0 };
+    s = monitorScan("/o", "v", s, mkDeps({ now: 100000, outboxMtime: 99000 })).state;
+    const r2 = monitorScan("/o", "v", s, mkDeps({ now: 100100, outboxMtime: 99000 }));
+    expect(r2.notifications.map((n) => n.event)).not.toContain("stale");
+  });
+
+  it("rescan emits a terminal event missed by the tail, deduped by line+event, with ' (rescan)'", () => {
+    const full = '{"event":"progress","summary":"p"}\n{"event":"error","summary":"boom"}\n';
+    const s: MonitorScanState = { offset: Buffer.byteLength(full), rescanEmitted: new Set(),
+      lastStaleTs: 0, lastStuckTs: 0, lastRescan: 0 };
+    const r = monitorScan("/o", "v", s, mkDeps({ outboxText: "", outboxFullText: full,
+      outboxSize: Buffer.byteLength(full), phase: "idle", now: 1000 }));
+    const err = r.notifications.find((n) => n.event === "error");
+    expect(err).toBeDefined();
+    expect(err!.summary).toMatch(/ \(rescan\)$/);
+    expect(r.state.rescanEmitted.has("2\terror")).toBe(true);
+    const r2 = monitorScan("/o", "v", r.state, mkDeps({ outboxFullText: full, outboxSize: Buffer.byteLength(full),
+      phase: "idle", now: 1000 + TH.rescanEveryS }));
+    expect(r2.notifications.find((n) => n.event === "error")).toBeUndefined();
+  });
+
+  it("monitorScan does not mutate prev (offset/clocks/rescanEmitted)", () => {
+    const prev: MonitorScanState = { offset: 0, rescanEmitted: new Set(), lastStaleTs: 0, lastStuckTs: 0, lastRescan: 0 };
+    const newText = '{"event":"done","summary":"d"}\n';
+    monitorScan("/o", "v", prev, mkDeps({ outboxText: newText, outboxFullText: newText,
+      outboxSize: Buffer.byteLength(newText), phase: "working", now: 100000, outboxMtime: 1 }));
+    expect(prev.offset).toBe(0);            // advanced only in returned state
+    expect(prev.rescanEmitted.size).toBe(0);
+    expect(prev.lastStaleTs).toBe(0);
+    expect(prev.lastStuckTs).toBe(0);
+    expect(prev.lastRescan).toBe(0);
+  });
+
+  it("rescan does NOT emit heartbeat (tail-only event)", () => {
+    const full = '{"event":"heartbeat","summary":"epoch 1/5"}\n';
+    const s: MonitorScanState = { offset: Buffer.byteLength(full), rescanEmitted: new Set(),
+      lastStaleTs: 0, lastStuckTs: 0, lastRescan: 0 };
+    const r = monitorScan("/o", "v", s, mkDeps({ outboxText: "", outboxFullText: full,
+      outboxSize: Buffer.byteLength(full), phase: "idle", now: 1000 }));
+    expect(r.notifications.find((n) => n.event === "heartbeat")).toBeUndefined();
+  });
+
+  it("rescan is skipped when now - lastRescan < rescanEveryS", () => {
+    const full = '{"event":"done","summary":"d"}\n';
+    const s: MonitorScanState = { offset: Buffer.byteLength(full), rescanEmitted: new Set(),
+      lastStaleTs: 0, lastStuckTs: 0, lastRescan: 1000 };
+    const r = monitorScan("/o", "v", s, mkDeps({ outboxText: "", outboxFullText: full,
+      outboxSize: Buffer.byteLength(full), phase: "idle", now: 1000 + TH.rescanEveryS - 1 }));
+    expect(r.notifications).toHaveLength(0);      // gate closed -> rescan suppressed
+    expect(r.state.rescanEmitted.size).toBe(0);   // rescan never ran -> nothing seeded
+  });
+
+  it("pre-seeded terminal event is not re-emitted by the first rescan", () => {
+    const full = '{"event":"done","summary":"already seen"}\n';
+    const s = initScanState(Buffer.byteLength(full), full, String(Buffer.byteLength(full)), null);
+    expect(s.rescanEmitted.has("1\tdone")).toBe(true);   // pre-seed marked it
+    const r = monitorScan("/o", "v", s, mkDeps({ outboxText: "", outboxFullText: full,
+      outboxSize: Buffer.byteLength(full), phase: "idle", now: 1000 }));
+    expect(r.notifications.find((n) => n.event === "done")).toBeUndefined();   // suppressed by pre-seed
+  });
+});
