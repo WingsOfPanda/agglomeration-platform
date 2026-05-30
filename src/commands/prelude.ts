@@ -8,12 +8,17 @@ import { applyArgsFile } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
 import { isoUtc } from "../core/archive.js";
 import { preludeArtDir, deriveSlug } from "../core/prelude.js";
-import { type RosterRow, formatRosterFile } from "../core/score.js";
+import {
+  type RosterRow, formatRosterFile, parseRosterFile, spawnRosterArg, spawnResultsTsv, spawnTally,
+  parsePanesFile, type SpawnResult,
+} from "../core/score.js";
 import { readProviderList } from "../core/providers.js";
-import { activeProvidersPath } from "../core/paths.js";
+import { activeProvidersPath, repoRoot } from "../core/paths.js";
 import { pickInstruments } from "../core/instruments.js";
 import { instrumentConsultValidated } from "../core/contracts.js";
 import { classifyTopic } from "../core/preludeLit.js";
+import { run as spawnRun } from "./spawn.js";
+import { run as preflightRun } from "./preflight.js";
 
 function usage(): number {
   log.error("usage: prelude <init|classify|spawn-all|research-send|research-wait|synth-preliminary|" +
@@ -27,6 +32,7 @@ export async function run(args: string[]): Promise<number> {
   switch (verb) {
     case "init": return initRun(applyArgsFile(rest));
     case "classify": return classifyRun(rest);
+    case "spawn-all": return spawnAllRun(rest);
     default: return usage();
   }
 }
@@ -91,4 +97,48 @@ export async function classifyRun(rest: string[]): Promise<number> {
   atomicWrite(join(art, "lit-track.txt"), `${track}\nreason: auto-detect via keyword scan\n`);
   log.ok(`prelude classify: lit-track=${track}`);
   return 0;
+}
+
+// ---- spawn-all ----
+export interface PreludeSpawnAllDeps {
+  preflight(args: string[]): Promise<number>;
+  spawn(args: string[]): Promise<number>;
+  repoRoot(): string;
+}
+const livePreludeSpawnAllDeps: PreludeSpawnAllDeps = { preflight: preflightRun, spawn: spawnRun, repoRoot };
+
+async function spawnAllRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: prelude spawn-all <topic>"); return 2; }
+  return spawnAllWith(topic, livePreludeSpawnAllDeps);
+}
+
+export async function spawnAllWith(topic: string, d: PreludeSpawnAllDeps): Promise<number> {
+  const art = preludeArtDir(topic);
+  const rosterPath = join(art, "roster.txt");
+  if (!existsSync(rosterPath)) { log.error(`prelude spawn-all: roster.txt missing at ${rosterPath} (run prelude init)`); return 2; }
+  const rows = parseRosterFile(readFileSync(rosterPath, "utf8"));
+  if (rows.length < 2) { log.error(`prelude spawn-all: need >=2 parts in roster.txt, got ${rows.length}`); return 2; }
+
+  const pf = await d.preflight([topic, String(rows.length), "--roster", spawnRosterArg(rows), "--art-dir", art]);
+  if (pf !== 0) { log.error(`prelude spawn-all: preflight failed (rc=${pf})`); return 2; }
+
+  const panesPath = join(art, "preflight-panes.txt");
+  if (!existsSync(panesPath)) { log.error(`prelude spawn-all: preflight wrote no ${panesPath}`); return 2; }
+  const panes = parsePanesFile(readFileSync(panesPath, "utf8"));
+  const orphans = rows.filter((r) => !panes.has(r.instrument));
+  if (orphans.length) { log.error(`prelude spawn-all: parts missing a preflight pane: ${orphans.map((r) => r.instrument).join(", ")}`); return 2; }
+
+  const cwd = d.repoRoot();
+  const results: SpawnResult[] = await Promise.all(rows.map(async (r) => {
+    const rc = await d.spawn([r.instrument, r.provider, topic, "--target-pane", panes.get(r.instrument)!, "--cwd", cwd]);
+    return { instrument: r.instrument, provider: r.provider, rc };
+  }));
+  atomicWrite(join(art, "spawn-results.tsv"), spawnResultsTsv(results));
+
+  const rc = spawnTally(results.map((r) => r.rc));
+  const nOk = results.filter((r) => r.rc === 0).length;
+  if (rc === 0) log.ok(`prelude spawn-all: ${nOk}/${rows.length} parts ready`);
+  else log.warn(`prelude spawn-all: ${nOk}/${rows.length} parts ready (rc=${rc})`);
+  return rc;
 }
