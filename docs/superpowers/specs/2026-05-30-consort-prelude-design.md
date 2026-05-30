@@ -62,7 +62,7 @@ failure, `2` usage / missing-input.
 
 | Verb | Args | Behavior (port of) |
 |---|---|---|
-| `init` | `<topic-text>` (via `--args-file`) | Derive `prelude-<slug>` (slug base capped to 20 chars so `prelude-<base>-NNN` stays bounded). Provider gate: needs **2–3** consult-validated active providers (0/1 → rc1 "just ask Claude directly"; >3 → cap to first 3). Pick instruments, create `_prelude/`, write `topic.txt` + `roster.txt`. Refuse if art-dir already exists (rc2). Print `TOPIC=/N=/ART=/PART=…`. (`meditate-init.sh`) |
+| `init` | `<topic-text>` (via `--args-file`) | Derive a **bare slug** topic via `deriveSlug` (already cap-20). The `_prelude` art-dir suffix disambiguates from `_score`/`_rehearsal`, so **no `meditate-` topic prefix** (matches score/rehearsal — clone-wars' prefix existed only because consult+meditate shared a non-suffixed tree). Provider gate: needs **2–3** consult-validated active providers (0/1 → rc1 "just ask Claude directly"; >3 → cap to first 3). Pick instruments, create `_prelude/`, write `topic.txt` + `roster.txt`. Refuse if the `_prelude` art-dir already exists (rc2; no auto-rename — mirrors score, not clone-wars' `-N` suffix). Print `TOPIC=/N=/ART=/PART=…`. (`meditate-init.sh`) |
 | `classify` | `<topic>` | Whole-word case-insensitive keyword scan → `ON`/`OFF`; write `_prelude/lit-track.txt` (`<ON\|OFF>\nreason: auto-detect via keyword scan\n`). (directive Step 1 + `cw_meditate_classify_topic`) |
 | `spawn-all` | `<topic>` | Read `roster.txt`, preflight panes, spawn N parts in parallel, write `spawn-results.tsv`, return spawn-tally rc. (directive Step 2 / `spawn-batch.sh`) |
 | `research-send` | `<topic> <instrument> <provider>` | Render research prompt with the lit-guidance block from `lit-track.txt`; part writes `findings-<instrument>.md` in the **art-dir** (flat); dispatch via `send --from maestro`. Refuse if `research-<instrument>.txt` exists (rc1). (`meditate-research-send.sh`) |
@@ -71,7 +71,7 @@ failure, `2` usage / missing-input.
 | `confidence` | `<topic> [--decision skip\|continue]` | **No flag:** compute S1–S5 against `landscape-draft.md` + `findings-*.md`; log + print `S1=… S5=… ALL_HOLD=…`. If `ALL_HOLD=false`, write `adversary-skip.txt` (`user_decision: not-offered`). If `ALL_HOLD=true`, write nothing (Maestro will ask, then re-invoke with `--decision`). **With `--decision <skip\|continue>`:** recompute signals, write `adversary-skip.txt` with that decision. (directive Step 5.5) |
 | `adversary-send` | `<topic> <instrument> <provider>` | Guard `landscape-draft.md` non-empty (rc1). Render adversary prompt (inline the draft); part writes `adversary-<instrument>.md`; dispatch. Refuse if `adversary-<instrument>.txt` exists. (`meditate-adversary-send.sh`) |
 | `adversary-wait` | `<topic> <instrument> <provider>` | Same wait/classify shape as `research-wait`, output file `adversary-<instrument>.md`, timeout `consultTimeout("adversary")`×multiplier; write `adversary-<instrument>.done`. (`meditate-adversary-wait.sh` → `consult_wait adversary`) |
-| `synth-final` | `<topic>` | Input validator: require `landscape-draft.md` + `topic.txt`; if `adversary-skip.txt` does **not** record `user_decision: skip`, require `adversary-<instrument>.md` for every part. Resolve + print canonical output path `_prelude/landscape-<YYYY-MM-DD>-<slug>.md` (slug = topic minus `prelude-` prefix; date = UTC today). (`meditate-synth-final.sh`) |
+| `synth-final` | `<topic>` | Input validator: require `landscape-draft.md` + `topic.txt`; if `adversary-skip.txt` does **not** record `user_decision: skip`, require `adversary-<instrument>.md` for every part. Resolve + print canonical output path `_prelude/landscape-<YYYY-MM-DD>-<topic>.md` (slug = the bare topic; date = UTC today). (`meditate-synth-final.sh`) |
 | `forensics` | `<topic>` | `captureArtDir({ artDir, command: "prelude" })`; print path; rc0 best-effort. (`forensics-capture.sh … meditate`) |
 | `teardown` | `<topic>` | Preflight-orphan kill + `coda --pairs` graceful teardown of the roster panes, then `archiveTopic(topic, "prelude")`; print archive dest. (`meditate-teardown.sh` + directive Step 9 archive — combined like rehearsal's `teardown`) |
 | `handoff-extract` | `<art-dir>` | Write `<art-dir>/handoff-data.kv` from the landscape doc + findings + `adversary-skip.txt` + `adversary-<instrument>.md` (see §6). Takes the **art-dir directly** (runs against the archive). rc2 if art-dir or `topic.txt` missing. (`meditate-handoff-extract.sh`) |
@@ -85,7 +85,7 @@ the **Maestro** via the Write tool inside the directive — never by a verb.
 
 | Module | Public surface | Notes |
 |---|---|---|
-| `src/core/prelude.ts` | `preludeArtDir(topic)`, `derivePreludeSlug(text)`, `parsePreludeArgs(tokens)` | Reuse score's `RosterRow`/`formatRosterFile`/`parseRosterFile` rather than re-declaring. Slug: lowercase → `[a-z0-9-]` → collapse dashes → trim → **cap base 20**; empty → error. Topic = `prelude-<slug>` with `-N` (N≥2) uniqueness suffix when the dir exists. |
+| `src/core/prelude.ts` | `preludeArtDir(topic, opts?)`; re-export `deriveSlug` | Reuse score's `deriveSlug` (already cap-20) + `RosterRow`/`formatRosterFile`/`parseRosterFile`. Topic = the bare `deriveSlug(text)`; no separate arg parser (meditate has no flags — init joins the topic tokens). |
 | `src/core/preludeLit.ts` | `classifyTopic(topic): "ON" \| "OFF"`, `LIT_KEYWORDS: string[]` | Whole-word, case-insensitive match against the 24-keyword list (loss, embedding, network, model, architecture, training, optimizer, scheduler, transformer, mamba, attention, regularization, augmentation, fine-tune, sota, state-of-the-art, benchmark, paper, arxiv, algorithm, inference, quantization, distillation, pruning). Empty topic → `OFF`. |
 | `src/core/preludeConfidence.ts` | `computeSignals(draft, findings: string[]): { s1..s5: boolean, allHold: boolean }`, `renderSkipRecord({ signals, decision, now })` | Pure. Signal defs in §5. `renderSkipRecord` emits the 3-line `adversary-skip.txt` body. |
 | `src/core/preludeTurn.ts` | `composePreludeResearchPrompt(topic, writeTo, litGuidance)`, `composeAdversaryPrompt(draft, instrument, outPath)`, `litGuidance(track: "ON" \| "OFF"): string` | Ports the three meditate prompt templates as string-builders. Bodies end with the frozen `{"event":"done",…}` line + `END_OF_INSTRUCTION`. |
@@ -196,8 +196,9 @@ Maestro authors the synthesis docs). Task list created via `TaskCreate` before S
 
 ## 8. Rebrand & frozen
 
-**Cosmetic rebrand (prose + identifiers):** `meditate`→`prelude`, `_meditate/`→`_prelude/`,
-`meditate-` topic prefix → `prelude-`, Master Yoda→Maestro, `From: master-yoda`→`From: maestro`,
+**Cosmetic rebrand (prose + identifiers):** `meditate`→`prelude`, `_meditate/`→`_prelude/`
+(consort uses a bare-slug topic + `_prelude` suffix — clone-wars' `meditate-` topic prefix is
+dropped, not renamed), Master Yoda→Maestro, `From: master-yoda`→`From: maestro`,
 trooper→part, commander→instrument, `consult-handoff.md`→`score-handoff.md`,
 `/clone-wars:consult`→`/consort:score`, `mode=meditate[-no-convergence]`→`mode=prelude[-no-convergence]`,
 `cw_*`/`CLONE_WARS_HOME`/`.clone-wars/` dropped.
