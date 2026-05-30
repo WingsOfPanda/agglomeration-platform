@@ -6,6 +6,7 @@ import {
 import { extractMetric, METRIC_VOCAB } from "../src/core/rehearsalMetric.js";
 import { formatMetricBlock, parseMetricMd } from "../src/core/rehearsalMetric.js";
 import { formatSotaBlock } from "../src/core/rehearsalMetric.js";
+import { validateResult, type ResultJson } from "../src/core/rehearsalResult.js";
 
 describe("rehearsal art-dir paths", () => {
   it("layers _rehearsal/parts/<instrument>/experiments/<exp-id>", () => {
@@ -118,5 +119,47 @@ describe("formatSotaBlock", () => {
     expect(() => formatSotaBlock({ topic: "", metric: "loss", sweep_date: "d", refs: [] })).toThrow(/topic/);
     expect(() => formatSotaBlock({ topic: "x", metric: "", sweep_date: "d", refs: [] })).toThrow(/metric/);
     expect(() => formatSotaBlock({ topic: "x", metric: "loss", sweep_date: "", refs: [] })).toThrow(/sweep_date/);
+  });
+});
+
+const okResult: ResultJson = {
+  branch_id: "b1", approach_label: "cnn", metric_name: "accuracy",
+  metric_value: 0.98, status: "ok", runtime_s: 12.5,
+  log_paths: ["./stdout.log", "./stderr.log"],
+  checkpoint_path: null, notes: "fine",
+  self_reported_count: 1, self_reported_ratio: 0.98, self_reported_notes: "",
+};
+
+describe("validateResult", () => {
+  const allExist = () => true;
+  it("accepts a well-formed ok result", () => {
+    expect(validateResult(okResult, { logPathExists: allExist })).toEqual({ ok: true });
+  });
+  it("rejects a missing required field", () => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional field-omission discard
+    const { approach_label: _omit, ...bad } = okResult;
+    expect(validateResult(bad, { logPathExists: allExist })).toMatchObject({ ok: false });
+  });
+  it("rejects an invalid status enum", () => {
+    expect(validateResult({ ...okResult, status: "weird" }, { logPathExists: allExist }))
+      .toMatchObject({ ok: false });
+  });
+  it("enforces metric_value non-null IFF status=ok", () => {
+    expect(validateResult({ ...okResult, metric_value: null }, { logPathExists: allExist }))
+      .toMatchObject({ ok: false }); // ok + null
+    expect(validateResult({ ...okResult, status: "fail", metric_value: 0.5 }, { logPathExists: allExist }))
+      .toMatchObject({ ok: false }); // non-ok + non-null
+    expect(validateResult({ ...okResult, status: "fail", metric_value: null }, { logPathExists: allExist }))
+      .toEqual({ ok: true });       // non-ok + null is valid
+  });
+  it("rejects a missing log_path on disk", () => {
+    const onlyStdout = (p: string) => p === "./stdout.log";
+    expect(validateResult(okResult, { logPathExists: onlyStdout })).toMatchObject({ ok: false });
+  });
+  it("enforces metric_name match when expectedMetric is given", () => {
+    expect(validateResult(okResult, { logPathExists: allExist, expectedMetric: "auc" }))
+      .toMatchObject({ ok: false });
+    expect(validateResult(okResult, { logPathExists: allExist, expectedMetric: "accuracy" }))
+      .toEqual({ ok: true });
   });
 });
