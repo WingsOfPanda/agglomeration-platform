@@ -23,7 +23,7 @@ import { extractQuestionPayload } from "../core/performQuestions.js";
 import { outboxOffset, outboxPath, outboxWaitSince, statusPath, type OutboxEvent } from "../core/ipc.js";
 import { instrumentTimeoutMultiplier } from "../core/contracts.js";
 import { scaledTimeout, parseLatestOffset } from "../core/scoreTurn.js";
-import { parseDagLine, dagTopological, dagSectionBody } from "../core/dag.js";
+import { parseDagLine, dagTopological, dagSectionBody, dagFanInRepos } from "../core/dag.js";
 import {
   enumerateSiblings, captureSiblingBaseline, formatBaselineFile,
   parseBaselineFile, diffSiblingAgainstBaseline, revertAndReplay,
@@ -43,7 +43,7 @@ function detectRouting(docText: string): "single" | "multi" {
   return /^\*\*Target Sub-Project\(s\):\*\*/m.test(docText) && /^## Execution DAG[ \t]*$/m.test(docText) ? "multi" : "single";
 }
 function usage(): number {
-  log.error("usage: perform <init|pre-snapshot|branch|turn-send|turn-wait|scope-check|sibling-baseline|sibling-verify|sibling-rescue|summary|finish|forensics|archive|dag-parse|wave-wait|multi-init|send-unit> ...");
+  log.error("usage: perform <init|pre-snapshot|branch|turn-send|turn-wait|scope-check|sibling-baseline|sibling-verify|sibling-rescue|cross-signal|summary|finish|forensics|archive|dag-parse|wave-wait|multi-init|send-unit> ...");
   return 2;
 }
 
@@ -59,6 +59,7 @@ export async function run(args: string[]): Promise<number> {
     case "sibling-baseline": return siblingBaselineRun(rest);
     case "sibling-verify":   return siblingVerifyRun(rest);
     case "sibling-rescue":   return siblingRescueRun(rest);
+    case "cross-signal":     return crossSignalRun(rest);
     case "summary":      return summaryRun(rest);
     case "finish":       return finishRun(rest);
     case "forensics":    return forensicsRun(rest);
@@ -358,6 +359,49 @@ export async function siblingRescueWith(topic: string, hubCwd: string, d: Siblin
     else { log.warn(`perform sibling-rescue: rescue failed for ${slug} (${res.outcome})`); resultRows.push(`${slug}\trescue-failed`); }
   }
   appendFileSync(join(art, "sibling-rescue.txt"), resultRows.length ? resultRows.join("\n") + "\n" : "");
+  return 0;
+}
+
+// ---- cross-repo "feels unsafe" signal (deploy.md:1063-1085) ----
+export interface CrossSignalDeps { runnerFor(cwd: string): Runner; }
+const liveCrossSignalDeps: CrossSignalDeps = { runnerFor: runnerAt };
+async function crossSignalRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: perform cross-signal <topic>"); return 2; }
+  return crossSignalWith(topic, liveCrossSignalDeps);
+}
+/**
+ * Compute the deterministic "feels unsafe" heuristic the multi-repo cross-verify
+ * stage reads. Byte-faithful port of deploy.md:1063-1085: WAVE_COUNT (unique
+ * wave column of dag-waves.txt), FAN_IN_REPOS (dagFanInRepos), SHARED_PATHS
+ * (filesystem paths touched by >= 2 parts, per-part baseline from
+ * baselines/<slug>.tsv field baseline_sha), and UNSAFE (1 iff any trigger fires).
+ * Emits all four as KV stdout; the bug collection itself stays Maestro directive work.
+ */
+export async function crossSignalWith(topic: string, d: CrossSignalDeps): Promise<number> {
+  const art = performArtDir(topic);
+  const wavesFile = join(art, "dag-waves.txt"), edgesFile = join(art, "dag-edges.txt");
+  if (!existsSync(wavesFile)) { log.error(`perform cross-signal: dag-waves.txt missing under ${art} (run dag-parse first)`); return 1; }
+  const wavesText = readFileSync(wavesFile, "utf8");
+  const edgesText = existsSync(edgesFile) ? readFileSync(edgesFile, "utf8") : "";
+  const waves = new Set<string>();
+  for (const line of wavesText.split("\n")) { if (line.length === 0) continue; waves.add(line.split("\t")[0]); }
+  const waveCount = waves.size;
+  const fanIn = dagFanInRepos(edgesText, wavesText);
+  const pathCount = new Map<string, number>();
+  for (const t of iterTargets(topic)) {
+    if (!t.slug || !t.cwd) continue;
+    const base = kvFileField(join(art, "baselines", `${t.slug}.tsv`), "baseline_sha");
+    if (!base) continue;
+    const diff = d.runnerFor(t.cwd).run("git", ["diff", "--name-only", `${base}..HEAD`]).stdout;
+    for (const p of diff.split("\n")) { if (p.length === 0) continue; pathCount.set(p, (pathCount.get(p) ?? 0) + 1); }
+  }
+  const shared = [...pathCount.entries()].filter(([, n]) => n >= 2).map(([p]) => p).sort();
+  const unsafe = waveCount >= 3 || fanIn.length > 0 || shared.length > 0 ? 1 : 0;
+  if (waveCount >= 3) log.warn(`feels unsafe: wave count ${waveCount} >= 3`);
+  if (fanIn.length > 0) log.warn(`feels unsafe: fan-in repos: ${fanIn.join(" ")}`);
+  if (shared.length > 0) log.warn(`feels unsafe: shared filesystem paths: ${shared.join(" ")}`);
+  process.stdout.write(`WAVE_COUNT=${waveCount}\nFAN_IN_REPOS=${fanIn.join(" ")}\nSHARED_PATHS=${shared.join(" ")}\nUNSAFE=${unsafe}\n`);
   return 0;
 }
 
