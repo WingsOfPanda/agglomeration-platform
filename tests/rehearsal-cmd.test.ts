@@ -8,9 +8,10 @@ import { spawnAllWith, type SpawnAllDeps } from "../src/commands/rehearsal.js";
 import { experimentSendWith, type ExperimentSendDeps } from "../src/commands/rehearsal.js";
 import { scoreWith, liveScoreDeps } from "../src/commands/rehearsal.js";
 import { monitorRun } from "../src/commands/rehearsal.js";
+import { statusBriefWith } from "../src/commands/rehearsal.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { rehearsalArtDir, partStateDir } from "../src/core/rehearsal.js";
+import { rehearsalArtDir, partStateDir, experimentDir } from "../src/core/rehearsal.js";
 import { partDir } from "../src/core/paths.js";
 import { inboxPath } from "../src/core/ipc.js";
 
@@ -574,5 +575,115 @@ describe("rehearsal monitor", () => {
     writeFileSync(join(sd, "liveness-cursor.txt"), "0");
     const { rc } = await capture(() => monitorRun(["--once", TOPIC, INST], opts(h)));
     expect(rc).toBe(0);
+  });
+});
+
+// ---- Phase C: status-brief — render a compact chat-shaped status update (C8) ----
+
+describe("rehearsal status-brief", () => {
+  const TOPIC = "sb-topic";
+  const INST = "viola";
+
+  /** Scaffold an in-flight topic: art + metric.md + scoreboard.md (one OK row) +
+   *  parts.txt (one instrument) + the part's working state.txt + its prompt.md. */
+  function scaffold(h: { home: string }) {
+    const o = { home: h.home };
+    const art = rehearsalArtDir(TOPIC, o);
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "metric.md"), "# Research goal\n\n**Primary metric:** accuracy\n**Direction:** maximize\n");
+    writeFileSync(join(art, "scoreboard.md"), [
+      "| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |",
+      "|---|---|---|---|---|---|---|---|",
+      "| 1 | exp-001 | viola | 0.9500 | ok | 10.00s | baseline | accuracy |",
+    ].join("\n") + "\n");
+    writeFileSync(join(art, "parts.txt"), INST + "\n");
+    const sd = partStateDir(art, INST);
+    mkdirSync(sd, { recursive: true });
+    writeFileSync(join(sd, "state.txt"), "phase=working\ncurrent_exp_id=exp-001\n");
+    const expDir = experimentDir(art, INST, "exp-001");
+    mkdirSync(expDir, { recursive: true });
+    writeFileSync(join(expDir, "prompt.md"), "Some preamble\n  Approach label:  baseline\nmore text\n");
+    return { art, o };
+  }
+
+  async function capture(fn: (stdout: (l: string) => void) => Promise<number>): Promise<{ rc: number; text: string }> {
+    const lines: string[] = [];
+    const rc = await fn((l) => lines.push(l));
+    return { rc, text: lines.join("\n") };
+  }
+
+  it("renders header, the | Part | table with the working row, scoreboard top-3, and completion line; rc 0", async () => {
+    const h = home();
+    const { o } = scaffold(h);
+    const { rc, text } = await capture((stdout) => statusBriefWith([TOPIC], { opts: o, stdout }));
+    expect(rc).toBe(0);
+    expect(text).toContain("## Experiment status");
+    expect(text).toContain("| Part | Phase | Current/last | Approach | Metric |");
+    expect(text).not.toContain("| Trooper |");
+    // working part row: phase working, approach from prompt.md, metric (running)
+    expect(text).toContain("| viola | working | exp-001 | baseline | (running) |");
+    // scoreboard top-3 line
+    expect(text).toContain("1. viola/exp-001 — 0.9500 — accuracy");
+    // completion line
+    expect(text).toContain("**Completion check:** floor_met=");
+  });
+
+  it("--latest-instrument/--latest-exp name the just-landed experiment in the header", async () => {
+    const h = home();
+    const { o } = scaffold(h);
+    const { rc, text } = await capture((stdout) =>
+      statusBriefWith([TOPIC, "--latest-instrument", INST, "--latest-exp", "exp-001"], { opts: o, stdout }));
+    expect(rc).toBe(0);
+    expect(text).toContain("## Experiment status — exp-001 (viola) just landed");
+  });
+
+  it("non-working part: approach comes from result.json (wins over prompt.md), metric is '<value> <status>'", async () => {
+    const h = home();
+    const o = { home: h.home };
+    const art = rehearsalArtDir(TOPIC, o);
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "metric.md"), "# Research goal\n\n**Primary metric:** accuracy\n**Direction:** maximize\n");
+    writeFileSync(join(art, "parts.txt"), INST + "\n");
+    const sd = partStateDir(art, INST);
+    mkdirSync(sd, { recursive: true });
+    // Finished part: idle, current/last exp via current_exp_id.
+    writeFileSync(join(sd, "state.txt"), "phase=idle\ncurrent_exp_id=exp-002\n");
+    const expDir = experimentDir(art, INST, "exp-002");
+    mkdirSync(expDir, { recursive: true });
+    // prompt.md says "baseline"; result.json says "deep-net" -> result.json must win.
+    writeFileSync(join(expDir, "prompt.md"), "  Approach label:  baseline\n");
+    writeFileSync(join(expDir, "result.json"), JSON.stringify({
+      branch_id: "b", approach_label: "deep-net", metric_name: "accuracy",
+      metric_value: 0.9, status: "ok", runtime_s: 12, log_paths: [],
+    }));
+    const { rc, text } = await capture((stdout) => statusBriefWith([TOPIC], { opts: o, stdout }));
+    expect(rc).toBe(0);
+    // result.json's approach_label (deep-net) wins; prompt.md's baseline must NOT appear.
+    expect(text).toContain("| viola | idle | exp-002 | deep-net | 0.9 ok |");
+    expect(text).not.toContain("baseline");
+  });
+
+  it("metric.md absent -> completion line is the absent line (not an all-no row)", async () => {
+    const h = home();
+    const o = { home: h.home };
+    const art = rehearsalArtDir(TOPIC, o);
+    mkdirSync(art, { recursive: true });
+    // scoreboard.md present but metric.md absent -> completion can't be computed.
+    writeFileSync(join(art, "scoreboard.md"), [
+      "| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |",
+      "|---|---|---|---|---|---|---|---|",
+      "| 1 | exp-001 | viola | 0.9500 | ok | 10.00s | baseline | accuracy |",
+    ].join("\n") + "\n");
+    writeFileSync(join(art, "parts.txt"), INST + "\n");
+    const { rc, text } = await capture((stdout) => statusBriefWith([TOPIC], { opts: o, stdout }));
+    expect(rc).toBe(0);
+    expect(text).toContain("**Completion check:** _(scoreboard or metric absent)_");
+    expect(text).not.toContain("floor_met=");
+  });
+
+  it("no topic -> rc 2", async () => {
+    const h = home();
+    const { rc } = await capture((stdout) => statusBriefWith([], { opts: { home: h.home }, stdout }));
+    expect(rc).toBe(2);
   });
 });

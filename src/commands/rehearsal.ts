@@ -10,9 +10,11 @@ import { atomicWrite } from "../core/atomic.js";
 import { isoUtc } from "../core/archive.js";
 import { deriveSlug } from "../core/solo.js";
 import { extractMetric, formatMetricBlock, formatSotaBlock, parseMetricMd } from "../core/rehearsalMetric.js";
-import { rehearsalArtDir, partsDir, partStateDir, experimentDir } from "../core/rehearsal.js";
+import { rehearsalArtDir, partsDir, partStateDir, experimentsDir, experimentDir } from "../core/rehearsal.js";
 import { computeScore, type ScoreFs, type ScoreComputation } from "../core/rehearsalScore.js";
 import { parseState } from "../core/rehearsalState.js";
+import { checkCompletion } from "../core/rehearsalComplete.js";
+import { buildStatusBrief, type PartBrief } from "../core/rehearsalBrief.js";
 import { initScanState, monitorScan, type MonitorScanState } from "../core/rehearsalMonitor.js";
 import {
   renderExperimentPrompt, buildSotaBlock, assembleHardwareBlock, hardwareDiffAlert,
@@ -565,6 +567,125 @@ export async function monitorRun(args: string[], opts?: { home?: string; cwd?: s
   return 0;
 }
 
+// ---- Phase C: status-brief — render a compact chat-shaped status update (C8) ----
+// Ports deep-research.sh's render_status_brief: gather per-part data (state.txt +
+// result.json approach/metric, prompt.md approach fallback), read scoreboard.md,
+// compute the completion signals, then hand off to the pure buildStatusBrief
+// renderer. Read-only FS shell; no injected deps needed.
+
+/** Extract the `Approach label:` value rendered into an experiment's prompt.md
+ *  (template line `  Approach label:  <slug>`). Best-effort; "" when absent.
+ *  Faithful to deep-research.sh's approach_from_prompt helper. */
+function approachFromPrompt(promptPath: string): string {
+  if (!existsSync(promptPath)) return "";
+  for (const line of readFileSync(promptPath, "utf8").split("\n")) {
+    const m = /^\s*Approach label:\s+(.*?)\s*$/.exec(line);
+    if (m) return m[1];
+  }
+  return "";
+}
+
+/** Read result.json ONCE and surface the brief's two cells for a non-working part:
+ *  approach (from approach_label) + metric ("<metric_value> <status>", e.g. "0.9 ok").
+ *  Both default empty/"—" when the result is absent/garbled. Faithful to the bash:
+ *  approach comes from result.json approach_label (prompt.md is only the fallback,
+ *  applied by the caller), metric is `"$m $s"`. */
+function readResultCells(resultPath: string): { approach: string; metric: string } {
+  if (!existsSync(resultPath)) return { approach: "", metric: "—" };
+  try {
+    const r = JSON.parse(readFileSync(resultPath, "utf8")) as Record<string, unknown>;
+    const approach = r.approach_label != null ? String(r.approach_label) : "";
+    const m = r.metric_value != null ? String(r.metric_value) : "";
+    const s = r.status != null ? String(r.status) : "";
+    const metric = `${m} ${s}`.trim() || "—";
+    return { approach, metric };
+  } catch { return { approach: "", metric: "—" }; }
+}
+
+/** Parse the --latest-instrument / --latest-exp flags + the single positional <topic>. */
+function parseStatusBriefArgs(args: string[]): { topic: string; latestInstrument?: string; latestExp?: string } {
+  let topic = "", latestInstrument: string | undefined, latestExp: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--latest-instrument") latestInstrument = args[++i];
+    else if (a === "--latest-exp") latestExp = args[++i];
+    else if (!a.startsWith("--") && !topic) topic = a;
+  }
+  return { topic, latestInstrument, latestExp };
+}
+
+export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (line: string) => void } = {}): Promise<number> {
+  const out = v.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
+  const p = parseStatusBriefArgs(args);
+  if (!p.topic) { log.error("rehearsal status-brief: topic required"); return 2; }
+
+  const art = rehearsalArtDir(p.topic, v.opts);
+
+  // Per-part rows: read parts.txt (one instrument/line); for each, parse state.txt
+  // (phase + current_exp_id), then approach + metric. Working parts have no
+  // result.json yet -> approach from prompt.md, metric "(running)". Non-working
+  // parts -> approach from result.json approach_label (prompt.md fallback), metric
+  // "<metric_value> <status>". Faithful to deep-research.sh's render_status_brief.
+  const parts: PartBrief[] = [];
+  const partsFile = join(art, "parts.txt");
+  if (existsSync(partsFile)) {
+    const instruments = readFileSync(partsFile, "utf8")
+      .split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+    for (const instrument of instruments) {
+      let phase = "?", currentOrLast = "—";
+      const stateTxt = join(partStateDir(art, instrument), "state.txt");
+      let curExp = "";
+      if (existsSync(stateTxt)) {
+        const kv = parseState(readFileSync(stateTxt, "utf8"));
+        phase = kv.phase || "?";
+        curExp = kv.current_exp_id ?? "";
+      }
+      if (curExp) {
+        currentOrLast = curExp;
+      } else {
+        // Most-recent scored experiment from the filesystem (lexical sort on exp-NNN).
+        const expsRoot = experimentsDir(art, instrument);
+        if (existsSync(expsRoot)) {
+          let newest = "";
+          for (const name of readdirSync(expsRoot)) {
+            if (EXP_ID_RE.test(name) && name > newest) newest = name;
+          }
+          if (newest) currentOrLast = newest;
+        }
+      }
+      const expForFiles = curExp || (currentOrLast !== "—" ? currentOrLast : "");
+      const promptPath = expForFiles ? join(experimentDir(art, instrument, expForFiles), "prompt.md") : "";
+      const resultPath = expForFiles ? join(experimentDir(art, instrument, expForFiles), "result.json") : "";
+
+      let approach: string, metric: string;
+      if (phase === "working") {
+        // result.json not landed yet -> approach from prompt.md, metric running.
+        approach = (promptPath && approachFromPrompt(promptPath)) || "—";
+        metric = "(running)";
+      } else {
+        // Approach from result.json's approach_label; fall back to prompt.md when empty.
+        const cells = resultPath ? readResultCells(resultPath) : { approach: "", metric: "—" };
+        approach = cells.approach || (promptPath && approachFromPrompt(promptPath)) || "—";
+        metric = cells.metric;
+      }
+      parts.push({ instrument, phase, currentOrLast, approach, metric });
+    }
+  }
+
+  const sbPath = join(art, "scoreboard.md");
+  const scoreboardMd = existsSync(sbPath) ? readFileSync(sbPath, "utf8") : null;
+  const metricPath = join(art, "metric.md");
+  // Completion signals require BOTH scoreboard.md and metric.md; null otherwise so
+  // the renderer shows "_(scoreboard or metric absent)_" rather than an all-`no` row.
+  const completion = scoreboardMd !== null && existsSync(metricPath)
+    ? checkCompletion(scoreboardMd, readFileSync(metricPath, "utf8"))
+    : null;
+
+  const latest = p.latestInstrument && p.latestExp ? { instrument: p.latestInstrument, exp: p.latestExp } : undefined;
+  out(buildStatusBrief({ parts, scoreboardMd, completion, latest }));
+  return 0;
+}
+
 export async function run(args: string[]): Promise<number> {
   const [verb, ...rest] = args;
   switch (verb) {
@@ -575,6 +696,7 @@ export async function run(args: string[]): Promise<number> {
     case "experiment-send": return experimentSendWith(applyArgsFile(rest), liveExperimentSendDeps);
     case "score": return scoreWith(rest, liveScoreDeps);
     case "monitor": return monitorRun(rest);
+    case "status-brief": return statusBriefWith(rest);
     default: log.error(`rehearsal: unknown verb: ${verb ?? "(none)"}`); return 2;
   }
 }
