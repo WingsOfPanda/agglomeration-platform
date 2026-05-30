@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
-import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, type PreludeInitDeps, type PreludeSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/prelude.js";
+import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, synthPreliminaryRun, confidenceRun, type PreludeInitDeps, type PreludeSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/prelude.js";
 import { preludeArtDir } from "../src/core/prelude.js";
 
 function initDeps(over: Partial<PreludeInitDeps> = {}): PreludeInitDeps {
@@ -116,6 +116,79 @@ describe("prelude research-send/wait", () => {
       expect(rc).toBe(0);
       expect(existsSync(join(art, "research-viola.done"))).toBe(true);
       expect(readFileSync(join(art, "research-viola.txt"), "utf8")).toContain("FS=ok");
+    } finally { cleanup(); }
+  });
+});
+
+async function seedFindings(art: string, draft: string): Promise<void> {
+  writeFileSync(join(art, "findings-viola.md"), "FlashAttention is fast. https://x.test/p . uncertain about batch.");
+  writeFileSync(join(art, "findings-cello.md"), "FlashAttention wins. https://x.test/p .");
+  writeFileSync(join(art, "landscape-draft.md"), draft);
+}
+const DRAFT = [
+  "## Approaches", "1. FlashAttention — fused", "## Tradeoff matrix",
+  "| Priority | Best fit | Reason |", "| latency | FlashAttention | https://x.test/p |", "## Citations", "- https://x.test/p",
+].join("\n");
+
+describe("prelude synth-preliminary", () => {
+  it("prints the draft path when all findings exist", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = preludeArtDir("x");
+      writeFileSync(join(art, "findings-viola.md"), "a"); writeFileSync(join(art, "findings-cello.md"), "b");
+      const rc = await synthPreliminaryRun(["x"]);
+      expect(rc).toBe(0);
+    } finally { cleanup(); }
+  });
+  it("rc1 when a part's findings are missing", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      writeFileSync(join(preludeArtDir("x"), "findings-viola.md"), "a"); // cello missing
+      expect(await synthPreliminaryRun(["x"])).toBe(1);
+    } finally { cleanup(); }
+  });
+});
+
+describe("prelude confidence", () => {
+  it("no-flag + not-all-hold writes adversary-skip.txt with user_decision: not-offered", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = preludeArtDir("x");
+      await seedFindings(art, DRAFT + "\nCONTESTED: foo"); // S3 fails -> not all hold
+      const rc = await confidenceRun(["x"]);
+      expect(rc).toBe(0);
+      expect(readFileSync(join(art, "adversary-skip.txt"), "utf8")).toContain("user_decision: not-offered");
+    } finally { cleanup(); }
+  });
+  it("--decision skip writes the record with that decision", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = preludeArtDir("x");
+      await seedFindings(art, DRAFT);
+      const rc = await confidenceRun(["x", "--decision", "skip"]);
+      expect(rc).toBe(0);
+      expect(readFileSync(join(art, "adversary-skip.txt"), "utf8")).toContain("user_decision: skip");
+    } finally { cleanup(); }
+  });
+  it("ALL_HOLD=true + no flag writes nothing (two-call: Maestro asks before --decision)", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = preludeArtDir("x");
+      // header-less matrix with a /-anchored Reason cell so the strict S4 holds; viola finding has
+      // "uncertain" (S5); both findings cite https://x.test/p (S1/S2); no CONTESTED (S3) -> all hold.
+      const allHold = [
+        "## Approaches", "1. FlashAttention — fused", "## Tradeoff matrix",
+        "| latency | FlashAttention | /p see https://x.test/p |", "## Citations", "- https://x.test/p",
+      ].join("\n");
+      await seedFindings(art, allHold);
+      const rc = await confidenceRun(["x"]);
+      expect(rc).toBe(0);
+      expect(existsSync(join(art, "adversary-skip.txt"))).toBe(false);
     } finally { cleanup(); }
   });
 });

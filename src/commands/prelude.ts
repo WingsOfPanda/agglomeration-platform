@@ -17,6 +17,7 @@ import { activeProvidersPath, repoRoot } from "../core/paths.js";
 import { pickInstruments } from "../core/instruments.js";
 import { instrumentConsultValidated, consultTimeout, instrumentTimeoutMultiplier } from "../core/contracts.js";
 import { classifyTopic } from "../core/preludeLit.js";
+import { computeSignals, renderSkipRecord, type Decision } from "../core/preludeConfidence.js";
 import { outboxOffset, outboxPath, outboxWaitSince, type OutboxEvent } from "../core/ipc.js";
 import { parseLatestOffset, scaledTimeout, researchState } from "../core/scoreTurn.js";
 import { composePreludeResearchPrompt, litGuidance } from "../core/preludeTurn.js";
@@ -39,6 +40,8 @@ export async function run(args: string[]): Promise<number> {
     case "spawn-all": return spawnAllRun(rest);
     case "research-send": return researchSendRun(rest);
     case "research-wait": return researchWaitRun(rest);
+    case "synth-preliminary": return synthPreliminaryRun(rest);
+    case "confidence": return confidenceRun(rest);
     default: return usage();
   }
 }
@@ -219,5 +222,59 @@ export async function researchWaitWith(topic: string, instrument: string, provid
   }
   writeFileSync(join(art, `research-${instrument}.done`), "");
   log.ok(`prelude research-wait: ${instrument} FS=${fs}`);
+  return 0;
+}
+
+// ---- synth-preliminary (input validator) ----
+export async function synthPreliminaryRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: prelude synth-preliminary <topic>"); return 2; }
+  const art = preludeArtDir(topic);
+  if (!existsSync(art)) { log.error(`prelude synth-preliminary: ${art} not found — run prelude init`); return 1; }
+  for (const f of ["topic.txt", "roster.txt"]) {
+    if (!readIf(join(art, f)).trim()) { log.error(`prelude synth-preliminary: missing or empty: ${join(art, f)}`); return 1; }
+  }
+  const rows = parseRosterFile(readIf(join(art, "roster.txt")));
+  const missing = rows.filter((r) => !readIf(join(art, `findings-${r.instrument}.md`)).trim()).map((r) => `findings-${r.instrument}.md`);
+  if (missing.length) {
+    log.error("prelude synth-preliminary: blocked — missing or empty findings:");
+    for (const m of missing) log.error(`  - ${join(art, m)}`);
+    return 1;
+  }
+  const out = join(art, "landscape-draft.md");
+  log.ok(`prelude synth-preliminary: inputs validated for ${topic}`);
+  process.stdout.write(out + "\n");
+  return 0;
+}
+
+// ---- confidence (5-signal gate; two-call contract) ----
+export async function confidenceRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: prelude confidence <topic> [--decision skip|continue]"); return 2; }
+  let decision: Decision | null = null;
+  const di = rest.indexOf("--decision");
+  if (di >= 0) {
+    const v = rest[di + 1];
+    if (v !== "skip" && v !== "continue") { log.error("prelude confidence: --decision must be 'skip' or 'continue'"); return 2; }
+    decision = v;
+  }
+  const art = preludeArtDir(topic);
+  const draft = readIf(join(art, "landscape-draft.md"));
+  if (!draft.trim()) { log.error(`prelude confidence: landscape-draft.md missing/empty at ${art}`); return 1; }
+  const rows = parseRosterFile(readIf(join(art, "roster.txt")));
+  const findings = rows.map((r) => readIf(join(art, `findings-${r.instrument}.md`)));
+
+  const s = computeSignals(draft, findings);
+  log.info(`prelude confidence: S1=${s.s1} S2=${s.s2} S3=${s.s3} S4=${s.s4} S5=${s.s5} — ALL_HOLD=${s.allHold}`);
+  process.stdout.write(`ALL_HOLD=${s.allHold}\n`);
+
+  if (decision) { // --decision path: record the user's choice
+    atomicWrite(join(art, "adversary-skip.txt"), renderSkipRecord({ signals: s, decision, now: isoUtc() }));
+    return 0;
+  }
+  if (!s.allHold) { // gate not offered → record not-offered, fall through to adversary
+    atomicWrite(join(art, "adversary-skip.txt"), renderSkipRecord({ signals: s, decision: "not-offered", now: isoUtc() }));
+  }
+  // ALL_HOLD=true with no flag: write nothing — the Maestro asks, then re-invokes with --decision.
   return 0;
 }
