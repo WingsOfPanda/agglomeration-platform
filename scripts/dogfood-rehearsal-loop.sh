@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Phase C ACCEPTANCE GATE — simulated-parts dogfood for /consort:rehearsal.
+# Phase C ACCEPTANCE GATE + Phase D wind-down — simulated-parts dogfood for /consort:rehearsal.
 #
 # Drives the REAL CLI verbs (init/metric/experiment-send/score/monitor/status-brief)
-# across simulated experiment rounds. codex IS on PATH (so init's codex gate passes),
+# across simulated experiment rounds, then exercises the Phase-D wind-down verbs
+# (finalize/consensus/handoff-extract/forensics/teardown) on Scenario A's scored topic.
+# codex IS on PATH (so init's codex gate passes),
 # but live codex pane spawns are blocked by codex 0.135.0's directory-trust prompt +
 # need tmux, so the PARTS are SIMULATED: we scaffold their state + outbox by hand
 # instead of `spawn-all`, then dispatch/score/monitor against that state.
@@ -211,6 +213,48 @@ check "C1 monitor --once prints a parseable {part,event:done} line" "$PARSE_OK"
 CUR_AFTER="$(cat "$ART_B/parts/$INST_P/liveness-cursor.txt")"
 check "C2 liveness-cursor.txt advanced to outbox byte size ($SIZE_C)" \
   "$([ "$CUR_AFTER" = "$SIZE_C" ] && echo 0 || echo 1)"
+
+############################################################################
+# Scenario D — wind-down (finalize -> consensus -> handoff-extract -> teardown/forensics)
+############################################################################
+echo "===================================================================="
+echo "Scenario D — wind-down on Scenario A's scored topic"
+echo "===================================================================="
+
+# D1 finalize: structured halt.flag, then finalize -> session-summary.md ## Halt.
+printf 'halted_by=maestro\nhalted_at=2026-05-30T12:00:00Z\nreason=converged target+K\n' > "$ART/halt.flag"
+fin_rc="$(rc_of $CS rehearsal finalize "$TOPIC")"
+check "D1 finalize rc 0" "$fin_rc"
+check "D2 session-summary.md has ## Halt + reason" \
+  "$([ -f "$ART/session-summary.md" ] && grep -q '## Halt' "$ART/session-summary.md" && grep -q 'reason=converged' "$ART/session-summary.md" && echo 0 || echo 1)"
+
+# D3 consensus: latest-ok per part -> consensus.md.
+con_rc="$(rc_of $CS rehearsal consensus "$TOPIC")"
+check "D3 consensus rc 0 + consensus.md ## Agreed/## Contested" \
+  "$([ "$con_rc" -eq 0 ] && [ -f "$ART/consensus.md" ] && grep -q '## Agreed' "$ART/consensus.md" && grep -q '## Contested' "$ART/consensus.md" && echo 0 || echo 1)"
+
+# D4 handoff-extract (takes the ART-DIR): winner = violin/exp-003 @ 0.9950.
+he_rc="$(rc_of $CS rehearsal handoff-extract "$ART")"
+KV="$ART/handoff-data.kv"
+check "D4 handoff-extract rc 0 + kv winner=violin metric=0.9950 + code_dir + mode=rehearsal" \
+  "$([ "$he_rc" -eq 0 ] && grep -q '^winner_instrument=violin$' "$KV" && grep -q '^winner_metric=0.9950$' "$KV" && grep -q '^winner_code_dir=parts/violin/experiments/exp-003/code/$' "$KV" && grep -q '^mode=rehearsal$' "$KV" && echo 0 || echo 1)"
+
+# D5 forensics: best-effort, rc 0.
+fo_rc="$(rc_of $CS rehearsal forensics "$TOPIC")"
+check "D5 forensics rc 0 (best-effort)" "$fo_rc"
+
+# D6 teardown: winner symlink + archive. Make the winner code dir real first.
+mkdir -p "$ART/parts/violin/experiments/exp-003/code"
+TD_OUT="$($CS rehearsal teardown "$TOPIC" 2>/dev/null)" && td_rc=0 || td_rc=$?
+ARCHIVE_ROOT="$CONSORT_HOME/archive"
+check "D6 teardown rc 0 + printed archive dest under archive/" \
+  "$([ "$td_rc" -eq 0 ] && printf '%s' "$TD_OUT" | grep -q '/archive/.*/_rehearsal-' && echo 0 || echo 1)"
+check "D7 topic _rehearsal archived (live art dir gone; archive present)" \
+  "$([ ! -d "$ART" ] && [ -d "$ARCHIVE_ROOT" ] && find "$ARCHIVE_ROOT" -name '_rehearsal-*' -type d | grep -q . && echo 0 || echo 1)"
+
+# D8 no stale tokens in any archived wind-down artifact.
+check "D8 no master-yoda / MISSION ACCOMPLISHED / consult-handoff in archive" \
+  "$(! grep -rIl -e 'master-yoda' -e 'MISSION ACCOMPLISHED' -e 'consult-handoff' "$ARCHIVE_ROOT" 2>/dev/null | grep -q . && echo 0 || echo 1)"
 
 ############################################################################
 # Tally

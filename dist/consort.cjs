@@ -432,9 +432,10 @@ function archiveTopic(topic, suite, opts) {
   const td = topicDir(topic);
   finalizeArchived(td, opts);
   const art = (0, import_node_path2.join)(td, `_${suite}`);
+  let dest = null;
   if ((0, import_node_fs4.existsSync)(art)) {
     const base = (0, import_node_path2.join)(globalRoot(), "archive", repoHash(), topic, `_${suite}-${archiveTs(opts?.now)}`);
-    const dest = uniqueDest(base);
+    dest = uniqueDest(base);
     (0, import_node_fs4.mkdirSync)((0, import_node_path2.dirname)(dest), { recursive: true });
     (0, import_node_fs4.renameSync)(art, dest);
   }
@@ -442,6 +443,7 @@ function archiveTopic(topic, suite, opts) {
     (0, import_node_fs4.rmSync)(td, { recursive: false, force: false });
   } catch {
   }
+  return dest;
 }
 var import_node_fs4, import_node_path2, STALE;
 var init_archive = __esm({
@@ -9159,12 +9161,12 @@ var require_isexe = __commonJS({
         if (typeof Promise !== "function") {
           throw new TypeError("callback not provided");
         }
-        return new Promise(function(resolve, reject) {
+        return new Promise(function(resolve2, reject) {
           isexe(path6, options || {}, function(er, is) {
             if (er) {
               reject(er);
             } else {
-              resolve(is);
+              resolve2(is);
             }
           });
         });
@@ -9230,27 +9232,27 @@ var require_which = __commonJS({
         opt = {};
       const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
       const found = [];
-      const step = (i2) => new Promise((resolve, reject) => {
+      const step = (i2) => new Promise((resolve2, reject) => {
         if (i2 === pathEnv.length)
-          return opt.all && found.length ? resolve(found) : reject(getNotFoundError(cmd));
+          return opt.all && found.length ? resolve2(found) : reject(getNotFoundError(cmd));
         const ppRaw = pathEnv[i2];
         const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
         const pCmd = path6.join(pathPart, cmd);
         const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve(subStep(p, i2, 0));
+        resolve2(subStep(p, i2, 0));
       });
-      const subStep = (p, i2, ii) => new Promise((resolve, reject) => {
+      const subStep = (p, i2, ii) => new Promise((resolve2, reject) => {
         if (ii === pathExt.length)
-          return resolve(step(i2 + 1));
+          return resolve2(step(i2 + 1));
         const ext = pathExt[ii];
         isexe(p + ext, { pathExt: pathExtExe }, (er, is) => {
           if (!er && is) {
             if (opt.all)
               found.push(p + ext);
             else
-              return resolve(p + ext);
+              return resolve2(p + ext);
           }
-          return resolve(subStep(p, i2, ii + 1));
+          return resolve2(subStep(p, i2, ii + 1));
         });
       });
       return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
@@ -10330,8 +10332,8 @@ var init_deferred = __esm({
   "node_modules/execa/lib/utils/deferred.js"() {
     createDeferred = () => {
       const methods = {};
-      const promise = new Promise((resolve, reject) => {
-        Object.assign(methods, { resolve, reject });
+      const promise = new Promise((resolve2, reject) => {
+        Object.assign(methods, { resolve: resolve2, reject });
       });
       return Object.assign(promise, methods);
     };
@@ -15624,11 +15626,11 @@ var init_concurrent = __esm({
       const promises = weakMap.get(stream);
       const promise = createDeferred();
       promises.push(promise);
-      const resolve = promise.resolve.bind(promise);
-      return { resolve, promises };
+      const resolve2 = promise.resolve.bind(promise);
+      return { resolve: resolve2, promises };
     };
-    waitForConcurrentStreams = async ({ resolve, promises }, subprocess) => {
-      resolve();
+    waitForConcurrentStreams = async ({ resolve: resolve2, promises }, subprocess) => {
+      resolve2();
       const [isSubprocessExit] = await Promise.race([
         Promise.allSettled([true, subprocess]),
         Promise.all([false, ...promises])
@@ -21712,6 +21714,18 @@ function buildScoreboard(rows) {
   }
   return lines.join("\n") + "\n";
 }
+function normalizeResult(json) {
+  const { status, metric_value: mv, self_reported_ratio: srr } = json;
+  if (status === "ok" && (mv === null || mv === void 0)) {
+    return { ...json, status: "partial" };
+  }
+  if (status === "fail" && srr !== void 0 && srr !== null) {
+    const out = { ...json, status: "partial" };
+    if (mv === null || mv === void 0) out.metric_value = srr;
+    return out;
+  }
+  return json;
+}
 var REQUIRED_FIELDS, STATUS_ENUM, NUM_RE;
 var init_rehearsalResult = __esm({
   "src/core/rehearsalResult.ts"() {
@@ -21753,6 +21767,35 @@ function mergeState(existing, updates) {
   const kv = existing ? parseState(existing) : {};
   for (const [k, v] of Object.entries(updates)) if (k) kv[k] = v;
   return renderState(kv);
+}
+function reconcileFromOutbox(outboxTail, doneResultExists) {
+  let sawDone = false, sawError = false;
+  for (const line of outboxTail.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    try {
+      const o2 = JSON.parse(t);
+      if (o2.event === "done") sawDone = true;
+      else if (o2.event === "error") sawError = true;
+    } catch {
+    }
+  }
+  if (sawError) return "failed";
+  if (sawDone) return doneResultExists ? "idle" : null;
+  return null;
+}
+function readHaltFlag(body) {
+  if (body === null || body.trim() === "") return { format: "missing" };
+  const firstLine = body.split("\n").find((l) => l.trim() !== "") ?? "";
+  if (firstLine.startsWith("halted_by=")) {
+    const fields = {};
+    for (const line of body.split("\n")) {
+      const eq = line.indexOf("=");
+      if (eq > 0) fields[line.slice(0, eq)] = line.slice(eq + 1);
+    }
+    return { format: "structured", fields };
+  }
+  return { format: "prose", reason: body.split("\n").join(" ").replace(/\s+$/, "") };
 }
 var init_rehearsalState = __esm({
   "src/core/rehearsalState.ts"() {
@@ -21931,12 +21974,123 @@ function checkCompletion(scoreboardMd, metricMd) {
   if (kSoFar > t.kRequired) kSoFar = t.kRequired;
   return { floorMet, targetMet, kSoFar, kRequired: t.kRequired, plateau };
 }
+function checkTimeBudget(budget, sessionStartIso, nowEpochS) {
+  const b = budget.replace(/\s/g, "");
+  if (b === "none") return false;
+  if (!/^[1-9][0-9]*$/.test(b)) throw new Error(`malformed budget: '${b}' (expected 'none' or positive integer)`);
+  const startMs = Date.parse(sessionStartIso.replace(/\s/g, ""));
+  if (Number.isNaN(startMs)) throw new Error(`could not parse session-start: '${sessionStartIso}'`);
+  return nowEpochS - Math.floor(startMs / 1e3) >= parseInt(b, 10);
+}
 var NUM;
 var init_rehearsalComplete = __esm({
   "src/core/rehearsalComplete.ts"() {
     "use strict";
     init_rehearsalMetric();
     NUM = /^[0-9.]+$/;
+  }
+});
+
+// src/core/rehearsalSummary.ts
+function renderHaltSection(halt, finalizedIso) {
+  if (halt.format === "structured" && halt.fields) {
+    const body = Object.entries(halt.fields).filter(([k]) => k !== "format").map(([k, v]) => `${k}=${v}`).join("\n");
+    return `
+## Halt
+
+\`\`\`
+${body}
+\`\`\`
+Finalized: ${finalizedIso}
+`;
+  }
+  if (halt.format === "prose") {
+    return `
+## Halt
+
+- Reason: ${halt.reason ?? ""}
+- Finalized: ${finalizedIso}
+`;
+  }
+  return "";
+}
+function renderSessionSummary(s) {
+  const out = [];
+  out.push(`# Research session \u2014 ${s.topic}`);
+  out.push(`Updated: ${s.updatedIso}`);
+  out.push(`Started: ${s.startedIso}`);
+  out.push(`Time budget: ${s.budget}`, "");
+  out.push("## Status", "");
+  out.push("| Part | Phase | Current | Last event |");
+  out.push("|---|---|---|---|");
+  for (const r of s.statusRows) {
+    out.push(`| ${r.instrument} | ${r.phase} | ${r.current || "\u2014"} | ${r.lastTs} ${r.lastEvent} |`);
+  }
+  out.push("");
+  out.push("## Scoreboard top 5", "");
+  if (s.scoreboardMd) {
+    out.push("| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |");
+    out.push("|---|---|---|---|---|---|---|---|");
+    const data = s.scoreboardMd.split("\n").filter((l) => SB_DATA_RE.test(l)).slice(0, 5);
+    for (const l of data) out.push(l);
+  } else {
+    out.push("_(scoreboard empty)_");
+  }
+  out.push("");
+  out.push("## Completion check", "");
+  if (s.completion) {
+    out.push(`- Floor: ${s.completion.floorMet ? "MET" : "not met"}`);
+    out.push(`- Target: ${s.completion.targetMet ? "MET" : "not met"}`);
+    out.push(`- K corroboration: ${s.completion.kSoFar}/${s.completion.kRequired}`);
+    out.push(`- Plateau: ${s.completion.plateau ? "YES" : "no"}`);
+    if (s.hardCap !== null) out.push(`- Hard cap: ${s.hardCap ? "YES" : "NO"}`);
+  } else {
+    out.push("_(missing scoreboard or metric)_");
+  }
+  out.push("");
+  out.push("## Recent events", "");
+  if (s.recentEvents.length > 0) {
+    for (const e of s.recentEvents) out.push(`- ${e.ts} ${e.instrument}/${e.event}`);
+  } else {
+    out.push("_(no events yet)_");
+  }
+  if (s.warnings.length > 0) {
+    out.push("", "## Warnings", "");
+    for (const w of s.warnings) out.push(w);
+  }
+  return out.join("\n") + "\n" + renderHaltSection(s.halt, s.finalizedIso);
+}
+var SB_DATA_RE;
+var init_rehearsalSummary = __esm({
+  "src/core/rehearsalSummary.ts"() {
+    "use strict";
+    SB_DATA_RE = /^\|\s*~?\d+\s*\|\s*exp-/;
+  }
+});
+
+// src/core/rehearsalFinalize.ts
+function finalizePhase(cur) {
+  if (cur === "working" || cur === "stale" || cur === "stuck" || cur === "blocked") return "incomplete";
+  if (cur === "idle" || cur === "complete") return "complete";
+  return null;
+}
+function parseHardConstraints(promptMd) {
+  const lines = promptMd.split("\n");
+  const start = lines.findIndex((l) => l.trim() === "**Hard constraints:**");
+  if (start < 0) return [];
+  const out = [];
+  for (let i2 = start + 1; i2 < lines.length; i2++) {
+    if (lines[i2].trim() === "") break;
+    const m = HC_RE.exec(lines[i2]);
+    if (m) out.push({ key: m[1], value: m[2] });
+  }
+  return out;
+}
+var HC_RE;
+var init_rehearsalFinalize = __esm({
+  "src/core/rehearsalFinalize.ts"() {
+    "use strict";
+    HC_RE = /^\s*([a-z_]+)\s*=\s*([0-9]+(?:\.[0-9]+)?)\b/;
   }
 });
 
@@ -22176,19 +22330,157 @@ var init_rehearsalExperiment = __esm({
   }
 });
 
+// src/core/rehearsalHandoff.ts
+function parseScoreboard(md) {
+  const rows = [];
+  for (const line of md.split("\n")) {
+    if (!/^\|\s*~?\d+\s*\|\s*exp-\d+\s*\|/.test(line)) continue;
+    const c3 = line.split("|").map((s) => s.trim());
+    rows.push({ rank: c3[1], expId: c3[2], instrument: c3[3], metric: c3[4], status: c3[5] });
+  }
+  const ok = rows.filter((r) => r.status === "ok");
+  const winner = ok[0] ?? null;
+  const runnerUps = ok.slice(1, 4);
+  return { rows, winner, runnerUps };
+}
+function buildHandoffKv(i2) {
+  const L = [];
+  if (!i2.winner) {
+    L.push("mode=rehearsal-no-winner", `topic=${i2.topic}`);
+    if (i2.landscapeDoc) L.push(`landscape_doc=${i2.landscapeDoc}`);
+    if (i2.hasMetricMd) L.push("mandates_block_path=metric.md");
+    L.push("session_path=.", "topic_txt_path=topic.txt", `generated_ts=${i2.generatedTs}`);
+    return L.join("\n") + "\n";
+  }
+  const w = i2.winner;
+  L.push("mode=rehearsal", `topic=${i2.topic}`);
+  if (i2.landscapeDoc) L.push(`landscape_doc=${i2.landscapeDoc}`);
+  L.push(
+    `winner_instrument=${w.instrument}`,
+    `winner_exp=${w.exp}`,
+    `winner_approach=${w.approach || "unknown"}`,
+    `winner_metric=${w.metric}`
+  );
+  if (w.checkpoint) L.push(`winner_checkpoint=${w.checkpoint}`);
+  if (w.notes) L.push(`winner_notes=${w.notes}`);
+  L.push(`winner_code_dir=${w.codeDir}`);
+  i2.runnerUps.forEach((r, n2) => L.push(`runner_up_${n2 + 1}=${r.instrument}/${r.exp}:${r.metric}:${r.approach || "unknown"}`));
+  if (i2.hasMetricMd) L.push("mandates_block_path=metric.md");
+  L.push("session_path=.", "topic_txt_path=topic.txt", `generated_ts=${i2.generatedTs}`);
+  return L.join("\n") + "\n";
+}
+var init_rehearsalHandoff = __esm({
+  "src/core/rehearsalHandoff.ts"() {
+    "use strict";
+  }
+});
+
+// src/core/rehearsalConsensus.ts
+function buildConsensus(latestOk, opts) {
+  const epsilon = opts.epsilon ?? 0.01;
+  const instruments = Object.keys(latestOk).sort();
+  const field = (inst2, k) => {
+    const v = latestOk[inst2]?.[k];
+    return v === void 0 || v === null ? "" : String(v);
+  };
+  const numEq = (a2, b) => Math.abs(parseFloat(a2) - parseFloat(b)) <= epsilon;
+  const agreed = [];
+  const contested = [];
+  const missing = [];
+  for (const f of FIELDS) {
+    const present = [];
+    const srcs = [];
+    let miss = 0;
+    for (const inst2 of instruments) {
+      const v = field(inst2, f);
+      if (v === "") miss++;
+      else {
+        present.push(v);
+        srcs.push(inst2);
+      }
+    }
+    if (miss === instruments.length) {
+      missing.push(`- ${f}`);
+      continue;
+    }
+    let allAgree = true;
+    const first = present[0];
+    const firstNumeric = NUMERIC.test(first);
+    for (const v of present.slice(1)) {
+      if (firstNumeric && NUMERIC.test(v)) {
+        if (!numEq(first, v)) {
+          allAgree = false;
+          break;
+        }
+      } else if (v !== first) {
+        allAgree = false;
+        break;
+      }
+    }
+    if (miss > 0) allAgree = false;
+    if (allAgree) {
+      agreed.push(`| ${f} | ${first} | ${srcs.join(", ")} |`);
+    } else {
+      let row = `| ${f}`;
+      for (const inst2 of instruments) row += ` | ${field(inst2, f) || "\u2014"}`;
+      contested.push(`${row} |`);
+    }
+  }
+  const out = [
+    `# Consensus \u2014 ${opts.topic}`,
+    "",
+    `Generated: ${opts.nowIso}`,
+    `Epsilon for metric_value: ${epsilon}`,
+    "",
+    "## Agreed",
+    ""
+  ];
+  if (agreed.length) out.push("| Field | Value | Proposed by |", "|---|---|---|", ...agreed);
+  else out.push("_(none)_");
+  out.push("", "## Contested", "");
+  if (contested.length) {
+    let header = "| Field", sep = "|---";
+    for (const inst2 of instruments) {
+      header += ` | ${inst2}'s value`;
+      sep += "|---";
+    }
+    out.push(`${header} |`, `${sep}|`, ...contested);
+  } else out.push("_(none)_");
+  out.push("", "## All-missing", "");
+  if (missing.length) out.push(...missing);
+  else out.push("_(none)_");
+  return out.join("\n") + "\n";
+}
+var FIELDS, NUMERIC;
+var init_rehearsalConsensus = __esm({
+  "src/core/rehearsalConsensus.ts"() {
+    "use strict";
+    FIELDS = ["branch_id", "approach_label", "metric_name", "metric_value", "status", "runtime_s", "notes"];
+    NUMERIC = /^-?[0-9.eE+-]+$/;
+  }
+});
+
 // src/commands/rehearsal.ts
 var rehearsal_exports = {};
 __export(rehearsal_exports, {
+  abortWith: () => abortWith,
+  consensusWith: () => consensusWith,
   experimentSendWith: () => experimentSendWith,
+  finalizeWith: () => finalizeWith,
+  forensicsRun: () => forensicsRun3,
+  freshPartWith: () => freshPartWith,
+  handoffExtractWith: () => handoffExtractWith,
   initWith: () => initWith4,
   liveScoreDeps: () => liveScoreDeps,
   metricWith: () => metricWith,
   monitorRun: () => monitorRun,
+  refineWith: () => refineWith,
   run: () => run13,
   scoreWith: () => scoreWith,
   sotaWith: () => sotaWith,
   spawnAllWith: () => spawnAllWith2,
-  statusBriefWith: () => statusBriefWith
+  statusBriefWith: () => statusBriefWith,
+  teardownWith: () => teardownWith
 });
 function parseInitArgs(args) {
   let topic = "";
@@ -22817,6 +23109,655 @@ async function statusBriefWith(args, v = {}) {
   out(buildStatusBrief({ parts, scoreboardMd, completion, latest }));
   return 0;
 }
+function readOr(path6, fallback = "") {
+  try {
+    return (0, import_node_fs33.readFileSync)(path6, "utf8");
+  } catch {
+    return fallback;
+  }
+}
+function listExpDirs(expsRoot) {
+  try {
+    return (0, import_node_fs33.readdirSync)(expsRoot, { withFileTypes: true }).filter((e) => e.isDirectory() && EXP_ID_RE.test(e.name)).map((e) => e.name).sort();
+  } catch {
+    return [];
+  }
+}
+function dirByteSize(dir) {
+  let total = 0;
+  let entries;
+  try {
+    entries = (0, import_node_fs33.readdirSync)(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const e of entries) {
+    const p = (0, import_node_path31.join)(dir, e.name);
+    if (e.isDirectory()) total += dirByteSize(p);
+    else if (e.isFile()) {
+      try {
+        total += (0, import_node_fs33.statSync)(p).size;
+      } catch {
+      }
+    }
+  }
+  return total;
+}
+function fileCountDepth1(dir) {
+  try {
+    return (0, import_node_fs33.readdirSync)(dir, { withFileTypes: true }).filter((e) => e.isFile()).length;
+  } catch {
+    return 0;
+  }
+}
+async function finalizeWith(args, deps) {
+  const opts = deps.opts;
+  let keep = deps.keepIntermediate ?? false;
+  let rest = args;
+  if (rest[0] === "--keep-intermediate") {
+    keep = true;
+    rest = rest.slice(1);
+  }
+  if (rest.length !== 1 || rest[0].startsWith("--")) {
+    log.error("usage: rehearsal finalize [--keep-intermediate] <topic>");
+    return 2;
+  }
+  const topic = rest[0];
+  const art = rehearsalArtDir(topic, opts);
+  if (!(0, import_node_fs33.existsSync)(art) || !(0, import_node_fs33.statSync)(art).isDirectory()) {
+    log.error(`finalize: art-dir missing: ${art}`);
+    return 1;
+  }
+  const partsFile = (0, import_node_path31.join)(art, "parts.txt");
+  const instruments = (0, import_node_fs33.existsSync)(partsFile) ? (0, import_node_fs33.readFileSync)(partsFile, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#")) : [];
+  for (const instrument of instruments) {
+    const stateDir = partStateDir(art, instrument);
+    const stateTxt = (0, import_node_path31.join)(stateDir, "state.txt");
+    if (!(0, import_node_fs33.existsSync)(stateTxt)) continue;
+    const cursorRaw = readOr((0, import_node_path31.join)(stateDir, "liveness-cursor.txt"));
+    const offset = Number.parseInt(cursorRaw.trim(), 10) || 0;
+    const model = resolveModel(instrument, topic);
+    const ob = model ? outboxPath(instrument, model, topic) : "";
+    let tail = "";
+    if (ob && (0, import_node_fs33.existsSync)(ob)) {
+      try {
+        tail = (0, import_node_fs33.readFileSync)(ob).subarray(offset).toString("utf8");
+      } catch {
+        tail = "";
+      }
+    }
+    const curExp = parseState(readOr(stateTxt)).current_exp_id ?? "";
+    const doneResultExists = !!curExp && (0, import_node_fs33.existsSync)((0, import_node_path31.join)(experimentDir(art, instrument, curExp), "result.json"));
+    const recon = reconcileFromOutbox(tail, doneResultExists);
+    if (recon === "failed" || recon === "idle") {
+      atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: recon }));
+    }
+    const phase = parseState(readOr(stateTxt)).phase ?? "";
+    const np = finalizePhase(phase);
+    if (np) atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: np }));
+  }
+  for (const instrument of instruments) {
+    const expsRoot = experimentsDir(art, instrument);
+    for (const expId of listExpDirs(expsRoot)) {
+      const resultPath = (0, import_node_path31.join)(expsRoot, expId, "result.json");
+      if (!(0, import_node_fs33.existsSync)(resultPath)) continue;
+      let parsed;
+      try {
+        parsed = JSON.parse((0, import_node_fs33.readFileSync)(resultPath, "utf8"));
+      } catch {
+        continue;
+      }
+      const norm = normalizeResult(parsed);
+      if (norm.status !== parsed.status || norm.metric_value !== parsed.metric_value) {
+        atomicWrite(resultPath, JSON.stringify(norm));
+        log.info(`normalize: ${instrument}/${expId} -> ${norm.status}`);
+      }
+    }
+  }
+  if (!keep) {
+    for (const instrument of instruments) {
+      const expsRoot = experimentsDir(art, instrument);
+      for (const expId of listExpDirs(expsRoot)) {
+        const expDir = (0, import_node_path31.join)(expsRoot, expId);
+        const resultPath = (0, import_node_path31.join)(expDir, "result.json");
+        if (!(0, import_node_fs33.existsSync)(resultPath)) continue;
+        let keptRel;
+        try {
+          const r = JSON.parse((0, import_node_fs33.readFileSync)(resultPath, "utf8"));
+          keptRel = r.checkpoint_path != null ? String(r.checkpoint_path) : "";
+        } catch {
+          continue;
+        }
+        if (!keptRel || keptRel === "null") continue;
+        const keptAbs = (0, import_node_path31.resolve)(expDir, keptRel);
+        if (keptAbs !== expDir && !keptAbs.startsWith(expDir + "/")) {
+          log.warn(`prune: checkpoint_path escapes exp dir: ${keptRel} (in ${expDir}); skipping`);
+          continue;
+        }
+        let entries;
+        try {
+          entries = (0, import_node_fs33.readdirSync)(expDir);
+        } catch {
+          continue;
+        }
+        for (const name of entries) {
+          if (!name.endsWith(".pt")) continue;
+          const pt = (0, import_node_path31.join)(expDir, name);
+          if (pt === keptAbs) continue;
+          try {
+            if ((0, import_node_fs33.statSync)(pt).isFile()) (0, import_node_fs33.rmSync)(pt, { force: true });
+          } catch {
+          }
+        }
+      }
+    }
+  }
+  for (const instrument of instruments) {
+    const model = resolveModel(instrument, topic);
+    if (!model) continue;
+    const targetDir = partStateDir(art, instrument);
+    (0, import_node_fs33.mkdirSync)(targetDir, { recursive: true });
+    const paneFiles = [
+      ["outbox.jsonl", outboxPath(instrument, model, topic)],
+      ["inbox.md", inboxPath(instrument, model, topic)]
+    ];
+    for (const [name, src] of paneFiles) {
+      if (!(0, import_node_fs33.existsSync)(src)) {
+        log.warn(`link_pane_artifacts: pane file missing for ${instrument}: ${name}`);
+        continue;
+      }
+      const linkPath = (0, import_node_path31.join)(targetDir, name);
+      const rel = (0, import_node_path31.relative)(targetDir, src);
+      try {
+        try {
+          if ((0, import_node_fs33.lstatSync)(linkPath)) (0, import_node_fs33.unlinkSync)(linkPath);
+        } catch {
+        }
+        (0, import_node_fs33.symlinkSync)(rel, linkPath);
+      } catch {
+      }
+    }
+  }
+  const warningsPath = (0, import_node_path31.join)(art, "warnings.txt");
+  const threshold = (deps.sizeWarnGb ?? 2) * GIB;
+  const sizeLines = [];
+  for (const instrument of instruments) {
+    const expsRoot = experimentsDir(art, instrument);
+    for (const expId of listExpDirs(expsRoot)) {
+      const expDir = (0, import_node_path31.join)(expsRoot, expId);
+      const bytes = dirByteSize(expDir);
+      if (bytes >= threshold) {
+        const gb = (bytes / GIB).toFixed(1);
+        sizeLines.push(`size_warn	${instrument}/${expId}	${gb}	${fileCountDepth1(expDir)}`);
+      }
+    }
+  }
+  atomicWrite(warningsPath, sizeLines.length ? sizeLines.join("\n") + "\n" : "");
+  const auditLines = [];
+  for (const instrument of instruments) {
+    const expsRoot = experimentsDir(art, instrument);
+    for (const expId of listExpDirs(expsRoot)) {
+      const expDir = (0, import_node_path31.join)(expsRoot, expId);
+      const promptMd = (0, import_node_path31.join)(expDir, "prompt.md");
+      const auditJson = (0, import_node_path31.join)(expDir, "audit.json");
+      if (!(0, import_node_fs33.existsSync)(promptMd) || !(0, import_node_fs33.existsSync)(auditJson)) continue;
+      let audit;
+      try {
+        audit = JSON.parse((0, import_node_fs33.readFileSync)(auditJson, "utf8"));
+      } catch {
+        continue;
+      }
+      for (const { key, value } of parseHardConstraints((0, import_node_fs33.readFileSync)(promptMd, "utf8"))) {
+        const actual = audit[key];
+        if (actual == null || String(actual) === "null") continue;
+        if (String(value) !== String(actual)) {
+          auditLines.push(`audit_warn	${instrument}/${expId}	${key}	prompt=${value}  actual=${String(actual)}`);
+        }
+      }
+    }
+  }
+  if (auditLines.length) {
+    const existing = readOr(warningsPath);
+    atomicWrite(warningsPath, existing + auditLines.join("\n") + "\n");
+  }
+  const statusRows = [];
+  for (const instrument of instruments) {
+    const stateTxt = (0, import_node_path31.join)(partStateDir(art, instrument), "state.txt");
+    if ((0, import_node_fs33.existsSync)(stateTxt)) {
+      const kv = parseState(readOr(stateTxt));
+      statusRows.push({
+        instrument,
+        phase: kv.phase ?? "?",
+        current: kv.current_exp_id ?? "",
+        lastTs: kv.last_event_ts ?? "?",
+        lastEvent: kv.last_event ?? "?"
+      });
+    } else {
+      statusRows.push({ instrument, phase: "?", current: "", lastTs: "?", lastEvent: "?" });
+    }
+  }
+  const scoreboardPath = (0, import_node_path31.join)(art, "scoreboard.md");
+  const scoreboardMd = (0, import_node_fs33.existsSync)(scoreboardPath) ? (0, import_node_fs33.readFileSync)(scoreboardPath, "utf8") : null;
+  const metricPath = (0, import_node_path31.join)(art, "metric.md");
+  const completion = scoreboardMd !== null && (0, import_node_fs33.existsSync)(metricPath) ? checkCompletion(scoreboardMd, (0, import_node_fs33.readFileSync)(metricPath, "utf8")) : null;
+  const budgetPath = (0, import_node_path31.join)(art, "time-budget.txt");
+  const startPath = (0, import_node_path31.join)(art, "session-start.txt");
+  let hardCap = null;
+  if ((0, import_node_fs33.existsSync)(budgetPath) && (0, import_node_fs33.existsSync)(startPath)) {
+    try {
+      hardCap = checkTimeBudget(
+        (0, import_node_fs33.readFileSync)(budgetPath, "utf8").trim(),
+        (0, import_node_fs33.readFileSync)(startPath, "utf8").trim(),
+        Math.floor(Date.parse(deps.now()) / 1e3)
+      );
+    } catch {
+      hardCap = null;
+    }
+  }
+  const allEvents = [];
+  for (const instrument of instruments) {
+    const model = resolveModel(instrument, topic);
+    if (!model) continue;
+    const ob = outboxPath(instrument, model, topic);
+    if (!(0, import_node_fs33.existsSync)(ob)) continue;
+    const lines = readOr(ob).split("\n").filter((l) => l.trim() !== "").slice(-10);
+    for (const line of lines) {
+      try {
+        const o2 = JSON.parse(line);
+        allEvents.push({ ts: o2.ts != null ? String(o2.ts) : "", instrument, event: o2.event != null ? String(o2.event) : "" });
+      } catch {
+      }
+    }
+  }
+  allEvents.sort((a2, b) => a2.ts < b.ts ? 1 : a2.ts > b.ts ? -1 : 0);
+  const recentEvents = allEvents.slice(0, 10);
+  const warnings = [];
+  for (const line of readOr(warningsPath).split("\n")) {
+    if (!line.trim()) continue;
+    const f = line.split("	");
+    if (f[0] === "size_warn") {
+      warnings.push(`- size_warn: ${f[1]} ${f[2]} GB (${f[3]} files)`);
+    } else if (f[0] === "audit_warn") {
+      warnings.push(`- audit_warn: ${f[1]} ${f[2]} (${f[3]})`);
+    }
+  }
+  const haltPath = (0, import_node_path31.join)(art, "halt.flag");
+  const halt = readHaltFlag((0, import_node_fs33.existsSync)(haltPath) ? (0, import_node_fs33.readFileSync)(haltPath, "utf8") : null);
+  const startedIso = (0, import_node_fs33.existsSync)(startPath) ? (0, import_node_fs33.readFileSync)(startPath, "utf8").trim() : "(unknown)";
+  const budget = (0, import_node_fs33.existsSync)(budgetPath) ? (0, import_node_fs33.readFileSync)(budgetPath, "utf8").trim() : "none";
+  const summary = renderSessionSummary({
+    topic,
+    updatedIso: deps.now(),
+    startedIso,
+    budget,
+    statusRows,
+    scoreboardMd,
+    completion,
+    hardCap,
+    recentEvents,
+    warnings,
+    halt,
+    finalizedIso: deps.now()
+  });
+  atomicWrite((0, import_node_path31.join)(art, "session-summary.md"), summary);
+  log.ok("finalize: cleanup complete");
+  return 0;
+}
+function parseRefineArgs(args) {
+  if (args.length !== 4) return { topic: "", instrument: "", expId: "", text: "", ok: false };
+  const [topic, instrument, expId, text] = args;
+  return { topic, instrument, expId, text, ok: true };
+}
+async function refineWith(args, deps) {
+  const p = parseRefineArgs(args);
+  if (!p.ok) {
+    log.error("rehearsal refine: usage: <topic> <instrument> <exp-id> <refinement-text>");
+    return 2;
+  }
+  const { topic, instrument, expId, text } = p;
+  if (!INSTRUMENT_RE.test(instrument)) {
+    log.error(`instrument must match [a-z][a-z0-9-]*; got '${instrument}'`);
+    return 2;
+  }
+  if (!EXP_ID_RE.test(expId)) {
+    log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`);
+    return 2;
+  }
+  const art = rehearsalArtDir(topic, deps.opts);
+  const branchDir = experimentDir(art, instrument, expId);
+  if (!(0, import_node_fs33.existsSync)(branchDir) || !(0, import_node_fs33.statSync)(branchDir).isDirectory()) {
+    log.error(`branch dir missing: ${branchDir}`);
+    return 1;
+  }
+  let n2 = 1;
+  while ((0, import_node_fs33.existsSync)((0, import_node_path31.join)(branchDir, `refine-${n2}.md`))) n2++;
+  const refinePath = (0, import_node_path31.join)(branchDir, `refine-${n2}.md`);
+  atomicWrite(refinePath, text + "\n");
+  log.info(`[refine] wrote ${refinePath}`);
+  if (!deps.dryRun) {
+    const msg = `REFINE: read ${refinePath} before continuing your current experiment (${expId}).`;
+    try {
+      const rc = await deps.send(["--from", "maestro", instrument, topic, msg]);
+      if (rc !== 0) log.warn(`[refine] send nudge failed; part may not have noticed refine-${n2}.md`);
+    } catch {
+      log.warn(`[refine] send nudge failed; part may not have noticed refine-${n2}.md`);
+    }
+  }
+  log.ok(`[refine] ${instrument}/${expId} refine-${n2}.md sent`);
+  return 0;
+}
+function readResultJson(path6) {
+  if (!(0, import_node_fs33.existsSync)(path6)) return {};
+  try {
+    return JSON.parse((0, import_node_fs33.readFileSync)(path6, "utf8"));
+  } catch {
+    return {};
+  }
+}
+async function handoffExtractWith(args, deps) {
+  const art = args[0];
+  if (!art || !(0, import_node_fs33.existsSync)(art) || !(0, import_node_fs33.statSync)(art).isDirectory()) {
+    log.error(`rehearsal handoff-extract: art-dir required (got '${art ?? ""}')`);
+    return 2;
+  }
+  const topicTxt = (0, import_node_path31.join)(art, "topic.txt");
+  if (!(0, import_node_fs33.existsSync)(topicTxt)) {
+    log.error(`rehearsal handoff-extract: topic.txt missing under ${art}`);
+    return 2;
+  }
+  const topic = (0, import_node_fs33.readFileSync)(topicTxt, "utf8").replace(/\n/g, " ").replace(/\s+$/, "");
+  const sbPath = (0, import_node_path31.join)(art, "scoreboard.md");
+  const { winner, runnerUps } = parseScoreboard((0, import_node_fs33.existsSync)(sbPath) ? (0, import_node_fs33.readFileSync)(sbPath, "utf8") : "");
+  let landscapeDoc;
+  for (const name of (0, import_node_fs33.readdirSync)(art).sort()) {
+    if (/^rehearsal-.*\.md$/.test(name) && (0, import_node_fs33.statSync)((0, import_node_path31.join)(art, name)).isFile()) {
+      landscapeDoc = name;
+      break;
+    }
+  }
+  const hasMetricMd = (0, import_node_fs33.existsSync)((0, import_node_path31.join)(art, "metric.md"));
+  const generatedTs = deps.now();
+  let input;
+  if (!winner) {
+    input = { topic, landscapeDoc, hasMetricMd, generatedTs, winner: null, runnerUps: [] };
+  } else {
+    const expRel = `parts/${winner.instrument}/experiments/${winner.expId}`;
+    const result = readResultJson((0, import_node_path31.join)(art, expRel, "result.json"));
+    const approach = result.approach_label != null ? String(result.approach_label) : "";
+    const notes = String(result.notes ?? "").replace(/\n/g, " ");
+    let checkpoint;
+    const ckptRaw = result.checkpoint_path != null ? String(result.checkpoint_path) : "";
+    if (ckptRaw && ckptRaw !== "null") {
+      checkpoint = ckptRaw.startsWith("/") ? ckptRaw : `${expRel}/${ckptRaw}`;
+    }
+    const runners = runnerUps.map((r) => {
+      const rr = readResultJson((0, import_node_path31.join)(art, `parts/${r.instrument}/experiments/${r.expId}`, "result.json"));
+      return { instrument: r.instrument, exp: r.expId, metric: r.metric, approach: rr.approach_label != null ? String(rr.approach_label) : "" };
+    });
+    input = {
+      topic,
+      landscapeDoc,
+      hasMetricMd,
+      generatedTs,
+      winner: {
+        instrument: winner.instrument,
+        exp: winner.expId,
+        approach,
+        metric: winner.metric,
+        checkpoint,
+        notes: notes || void 0,
+        codeDir: `${expRel}/code/`
+      },
+      runnerUps: runners
+    };
+  }
+  atomicWrite((0, import_node_path31.join)(art, "handoff-data.kv"), buildHandoffKv(input));
+  log.ok(`handoff-data.kv written: ${(0, import_node_path31.join)(art, "handoff-data.kv")}`);
+  return 0;
+}
+function sweepTmpLock(dir, depth) {
+  if (depth < 0) return;
+  let entries;
+  try {
+    entries = (0, import_node_fs33.readdirSync)(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const e of entries) {
+    const p = (0, import_node_path31.join)(dir, e.name);
+    if (e.isDirectory()) {
+      sweepTmpLock(p, depth - 1);
+    } else if (e.isFile() && (e.name.endsWith(".tmp") || e.name.endsWith(".lock"))) {
+      try {
+        (0, import_node_fs33.rmSync)(p, { force: true });
+      } catch {
+      }
+    }
+  }
+}
+async function teardownWith(args, deps) {
+  const out = deps.stdout ?? ((l) => {
+    process.stdout.write(l + "\n");
+  });
+  const topic = args[0];
+  if (!topic) {
+    log.error("rehearsal teardown: topic required");
+    return 2;
+  }
+  const art = rehearsalArtDir(topic, deps.opts);
+  if (!(0, import_node_fs33.existsSync)(art) || !(0, import_node_fs33.statSync)(art).isDirectory()) {
+    log.error(`${art} not found`);
+    return 1;
+  }
+  const pf = (0, import_node_path31.join)(art, "preflight-panes.txt");
+  if ((0, import_node_fs33.existsSync)(pf)) {
+    for (const line of (0, import_node_fs33.readFileSync)(pf, "utf8").split("\n")) {
+      const pane = line.trim();
+      if (!pane) continue;
+      try {
+        await deps.killPane(pane);
+      } catch {
+      }
+    }
+  }
+  const shared = (0, import_node_path31.join)(art, "shared");
+  if ((0, import_node_fs33.existsSync)(shared) && (0, import_node_fs33.statSync)(shared).isDirectory()) sweepTmpLock(shared, 2);
+  const sbPath = (0, import_node_path31.join)(art, "scoreboard.md");
+  if ((0, import_node_fs33.existsSync)(sbPath)) {
+    const { winner } = parseScoreboard((0, import_node_fs33.readFileSync)(sbPath, "utf8"));
+    if (winner) {
+      const rel = `parts/${winner.instrument}/experiments/${winner.expId}/code`;
+      if ((0, import_node_fs33.existsSync)((0, import_node_path31.join)(art, rel)) && (0, import_node_fs33.statSync)((0, import_node_path31.join)(art, rel)).isDirectory()) {
+        const link = (0, import_node_path31.join)(art, "winner");
+        try {
+          (0, import_node_fs33.rmSync)(link, { force: true });
+        } catch {
+        }
+        (0, import_node_fs33.symlinkSync)(rel, link);
+        log.ok(`[teardown] winner symlink -> ${rel} (${winner.instrument}/${winner.expId})`);
+      } else {
+        log.warn(`[teardown] scoreboard top-1 dir missing: ${(0, import_node_path31.join)(art, rel)}; no symlink`);
+      }
+    } else {
+      log.info("[teardown] scoreboard has no ok rows; no winner symlink");
+    }
+  }
+  const dest = deps.archiveTopic(topic, "rehearsal");
+  if (dest) {
+    out(dest);
+    log.ok(`[teardown] archived ${topic} -> ${dest}`);
+  }
+  return 0;
+}
+async function forensicsRun3(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("rehearsal forensics: topic required");
+    return 2;
+  }
+  const path6 = captureArtDir({ artDir: rehearsalArtDir(topic), command: "rehearsal" });
+  if (path6) {
+    log.ok(`forensics captured: ${path6}`);
+    process.stdout.write(path6 + "\n");
+  } else log.info("rehearsal forensics: no mechanical findings");
+  return 0;
+}
+async function freshPartWith(args, deps) {
+  if (args.length !== 2) {
+    log.error("rehearsal fresh-part: usage: <topic> <instrument>");
+    return 2;
+  }
+  const [topic, instrument] = args;
+  if (!INSTRUMENT_RE.test(instrument)) {
+    log.error(`instrument must match [a-z][a-z0-9-]*; got '${instrument}'`);
+    return 2;
+  }
+  const art = rehearsalArtDir(topic, deps.opts);
+  const stateTxt = (0, import_node_path31.join)(partStateDir(art, instrument), "state.txt");
+  if (!(0, import_node_fs33.existsSync)(stateTxt)) {
+    log.error(`part state.txt missing: ${stateTxt}`);
+    return 1;
+  }
+  const prev = parseState((0, import_node_fs33.readFileSync)(stateTxt, "utf8"));
+  if (prev.phase === "working") {
+    log.error(`part ${instrument} is mid-experiment (phase=working); abort or wait for done before fresh-part.`);
+    return 1;
+  }
+  const prevCounter = /^[0-9]+$/.test(prev.exp_counter ?? "") ? prev.exp_counter : "0";
+  log.info(`[fresh-part] tearing down ${instrument}'s pane on ${topic} ...`);
+  try {
+    await deps.teardown(topic, instrument);
+  } catch {
+  }
+  log.info(`[fresh-part] respawning ${instrument} ...`);
+  const rc = await deps.spawn([instrument, "codex", topic]);
+  if (rc !== 0) {
+    log.error(`spawn failed for ${instrument} on ${topic}`);
+    return 1;
+  }
+  atomicWrite(stateTxt, mergeState((0, import_node_fs33.readFileSync)(stateTxt, "utf8"), {
+    last_event: "fresh-part-respawn",
+    last_event_ts: deps.now(),
+    phase: "idle",
+    current_exp_id: "",
+    exp_counter: prevCounter,
+    probe_sent_ts: ""
+  }));
+  log.ok(`[fresh-part] ${instrument} respawned on ${topic}; state preserved (exp_counter=${prevCounter})`);
+  return 0;
+}
+async function abortWith(args, deps) {
+  if (args.length < 1 || args.length > 2) {
+    log.error("rehearsal abort: usage: <topic> [reason]");
+    return 2;
+  }
+  const topic = args[0];
+  const reason = args[1] ?? "unspecified";
+  const art = rehearsalArtDir(topic, deps.opts);
+  if (!(0, import_node_fs33.existsSync)(art) || !(0, import_node_fs33.statSync)(art).isDirectory()) {
+    log.error(`no active rehearsal session for topic: ${topic} (art-dir ${art} missing)`);
+    return 1;
+  }
+  const mt = (0, import_node_path31.join)(art, "monitor-tasks.txt");
+  const ids = (0, import_node_fs33.existsSync)(mt) ? (0, import_node_fs33.readFileSync)(mt, "utf8").split("\n").map((l) => l.trim()).filter(Boolean) : [];
+  (0, import_node_fs33.writeFileSync)((0, import_node_path31.join)(art, "halt.flag"), `halted_by=user
+halted_at=${deps.now()}
+reason=${reason}
+`);
+  log.info(`halt.flag written (${reason})`);
+  const frc = await deps.finalize(topic);
+  if (frc !== 0) {
+    log.error("finalize failed");
+    return 1;
+  }
+  const trc = await deps.teardown(topic);
+  if (trc !== 0) {
+    log.error("teardown failed");
+    return 1;
+  }
+  if (ids.length > 0) {
+    log.info(`note: ${ids.length} Monitor task(s) still active; will TaskStop on next Maestro turn (halt.flag detected):`);
+    for (const id of ids) log.info(`  - ${id}`);
+  } else {
+    log.info("no Monitor tasks to stop");
+  }
+  log.ok(`rehearsal session ${topic} aborted`);
+  return 0;
+}
+function parseConsensusArgs(args) {
+  let epsilon = 0.01, topic = "", badArgs = false;
+  for (let i2 = 0; i2 < args.length; i2++) {
+    const a2 = args[i2];
+    if (a2 === "--epsilon" || a2.startsWith("--epsilon=")) {
+      const r = kvParse(a2, args[i2 + 1]);
+      epsilon = parseFloat(r.value);
+      i2 += r.shift - 1;
+    } else if (a2.startsWith("-")) {
+      badArgs = true;
+    } else {
+      topic = a2;
+    }
+  }
+  return { topic, epsilon, badArgs };
+}
+async function consensusWith(args, deps) {
+  const p = parseConsensusArgs(args);
+  if (p.badArgs) {
+    log.error("rehearsal consensus: unknown flag");
+    return 2;
+  }
+  if (!p.topic) {
+    log.error("rehearsal consensus: topic required");
+    return 2;
+  }
+  const epsilon = deps.epsilon ?? p.epsilon;
+  const art = rehearsalArtDir(p.topic, deps.opts);
+  const partsRoot = partsDir(art);
+  if (!(0, import_node_fs33.existsSync)(partsRoot)) {
+    log.error(`rehearsal consensus: no parts dir under ${art}`);
+    return 1;
+  }
+  const latestOk = {};
+  let instruments;
+  try {
+    instruments = (0, import_node_fs33.readdirSync)(partsRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+  } catch {
+    instruments = [];
+  }
+  for (const instrument of instruments) {
+    const expsRoot = experimentsDir(art, instrument);
+    let names;
+    try {
+      names = (0, import_node_fs33.readdirSync)(expsRoot).filter((n2) => EXP_ID_RE.test(n2)).sort();
+    } catch {
+      continue;
+    }
+    let newest = "";
+    for (const exp of names) {
+      const resultPath = (0, import_node_path31.join)(experimentDir(art, instrument, exp), "result.json");
+      if (!(0, import_node_fs33.existsSync)(resultPath)) continue;
+      let parsed;
+      try {
+        parsed = JSON.parse((0, import_node_fs33.readFileSync)(resultPath, "utf8"));
+      } catch {
+        continue;
+      }
+      if (parsed.status !== "ok") continue;
+      if (exp > newest) {
+        newest = exp;
+        latestOk[instrument] = parsed;
+      }
+    }
+  }
+  if (Object.keys(latestOk).length === 0) {
+    log.error("rehearsal consensus: no ok result.json files found");
+    return 1;
+  }
+  const md = buildConsensus(latestOk, { topic: p.topic, nowIso: deps.now(), epsilon });
+  atomicWrite((0, import_node_path31.join)(art, "consensus.md"), md);
+  log.ok(`[consensus] wrote ${(0, import_node_path31.join)(art, "consensus.md")} (${Object.keys(latestOk).length} parts)`);
+  return 0;
+}
 async function run13(args) {
   const [verb, ...rest] = args;
   switch (verb) {
@@ -22836,12 +23777,28 @@ async function run13(args) {
       return monitorRun(rest);
     case "status-brief":
       return statusBriefWith(rest);
+    case "finalize":
+      return finalizeWith(rest, liveFinalizeDeps);
+    case "refine":
+      return refineWith(applyArgsFile(rest), liveRefineDeps);
+    case "handoff-extract":
+      return handoffExtractWith(rest, liveHandoffDeps);
+    case "teardown":
+      return teardownWith(rest, liveTeardownDeps);
+    case "fresh-part":
+      return freshPartWith(rest, liveFreshPartDeps);
+    case "forensics":
+      return forensicsRun3(rest);
+    case "abort":
+      return abortWith(applyArgsFile(rest), liveAbortDeps);
+    case "consensus":
+      return consensusWith(rest, liveConsensusDeps);
     default:
       log.error(`rehearsal: unknown verb: ${verb ?? "(none)"}`);
       return 2;
   }
 }
-var import_node_fs33, import_node_child_process9, import_node_path31, liveInitDeps4, liveSpawnAllDeps2, liveExperimentSendDeps, liveScoreDeps, sleep4;
+var import_node_fs33, import_node_child_process9, import_node_path31, liveInitDeps4, liveSpawnAllDeps2, liveExperimentSendDeps, liveScoreDeps, sleep4, GIB, liveFinalizeDeps, liveRefineDeps, liveHandoffDeps, liveTeardownDeps, liveFreshPartDeps, liveAbortDeps, liveConsensusDeps;
 var init_rehearsal2 = __esm({
   "src/commands/rehearsal.ts"() {
     "use strict";
@@ -22858,9 +23815,15 @@ var init_rehearsal2 = __esm({
     init_rehearsalScore();
     init_rehearsalState();
     init_rehearsalComplete();
+    init_rehearsalResult();
+    init_rehearsalSummary();
+    init_rehearsalFinalize();
     init_rehearsalBrief();
     init_rehearsalMonitor();
     init_rehearsalExperiment();
+    init_forensics();
+    init_rehearsalHandoff();
+    init_rehearsalConsensus();
     init_contracts();
     init_ipc();
     init_tmux();
@@ -22870,6 +23833,8 @@ var init_rehearsal2 = __esm({
     init_paths();
     init_spawn();
     init_preflight();
+    init_send2();
+    init_coda();
     liveInitDeps4 = {
       haveCmd,
       instrumentBinary,
@@ -22916,6 +23881,33 @@ var init_rehearsal2 = __esm({
       now: () => isoUtc()
     };
     sleep4 = (ms) => new Promise((r) => setTimeout(r, ms));
+    GIB = 1073741824;
+    liveFinalizeDeps = {
+      now: () => isoUtc(),
+      keepIntermediate: process.env.CONSORT_REHEARSAL_KEEP_INTERMEDIATE ? true : void 0,
+      sizeWarnGb: Number(process.env.CONSORT_REHEARSAL_SIZE_WARN_GB) || 2
+    };
+    liveRefineDeps = {
+      send: (a2) => run2(a2),
+      dryRun: process.env.CONSORT_DRY_RUN === "1"
+    };
+    liveHandoffDeps = { now: () => isoUtc() };
+    liveTeardownDeps = {
+      killPane: (p) => killNow(p),
+      archiveTopic: (t, s) => archiveTopic(t, s),
+      now: () => isoUtc()
+    };
+    liveFreshPartDeps = {
+      teardown: (t, i2) => run5(["--pairs", t, i2]).then(() => void 0),
+      spawn: (a2) => run(a2),
+      now: () => isoUtc()
+    };
+    liveAbortDeps = {
+      finalize: (t) => finalizeWith([t], liveFinalizeDeps),
+      teardown: (t) => teardownWith([t], liveTeardownDeps),
+      now: () => isoUtc()
+    };
+    liveConsensusDeps = { now: () => isoUtc() };
   }
 });
 
