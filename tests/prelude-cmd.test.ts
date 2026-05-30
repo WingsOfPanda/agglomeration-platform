@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
-import { initWith, classifyRun, spawnAllWith, type PreludeInitDeps, type PreludeSpawnAllDeps } from "../src/commands/prelude.js";
+import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, type PreludeInitDeps, type PreludeSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/prelude.js";
 import { preludeArtDir } from "../src/core/prelude.js";
 
 function initDeps(over: Partial<PreludeInitDeps> = {}): PreludeInitDeps {
@@ -83,6 +83,39 @@ describe("prelude spawn-all", () => {
       const rc = await spawnAllWith("x", deps);
       expect(rc).toBe(0);
       expect(readFileSync(join(art, "spawn-results.tsv"), "utf8")).toContain("viola\tcodex\t0");
+    } finally { cleanup(); }
+  });
+});
+
+describe("prelude research-send/wait", () => {
+  it("send renders prompt to <inst>_research_prompt.md and writes the offset state", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      await classifyRun(["x"]);
+      const art = preludeArtDir("x");
+      let sent: string[] = [];
+      const deps: ResearchSendDeps = { offsetFor: () => 7, send: async (a) => { sent = a; return 0; } };
+      const rc = await researchSendWith("x", "viola", "codex", deps);
+      expect(rc).toBe(0);
+      expect(readFileSync(join(art, "research-viola.txt"), "utf8")).toContain("OFFSET=7");
+      const prompt = readFileSync(join(art, "viola_research_prompt.md"), "utf8");
+      expect(prompt).toContain(join(art, "findings-viola.md"));
+      expect(sent).toEqual(["--from", "maestro", "viola", "x", `@${join(art, "viola_research_prompt.md")}`]);
+    } finally { cleanup(); }
+  });
+  it("wait classifies a done event with findings as FS=ok and writes the .done sentinel", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = preludeArtDir("x");
+      writeFileSync(join(art, "research-viola.txt"), "OFFSET=0\n");
+      writeFileSync(join(art, "findings-viola.md"), "## Claims\n1. [src/a.ts:1] x\n");
+      const deps: ResearchWaitDeps = { wait: async () => ({ event: "done" } as any), multiplier: () => "1" };
+      const rc = await researchWaitWith("x", "viola", "codex", deps);
+      expect(rc).toBe(0);
+      expect(existsSync(join(art, "research-viola.done"))).toBe(true);
+      expect(readFileSync(join(art, "research-viola.txt"), "utf8")).toContain("FS=ok");
     } finally { cleanup(); }
   });
 });
