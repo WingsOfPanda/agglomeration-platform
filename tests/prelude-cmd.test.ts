@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
-import { initWith, classifyRun, type PreludeInitDeps } from "../src/commands/prelude.js";
+import { initWith, classifyRun, spawnAllWith, type PreludeInitDeps, type PreludeSpawnAllDeps } from "../src/commands/prelude.js";
 import { preludeArtDir } from "../src/core/prelude.js";
 
 function initDeps(over: Partial<PreludeInitDeps> = {}): PreludeInitDeps {
@@ -66,5 +66,23 @@ describe("prelude classify", () => {
   it("rc1 when the art dir is missing", async () => {
     const { cleanup } = freshHome();
     try { expect(await classifyRun(["nope"])).toBe(1); } finally { cleanup(); }
+  });
+});
+
+describe("prelude spawn-all", () => {
+  it("preflights then spawns each roster part; rc0 when all ok", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = preludeArtDir("x");
+      const deps: PreludeSpawnAllDeps = {
+        preflight: async () => { writeFileSync(join(art, "preflight-panes.txt"), "viola\t%1\ncello\t%2\n"); return 0; },
+        spawn: async () => 0,
+        repoRoot: () => "/repo",
+      };
+      const rc = await spawnAllWith("x", deps);
+      expect(rc).toBe(0);
+      expect(readFileSync(join(art, "spawn-results.tsv"), "utf8")).toContain("viola\tcodex\t0");
+    } finally { cleanup(); }
   });
 });
