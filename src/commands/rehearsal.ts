@@ -1,7 +1,7 @@
 // /consort:rehearsal CLI verbs (Phase B front half). Ports deep-research-init.sh
 // (slug/codex-gate/flags/scaffolding) + the deep-research.md Phase 0-3 surface.
 // Phase C: experiment-send (dispatch ONE experiment to a persistent codex part).
-import { accessSync, constants as fsConstants, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { log } from "../core/log.js";
@@ -13,6 +13,7 @@ import { extractMetric, formatMetricBlock, formatSotaBlock, parseMetricMd } from
 import { rehearsalArtDir, partsDir, partStateDir, experimentDir } from "../core/rehearsal.js";
 import { computeScore, type ScoreFs, type ScoreComputation } from "../core/rehearsalScore.js";
 import { parseState } from "../core/rehearsalState.js";
+import { initScanState, monitorScan, type MonitorScanState } from "../core/rehearsalMonitor.js";
 import {
   renderExperimentPrompt, buildSotaBlock, assembleHardwareBlock, hardwareDiffAlert,
   formatPeersBlock, buildDispatchState, EXP_ID_RE, INSTRUMENT_RE, type PeerRow,
@@ -492,6 +493,78 @@ export const liveScoreDeps: RehearsalScoreDeps = {
   now: () => isoUtc(),
 };
 
+// ---- Phase C: monitor — per-part liveness scan loop ----
+// Wires the pure monitorScan/initScanState (C6) into a CLI verb. The Monitor tool
+// launches this persistently per part; it loops, emitting notification JSON lines to
+// stdout, with the cursor + rescan-set persisted to disk for restart-survival.
+// This verb is the impure shell (Date.now/statSync/readFileSync/writeFileSync are fine).
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+export async function monitorRun(args: string[], opts?: { home?: string; cwd?: string }): Promise<number> {
+  // Strip --once anywhere so it's position-independent; the rest are the 2 positionals.
+  const once = args.includes("--once");
+  const pos = args.filter((a) => a !== "--once");
+  if (pos.length !== 2) { log.error("rehearsal monitor: usage: <topic> <instrument> [--once]"); return 2; }
+  const [topic, instrument] = pos;
+
+  const art = rehearsalArtDir(topic, opts);
+  if (!existsSync(art)) { log.error(`rehearsal monitor: art dir missing: ${art}`); return 2; }
+
+  const model = resolveModel(instrument, topic);
+  if (!model) { log.error(`rehearsal monitor: no part '${instrument}' on topic '${topic}' (resolveModel null)`); return 1; }
+  const outbox = outboxPath(instrument, model, topic);
+
+  const stateDir = partStateDir(art, instrument);
+  mkdirSync(stateDir, { recursive: true });
+  const cursorFile = join(stateDir, "liveness-cursor.txt");
+  const rescanFile = join(stateDir, "liveness-rescan-emitted.txt");
+  const stateTxt = join(stateDir, "state.txt");
+
+  const thresholds = {
+    probeS: Number(process.env.CONSORT_PROBE_S ?? 900),
+    stuckS: Number(process.env.CONSORT_STUCK_S ?? 1800),
+    rescanEveryS: Number(process.env.CONSORT_RESCAN_EVERY_S ?? 30),
+  };
+
+  const persist = (state: MonitorScanState): void => {
+    writeFileSync(cursorFile, String(state.offset));            // NO trailing newline
+    writeFileSync(rescanFile, [...state.rescanEmitted].join("\n"));
+  };
+
+  // Initial cursor restore + pre-seed from the whole outbox (size = BYTES).
+  const initBuf = existsSync(outbox) ? readFileSync(outbox) : Buffer.alloc(0);
+  let state = initScanState(
+    initBuf.length, initBuf.toString("utf8"),
+    existsSync(cursorFile) ? readFileSync(cursorFile, "utf8") : null,
+    existsSync(rescanFile) ? readFileSync(rescanFile, "utf8") : null,
+  );
+  persist(state);
+
+  do {
+    const buf = existsSync(outbox) ? readFileSync(outbox) : Buffer.alloc(0);
+    const size = buf.length;
+    const full = buf.toString("utf8");
+    const text = buf.subarray(state.offset).toString("utf8");
+    const mtime = existsSync(outbox) ? Math.floor(statSync(outbox).mtimeMs / 1000) : 0;
+    const phase = (existsSync(stateTxt) ? parseState(readFileSync(stateTxt, "utf8")).phase : "") ?? "";
+
+    const r = monitorScan(outbox, instrument, state, {
+      outboxText: text, outboxFullText: full, outboxSize: size, outboxMtime: mtime,
+      phase, now: Math.floor(Date.now() / 1000), nowIso: isoUtc(), thresholds,
+    });
+    for (const n of r.notifications) process.stdout.write(JSON.stringify(n) + "\n");
+
+    state = r.state;
+    persist(state);
+
+    if (once) break;
+    await sleep(2000);
+  } while (!once);
+
+  return 0;
+}
+
 export async function run(args: string[]): Promise<number> {
   const [verb, ...rest] = args;
   switch (verb) {
@@ -501,6 +574,7 @@ export async function run(args: string[]): Promise<number> {
     case "spawn-all": return spawnAllWith(rest, liveSpawnAllDeps);
     case "experiment-send": return experimentSendWith(applyArgsFile(rest), liveExperimentSendDeps);
     case "score": return scoreWith(rest, liveScoreDeps);
+    case "monitor": return monitorRun(rest);
     default: log.error(`rehearsal: unknown verb: ${verb ?? "(none)"}`); return 2;
   }
 }

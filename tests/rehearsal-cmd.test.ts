@@ -1,5 +1,5 @@
 // tests/rehearsal-cmd.test.ts — rehearsal CLI verbs (Phase B).
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { freshHome } from "./helpers/tmpHome.js";
 import { initWith, type RehearsalInitDeps } from "../src/commands/rehearsal.js";
@@ -7,6 +7,7 @@ import { metricWith, sotaWith } from "../src/commands/rehearsal.js";
 import { spawnAllWith, type SpawnAllDeps } from "../src/commands/rehearsal.js";
 import { experimentSendWith, type ExperimentSendDeps } from "../src/commands/rehearsal.js";
 import { scoreWith, liveScoreDeps } from "../src/commands/rehearsal.js";
+import { monitorRun } from "../src/commands/rehearsal.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { rehearsalArtDir, partStateDir } from "../src/core/rehearsal.js";
@@ -489,5 +490,89 @@ describe("rehearsal score", () => {
     writeFileSync(join(sd, "state.txt"), "phase=working\ncurrent_exp_id=exp-001\n");
     // NO experiments/ dir under solo -> live listDir must return [] not throw.
     expect(await scoreWith(["topic"], SCORE_OPTS(h))).toBe(0);
+  });
+});
+
+// ---- Phase C: monitor — per-part liveness scan loop (C7) ----
+
+describe("rehearsal monitor", () => {
+  const TOPIC = "mon-topic";
+  const INST = "viola";
+  const MODEL = "codex";
+  // resolveModel hashes process.cwd() (no cwd opt), so scaffold under process.cwd().
+  const opts = (h: { home: string }) => ({ home: h.home, cwd: process.cwd() });
+
+  /** Scaffold an in-flight topic with a live codex part (pane.json + outbox.jsonl carrying
+   *  one done event) and a working state.txt under the art's part state dir. */
+  function scaffold(h: { home: string }) {
+    const o = opts(h);
+    const art = rehearsalArtDir(TOPIC, o);
+    mkdirSync(art, { recursive: true });
+    const pd = partDir(INST, MODEL, TOPIC, o);
+    mkdirSync(pd, { recursive: true });
+    writeFileSync(join(pd, "pane.json"), JSON.stringify({ instrument: INST, model: MODEL, pane_id: "%1" }));
+    writeFileSync(join(pd, "outbox.jsonl"), '{"event":"done","summary":"finished","ts":"T"}\n');
+    const sd = partStateDir(art, INST);
+    mkdirSync(sd, { recursive: true });
+    writeFileSync(join(sd, "state.txt"), "phase=working\n");
+    return { art, pd, sd, o };
+  }
+
+  /** Capture process.stdout.write lines for the duration of fn. */
+  async function capture(fn: () => Promise<number>): Promise<{ rc: number; lines: string[] }> {
+    const lines: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+      lines.push(String(chunk));
+      return true;
+    });
+    try {
+      const rc = await fn();
+      return { rc, lines: lines.join("").split("\n").filter(Boolean) };
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it("--once: emits the existing done event past a 0 cursor and persists the byte cursor; rc 0", async () => {
+    const h = home();
+    const { sd, pd } = scaffold(h);
+    // Pre-seed the cursor at 0 so a fresh monitor's byte-tail sees the existing done line.
+    writeFileSync(join(sd, "liveness-cursor.txt"), "0");
+    const { rc, lines } = await capture(() => monitorRun([TOPIC, INST, "--once"], opts(h)));
+    expect(rc).toBe(0);
+    const events = lines.map((l) => JSON.parse(l) as { part: string; event: string });
+    expect(events.some((e) => e.part === INST && e.event === "done")).toBe(true);
+    // cursor advanced to the outbox byte size
+    const size = readFileSync(join(pd, "outbox.jsonl")).length;
+    expect(readFileSync(join(sd, "liveness-cursor.txt"), "utf8")).toBe(String(size));
+  });
+
+  it("wrong arg count -> rc 2", async () => {
+    const h = home();
+    scaffold(h);
+    const { rc } = await capture(() => monitorRun([TOPIC], opts(h)));
+    expect(rc).toBe(2);
+  });
+
+  it("missing art dir -> rc 2", async () => {
+    const h = home();
+    scaffold(h);
+    const { rc } = await capture(() => monitorRun(["nope", INST, "--once"], opts(h)));
+    expect(rc).toBe(2);
+  });
+
+  it("null model (no part dir) -> rc 1", async () => {
+    const h = home();
+    scaffold(h);
+    const { rc } = await capture(() => monitorRun([TOPIC, "ghost", "--once"], opts(h)));
+    expect(rc).toBe(1);
+  });
+
+  it("--once flag is position-independent (leading flag) -> rc 0", async () => {
+    const h = home();
+    const { sd } = scaffold(h);
+    writeFileSync(join(sd, "liveness-cursor.txt"), "0");
+    const { rc } = await capture(() => monitorRun(["--once", TOPIC, INST], opts(h)));
+    expect(rc).toBe(0);
   });
 });
