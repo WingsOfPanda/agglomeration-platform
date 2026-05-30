@@ -1,12 +1,14 @@
 // src/commands/playback.ts — /consort:playback verbs. survey = read-only list + trend digest;
 // archive = accrue trend + move surveyed files to .reviewed/. Logic lives in core/playback.ts.
 // Port of the prior plugin's review-forensics.sh + forensics-mark-reviewed.sh (review half).
-import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync, mkdirSync, renameSync, type Dirent } from "node:fs";
+import { join, dirname } from "node:path";
 import { log } from "../core/log.js";
 import { globalRoot } from "../core/paths.js";
+import { atomicWrite } from "../core/atomic.js";
 import {
-  parseForensicsFrontmatter, parseSince, parseTrendLedger, renderTrendDigest,
+  parseForensicsFrontmatter, parseMechanicalFindings, parseSince,
+  parseTrendLedger, accrue, renderTrendDigest, reviewedTarget,
 } from "../core/playback.js";
 
 function forensicsRoot(): string { return join(globalRoot(), "forensics"); }
@@ -57,6 +59,30 @@ export async function surveyWith(o: SurveyOpts): Promise<number> {
   return 0;
 }
 
+export interface ArchiveOpts { now?: Date; }
+
+export async function archiveWith(paths: string[], o: ArchiveOpts = {}): Promise<number> {
+  const root = forensicsRoot();
+  const ledger = parseTrendLedger(readLedgerText(root));
+  const date = (o.now ?? new Date()).toISOString().slice(0, 10);
+  let moved = 0;
+  for (const p of paths) {
+    const target = reviewedTarget(root, p);
+    if (target === null) { log.warn(`playback archive: skip (not under forensics root): ${p}`); continue; }
+    if (target === p) { log.info(`playback archive: already reviewed: ${p}`); continue; }
+    let text: string;
+    try { text = readFileSync(p, "utf8"); } catch { log.warn(`playback archive: skip (unreadable): ${p}`); continue; }
+    const findings = parseMechanicalFindings(text);
+    try { mkdirSync(dirname(target), { recursive: true }); renameSync(p, target); }
+    catch (e: any) { log.warn(`playback archive: move failed for ${p}: ${e?.message ?? e}`); continue; }
+    accrue(ledger, findings, date);                       // only after a successful move
+    moved++;
+  }
+  atomicWrite(join(root, ".trends.json"), JSON.stringify(ledger, null, 2) + "\n");
+  log.ok(`playback archive: ${moved} file(s) moved to .reviewed/, trend updated`);
+  return 0;
+}
+
 export async function run(args: string[]): Promise<number> {
   const verb = args[0]; const rest = args.slice(1);
   if (verb === "survey") {
@@ -68,6 +94,10 @@ export async function run(args: string[]): Promise<number> {
       else { log.error(`playback survey: unknown flag '${rest[i]}'`); return 2; }
     }
     return surveyWith(o);
+  }
+  if (verb === "archive") {
+    if (rest.length === 0) { log.error("usage: playback archive <path...>"); return 2; }
+    return archiveWith(rest);
   }
   log.error("usage: playback <survey|archive> ...");
   return 2;
