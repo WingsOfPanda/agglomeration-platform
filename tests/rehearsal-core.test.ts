@@ -11,6 +11,8 @@ import { formatSotaBlock } from "../src/core/rehearsalMetric.js";
 import { validateResult, type ResultJson } from "../src/core/rehearsalResult.js";
 import { renderScoreboardRow, buildScoreboard, type ScoreRow } from "../src/core/rehearsalResult.js";
 import { normalizeResult } from "../src/core/rehearsalResult.js";
+import { buildStatusBrief } from "../src/core/rehearsalBrief.js";
+import type { CompletionSignals } from "../src/core/rehearsalComplete.js";
 
 describe("rehearsal art-dir paths", () => {
   it("layers _rehearsal/parts/<instrument>/experiments/<exp-id>", () => {
@@ -776,5 +778,94 @@ describe("rehearsalMonitor", () => {
     const r = monitorScan("/o", "v", s, mkDeps({ outboxText: "", outboxFullText: full,
       outboxSize: Buffer.byteLength(full), phase: "idle", now: 1000 }));
     expect(r.notifications.find((n) => n.event === "done")).toBeUndefined();   // suppressed by pre-seed
+  });
+});
+
+describe("rehearsalBrief", () => {
+  const SIG: CompletionSignals = { floorMet: true, targetMet: false, kSoFar: 1, kRequired: 2, plateau: false };
+  const part = (over: Partial<import("../src/core/rehearsalBrief.js").PartBrief> = {}) => ({
+    instrument: "viola", phase: "idle", currentOrLast: "exp-001", approach: "baseline", metric: "0.95 ok", ...over,
+  });
+
+  it("header names the just-landed exp when latest is given", () => {
+    const out = buildStatusBrief({ parts: [], scoreboardMd: null, completion: SIG,
+      latest: { instrument: "viola", exp: "exp-003" } });
+    expect(out).toContain("## Experiment status — exp-003 (viola) just landed");
+  });
+
+  it("header is bare when latest is absent", () => {
+    const out = buildStatusBrief({ parts: [], scoreboardMd: null, completion: SIG });
+    expect(out).toContain("## Experiment status");
+    expect(out).not.toContain("just landed");
+  });
+
+  it("per-part table uses the rebranded | Part | header (NOT | Trooper |)", () => {
+    const out = buildStatusBrief({ parts: [part()], scoreboardMd: null, completion: SIG });
+    expect(out).toContain("| Part | Phase | Current/last | Approach | Metric |");
+    expect(out).toContain("|---|---|---|---|---|");
+    expect(out).not.toContain("| Trooper |");
+  });
+
+  it("a working part shows (running) in the metric cell", () => {
+    const out = buildStatusBrief({ parts: [part({ phase: "working", metric: "(running)" })],
+      scoreboardMd: null, completion: SIG });
+    expect(out).toContain("| viola | working | exp-001 | baseline | (running) |");
+  });
+
+  it("scoreboard null -> _(scoreboard absent)_", () => {
+    const out = buildStatusBrief({ parts: [], scoreboardMd: null, completion: SIG });
+    expect(out).toContain("**Scoreboard top 3:**");
+    expect(out).toContain("_(scoreboard absent)_");
+  });
+
+  it("scoreboard with no OK rows -> _(no scored experiments yet)_", () => {
+    const sb = [
+      "# Scoreboard", "",
+      "| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |",
+      "|---|---|---|---|---|---|---|---|",
+    ].join("\n") + "\n";
+    const out = buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG });
+    expect(out).toContain("_(no scored experiments yet)_");
+  });
+
+  it("scoreboard with 2 OK rows -> two <rank>. <instrument>/<exp> — <metric> — <metric_name> lines", () => {
+    const sb = [
+      "| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |",
+      "|---|---|---|---|---|---|---|---|",
+      "| 1 | exp-002 | viola | 0.9700 | ok | 12.00s | tuned | accuracy |",
+      "| 2 | exp-001 | cello | 0.9500 | ok | 10.00s | baseline | accuracy |",
+    ].join("\n") + "\n";
+    const out = buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG });
+    expect(out).toContain("1. viola/exp-002 — 0.9700 — accuracy");
+    expect(out).toContain("2. cello/exp-001 — 0.9500 — accuracy");
+  });
+
+  it("scoreboard top-3 caps at 3 rows", () => {
+    const rows = [1, 2, 3, 4].map((n) => `| ${n} | exp-00${n} | inst${n} | 0.9${n}00 | ok | 1.00s | a | accuracy |`);
+    const sb = [
+      "| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |",
+      "|---|---|---|---|---|---|---|---|",
+      ...rows,
+    ].join("\n") + "\n";
+    const out = buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG });
+    expect(out).toContain("3. inst3/exp-003");
+    expect(out).not.toContain("4. inst4/exp-004");
+  });
+
+  it("completion line renders yes/no booleans in field order", () => {
+    const out = buildStatusBrief({ parts: [], scoreboardMd: null, completion: SIG });
+    expect(out).toContain("**Completion check:** floor_met=yes target_met=no K_so_far=1 K_required=2 plateau=no");
+  });
+
+  it("completion null -> the absent line (no misleading all-no row)", () => {
+    const out = buildStatusBrief({ parts: [], scoreboardMd: null, completion: null });
+    expect(out).toContain("**Completion check:** _(scoreboard or metric absent)_");
+    expect(out).not.toContain("floor_met=");
+  });
+
+  it("ends with a single trailing newline", () => {
+    const out = buildStatusBrief({ parts: [part()], scoreboardMd: null, completion: SIG });
+    expect(out.endsWith("\n")).toBe(true);
+    expect(out.endsWith("\n\n")).toBe(false);
   });
 });
