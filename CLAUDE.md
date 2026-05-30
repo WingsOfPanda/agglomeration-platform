@@ -30,15 +30,20 @@ binaries behave exactly as they do under clone-wars.
 **Shipped:** the foundation (scaffold + `core/*` + the six primitives
 `spawn`/`send`/`collect`/`roster`/`coda`/`soundcheck` + `preflight`) and the high-level commands
 **`solo`** (was strike), **`score`** (consult), **`perform`** (deploy), **`playback`**
-(review-forensics), and **`rehearsal`** (deep-research) — each grounded by its own spec under
-`docs/superpowers/specs/` and a live dogfood. `rehearsal` ships the full A–D port: the six core
-`rehearsal*` modules + the verbs `init`/`metric`/`sota`/`spawn-all`/`experiment-send`/`score`/`monitor`/
+(review-forensics), **`rehearsal`** (deep-research), and **`prelude`** (meditate) — each grounded by
+its own spec under `docs/superpowers/specs/` and a live dogfood. `rehearsal` ships the full A–D port:
+the six core `rehearsal*` modules + the verbs `init`/`metric`/`sota`/`spawn-all`/`experiment-send`/`score`/`monitor`/
 `status-brief`/`finalize`/`refine`/`handoff-extract`/`forensics`/`teardown`/`fresh-part`/`abort`/`consensus`,
-the inline loop, and Phases 0–7 of `commands/rehearsal.md`.
+the inline loop, and Phases 0–7 of `commands/rehearsal.md`. `prelude` ships the five core `prelude*`
+modules (`prelude`/`preludeLit`/`preludeConfidence`/`preludeTurn`/`preludeHandoff`) + the verbs
+`init`/`classify`/`spawn-all`/`research-send`/`research-wait`/`synth-preliminary`/`confidence`/
+`adversary-send`/`adversary-wait`/`synth-final`/`forensics`/`teardown`/`handoff-extract`, the lit-track
+classifier, the 5-signal confidence gate, the adversary round, and Phases 0–10 of `commands/prelude.md`.
 
-**Still OUT OF SCOPE** until it gets its own spec under `docs/superpowers/specs/`: `prelude`
-(meditate) — the last unported command. Do **not** implement it, and do not import features across
-that boundary, without a new design doc. (This mirrors the clone-wars phase-guard convention.)
+**Fully ported.** Every clone-wars command now has a consort equivalent — there is no remaining
+unported command. New behavior beyond a faithful port still needs its own spec under
+`docs/superpowers/specs/`; do not import features across command boundaries without a design doc.
+(This preserves the clone-wars phase-guard convention even though the port is complete.)
 
 ## The musical rebrand (locked) — change everything cosmetic, freeze the protocol
 
