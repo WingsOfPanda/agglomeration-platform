@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { performArtDir } from "../src/core/perform.js";
 import {
-  siblingBaselineWith, siblingVerifyWith, type SiblingDeps,
+  siblingBaselineWith, siblingVerifyWith, siblingRescueWith, type SiblingDeps,
 } from "../src/commands/perform.js";
 import type { Runner, RunResult } from "../src/core/gitwork.js";
 
@@ -115,5 +115,76 @@ describe("perform sibling-baseline / sibling-verify", () => {
     };
     expect(await siblingVerifyWith("topic-d", hub, deps)).toBe(0);
     expect(readFileSync(join(art, "sibling-rogue.txt"), "utf8")).toBe("");
+  });
+});
+
+describe("perform sibling-rescue", () => {
+  let h: { home: string; cleanup: () => void };
+  let art: string;
+  let hub: string;
+  beforeEach(() => {
+    h = freshHome();
+    art = performArtDir("topic-d");
+    mkdirSync(art, { recursive: true });
+    hub = join(h.home, "hub");
+    mkdirSync(join(hub, "libx", ".git"), { recursive: true });
+    writeFileSync(join(art, "sibling-baseline.txt"), "libx\taaaa111\tmain\n");
+    writeFileSync(join(art, "sibling-rogue.txt"), "libx\tc2c2\tsecond rogue\nlibx\tc1c1\tfirst rogue\n");
+  });
+  afterEach(() => h.cleanup());
+
+  it("rescues each rogue slug via revertAndReplay; appends <slug>\\trescued", async () => {
+    const calls: string[][] = [];
+    const deps: SiblingDeps = {
+      runnerFor: (_cwd: string): Runner => ({
+        run(_cmd: string, args: string[]): RunResult {
+          calls.push(args);
+          // revertAndReplay happy path: no pre-existing rescue ref; all git ops succeed.
+          if (args[0] === "show-ref") return { code: 1, stdout: "" }; // rescue branch absent
+          return { code: 0, stdout: "" };
+        },
+      }),
+    };
+    const rc = await siblingRescueWith("topic-d", hub, deps);
+    expect(rc).toBe(0);
+    expect(readFileSync(join(art, "sibling-rescue.txt"), "utf8")).toBe("libx\trescued\n");
+    // rescue branch is created off the baseline SHA from sibling-baseline.txt.
+    const branchCreate = calls.find((a) => a[0] === "branch");
+    expect(branchCreate).toEqual(["branch", "feat/perform-topic-d-rescue", "aaaa111"]);
+    // load-bearing: the per-slug SHA list reaches revertAndReplay in sibling-rogue.txt
+    // row order (newest-first: c2c2 then c1c1), un-re-sorted → cherry-picked in that order.
+    const cherryPicks = calls.filter((a) => a[0] === "cherry-pick");
+    expect(cherryPicks).toEqual([["cherry-pick", "c2c2"], ["cherry-pick", "c1c1"]]);
+  });
+
+  it("records rescue-failed when revertAndReplay reports a pre-existing rescue branch", async () => {
+    const deps: SiblingDeps = {
+      runnerFor: (_cwd: string): Runner => ({
+        run(_cmd: string, args: string[]): RunResult {
+          if (args[0] === "show-ref") return { code: 0, stdout: "" }; // rescue branch EXISTS → rescue-exists
+          return { code: 0, stdout: "" };
+        },
+      }),
+    };
+    expect(await siblingRescueWith("topic-d", hub, deps)).toBe(0);
+    expect(readFileSync(join(art, "sibling-rescue.txt"), "utf8")).toBe("libx\trescue-failed\n");
+  });
+
+  it("rc 1 when sibling-rogue.txt is absent", async () => {
+    const h2 = freshHome();
+    mkdirSync(performArtDir("t2"), { recursive: true });
+    const deps: SiblingDeps = { runnerFor: (_c) => ({ run: () => ({ code: 0, stdout: "" }) }) };
+    expect(await siblingRescueWith("t2", join(h2.home, "hub"), deps)).toBe(1);
+    h2.cleanup();
+  });
+
+  it("rc 1 when sibling-baseline.txt is absent (rogue present)", async () => {
+    const h3 = freshHome();
+    const art3 = performArtDir("t3");
+    mkdirSync(art3, { recursive: true });
+    writeFileSync(join(art3, "sibling-rogue.txt"), "libx\tc1c1\tlone rogue\n"); // rogue present, baseline missing
+    const deps: SiblingDeps = { runnerFor: (_c) => ({ run: () => ({ code: 0, stdout: "" }) }) };
+    expect(await siblingRescueWith("t3", join(h3.home, "hub"), deps)).toBe(1);
+    h3.cleanup();
   });
 });
