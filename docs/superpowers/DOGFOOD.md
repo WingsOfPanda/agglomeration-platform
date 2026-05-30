@@ -414,3 +414,62 @@ ran `score drilldown drilltest Architecture <dd> <focus> <doc> viola codex`.
 - Phase F built subagent-driven: 4 fresh implementers (forensics core / drilldown core / command verbs /
   directive) each through two-stage review (spec → quality), all approved. The `score` command (A–F) is
   now complete; `perform`/`prelude`/`rehearsal`/`playback` remain as separate future commands.
+
+---
+
+# Consort `perform` — Phase B (single-repo) Dogfood Result
+
+**Date:** 2026-05-30 · **Branch:** `feat/perform` · **Verdict:** ✅ PASS (perform logic validated live)
+
+Live single-repo run of the `perform` command against a throwaway non-plugin git repo
+(`/tmp/perf-dogfood`, isolated `CONSORT_HOME`), a tiny audit-passing design doc, and real git/IPC.
+
+## Run
+
+| Stage | Result |
+|---|---|
+| `perform init` | ✅ rc 0; byte-perfect state files — `topic.txt` (no trailing `\n`, `od`-confirmed), `target_cwd.txt`/`provider.txt`/`multi-repo.txt` each `+\n`, `design.md` copied; `ROUTING=single PROVIDER=codex` |
+| `perform pre-snapshot` | ✅ `baselines/main.tsv` with the exact key order + `state=clean` + `baseline_sha` |
+| `perform branch` | ✅ created `feat/perform-perf-dogfood`, `perform-branches.tsv` + `branch-base.sha` recorded |
+| `perform turn-wait 1` | ✅ read the `done` event from the real outbox, gated `ok` on the non-empty `verify-report-1.md` → `TS=ok` + `.done` sentinel |
+| `perform scope-check` | ✅ correctly flagged `OOS_COUNT=2` (see finding below) — the drift-detection path |
+| `perform summary` | ✅ real per-target block: branch-changed WARNING, `35ed8fd (clean) → 9cbb962`, "2 files changed, 7 insertions(+)", commit list |
+| `perform finish keep` | ✅ `main → keep → kept`; feat branch preserved, repo restored to `master` |
+| `coda` | ✅ tore down + archived the part dir, handling the already-dead pane gracefully |
+| `perform archive` | ✅ moved `_perform` → `archive/.../_perform-<ts>` |
+
+## Scope of the live run
+
+The codex part-spawn itself was **blocked by an external-binary issue**, so the part's *completed
+turn* (the implementation commit on the feat branch + `verify-report-1.md` + the `done` outbox event)
+was stood in for by the conductor, and every `perform` verb downstream ran against the resulting real
+git/IPC state. All of Phase B's new logic — the `turn-wait` state machine + verify-report gating,
+`scope-check`, `summary`/`postSweep`/`formatSummaryBlock`, `finish`/`finishBranchAction`, and
+`archive` — is validated live; `init`/`pre-snapshot`/`branch` ran fully live with no simulation.
+
+## Findings / notes
+
+- **`scope-check` OOS_COUNT=2 is correct, not a bug.** `extractComponentsPaths` parses the markdown
+  **table** that `score` produces; the hand-written dogfood doc used a **bullet-list** Components
+  section, so 0 paths were declared and both changed files were (correctly) flagged as drift. The
+  table path is unit-covered (`tests/perform-scope.test.ts`); this run exercised the drift path. In a
+  real `score → perform` flow the Components table covers the diff.
+- **codex 0.135.0 directory-trust prompt blocks the live part-spawn (follow-up, not Phase B).** On an
+  untrusted target dir, `codex --dangerously-bypass-approvals-and-sandbox` shows a "Do you trust the
+  contents of this directory?" menu and never reaches `{ready}`; the frozen `spawn` primitive doesn't
+  answer it, and auto-trusting via `~/.codex/config.toml` is off-limits (standing user constraint).
+  This affects any `perform`/`score` dogfood whose target dir isn't already codex-trusted. Candidate
+  follow-ups: have `spawn` handle the trust prompt, or run dogfoods against a codex-trusted dir.
+- **Fixed a Phase-A defect during Phase B:** the `performTurn` BLOCKERS prompt referenced
+  `bin/part-ask.sh`/`bin/inbox-ack.sh` (a byte-faithful port of deploy's bin scripts) — but consort
+  parts emit events by appending JSONL directly to `outbox.jsonl`. Rewritten to instruct a direct
+  `{"event":"question",...}` / `{"event":"ack",...}` append (Task B1).
+
+## Verification context
+
+- **528 vitest unit tests green** (+ the perform command/turn/git/wind-down suites); `tsc --noEmit` 0,
+  eslint 0, stale-token gate (now scanning `commands/perform.md`) green; `dist/consort.cjs` rebuilt
+  (740.7kb) + committed so `/consort:perform` dispatches.
+- Phase B built subagent-driven: 3 implementers (B1 core extensions / B2a init+turn / B2b git+wind-down),
+  each through two-stage review (spec → quality), all SPEC PASS / QUALITY APPROVED. Single-repo
+  `perform` is complete; multi-repo DAG execution (Phase C) + verify/fix/finish (Phase D) remain.
