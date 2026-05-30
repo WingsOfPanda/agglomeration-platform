@@ -7,6 +7,7 @@ import { extractMetric, METRIC_VOCAB } from "../src/core/rehearsalMetric.js";
 import { formatMetricBlock, parseMetricMd } from "../src/core/rehearsalMetric.js";
 import { formatSotaBlock } from "../src/core/rehearsalMetric.js";
 import { validateResult, type ResultJson } from "../src/core/rehearsalResult.js";
+import { renderScoreboardRow, buildScoreboard, type ScoreRow } from "../src/core/rehearsalResult.js";
 
 describe("rehearsal art-dir paths", () => {
   it("layers _rehearsal/parts/<instrument>/experiments/<exp-id>", () => {
@@ -161,5 +162,43 @@ describe("validateResult", () => {
       .toMatchObject({ ok: false });
     expect(validateResult(okResult, { logPathExists: allExist, expectedMetric: "accuracy" }))
       .toEqual({ ok: true });
+  });
+});
+
+describe("renderScoreboardRow", () => {
+  it("formats numeric metric (%.4f) and runtime (%.2fs)", () => {
+    expect(renderScoreboardRow("0.985", "12.5", "accuracy", "ok", "cnn"))
+      .toBe("0.9850 | ok | 12.50s | cnn | accuracy");
+  });
+  it("passes non-numeric metric (n/a) through verbatim", () => {
+    expect(renderScoreboardRow("n/a", "3", "accuracy", "fail", "mlp"))
+      .toBe("n/a | fail | 3.00s | mlp | accuracy");
+  });
+});
+
+describe("buildScoreboard", () => {
+  const rows: ScoreRow[] = [
+    { expId: "exp-001", instrument: "oboe",  metric: "0.90", status: "ok",      runtime: "10", approach: "a", metricName: "accuracy" },
+    { expId: "exp-002", instrument: "viola", metric: "0.95", status: "ok",      runtime: "20", approach: "b", metricName: "accuracy" },
+    { expId: "exp-003", instrument: "oboe",  metric: "0.95", status: "ok",      runtime: "5",  approach: "c", metricName: "accuracy" },
+    { expId: "exp-004", instrument: "viola", metric: "",     status: "fail",    runtime: "2",  approach: "d", metricName: "accuracy" },
+    { expId: "exp-005", instrument: "oboe",  metric: "",     status: "partial", runtime: "1",  approach: "e", metricName: "accuracy" },
+  ];
+  it("orders ok rows metric-desc, then runtime-asc, then exp-id; ranks continue into fails", () => {
+    const sb = buildScoreboard(rows);
+    const lines = sb.split("\n").filter((l) => /^\| /.test(l) && !/Rank|---/.test(l));
+    // exp-003 (0.95,5s) and exp-002 (0.95,20s) tie on metric -> runtime asc puts exp-003 first.
+    expect(lines[0]).toContain("| 1 | exp-003 | oboe |");
+    expect(lines[1]).toContain("| 2 | exp-002 | viola |");
+    expect(lines[2]).toContain("| 3 | exp-001 | oboe |");
+    // fails sorted by exp-id; partial gets ~ prefix; rank counter continues.
+    expect(lines[3]).toContain("| 4 | exp-004 | viola |");   // plain fail
+    expect(lines[4]).toContain("| ~5 | exp-005 | oboe |");   // partial
+    expect(lines[3]).toContain("n/a | fail");
+  });
+  it("emits the schema header and 8-column table", () => {
+    const sb = buildScoreboard(rows);
+    expect(sb).toContain("<!-- scoreboard schema_version=2 -->");
+    expect(sb).toContain("| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |");
   });
 });
