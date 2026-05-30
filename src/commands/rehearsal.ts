@@ -3,6 +3,7 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
+import { applyArgsFile } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
 import { isoUtc } from "../core/archive.js";
 import { deriveSlug } from "../core/solo.js";
@@ -204,7 +205,7 @@ export async function spawnAllWith(args: string[], deps: SpawnAllDeps, opts?: Pa
 export async function run(args: string[]): Promise<number> {
   const [verb, ...rest] = args;
   switch (verb) {
-    case "init": return initWith(rest, liveInitDeps);
+    case "init": return initWith(applyArgsFile(rest), liveInitDeps);
     case "metric": return metricWith(rest);
     case "sota": return sotaWith(rest);
     case "spawn-all": return spawnAllWith(rest, liveSpawnAllDeps);
