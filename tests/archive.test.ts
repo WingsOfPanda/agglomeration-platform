@@ -75,3 +75,21 @@ describe("archiveTopic supports the score suite", () => {
     expect(moved).toBe(true);
   });
 });
+
+describe("archiveTopic supports the rehearsal suite", () => {
+  it("moves _rehearsal/ into the archive and returns the dest path", () => {
+    process.env.CONSORT_HOME = mkdtempSync(join(tmpdir(), "arch-rehearsal-"));
+    const topic = "rehearsal-demo";
+    const td = topicDir(topic);
+    const art = join(td, "_rehearsal");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "x.txt"), "x");
+    const dest = A.archiveTopic(topic, "rehearsal");
+    expect(dest).toMatch(/\/archive\/.+\/_rehearsal-\d{8}T\d{6}Z$/);
+    expect(existsSync(join(dest!, "x.txt"))).toBe(true);
+    // art subdir is moved out of the topic dir (topic dir itself is left empty,
+    // matching the score-suite behavior: rmdir-if-empty is best-effort)
+    expect(existsSync(art)).toBe(false);
+    expect(existsSync(td) ? readdirSync(td) : []).toEqual([]);
+  });
+});
