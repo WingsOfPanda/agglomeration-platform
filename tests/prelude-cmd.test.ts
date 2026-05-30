@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { freshHome } from "./helpers/tmpHome.js";
-import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, synthPreliminaryRun, confidenceRun, adversarySendWith, adversaryWaitWith, type PreludeInitDeps, type PreludeSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/prelude.js";
+import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, synthPreliminaryRun, confidenceRun, adversarySendWith, adversaryWaitWith, synthFinalRun, forensicsRun as preludeForensicsRun, teardownWith as preludeTeardownWith, handoffExtractRun, type PreludeInitDeps, type PreludeSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/prelude.js";
 import { preludeArtDir } from "../src/core/prelude.js";
 
 function initDeps(over: Partial<PreludeInitDeps> = {}): PreludeInitDeps {
@@ -239,5 +240,69 @@ describe("prelude adversary-send/wait", () => {
       expect(rc).toBe(0);
       expect(readFileSync(join(art, "adversary-viola.txt"), "utf8")).toContain("AS=missing");
     } finally { cleanup(); }
+  });
+});
+
+describe("prelude synth-final", () => {
+  it("rc0 when adversary ran and all critiques exist", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = preludeArtDir("x");
+      writeFileSync(join(art, "topic.txt"), "x"); writeFileSync(join(art, "landscape-draft.md"), "d");
+      writeFileSync(join(art, "adversary-skip.txt"), "user_decision: continue\n");
+      writeFileSync(join(art, "adversary-viola.md"), "c"); writeFileSync(join(art, "adversary-cello.md"), "c");
+      expect(await synthFinalRun(["x"])).toBe(0);
+    } finally { cleanup(); }
+  });
+  it("rc0 with only the draft when user_decision: skip", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = preludeArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "d");
+      writeFileSync(join(art, "adversary-skip.txt"), "user_decision: skip\n");
+      expect(await synthFinalRun(["x"])).toBe(0);
+    } finally { cleanup(); }
+  });
+  it("rc1 when adversary ran but a critique is missing", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = preludeArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "d");
+      writeFileSync(join(art, "adversary-skip.txt"), "user_decision: continue\n");
+      writeFileSync(join(art, "adversary-viola.md"), "c"); // cello missing
+      expect(await synthFinalRun(["x"])).toBe(1);
+    } finally { cleanup(); }
+  });
+});
+
+describe("prelude teardown", () => {
+  it("archives _prelude and prints the dest", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      let dest = "";
+      const rc = await preludeTeardownWith(["x"], {
+        killPane: async () => {}, archiveTopic: () => { dest = "/archive/x/_prelude-T"; return dest; },
+        stdout: (l) => { dest = l; },
+      });
+      expect(rc).toBe(0);
+      expect(dest).toContain("_prelude");
+    } finally { cleanup(); }
+  });
+});
+
+describe("prelude forensics", () => {
+  it("rc2 when no topic is given", async () => {
+    expect(await preludeForensicsRun([])).toBe(2);
+  });
+});
+
+describe("prelude handoff-extract", () => {
+  it("rc2 on a missing art-dir / no topic.txt", async () => {
+    const art = mkdtempSync(join(tmpdir(), "prelude-empty-"));
+    expect(await handoffExtractRun([art])).toBe(2);
   });
 });
