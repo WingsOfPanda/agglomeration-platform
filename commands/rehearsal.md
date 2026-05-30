@@ -9,8 +9,8 @@ allowed-tools: Bash, Write, Read, Edit, AskUserQuestion, WebSearch, Skill
 Run an executable research session: you (the Maestro, the conductor) lock a metric with the user, sweep
 the SOTA, spawn 2-3 persistent **codex parts** (PhD-student executors) once, then adaptively dispatch
 single-config **experiments** until a stop condition fires. **Explore-only** — never touch the user's real
-source. This directive covers Phases 0-4 (setup + spawn + the adaptive experiment loop); the wind-down
-(Phases 5-7: synthesis + teardown + handoff) is the remaining tail (Phase D, added next).
+source. This directive covers Phases 0-4 (setup + spawn + the adaptive experiment loop) plus the wind-down
+(Phases 5-7: synthesis + teardown + handoff), now shipped.
 
 Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs"`.
 
@@ -142,12 +142,10 @@ notification arrives, continue to Step 2 with it queued.
 IF `$ART/halt.flag` exists OR the time budget has elapsed (`now - session-start >= time-budget`, unless
 the budget is `none`):
 1. `$CS rehearsal score <TOPIC>` — write the final scoreboard.
-2. **`TaskStop` every task ID in `$ART/monitor-tasks.txt`** (the `TaskStop` tool is a harness primitive,
+2. `$CS rehearsal finalize <TOPIC>` — reconcile + normalize + final session-summary (`## Halt`).
+3. **`TaskStop` every task ID in `$ART/monitor-tasks.txt`** (the `TaskStop` tool is a harness primitive,
    one call per ID; idempotent).
-3. Proceed to synthesis + teardown. **Synthesis (Phase 5), teardown (Phase 6), and the `finalize` /
-   `handoff` verbs are Phase D — added next.** For now: read the final `$ART/scoreboard.md`, present the
-   final scoreboard + the winner row to the user, and note that the wind-down tail (synthesis doc +
-   `coda` teardown + handoff) is pending. **EXIT THE LOOP** (this is a real stop).
+4. Proceed to Phase 5 → 6 → 6b → 6c → 7 below. **EXIT THE LOOP** (this is a real stop).
 
 ### Step 3 — Process the queued notification(s)
 Initialize `RAN_SCORE=0`, `LAST_INSTRUMENT=`, `LAST_EXP=`. Route each queued notification by event type:
@@ -243,5 +241,104 @@ Recent events) plus a filled `## Current direction` (1-3 sentence strategy note)
 **Go to Step 1. Do NOT end the turn.** The loop continues blocking on the next notification and repeats
 Steps 1-8 until Step 2 (halt.flag / time budget) or Step 4 (completion-check stop) exits it.
 
-> Phases 5-7 (synthesis doc → `coda` teardown → handoff) are the remaining tail (Phase D, added next).
-> Until then, Step 2's exit presents the final scoreboard + winner and notes the wind-down is pending.
+## Phase 5 — Synthesis (landscape doc)
+
+The loop has exited via Step 2 (`score` + `finalize` already ran). As Maestro, **Write** the landscape
+doc `$ART/rehearsal-<date>-<slug>.md` (`<date>` = UTC `YYYY-MM-DD`, `<slug>` = `$TOPIC`) with the Write
+tool — atomic single-shot — drawing on `$ART/session-summary.md` (the rolling continuity record + Recent
+decisions) and the final `$ART/scoreboard.md`. Each section below is REQUIRED.
+
+H1: `# Rehearsal: <slug-titled>` (the slug, title-cased). Then the header lines, each on its own line:
+
+```markdown
+**Generated:** <ISO-8601 UTC>
+**Topic:** <verbatim from $ART/topic.txt>
+
+**Metric block:**
+
+<verbatim $ART/metric.md body>
+
+**Roster:** <comma-separated instrument names from $ART/parts.txt>
+**Time budget:** <none | N hours, from $ART/time-budget.txt>
+**Outcome:** stopped-by-user | converged-by-judgment | time-budget-exhausted
+```
+
+Then the sections, IN ORDER:
+
+- `## Experiment log` — a table `| Exp | Instrument | Approach | Metric | Status | Runtime |`, one row per
+  experiment in chronological order (walk each part's `experiments/` dirs, lex-sorted).
+- `## Winner` — names `exp-NNN (instrument <instrument>)`, then `Approach:` (label), `Metric:` (value),
+  `Code path:` (`parts/<instrument>/experiments/<exp>/code/` — the absolute archive path is baked in at
+  Phase 6), `Runtime:`, and `Notes:` verbatim from that experiment's `result.json`.
+- `## Why we stopped` — one paragraph in Maestro's voice, citing the relevant `exp-NNN` rows from the
+  scoreboard.
+- `## Branches preserved` — note that all dirs under each part's `parts/<instrument>/experiments/` are
+  kept in the archive (each holds `code/`, `result.json`, `stdout.log`, `stderr.log`, `prompt.md`).
+- `## Suggested next` —
+  **Step 1** — `/consort:score <abs-art-dir>/score-handoff.md` (produce a deploy-schema design doc).
+  **Step 2** — `/consort:perform <abs path to score's design-doc>` (implement it).
+  (Skip Step 1 ONLY if the winner is drop-in trivial; the `score-handoff.md` lists carry-forward
+  constraints and open questions `score` should answer first.)
+
+## Phase 6 — Teardown + archive
+
+1. **`TaskStop` every task ID** in `$ART/monitor-tasks.txt` (harness tool, one call per ID; idempotent —
+   `finalize` already ran at the loop exit, so the monitors may already be down).
+2. **Forensics + reflection (best-effort).** `$CS rehearsal forensics <TOPIC>`. If it printed a path, use
+   the **Edit tool** to APPEND a `## Maestro reflection` section to that file — 3-5 short bullets
+   interpreting the mechanical findings — BEFORE the teardown below moves the art dir.
+3. **Pane teardown.** `$CS coda --pairs <TOPIC> <instruments from $ART/parts.txt>` — one 9s graceful
+   **FINE** banner across all panes (not N × 9s).
+4. **Archive.** `$CS rehearsal teardown <TOPIC>` — capture its stdout as `ARCHIVED_ART`; verify it is a
+   real directory. **Rebind `$ART = ARCHIVED_ART`** for Phases 6b/6c (the teardown `mv` moved
+   `_rehearsal` into the archive, preserving every `parts/<instrument>/` subtree plus `session-summary.md`,
+   `monitor-tasks.txt`, and the final scoreboard).
+5. **Bake absolute paths.** **Read** the landscape doc inside the archive, then **Edit** it to make the
+   `## Suggested next` paths absolute (the `score-handoff.md` location + the `parts/<instrument>/.../code/`
+   winner path), now that `$ART` is the archive location.
+
+## Phase 6b — Extract handoff data
+
+`$CS rehearsal handoff-extract "$ART"` — pass the **rebound archived art-dir** as the positional (this verb
+takes the art-dir path, NOT a topic; per-experiment `result.json` is resolved relative to it). It writes
+`$ART/handoff-data.kv` (mechanical fields: `mode`, `topic`, `landscape_doc`, `winner_instrument`,
+`winner_exp`, `winner_approach`, `winner_metric`, `winner_checkpoint`, `winner_notes`, `winner_code_dir`,
+`runner_up_1..3`, `mandates_block_path`, `session_path`, `topic_txt_path`, `generated_ts`). A non-zero rc
+means required inputs were missing — note it and **SKIP Phase 6c** (warn, do not crash).
+
+## Phase 6c — Compose score-handoff.md
+
+Read `$ART/handoff-data.kv` (mechanical facts) AND the landscape doc (identified by `landscape_doc=`). As
+Maestro, **Write** `$ART/score-handoff.md` with the Write tool. Six sections IN ORDER:
+
+- `## Recommendation` — 1-3 paragraphs of English prose (no bullets). Names the winner. States what to
+  plan for. Past tense for evidence, active voice.
+- `## Recipe` — prescriptive distillation (technique to adopt, decisive design choices, key
+  hyperparameters, named techniques). Cite code paths as `$ART/<winner_code_dir>` (see Appendix); do NOT
+  inline code. **OMIT this whole section** when there is no winner.
+- `## Constraints (carry-forward)` — inline the Hard-constraints block from `metric.md` (at
+  `$ART/<mandates_block_path>`) verbatim; append any numeric guards / at-risk violations from
+  `winner_notes`.
+- `## Open questions` — **CONDITIONAL.** Emit ONLY when research surfaced unresolved planning decisions
+  that `score`'s drilldown will not naturally close (inspect the landscape doc + `winner_notes`). If
+  research closed everything, **OMIT the WHOLE section** — no header, no `_(none)_` stub.
+- `## Evidence` — a table `| Rank | Instrument/Exp | Metric | Approach | Status |` (winner + runner-ups
+  from the KV), then a one-line `Winner emergence:` (rounds run, key delta vs the top runner-up, stop
+  reason if known from the landscape doc).
+- `## Appendix: artifacts` — **ALL ABSOLUTE PATHS.** Interpolate each KV value as `$ART/<value>` (where
+  `$ART` is the rebound archive dir). Do NOT prefix, transform, or rewrite paths. If a KV value already
+  starts with `/` (e.g. `winner_checkpoint` may be absolute via the leading-slash guard), emit it
+  verbatim WITHOUT prepending `$ART`.
+
+**No-winner branch** (`mode=rehearsal-no-winner` in `handoff-data.kv`): `## Recommendation` reads "No
+deployable winner. Research ended without a `status=ok` row in the scoreboard — see Evidence for what was
+tried and why each attempt fell short." **OMIT `## Recipe`** entirely. `## Evidence` shows the partial/fail
+rows with their failure modes.
+
+## Phase 7 — Present
+
+Show the user:
+- The path to the archived landscape doc (`$ART/rehearsal-<date>-<slug>.md`).
+- The path to the winning experiment's `code/` directory.
+- The `## Suggested next` line VERBATIM.
+- A one-line outcome summary: outcome + best-metric + delta vs the FIRST experiment.
