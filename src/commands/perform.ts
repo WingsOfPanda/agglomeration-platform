@@ -245,14 +245,40 @@ export async function branchWith(a: { topic: string; noBranch: boolean; branchNa
 export interface ScopeDeps { runnerFor(cwd: string): Runner; }
 const liveScopeDeps: ScopeDeps = { runnerFor: runnerAt };
 async function scopeCheckRun(rest: string[]): Promise<number> { const topic = rest[0]; if (!topic) { log.error("usage: perform scope-check <topic>"); return 2; } return scopeCheckWith(topic, liveScopeDeps); }
+/**
+ * Scope conformance: collect the diff path set, then match it against the design's Components
+ * paths. Multi-repo (parts.txt present) collects each declared sub-repo's diff and prefixes every
+ * path with `<repo>/` (repo = basename(cwd)); single-repo path stays byte-identical (deploy.sh
+ * `deploy.md:1304-1319` multi-repo diff-collection branch). Per-part baseline SHA comes from
+ * `baselines/<slug>.tsv` field `baseline_sha` (the single `branch-base.sha` is last-target-wins for
+ * multi and must NOT be used per-repo).
+ */
 export async function scopeCheckWith(topic: string, d: ScopeDeps): Promise<number> {
   const art = performArtDir(topic);
-  const targetFile = join(art, "target_cwd.txt"), baseFile = join(art, "branch-base.sha"), designFile = join(art, "design.md");
-  if (!existsSync(targetFile) || !existsSync(baseFile)) { log.error(`perform scope-check: target_cwd.txt/branch-base.sha missing under ${art}`); return 1; }
-  if (!existsSync(designFile)) { log.error(`perform scope-check: design.md missing under ${art}`); return 1; }
-  const targetCwd = readFileSync(targetFile, "utf8").split("\n")[0].trim();
-  const base = readFileSync(baseFile, "utf8").split("\n")[0].trim();
-  const diffPaths = d.runnerFor(targetCwd).run("git", ["diff", "--name-only", `${base}..HEAD`]).stdout.split("\n").filter((x) => x.length > 0);
+  const designFile = join(art, "design.md");
+  const partsFile = join(art, "parts.txt");
+  let diffPaths: string[];
+  if (existsSync(partsFile)) {
+    // Multi-repo (deploy.md:1304-1313): per-sub-repo diff, prefixed with the repo slug.
+    if (!existsSync(designFile)) { log.error(`perform scope-check: design.md missing under ${art}`); return 1; }
+    diffPaths = [];
+    for (const t of iterTargets(topic)) {
+      if (!t.slug || !t.cwd) continue;
+      const base = kvFileField(join(art, "baselines", `${t.slug}.tsv`), "baseline_sha");
+      if (!base) continue;
+      const repo = basename(t.cwd);
+      const sub = d.runnerFor(t.cwd).run("git", ["diff", "--name-only", `${base}..HEAD`]).stdout.split("\n").filter((x) => x.length > 0);
+      for (const p of sub) diffPaths.push(`${repo}/${p}`);
+    }
+  } else {
+    // Single-repo — UNCHANGED behavior (target_cwd.txt + branch-base.sha).
+    const targetFile = join(art, "target_cwd.txt"), baseFile = join(art, "branch-base.sha");
+    if (!existsSync(targetFile) || !existsSync(baseFile)) { log.error(`perform scope-check: target_cwd.txt/branch-base.sha missing under ${art}`); return 1; }
+    if (!existsSync(designFile)) { log.error(`perform scope-check: design.md missing under ${art}`); return 1; }
+    const targetCwd = readFileSync(targetFile, "utf8").split("\n")[0].trim();
+    const base = readFileSync(baseFile, "utf8").split("\n")[0].trim();
+    diffPaths = d.runnerFor(targetCwd).run("git", ["diff", "--name-only", `${base}..HEAD`]).stdout.split("\n").filter((x) => x.length > 0);
+  }
   atomicWrite(join(art, "diff-paths.txt"), diffPaths.length ? diffPaths.join("\n") + "\n" : "");
   const compPaths = extractComponentsPaths(readFileSync(designFile, "utf8"));
   atomicWrite(join(art, "components-paths.txt"), compPaths.length ? compPaths.join("\n") + "\n" : "");
