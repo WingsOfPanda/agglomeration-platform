@@ -233,6 +233,11 @@ export async function researchWaitWith(topic: string, instrument: string, provid
   return 0;
 }
 
+/** Roster rows whose `<prefix>-<instrument>.md` art file is missing/empty → list of the missing filenames. */
+function missingRosterArtifacts(art: string, rows: RosterRow[], prefix: string): string[] {
+  return rows.filter((r) => !readIf(join(art, `${prefix}-${r.instrument}.md`)).trim()).map((r) => `${prefix}-${r.instrument}.md`);
+}
+
 // ---- synth-preliminary (input validator) ----
 export async function synthPreliminaryRun(rest: string[]): Promise<number> {
   const topic = rest[0];
@@ -243,7 +248,7 @@ export async function synthPreliminaryRun(rest: string[]): Promise<number> {
     if (!readIf(join(art, f)).trim()) { log.error(`prelude synth-preliminary: missing or empty: ${join(art, f)}`); return 1; }
   }
   const rows = parseRosterFile(readIf(join(art, "roster.txt")));
-  const missing = rows.filter((r) => !readIf(join(art, `findings-${r.instrument}.md`)).trim()).map((r) => `findings-${r.instrument}.md`);
+  const missing = missingRosterArtifacts(art, rows, "findings");
   if (missing.length) {
     log.error("prelude synth-preliminary: blocked — missing or empty findings:");
     for (const m of missing) log.error(`  - ${join(art, m)}`);
@@ -355,7 +360,7 @@ export async function synthFinalRun(rest: string[]): Promise<number> {
   const skipped = /^user_decision: skip$/m.test(readIf(join(art, "adversary-skip.txt")));
   if (!skipped) {
     const rows = parseRosterFile(readIf(join(art, "roster.txt")));
-    const missing = rows.filter((r) => !readIf(join(art, `adversary-${r.instrument}.md`)).trim()).map((r) => `adversary-${r.instrument}.md`);
+    const missing = missingRosterArtifacts(art, rows, "adversary");
     if (missing.length) {
       log.error("prelude synth-final: blocked — adversary ran but critiques missing:");
       for (const m of missing) log.error(`  - ${join(art, m)}`);

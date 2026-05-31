@@ -22747,6 +22747,10 @@ __export(rehearsal_exports, {
   statusBriefWith: () => statusBriefWith,
   teardownWith: () => teardownWith
 });
+function usage4() {
+  log.error("usage: rehearsal <init|metric|sota|spawn-all|experiment-send|score|monitor|status-brief|finalize|refine|handoff-extract|teardown|fresh-part|forensics|abort|consensus> ...");
+  return 2;
+}
 function parseInitArgs(args) {
   let topic = "";
   let seedFrom, timeBudget, metric, slug, badFlag;
@@ -24040,8 +24044,7 @@ async function run13(args) {
     case "consensus":
       return consensusWith(rest, liveConsensusDeps);
     default:
-      log.error(`rehearsal: unknown verb: ${verb ?? "(none)"}`);
-      return 2;
+      return usage4();
   }
 }
 var import_node_fs35, import_node_child_process9, import_node_path32, liveInitDeps4, liveSpawnAllDeps2, liveExperimentSendDeps, liveScoreDeps, sleep4, GIB, liveFinalizeDeps, liveRefineDeps, liveHandoffDeps, liveTeardownDeps, liveFreshPartDeps, liveAbortDeps, liveConsensusDeps;
@@ -24518,7 +24521,7 @@ __export(prelude_exports, {
   synthPreliminaryRun: () => synthPreliminaryRun,
   teardownWith: () => teardownWith2
 });
-function usage4() {
+function usage5() {
   log.error("usage: prelude <init|classify|spawn-all|research-send|research-wait|synth-preliminary|confidence|adversary-send|adversary-wait|synth-final|forensics|teardown|handoff-extract> ...");
   return 2;
 }
@@ -24553,7 +24556,7 @@ async function run14(args) {
     case "handoff-extract":
       return handoffExtractRun(rest);
     default:
-      return usage4();
+      return usage5();
   }
 }
 async function initRun4(tokens) {
@@ -24746,6 +24749,9 @@ FS=question
   log.ok(`prelude research-wait: ${instrument} FS=${fs}`);
   return 0;
 }
+function missingRosterArtifacts(art, rows, prefix) {
+  return rows.filter((r) => !readIfExists((0, import_node_path35.join)(art, `${prefix}-${r.instrument}.md`)).trim()).map((r) => `${prefix}-${r.instrument}.md`);
+}
 async function synthPreliminaryRun(rest) {
   const topic = rest[0];
   if (!topic) {
@@ -24764,7 +24770,7 @@ async function synthPreliminaryRun(rest) {
     }
   }
   const rows = parseRosterFile(readIfExists((0, import_node_path35.join)(art, "roster.txt")));
-  const missing = rows.filter((r) => !readIfExists((0, import_node_path35.join)(art, `findings-${r.instrument}.md`)).trim()).map((r) => `findings-${r.instrument}.md`);
+  const missing = missingRosterArtifacts(art, rows, "findings");
   if (missing.length) {
     log.error("prelude synth-preliminary: blocked \u2014 missing or empty findings:");
     for (const m of missing) log.error(`  - ${(0, import_node_path35.join)(art, m)}`);
@@ -24908,7 +24914,7 @@ async function synthFinalRun(rest) {
   const skipped = /^user_decision: skip$/m.test(readIfExists((0, import_node_path35.join)(art, "adversary-skip.txt")));
   if (!skipped) {
     const rows = parseRosterFile(readIfExists((0, import_node_path35.join)(art, "roster.txt")));
-    const missing = rows.filter((r) => !readIfExists((0, import_node_path35.join)(art, `adversary-${r.instrument}.md`)).trim()).map((r) => `adversary-${r.instrument}.md`);
+    const missing = missingRosterArtifacts(art, rows, "adversary");
     if (missing.length) {
       log.error("prelude synth-final: blocked \u2014 adversary ran but critiques missing:");
       for (const m of missing) log.error(`  - ${(0, import_node_path35.join)(art, m)}`);

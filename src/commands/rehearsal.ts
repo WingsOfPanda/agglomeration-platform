@@ -40,6 +40,11 @@ import { run as codaRun } from "./coda.js";
 
 type PathOpts = { home?: string; cwd?: string };
 
+function usage(): number {
+  log.error("usage: rehearsal <init|metric|sota|spawn-all|experiment-send|score|monitor|status-brief|finalize|refine|handoff-extract|teardown|fresh-part|forensics|abort|consensus> ...");
+  return 2;
+}
+
 export interface RehearsalInitDeps {
   haveCmd(name: string): boolean;
   instrumentBinary(name: string): string | undefined;
@@ -1431,6 +1436,6 @@ export async function run(args: string[]): Promise<number> {
     case "forensics": return forensicsRun(rest);
     case "abort": return abortWith(applyArgsFile(rest), liveAbortDeps);
     case "consensus": return consensusWith(rest, liveConsensusDeps);
-    default: log.error(`rehearsal: unknown verb: ${verb ?? "(none)"}`); return 2;
+    default: return usage();
   }
 }
