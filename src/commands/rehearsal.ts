@@ -144,7 +144,7 @@ export async function initWith(args: string[], deps: RehearsalInitDeps): Promise
 const liveInitDeps: RehearsalInitDeps = {
   haveCmd, instrumentBinary,
   now: () => isoUtc(),
-  configRoot: () => process.env.CLAUDE_PLUGIN_ROOT ?? process.cwd(),
+  configRoot: () => pluginRoot(),
 };
 
 interface VerbOpts { opts?: PathOpts }
@@ -1200,10 +1200,11 @@ export async function teardownWith(args: string[], deps: RehearsalTeardownDeps):
   const pf = join(art, "preflight-panes.txt");
   if (existsSync(pf)) {
     for (const line of readFileSync(pf, "utf8").split("\n")) {
-      const pane = line.trim();
+      const pane = (line.split("\t")[1] ?? "").trim();   // line is "<instrument>\t<pane>"
       if (!pane) continue;
       try { await deps.killPane(pane); } catch { /* best-effort */ }
     }
+    try { rmSync(pf, { force: true }); } catch { /* best-effort */ }
   }
 
   // 2. shared/ sweep (best-effort): drop *.tmp / *.lock leak shapes (depth <= 2).
