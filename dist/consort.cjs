@@ -23410,6 +23410,137 @@ function fileCountDepth1(dir) {
     return 0;
   }
 }
+function normalizeResults(art, instruments) {
+  for (const instrument of instruments) {
+    const expsRoot = experimentsDir(art, instrument);
+    for (const expId of listExpDirs(expsRoot)) {
+      const resultPath = (0, import_node_path32.join)(expsRoot, expId, "result.json");
+      if (!(0, import_node_fs35.existsSync)(resultPath)) continue;
+      let parsed;
+      try {
+        parsed = JSON.parse((0, import_node_fs35.readFileSync)(resultPath, "utf8"));
+      } catch {
+        continue;
+      }
+      const norm = normalizeResult(parsed);
+      if (norm.status !== parsed.status || norm.metric_value !== parsed.metric_value) {
+        atomicWrite(resultPath, JSON.stringify(norm));
+        log.info(`normalize: ${instrument}/${expId} -> ${norm.status}`);
+      }
+    }
+  }
+}
+function pruneIntermediate(art, instruments) {
+  for (const instrument of instruments) {
+    const expsRoot = experimentsDir(art, instrument);
+    for (const expId of listExpDirs(expsRoot)) {
+      const expDir = (0, import_node_path32.join)(expsRoot, expId);
+      const resultPath = (0, import_node_path32.join)(expDir, "result.json");
+      if (!(0, import_node_fs35.existsSync)(resultPath)) continue;
+      let keptRel;
+      try {
+        const r = JSON.parse((0, import_node_fs35.readFileSync)(resultPath, "utf8"));
+        keptRel = r.checkpoint_path != null ? String(r.checkpoint_path) : "";
+      } catch {
+        continue;
+      }
+      if (!keptRel || keptRel === "null") continue;
+      const keptAbs = (0, import_node_path32.resolve)(expDir, keptRel);
+      if (keptAbs !== expDir && !keptAbs.startsWith(expDir + "/")) {
+        log.warn(`prune: checkpoint_path escapes exp dir: ${keptRel} (in ${expDir}); skipping`);
+        continue;
+      }
+      let entries;
+      try {
+        entries = (0, import_node_fs35.readdirSync)(expDir);
+      } catch {
+        continue;
+      }
+      for (const name of entries) {
+        if (!name.endsWith(".pt")) continue;
+        const pt = (0, import_node_path32.join)(expDir, name);
+        if (pt === keptAbs) continue;
+        try {
+          if ((0, import_node_fs35.statSync)(pt).isFile()) (0, import_node_fs35.rmSync)(pt, { force: true });
+        } catch {
+        }
+      }
+    }
+  }
+}
+function linkPaneArtifacts(art, instruments, topic) {
+  for (const instrument of instruments) {
+    const model = resolveModel(instrument, topic);
+    if (!model) continue;
+    const targetDir = partStateDir(art, instrument);
+    (0, import_node_fs35.mkdirSync)(targetDir, { recursive: true });
+    const paneFiles = [
+      ["outbox.jsonl", outboxPath(instrument, model, topic)],
+      ["inbox.md", inboxPath(instrument, model, topic)]
+    ];
+    for (const [name, src] of paneFiles) {
+      if (!(0, import_node_fs35.existsSync)(src)) {
+        log.warn(`link_pane_artifacts: pane file missing for ${instrument}: ${name}`);
+        continue;
+      }
+      const linkPath = (0, import_node_path32.join)(targetDir, name);
+      const rel = (0, import_node_path32.relative)(targetDir, src);
+      try {
+        try {
+          if ((0, import_node_fs35.lstatSync)(linkPath)) (0, import_node_fs35.unlinkSync)(linkPath);
+        } catch {
+        }
+        (0, import_node_fs35.symlinkSync)(rel, linkPath);
+      } catch {
+      }
+    }
+  }
+}
+function computeSizeWarnings(art, instruments, threshold) {
+  const warningsPath = (0, import_node_path32.join)(art, "warnings.txt");
+  const sizeLines = [];
+  for (const instrument of instruments) {
+    const expsRoot = experimentsDir(art, instrument);
+    for (const expId of listExpDirs(expsRoot)) {
+      const expDir = (0, import_node_path32.join)(expsRoot, expId);
+      const bytes = dirByteSize(expDir);
+      if (bytes >= threshold) {
+        const gb = (bytes / GIB).toFixed(1);
+        sizeLines.push(`size_warn	${instrument}/${expId}	${gb}	${fileCountDepth1(expDir)}`);
+      }
+    }
+  }
+  atomicWrite(warningsPath, sizeLines.length ? sizeLines.join("\n") + "\n" : "");
+}
+function computeAuditWarnings(art, instruments, warningsPath) {
+  const auditLines = [];
+  for (const instrument of instruments) {
+    const expsRoot = experimentsDir(art, instrument);
+    for (const expId of listExpDirs(expsRoot)) {
+      const expDir = (0, import_node_path32.join)(expsRoot, expId);
+      const promptMd = (0, import_node_path32.join)(expDir, "prompt.md");
+      const auditJson = (0, import_node_path32.join)(expDir, "audit.json");
+      if (!(0, import_node_fs35.existsSync)(promptMd) || !(0, import_node_fs35.existsSync)(auditJson)) continue;
+      let audit;
+      try {
+        audit = JSON.parse((0, import_node_fs35.readFileSync)(auditJson, "utf8"));
+      } catch {
+        continue;
+      }
+      for (const { key, value } of parseHardConstraints((0, import_node_fs35.readFileSync)(promptMd, "utf8"))) {
+        const actual = audit[key];
+        if (actual == null || String(actual) === "null") continue;
+        if (String(value) !== String(actual)) {
+          auditLines.push(`audit_warn	${instrument}/${expId}	${key}	prompt=${value}  actual=${String(actual)}`);
+        }
+      }
+    }
+  }
+  if (auditLines.length) {
+    const existing = readOr(warningsPath);
+    atomicWrite(warningsPath, existing + auditLines.join("\n") + "\n");
+  }
+}
 async function finalizeWith(args, deps) {
   const opts = deps.opts;
   let keep = deps.keepIntermediate ?? false;
@@ -23456,130 +23587,12 @@ async function finalizeWith(args, deps) {
     const np = finalizePhase(phase);
     if (np) atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: np }));
   }
-  for (const instrument of instruments) {
-    const expsRoot = experimentsDir(art, instrument);
-    for (const expId of listExpDirs(expsRoot)) {
-      const resultPath = (0, import_node_path32.join)(expsRoot, expId, "result.json");
-      if (!(0, import_node_fs35.existsSync)(resultPath)) continue;
-      let parsed;
-      try {
-        parsed = JSON.parse((0, import_node_fs35.readFileSync)(resultPath, "utf8"));
-      } catch {
-        continue;
-      }
-      const norm = normalizeResult(parsed);
-      if (norm.status !== parsed.status || norm.metric_value !== parsed.metric_value) {
-        atomicWrite(resultPath, JSON.stringify(norm));
-        log.info(`normalize: ${instrument}/${expId} -> ${norm.status}`);
-      }
-    }
-  }
-  if (!keep) {
-    for (const instrument of instruments) {
-      const expsRoot = experimentsDir(art, instrument);
-      for (const expId of listExpDirs(expsRoot)) {
-        const expDir = (0, import_node_path32.join)(expsRoot, expId);
-        const resultPath = (0, import_node_path32.join)(expDir, "result.json");
-        if (!(0, import_node_fs35.existsSync)(resultPath)) continue;
-        let keptRel;
-        try {
-          const r = JSON.parse((0, import_node_fs35.readFileSync)(resultPath, "utf8"));
-          keptRel = r.checkpoint_path != null ? String(r.checkpoint_path) : "";
-        } catch {
-          continue;
-        }
-        if (!keptRel || keptRel === "null") continue;
-        const keptAbs = (0, import_node_path32.resolve)(expDir, keptRel);
-        if (keptAbs !== expDir && !keptAbs.startsWith(expDir + "/")) {
-          log.warn(`prune: checkpoint_path escapes exp dir: ${keptRel} (in ${expDir}); skipping`);
-          continue;
-        }
-        let entries;
-        try {
-          entries = (0, import_node_fs35.readdirSync)(expDir);
-        } catch {
-          continue;
-        }
-        for (const name of entries) {
-          if (!name.endsWith(".pt")) continue;
-          const pt = (0, import_node_path32.join)(expDir, name);
-          if (pt === keptAbs) continue;
-          try {
-            if ((0, import_node_fs35.statSync)(pt).isFile()) (0, import_node_fs35.rmSync)(pt, { force: true });
-          } catch {
-          }
-        }
-      }
-    }
-  }
-  for (const instrument of instruments) {
-    const model = resolveModel(instrument, topic);
-    if (!model) continue;
-    const targetDir = partStateDir(art, instrument);
-    (0, import_node_fs35.mkdirSync)(targetDir, { recursive: true });
-    const paneFiles = [
-      ["outbox.jsonl", outboxPath(instrument, model, topic)],
-      ["inbox.md", inboxPath(instrument, model, topic)]
-    ];
-    for (const [name, src] of paneFiles) {
-      if (!(0, import_node_fs35.existsSync)(src)) {
-        log.warn(`link_pane_artifacts: pane file missing for ${instrument}: ${name}`);
-        continue;
-      }
-      const linkPath = (0, import_node_path32.join)(targetDir, name);
-      const rel = (0, import_node_path32.relative)(targetDir, src);
-      try {
-        try {
-          if ((0, import_node_fs35.lstatSync)(linkPath)) (0, import_node_fs35.unlinkSync)(linkPath);
-        } catch {
-        }
-        (0, import_node_fs35.symlinkSync)(rel, linkPath);
-      } catch {
-      }
-    }
-  }
+  normalizeResults(art, instruments);
+  if (!keep) pruneIntermediate(art, instruments);
+  linkPaneArtifacts(art, instruments, topic);
   const warningsPath = (0, import_node_path32.join)(art, "warnings.txt");
-  const threshold = (deps.sizeWarnGb ?? 2) * GIB;
-  const sizeLines = [];
-  for (const instrument of instruments) {
-    const expsRoot = experimentsDir(art, instrument);
-    for (const expId of listExpDirs(expsRoot)) {
-      const expDir = (0, import_node_path32.join)(expsRoot, expId);
-      const bytes = dirByteSize(expDir);
-      if (bytes >= threshold) {
-        const gb = (bytes / GIB).toFixed(1);
-        sizeLines.push(`size_warn	${instrument}/${expId}	${gb}	${fileCountDepth1(expDir)}`);
-      }
-    }
-  }
-  atomicWrite(warningsPath, sizeLines.length ? sizeLines.join("\n") + "\n" : "");
-  const auditLines = [];
-  for (const instrument of instruments) {
-    const expsRoot = experimentsDir(art, instrument);
-    for (const expId of listExpDirs(expsRoot)) {
-      const expDir = (0, import_node_path32.join)(expsRoot, expId);
-      const promptMd = (0, import_node_path32.join)(expDir, "prompt.md");
-      const auditJson = (0, import_node_path32.join)(expDir, "audit.json");
-      if (!(0, import_node_fs35.existsSync)(promptMd) || !(0, import_node_fs35.existsSync)(auditJson)) continue;
-      let audit;
-      try {
-        audit = JSON.parse((0, import_node_fs35.readFileSync)(auditJson, "utf8"));
-      } catch {
-        continue;
-      }
-      for (const { key, value } of parseHardConstraints((0, import_node_fs35.readFileSync)(promptMd, "utf8"))) {
-        const actual = audit[key];
-        if (actual == null || String(actual) === "null") continue;
-        if (String(value) !== String(actual)) {
-          auditLines.push(`audit_warn	${instrument}/${expId}	${key}	prompt=${value}  actual=${String(actual)}`);
-        }
-      }
-    }
-  }
-  if (auditLines.length) {
-    const existing = readOr(warningsPath);
-    atomicWrite(warningsPath, existing + auditLines.join("\n") + "\n");
-  }
+  computeSizeWarnings(art, instruments, (deps.sizeWarnGb ?? 2) * GIB);
+  computeAuditWarnings(art, instruments, warningsPath);
   const statusRows = [];
   for (const instrument of instruments) {
     const stateTxt = (0, import_node_path32.join)(partStateDir(art, instrument), "state.txt");
