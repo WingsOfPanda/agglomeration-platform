@@ -105,8 +105,10 @@ export async function run(args: string[]): Promise<number> {
       const reason = ev ? "error_event" : "timeout";
       const tail = await capturePane(pane, 25);
       process.stderr.write(tail + "\n");
-      const ob = outboxDump(instrument, model, topic).trim();
-      if (ob) process.stderr.write(`outbox:\n${ob}\n`);
+      if (!ev) {
+        const ob = outboxDump(instrument, model, topic).trim();
+        if (ob) process.stderr.write(`outbox:\n${ob}\n`);
+      }
       const fr = await captureFailure(
         { instrument, model, topic, paneId: pane, reason: reason as "timeout" | "error_event", eventLine: ev ? JSON.stringify(ev) : undefined, readyTimeout },
         { partDir, capturePane: (p, n) => capturePane(p, n), atomicWriteSync: (d, c) => writeFileSync(d, c), isWritableDir: (d) => existsSync(d), now: () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z") },
