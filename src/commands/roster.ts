@@ -47,7 +47,7 @@ export async function run(args: string[]): Promise<number> {
       const pane = meta.paneId || "?";
       const ob = outboxPath(meta.instrument, meta.model, t.name);
       let state = "[ORPHAN]";
-      if (pane !== "?" && (await paneAlive(pane))) state = classifyStale(deriveState(lastOutboxEvent(ob)), ob);
+      if (pane !== "?" && (await paneAlive(pane))) state = classifyStale(deriveState(lastOutboxEvent(ob)), ob, Number(process.env.CONSORT_STALE_THRESHOLD_S ?? 180));
       process.stdout.write(`${W(meta.instrument, 32)} ${W(meta.model, 8)} ${W(t.name, 12)} ${W(pane, 9)} ${state}\n`);
     }
   }
