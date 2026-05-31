@@ -24,6 +24,7 @@ import { outboxOffset, outboxPath, outboxWaitSince, statusPath, resolveModel, ty
 import { instrumentTimeoutMultiplier } from "../core/contracts.js";
 import { scaledTimeout, parseLatestOffset } from "../core/scoreTurn.js";
 import { parseDagLine, dagTopological, dagSectionBody, dagFanInRepos } from "../core/dag.js";
+// note: verify-dag-repos uses node.repo (the DagNode slug field) + an em-dash-separated DAG line.
 import {
   enumerateSiblings, captureSiblingBaseline, formatBaselineFile,
   parseBaselineFile, diffSiblingAgainstBaseline, revertAndReplay,
@@ -43,7 +44,7 @@ function detectRouting(docText: string): "single" | "multi" {
   return /^\*\*Target Sub-Project\(s\):\*\*/m.test(docText) && /^## Execution DAG[ \t]*$/m.test(docText) ? "multi" : "single";
 }
 function usage(): number {
-  log.error("usage: perform <init|audit|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|sibling-baseline|sibling-verify|sibling-rescue|cross-signal|summary|finish|finish-one|forensics|archive|dag-parse|wave-wait|multi-init|send-unit|drop-part|find-latest-doc> ...");
+  log.error("usage: perform <init|audit|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|sibling-baseline|sibling-verify|sibling-rescue|cross-signal|summary|finish|finish-one|forensics|archive|dag-parse|wave-wait|multi-init|send-unit|drop-part|find-latest-doc|verify-dag-repos> ...");
   return 2;
 }
 
@@ -111,6 +112,7 @@ export async function run(args: string[]): Promise<number> {
     case "send-unit":  return sendUnitRun(rest);
     case "drop-part":  return dropPartRun(rest);
     case "find-latest-doc": return findLatestDocRun(rest);
+    case "verify-dag-repos": return verifyDagReposRun(rest);
     default:          return usage();
   }
 }
@@ -752,4 +754,39 @@ async function dropPartRun(rest: string[]): Promise<number> {
   log.ok(`perform drop-part: dropped ${instrument}, ${kept.length} part(s) remain`);
   process.stdout.write(`N=${kept.length}\n`);
   return 0;
+}
+
+// ---- verify-dag-repos (deploy.md prose-DAG rescue precheck) — per-slug repo-layout check ----
+// Reads the topic's design.md, extracts the unique DAG repo slugs (dagSectionBody + parseDagLine),
+// then reports per-slug `ok | missing-dir | missing-marker` against <hub>/<slug>. A repo is ok iff
+// the dir exists AND has CLAUDE.md or AGENTS.md (same marker rule as multiInitWith). Hub defaults to
+// repoRoot() when --cwd is omitted. rc 1 if any slug is bad, else 0; rc 2 on bad usage.
+async function verifyDagReposRun(rest: string[]): Promise<number> {
+  let topic: string | undefined; let hub: string | undefined;
+  for (let i = 0; i < rest.length; i++) {
+    const t = rest[i];
+    if (t === "--cwd") { hub = rest[i + 1]; i++; }
+    else if (t.startsWith("--cwd=")) { hub = t.slice("--cwd=".length); }
+    else if (!topic) topic = t;
+  }
+  if (!topic) { log.error("usage: perform verify-dag-repos <topic> [--cwd <hub>]"); return 2; }
+  const doc = join(performArtDir(topic), "design.md");
+  if (!existsSync(doc)) { log.error(`perform verify-dag-repos: design.md missing under ${performArtDir(topic)}`); return 1; }
+  const hubDir = hub ?? repoRoot();
+  const slugs: string[] = [];
+  for (const line of dagSectionBody(readFileSync(doc, "utf8"))) {
+    const node = parseDagLine(line);
+    if (node && !slugs.includes(node.repo)) slugs.push(node.repo);
+  }
+  let bad = 0;
+  for (const slug of slugs) {
+    const dir = join(hubDir, slug);
+    let st: string;
+    if (!existsSync(dir) || !statSync(dir).isDirectory()) st = "missing-dir";
+    else if (!existsSync(join(dir, "CLAUDE.md")) && !existsSync(join(dir, "AGENTS.md"))) st = "missing-marker";
+    else st = "ok";
+    if (st !== "ok") bad++;
+    process.stdout.write(`REPO=${slug}\tSTATUS=${st}\n`);
+  }
+  return bad > 0 ? 1 : 0;
 }
