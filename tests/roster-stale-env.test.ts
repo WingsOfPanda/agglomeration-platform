@@ -32,7 +32,7 @@ describe("staleThresholdS sources the env (CONSORT_STALE_THRESHOLD_S) with shell
     delete process.env.CONSORT_STALE_THRESHOLD_S;
     expect(staleThresholdS()).toBe(180);
   });
-  it("set-but-empty falls back to 180 (mirrors `${CW_STALE_THRESHOLD_S:-180}`, not `?? 180`)", () => {
+  it("set-but-empty falls back to 180 (mirrors the sibling shell `${VAR:-180}`, not `?? 180`)", () => {
     process.env.CONSORT_STALE_THRESHOLD_S = "";
     expect(staleThresholdS()).toBe(180);
   });
