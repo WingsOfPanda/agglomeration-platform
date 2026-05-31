@@ -43,7 +43,7 @@ function detectRouting(docText: string): "single" | "multi" {
   return /^\*\*Target Sub-Project\(s\):\*\*/m.test(docText) && /^## Execution DAG[ \t]*$/m.test(docText) ? "multi" : "single";
 }
 function usage(): number {
-  log.error("usage: perform <init|audit|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|sibling-baseline|sibling-verify|sibling-rescue|cross-signal|summary|finish|finish-one|forensics|archive|dag-parse|wave-wait|multi-init|send-unit|find-latest-doc> ...");
+  log.error("usage: perform <init|audit|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|sibling-baseline|sibling-verify|sibling-rescue|cross-signal|summary|finish|finish-one|forensics|archive|dag-parse|wave-wait|multi-init|send-unit|drop-part|find-latest-doc> ...");
   return 2;
 }
 
@@ -109,6 +109,7 @@ export async function run(args: string[]): Promise<number> {
     case "wave-wait":    return waveWaitRun(rest);
     case "multi-init": return multiInitRun(rest);
     case "send-unit":  return sendUnitRun(rest);
+    case "drop-part":  return dropPartRun(rest);
     case "find-latest-doc": return findLatestDocRun(rest);
     default:          return usage();
   }
@@ -727,5 +728,28 @@ export async function sendUnitWith(topic: string, repo: string, d: SendUnitDeps)
   const rc = await d.send(["--from", "maestro", instrument, topic, `@${promptFile}`]);
   if (rc !== 0) { log.error(`perform send-unit: send failed (rc=${rc}) for ${repo}`); return 1; }
   log.info(`[send-unit] ${instrument} -> ${repo} (step ${myStep}/${total}, upstream: ${upstreamCsv || "none"})`);
+  return 0;
+}
+
+// ---- drop-part (deploy "proceed degraded") — rewrite parts.txt, removing one part's row ----
+// When a sub-repo persistently fails in a multi-repo run, the directive ships the rest: it drops
+// the failing part by instrument and reports the new N. The rewritten parts.txt stays byte-faithful
+// to the multiInitWith format (trailing newline; empty file when no rows remain) so iterTargets
+// reads it transparently.
+async function dropPartRun(rest: string[]): Promise<number> {
+  const [topic, instrument] = rest;
+  if (!topic || !instrument || rest.length !== 2) { log.error("usage: perform drop-part <topic> <instrument>"); return 2; }
+  const partsFile = join(performArtDir(topic), "parts.txt");
+  if (!existsSync(partsFile)) { log.error(`perform drop-part: parts.txt missing`); return 1; }
+  const kept: string[] = []; let dropped = false;
+  for (const line of readFileSync(partsFile, "utf8").split("\n")) {
+    if (line.length === 0) continue;
+    if (line.split("\t")[0] === instrument) { dropped = true; continue; }
+    kept.push(line);
+  }
+  if (!dropped) { log.error(`perform drop-part: no part for instrument=${instrument}`); return 1; }
+  atomicWrite(partsFile, kept.length ? kept.join("\n") + "\n" : "");
+  log.ok(`perform drop-part: dropped ${instrument}, ${kept.length} part(s) remain`);
+  process.stdout.write(`N=${kept.length}\n`);
   return 0;
 }
