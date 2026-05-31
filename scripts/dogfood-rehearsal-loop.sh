@@ -75,6 +75,9 @@ ART="$(printf '%s\n' "$OUT" | sed -n 's/^ART=//p')"
 topicDir="${ART%/_rehearsal}"
 check "A1 init prints TOPIC + ART; art dir exists" \
   "$([ -n "$TOPIC" ] && [ -n "$ART" ] && [ -d "$ART" ] && echo 0 || echo 1)"
+# init seeds <art>/lib/ from config/rehearsal-lib-seed/ (arena helper + package marker).
+check "A1b init seeded <art>/lib/arena.py + __init__.py" \
+  "$([ -f "$ART/lib/arena.py" ] && [ -f "$ART/lib/__init__.py" ] && echo 0 || echo 1)"
 
 $CS rehearsal metric "$TOPIC" --kv "primary_metric=accuracy,direction=maximize,min_acceptable=>= 0.90,target=>= 0.99,K_corroboration=2,plateau_window=5,plateau_threshold=0.01" >/dev/null 2>&1
 check "A2 metric.md written" "$([ -f "$ART/metric.md" ] && echo 0 || echo 1)"

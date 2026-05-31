@@ -16440,8 +16440,8 @@ function paneLabelSetArgs(pane, instrument, model, topic) {
 async function paneLabelSet(pane, instrument, model, topic) {
   for (const args of paneLabelSetArgs(pane, instrument, model, topic)) await execa("tmux", args);
 }
-function gracefulRespawnCommand(snap, pluginRoot6, label, color) {
-  return `cat '${snap}'; node '${pluginRoot6}/dist/consort.cjs' _banner '${label}' '${color}'; rm -f '${snap}'`;
+function gracefulRespawnCommand(snap, pluginRoot7, label, color) {
+  return `cat '${snap}'; node '${pluginRoot7}/dist/consort.cjs' _banner '${label}' '${color}'; rm -f '${snap}'`;
 }
 async function paneLabel(pane) {
   try {
@@ -16457,7 +16457,7 @@ async function paneColor(pane) {
     return "";
   }
 }
-async function killGraceful(pane, pluginRoot6) {
+async function killGraceful(pane, pluginRoot7) {
   if (!await paneAlive(pane)) return;
   const label = await paneLabel(pane) || "part";
   const color = await paneColor(pane);
@@ -16468,7 +16468,7 @@ async function killGraceful(pane, pluginRoot6) {
   } catch {
     (0, import_node_fs13.writeFileSync)(snap, "");
   }
-  await respawn(pane, gracefulRespawnCommand(snap, pluginRoot6, label, color));
+  await respawn(pane, gracefulRespawnCommand(snap, pluginRoot7, label, color));
 }
 async function preflightLayout(topic, roster, opts) {
   const conductor = await conductorPane();
@@ -17544,12 +17544,16 @@ function deriveSlug(text) {
 }
 function parseSoloArgs(tokens) {
   let provider;
-  let finish = false;
+  let finish = true;
   const text = [];
   for (let i2 = 0; i2 < tokens.length; i2++) {
     const t = tokens[i2];
     if (t === "--finish") {
       finish = true;
+      continue;
+    }
+    if (t === "--no-finish") {
+      finish = false;
       continue;
     }
     if (t === "--provider") {
@@ -17673,7 +17677,7 @@ function classifyDirty(porcelain) {
 function finishAutoAction(remotes) {
   return remotes.trim().length > 0 ? "pr" : "keep";
 }
-function preSnapshot(r, topic) {
+function preSnapshot(r, command, topic) {
   if (r.run("git", ["rev-parse", "--git-dir"]).code !== 0) return { branch: "", baseSha: "", state: "not-git" };
   const branch = r.run("git", ["symbolic-ref", "--short", "HEAD"]).stdout.trim() || "(detached)";
   const preSha = r.run("git", ["rev-parse", "HEAD"]).stdout.trim();
@@ -17681,7 +17685,7 @@ function preSnapshot(r, topic) {
     return { branch, baseSha: preSha, state: "clean" };
   }
   r.run("git", ["add", "-A"]);
-  if (r.run("git", ["commit", "-q", "-m", `chore: WIP before solo ${topic}`]).code !== 0) {
+  if (r.run("git", ["commit", "-q", "-m", `chore: WIP before ${command} ${topic}`]).code !== 0) {
     return { branch, baseSha: preSha, state: "hook-blocked" };
   }
   return { branch, baseSha: r.run("git", ["rev-parse", "HEAD"]).stdout.trim(), state: "wip-committed" };
@@ -17930,7 +17934,7 @@ async function branchRun(rest) {
   return branchWith(topic, target, runnerAt(target));
 }
 async function branchWith(topic, target, r) {
-  const snap = preSnapshot(r, topic);
+  const snap = preSnapshot(r, "solo", topic);
   if (snap.state === "not-git") {
     log.error(`solo branch: ${target} is not a git repository`);
     return 1;
@@ -18258,6 +18262,12 @@ function lastTag(text, tag) {
   const re = new RegExp(`^${tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}=(.*)$`, "gm");
   const ms = [...text.matchAll(re)];
   return ms.length ? ms[ms.length - 1][1].trim() : null;
+}
+function cascadeTargets(phase, keepFindings) {
+  const partFile = phase === "research" ? "findings.md" : "verify.md";
+  if (keepFindings) return { partFile, artGlobs: [], artFiles: [] };
+  if (phase === "research") return { partFile, artGlobs: ["*_only_items.txt", "*_only.txt", "consensus.txt"], artFiles: ["adjudicated-draft.md", "diff.md"] };
+  return { partFile, artGlobs: [], artFiles: ["adjudicated-draft.md"] };
 }
 function resolveDrilldownPath(scratchDir, section, instrument, subproject) {
   const slug = section.toLowerCase().replace(/ /g, "-");
@@ -18986,6 +18996,46 @@ var init_scoreAdjudicate = __esm({
   }
 });
 
+// src/core/scoreSkill.ts
+function fence(topic) {
+  return " " + topic.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim() + " ";
+}
+function matchAny(fenced, triggers) {
+  return triggers.some((t) => new RegExp(" " + t + " ").test(fenced));
+}
+function classifyTopic(topic) {
+  const f = fence(topic);
+  if (matchAny(f, BRAINSTORMING)) return "brainstorming";
+  if (matchAny(f, DEBUGGING)) return "systematic-debugging";
+  return "none";
+}
+function pluginRoot6() {
+  return process.env.CLAUDE_PLUGIN_ROOT ?? process.cwd();
+}
+function skillHintAppend(skillTxtPath, basePrompt) {
+  let skill = "none";
+  if ((0, import_node_fs27.existsSync)(skillTxtPath)) skill = (0, import_node_fs27.readFileSync)(skillTxtPath, "utf8").replace(/\s/g, "");
+  if (process.env.CONSORT_SCORE_SKILL_OVERRIDE === "none") skill = "none";
+  if (skill !== "brainstorming" && skill !== "systematic-debugging") return basePrompt;
+  const hintFile = (0, import_node_path22.join)(pluginRoot6(), "config", "skill-hints", `${skill}.md`);
+  if (!(0, import_node_fs27.existsSync)(hintFile)) return basePrompt;
+  return `${basePrompt}
+
+---
+
+${(0, import_node_fs27.readFileSync)(hintFile, "utf8")}`;
+}
+var import_node_fs27, import_node_path22, BRAINSTORMING, DEBUGGING;
+var init_scoreSkill = __esm({
+  "src/core/scoreSkill.ts"() {
+    "use strict";
+    import_node_fs27 = require("node:fs");
+    import_node_path22 = require("node:path");
+    BRAINSTORMING = ["design patterns?", "how should", "best way", "what s the best way", "what is the best way", "decide between"];
+    DEBUGGING = ["why", "broken", "failing", "regressions?", "edge cases?", "bugs?", "doesn t work", "does not work"];
+  }
+});
+
 // src/core/scoreWalk.ts
 function auditIssueToSection(key) {
   switch (key) {
@@ -19015,23 +19065,23 @@ function auditIssueToSection(key) {
 function walkSectionState(dir, opts) {
   let files;
   try {
-    files = (0, import_node_fs27.readdirSync)(dir).filter((f) => f.endsWith(".md"));
+    files = (0, import_node_fs28.readdirSync)(dir).filter((f) => f.endsWith(".md"));
   } catch {
     return [];
   }
   const names = files.map((f) => f.replace(/\.md$/, "")).sort();
   if (!opts?.withStatus) return names;
   return names.map((name) => {
-    const body = (0, import_node_fs27.readFileSync)((0, import_node_path22.join)(dir, `${name}.md`), "utf8").replace(/\s/g, "");
+    const body = (0, import_node_fs28.readFileSync)((0, import_node_path23.join)(dir, `${name}.md`), "utf8").replace(/\s/g, "");
     return { name, status: body === "_(skipped)_" ? "skipped" : "approved" };
   });
 }
-var import_node_fs27, import_node_path22;
+var import_node_fs28, import_node_path23;
 var init_scoreWalk = __esm({
   "src/core/scoreWalk.ts"() {
     "use strict";
-    import_node_fs27 = require("node:fs");
-    import_node_path22 = require("node:path");
+    import_node_fs28 = require("node:fs");
+    import_node_path23 = require("node:path");
   }
 });
 
@@ -19047,6 +19097,7 @@ __export(score_exports, {
   emitDagRun: () => emitDagRun,
   forensicsRun: () => forensicsRun,
   initWith: () => initWith2,
+  offsetResetRun: () => offsetResetRun,
   researchSendWith: () => researchSendWith,
   researchWaitWith: () => researchWaitWith,
   run: () => run10,
@@ -19057,7 +19108,7 @@ __export(score_exports, {
   walkStateRun: () => walkStateRun
 });
 function usage2() {
-  log.error("usage: score <init|assemble|spawn-all|research-send|research-wait|diff|verify-send|verify-wait|adjudicate|synthesize|walk-state|detect-multi-repo|emit-dag|check-dag|drilldown|forensics|archive> ...");
+  log.error("usage: score <init|assemble|spawn-all|research-send|research-wait|diff|verify-send|verify-wait|adjudicate|synthesize|walk-state|detect-multi-repo|emit-dag|check-dag|drilldown|offset-reset|forensics|archive> ...");
   return 2;
 }
 async function run10(args) {
@@ -19094,6 +19145,8 @@ async function run10(args) {
       return checkDagRun(rest);
     case "drilldown":
       return drilldownRun(rest);
+    case "offset-reset":
+      return offsetResetRun(rest);
     case "forensics":
       return forensicsRun(rest);
     case "archive":
@@ -19127,7 +19180,7 @@ async function initWith2(tokens, d) {
     roster = roster.slice(0, 3);
   }
   const art = scoreArtDir(topic);
-  if ((0, import_node_fs28.existsSync)(art)) {
+  if ((0, import_node_fs29.existsSync)(art)) {
     log.error(`score init: topic already in flight: ${art}`);
     log.error("  run /consort:coda or pick a different topic");
     return 2;
@@ -19147,12 +19200,13 @@ async function initWith2(tokens, d) {
     return 1;
   }
   const rows = roster.map((provider, i2) => ({ provider, instrument: instruments[i2] }));
-  (0, import_node_fs28.mkdirSync)(scoreDraftDir(topic), { recursive: true });
-  atomicWrite((0, import_node_path23.join)(art, "topic.txt"), topicText);
-  atomicWrite((0, import_node_path23.join)(art, "roster.txt"), formatRosterFile(rows, isoUtc()));
+  (0, import_node_fs29.mkdirSync)(scoreDraftDir(topic), { recursive: true });
+  atomicWrite((0, import_node_path24.join)(art, "topic.txt"), topicText);
+  atomicWrite((0, import_node_path24.join)(art, "skill.txt"), classifyTopic(topicText));
+  atomicWrite((0, import_node_path24.join)(art, "roster.txt"), formatRosterFile(rows, isoUtc()));
   const mode = targetHits.length >= 2 ? "multi" : targetHits.length === 1 ? "single-sub" : "single";
-  atomicWrite((0, import_node_path23.join)(art, "multi-repo.txt"), mode + "\n");
-  if (targetHits.length > 0) atomicWrite((0, import_node_path23.join)(art, "targets.txt"), writeTargetsTsv(targetHits, isoUtc()));
+  atomicWrite((0, import_node_path24.join)(art, "multi-repo.txt"), mode + "\n");
+  if (targetHits.length > 0) atomicWrite((0, import_node_path24.join)(art, "targets.txt"), writeTargetsTsv(targetHits, isoUtc()));
   log.ok(`score init: topic=${topic} N=${rows.length} ensemble=${ensemble ? "yes" : "no"} mode=${mode}`);
   process.stdout.write(
     `TOPIC=${topic}
@@ -19165,7 +19219,7 @@ ART=${art}
   return 0;
 }
 function readIf(path6) {
-  return (0, import_node_fs28.existsSync)(path6) ? (0, import_node_fs28.readFileSync)(path6, "utf8") : "";
+  return (0, import_node_fs29.existsSync)(path6) ? (0, import_node_fs29.readFileSync)(path6, "utf8") : "";
 }
 async function assembleRun(rest) {
   const topic = rest[0];
@@ -19175,27 +19229,27 @@ async function assembleRun(rest) {
   }
   const art = scoreArtDir(topic);
   const draftDir = scoreDraftDir(topic);
-  if (!(0, import_node_fs28.existsSync)(draftDir)) {
+  if (!(0, import_node_fs29.existsSync)(draftDir)) {
     log.error(`score assemble: no draft dir at ${draftDir} (run score init + draft sections)`);
     return 2;
   }
-  const title = (readIf((0, import_node_path23.join)(art, "topic.txt")).split("\n")[0] || topic).trim();
-  const mode = parseMultiRepoMode(readIf((0, import_node_path23.join)(art, "multi-repo.txt")));
-  const targets = mode === "single" ? [] : parseRosterTargets(readIf((0, import_node_path23.join)(art, "targets.txt")));
+  const title = (readIf((0, import_node_path24.join)(art, "topic.txt")).split("\n")[0] || topic).trim();
+  const mode = parseMultiRepoMode(readIf((0, import_node_path24.join)(art, "multi-repo.txt")));
+  const targets = mode === "single" ? [] : parseRosterTargets(readIf((0, import_node_path24.join)(art, "targets.txt")));
   const keys = mode === "multi" ? SECTIONS_MULTI : SECTIONS_SINGLE;
   const drafts = /* @__PURE__ */ new Map();
   for (const k of keys) {
-    const f = (0, import_node_path23.join)(draftDir, `${k}.md`);
-    if ((0, import_node_fs28.existsSync)(f)) drafts.set(k, (0, import_node_fs28.readFileSync)(f, "utf8").replace(/\n+$/, "") + "\n");
+    const f = (0, import_node_path24.join)(draftDir, `${k}.md`);
+    if ((0, import_node_fs29.existsSync)(f)) drafts.set(k, (0, import_node_fs29.readFileSync)(f, "utf8").replace(/\n+$/, "") + "\n");
   }
   const date = isoUtc().slice(0, 10);
   const doc = assembleDoc({ title, mode, date, targets, drafts });
   const out = scoreDocPath(topic, date);
-  (0, import_node_fs28.mkdirSync)((0, import_node_path23.join)(art, "design-doc"), { recursive: true });
+  (0, import_node_fs29.mkdirSync)((0, import_node_path24.join)(art, "design-doc"), { recursive: true });
   atomicWrite(out, doc);
   const result = auditDoc(doc);
   const auditText = [`VERDICT=${result.verdict}`, ...result.issues.map((i2) => `ISSUE=${i2}`)].join("\n") + "\n";
-  atomicWrite((0, import_node_path23.join)(art, "design-doc", "audit.log"), auditText);
+  atomicWrite((0, import_node_path24.join)(art, "design-doc", "audit.log"), auditText);
   if (result.verdict === "FAIL") {
     for (const i2 of result.issues) process.stderr.write(`ISSUE=${i2}
 `);
@@ -19218,12 +19272,12 @@ async function spawnAllRun(rest) {
 }
 async function spawnAllWith(topic, d) {
   const art = scoreArtDir(topic);
-  const rosterPath = (0, import_node_path23.join)(art, "roster.txt");
-  if (!(0, import_node_fs28.existsSync)(rosterPath)) {
+  const rosterPath = (0, import_node_path24.join)(art, "roster.txt");
+  if (!(0, import_node_fs29.existsSync)(rosterPath)) {
     log.error(`score spawn-all: roster.txt missing at ${rosterPath} (run score init)`);
     return 2;
   }
-  const rows = parseRosterFile((0, import_node_fs28.readFileSync)(rosterPath, "utf8"));
+  const rows = parseRosterFile((0, import_node_fs29.readFileSync)(rosterPath, "utf8"));
   if (rows.length < 2) {
     log.error(`score spawn-all: need >=2 parts in roster.txt, got ${rows.length}`);
     return 2;
@@ -19233,12 +19287,12 @@ async function spawnAllWith(topic, d) {
     log.error(`score spawn-all: preflight failed (rc=${pf})`);
     return 2;
   }
-  const panesPath = (0, import_node_path23.join)(art, "preflight-panes.txt");
-  if (!(0, import_node_fs28.existsSync)(panesPath)) {
+  const panesPath = (0, import_node_path24.join)(art, "preflight-panes.txt");
+  if (!(0, import_node_fs29.existsSync)(panesPath)) {
     log.error(`score spawn-all: preflight wrote no ${panesPath}`);
     return 2;
   }
-  const panes = parsePanesFile((0, import_node_fs28.readFileSync)(panesPath, "utf8"));
+  const panes = parsePanesFile((0, import_node_fs29.readFileSync)(panesPath, "utf8"));
   const orphans = rows.filter((r) => !panes.has(r.instrument));
   if (orphans.length) {
     log.error(`score spawn-all: parts missing a preflight pane: ${orphans.map((r) => r.instrument).join(", ")}`);
@@ -19249,7 +19303,7 @@ async function spawnAllWith(topic, d) {
     const rc2 = await d.spawn([r.instrument, r.provider, topic, "--target-pane", panes.get(r.instrument), "--cwd", cwd]);
     return { instrument: r.instrument, provider: r.provider, rc: rc2 };
   }));
-  atomicWrite((0, import_node_path23.join)(art, "spawn-results.tsv"), spawnResultsTsv(results));
+  atomicWrite((0, import_node_path24.join)(art, "spawn-results.tsv"), spawnResultsTsv(results));
   const rc = spawnTally(results.map((r) => r.rc));
   const nOk = results.filter((r) => r.rc === 0).length;
   if (rc === 0) log.ok(`score spawn-all: ${nOk}/${rows.length} parts ready`);
@@ -19266,19 +19320,19 @@ async function researchSendRun(rest) {
 }
 async function researchSendWith(topic, instrument, provider, d) {
   const art = scoreArtDir(topic);
-  const stateFile = (0, import_node_path23.join)(art, `research-${instrument}.txt`);
-  if ((0, import_node_fs28.existsSync)(stateFile)) {
+  const stateFile = (0, import_node_path24.join)(art, `research-${instrument}.txt`);
+  if ((0, import_node_fs29.existsSync)(stateFile)) {
     log.error(`score research-send: ${stateFile} exists; rm to retry`);
     return 1;
   }
-  const topicText = readIf((0, import_node_path23.join)(art, "topic.txt")).trim();
+  const topicText = readIf((0, import_node_path24.join)(art, "topic.txt")).trim();
   if (!topicText) {
     log.error(`score research-send: topic.txt missing/empty at ${art} (run score init)`);
     return 1;
   }
-  const findingsPath = (0, import_node_path23.join)(partDir(instrument, provider, topic), "findings.md");
-  const promptFile = (0, import_node_path23.join)(art, `${instrument}_research_prompt.md`);
-  atomicWrite(promptFile, composeResearchPrompt(topicText, findingsPath));
+  const findingsPath = (0, import_node_path24.join)(partDir(instrument, provider, topic), "findings.md");
+  const promptFile = (0, import_node_path24.join)(art, `${instrument}_research_prompt.md`);
+  atomicWrite(promptFile, skillHintAppend((0, import_node_path24.join)(art, "skill.txt"), composeResearchPrompt(topicText, findingsPath)));
   const offset = d.offsetFor(instrument, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}
 `);
@@ -19300,12 +19354,12 @@ async function researchWaitRun(rest) {
 }
 async function researchWaitWith(topic, instrument, provider, d) {
   const art = scoreArtDir(topic);
-  const stateFile = (0, import_node_path23.join)(art, `research-${instrument}.txt`);
-  if (!(0, import_node_fs28.existsSync)(stateFile)) {
+  const stateFile = (0, import_node_path24.join)(art, `research-${instrument}.txt`);
+  if (!(0, import_node_fs29.existsSync)(stateFile)) {
     log.error(`score research-wait: ${stateFile} missing (run score research-send first)`);
     return 1;
   }
-  const offset = parseLatestOffset((0, import_node_fs28.readFileSync)(stateFile, "utf8"));
+  const offset = parseLatestOffset((0, import_node_fs29.readFileSync)(stateFile, "utf8"));
   if (offset === null) {
     log.error(`score research-wait: OFFSET not set in ${stateFile}`);
     return 1;
@@ -19313,20 +19367,20 @@ async function researchWaitWith(topic, instrument, provider, d) {
   const timeout = scaledTimeout(consultTimeout("research"), d.multiplier(provider));
   log.info(`score research-wait: ${instrument} offset=${offset} timeout=${timeout}s`);
   const ev = await d.wait(instrument, provider, topic, offset, ["done", "error", "question"], timeout);
-  const findingsPath = (0, import_node_path23.join)(partDir(instrument, provider, topic), "findings.md");
-  const findingsText = (0, import_node_fs28.existsSync)(findingsPath) ? (0, import_node_fs28.readFileSync)(findingsPath, "utf8") : null;
+  const findingsPath = (0, import_node_path24.join)(partDir(instrument, provider, topic), "findings.md");
+  const findingsText = (0, import_node_fs29.existsSync)(findingsPath) ? (0, import_node_fs29.readFileSync)(findingsPath, "utf8") : null;
   const fs = researchState(ev, findingsText);
   if (fs === "question" && ev) {
-    atomicWrite((0, import_node_path23.join)(art, `question-${instrument}.txt`), JSON.stringify(ev) + "\n");
+    atomicWrite((0, import_node_path24.join)(art, `question-${instrument}.txt`), JSON.stringify(ev) + "\n");
     const bumped = outboxOffset(outboxPath(instrument, provider, topic));
-    (0, import_node_fs28.appendFileSync)(stateFile, `OFFSET=${bumped}
+    (0, import_node_fs29.appendFileSync)(stateFile, `OFFSET=${bumped}
 FS=question
 `);
   } else {
-    (0, import_node_fs28.appendFileSync)(stateFile, `FS=${fs}
+    (0, import_node_fs29.appendFileSync)(stateFile, `FS=${fs}
 `);
   }
-  (0, import_node_fs28.writeFileSync)((0, import_node_path23.join)(art, `research-${instrument}.done`), "");
+  (0, import_node_fs29.writeFileSync)((0, import_node_path24.join)(art, `research-${instrument}.done`), "");
   log.ok(`score research-wait: ${instrument} FS=${fs}`);
   return 0;
 }
@@ -19337,38 +19391,38 @@ async function diffRun(rest) {
     return 2;
   }
   const art = scoreArtDir(topic);
-  if (!(0, import_node_fs28.existsSync)(art)) {
+  if (!(0, import_node_fs29.existsSync)(art)) {
     log.error(`score diff: ${art} not found`);
     return 1;
   }
-  if ((0, import_node_fs28.existsSync)((0, import_node_path23.join)(art, "diff.md"))) {
+  if ((0, import_node_fs29.existsSync)((0, import_node_path24.join)(art, "diff.md"))) {
     log.error("score diff: diff.md exists; rm to retry");
     return 1;
   }
-  const rosterPath = (0, import_node_path23.join)(art, "roster.txt");
-  if (!(0, import_node_fs28.existsSync)(rosterPath)) {
+  const rosterPath = (0, import_node_path24.join)(art, "roster.txt");
+  if (!(0, import_node_fs29.existsSync)(rosterPath)) {
     log.error("score diff: roster.txt missing \u2014 run score init first");
     return 1;
   }
-  const rows = parseRosterFile((0, import_node_fs28.readFileSync)(rosterPath, "utf8"));
+  const rows = parseRosterFile((0, import_node_fs29.readFileSync)(rosterPath, "utf8"));
   if (rows.length < 2) {
     log.error(`score diff: need >=2 parts in roster.txt, got ${rows.length}`);
     return 1;
   }
   const parts = [];
   for (const r of rows) {
-    const f = (0, import_node_path23.join)(partDir(r.instrument, r.provider, topic), "findings.md");
-    if (!(0, import_node_fs28.existsSync)(f)) {
+    const f = (0, import_node_path24.join)(partDir(r.instrument, r.provider, topic), "findings.md");
+    if (!(0, import_node_fs29.existsSync)(f)) {
       log.error(`score diff: ${r.instrument} findings.md missing: ${f}`);
       return 1;
     }
-    parts.push({ name: r.instrument, findings: (0, import_node_fs28.readFileSync)(f, "utf8") });
+    parts.push({ name: r.instrument, findings: (0, import_node_fs29.readFileSync)(f, "utf8") });
   }
   const result = diffFindings(parts);
-  for (const file of result.files) atomicWrite((0, import_node_path23.join)(art, file.filename), file.content);
-  atomicWrite((0, import_node_path23.join)(art, "diff.md"), result.diffMd);
+  for (const file of result.files) atomicWrite((0, import_node_path24.join)(art, file.filename), file.content);
+  atomicWrite((0, import_node_path24.join)(art, "diff.md"), result.diffMd);
   const summary = result.files.filter((f) => f.filename.endsWith("_only_items.txt") || f.filename === "consensus.txt").map((f) => `${f.filename.replace(/\.txt$/, "")}=${f.content.split("\n").filter(Boolean).length}`).join(" ");
-  log.ok(`score diff: wrote ${(0, import_node_path23.join)(art, "diff.md")} (${rows.length} parts) ${summary}`);
+  log.ok(`score diff: wrote ${(0, import_node_path24.join)(art, "diff.md")} (${rows.length} parts) ${summary}`);
   return 0;
 }
 async function verifySendRun(rest) {
@@ -19381,21 +19435,21 @@ async function verifySendRun(rest) {
 }
 async function verifySendWith(topic, instrument, provider, d) {
   const art = scoreArtDir(topic);
-  if (!(0, import_node_fs28.existsSync)(art)) {
+  if (!(0, import_node_fs29.existsSync)(art)) {
     log.error(`score verify-send: ${art} not found`);
     return 1;
   }
-  const stateFile = (0, import_node_path23.join)(art, `verify-${instrument}.txt`);
-  if ((0, import_node_fs28.existsSync)(stateFile)) {
+  const stateFile = (0, import_node_path24.join)(art, `verify-${instrument}.txt`);
+  if ((0, import_node_fs29.existsSync)(stateFile)) {
     log.error(`score verify-send: ${stateFile} exists; rm to retry`);
     return 1;
   }
-  const rosterPath = (0, import_node_path23.join)(art, "roster.txt");
-  if (!(0, import_node_fs28.existsSync)(rosterPath)) {
+  const rosterPath = (0, import_node_path24.join)(art, "roster.txt");
+  if (!(0, import_node_fs29.existsSync)(rosterPath)) {
     log.error("score verify-send: roster.txt missing \u2014 run score init first");
     return 1;
   }
-  const instruments = parseRosterFile((0, import_node_fs28.readFileSync)(rosterPath, "utf8")).map((r) => r.instrument);
+  const instruments = parseRosterFile((0, import_node_fs29.readFileSync)(rosterPath, "utf8")).map((r) => r.instrument);
   if (instruments.length < 2) {
     log.error(`score verify-send: need >=2 parts, got ${instruments.length}`);
     return 1;
@@ -19406,24 +19460,24 @@ async function verifySendWith(topic, instrument, provider, d) {
   }
   const parts = [];
   for (const f of verifyScopeFiles(instrument, instruments)) {
-    const p = (0, import_node_path23.join)(art, f);
-    if (!(0, import_node_fs28.existsSync)(p)) {
+    const p = (0, import_node_path24.join)(art, f);
+    if (!(0, import_node_fs29.existsSync)(p)) {
       log.error(`score verify-send: expected bucket missing: ${p} (run score diff first)`);
       return 1;
     }
-    const c3 = (0, import_node_fs28.readFileSync)(p, "utf8");
+    const c3 = (0, import_node_fs29.readFileSync)(p, "utf8");
     if (c3.split("\n").some((l) => l.length > 0)) parts.push(c3.replace(/\n+$/, ""));
   }
   const items = parts.join("\n");
-  atomicWrite((0, import_node_path23.join)(art, `verify-claims-${instrument}.txt`), items ? items + "\n" : "");
+  atomicWrite((0, import_node_path24.join)(art, `verify-claims-${instrument}.txt`), items ? items + "\n" : "");
   if (!items) {
     atomicWrite(stateFile, "VS=skipped\n");
     log.ok(`score verify-send: ${instrument} VS=skipped (no claims to verify)`);
     return 0;
   }
-  const verifyPath = (0, import_node_path23.join)(partDir(instrument, provider, topic), "verify.md");
-  const promptFile = (0, import_node_path23.join)(art, `${instrument}_verify_prompt.md`);
-  atomicWrite(promptFile, composeVerifyPrompt(items, verifyPath));
+  const verifyPath = (0, import_node_path24.join)(partDir(instrument, provider, topic), "verify.md");
+  const promptFile = (0, import_node_path24.join)(art, `${instrument}_verify_prompt.md`);
+  atomicWrite(promptFile, skillHintAppend((0, import_node_path24.join)(art, "skill.txt"), composeVerifyPrompt(items, verifyPath)));
   const offset = d.offsetFor(instrument, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}
 `);
@@ -19445,14 +19499,14 @@ async function verifyWaitRun(rest) {
 }
 async function verifyWaitWith(topic, instrument, provider, d) {
   const art = scoreArtDir(topic);
-  const stateFile = (0, import_node_path23.join)(art, `verify-${instrument}.txt`);
-  if (!(0, import_node_fs28.existsSync)(stateFile)) {
+  const stateFile = (0, import_node_path24.join)(art, `verify-${instrument}.txt`);
+  if (!(0, import_node_fs29.existsSync)(stateFile)) {
     log.error(`score verify-wait: ${stateFile} missing (run score verify-send first)`);
     return 1;
   }
-  const text = (0, import_node_fs28.readFileSync)(stateFile, "utf8");
+  const text = (0, import_node_fs29.readFileSync)(stateFile, "utf8");
   if (lastTag(text, "VS") === "skipped") {
-    (0, import_node_fs28.writeFileSync)((0, import_node_path23.join)(art, `verify-${instrument}.done`), "");
+    (0, import_node_fs29.writeFileSync)((0, import_node_path24.join)(art, `verify-${instrument}.done`), "");
     log.ok(`score verify-wait: ${instrument} VS=skipped (already)`);
     return 0;
   }
@@ -19464,20 +19518,20 @@ async function verifyWaitWith(topic, instrument, provider, d) {
   const timeout = scaledTimeout(consultTimeout("verify"), d.multiplier(provider));
   log.info(`score verify-wait: ${instrument} offset=${offset} timeout=${timeout}s`);
   const ev = await d.wait(instrument, provider, topic, offset, ["done", "error", "question"], timeout);
-  const verifyPath = (0, import_node_path23.join)(partDir(instrument, provider, topic), "verify.md");
-  const verifyText = (0, import_node_fs28.existsSync)(verifyPath) ? (0, import_node_fs28.readFileSync)(verifyPath, "utf8") : null;
+  const verifyPath = (0, import_node_path24.join)(partDir(instrument, provider, topic), "verify.md");
+  const verifyText = (0, import_node_fs29.existsSync)(verifyPath) ? (0, import_node_fs29.readFileSync)(verifyPath, "utf8") : null;
   const vs = verifyState(ev, verifyText);
   if (vs === "question" && ev) {
-    atomicWrite((0, import_node_path23.join)(art, `question-${instrument}.txt`), JSON.stringify(ev) + "\n");
+    atomicWrite((0, import_node_path24.join)(art, `question-${instrument}.txt`), JSON.stringify(ev) + "\n");
     const bumped = outboxOffset(outboxPath(instrument, provider, topic));
-    (0, import_node_fs28.appendFileSync)(stateFile, `OFFSET=${bumped}
+    (0, import_node_fs29.appendFileSync)(stateFile, `OFFSET=${bumped}
 VS=question
 `);
   } else {
-    (0, import_node_fs28.appendFileSync)(stateFile, `VS=${vs}
+    (0, import_node_fs29.appendFileSync)(stateFile, `VS=${vs}
 `);
   }
-  (0, import_node_fs28.writeFileSync)((0, import_node_path23.join)(art, `verify-${instrument}.done`), "");
+  (0, import_node_fs29.writeFileSync)((0, import_node_path24.join)(art, `verify-${instrument}.done`), "");
   log.ok(`score verify-wait: ${instrument} VS=${vs}`);
   return 0;
 }
@@ -19488,31 +19542,31 @@ async function adjudicateRun(rest) {
     return 2;
   }
   const art = scoreArtDir(topic);
-  if (!(0, import_node_fs28.existsSync)(art)) {
+  if (!(0, import_node_fs29.existsSync)(art)) {
     log.error(`score adjudicate: ${art} not found`);
     return 1;
   }
-  const rosterPath = (0, import_node_path23.join)(art, "roster.txt");
-  if (!(0, import_node_fs28.existsSync)(rosterPath)) {
+  const rosterPath = (0, import_node_path24.join)(art, "roster.txt");
+  if (!(0, import_node_fs29.existsSync)(rosterPath)) {
     log.error("score adjudicate: roster.txt missing");
     return 1;
   }
-  const rows = parseRosterFile((0, import_node_fs28.readFileSync)(rosterPath, "utf8"));
+  const rows = parseRosterFile((0, import_node_fs29.readFileSync)(rosterPath, "utf8"));
   if (rows.length < 2) {
     log.error(`score adjudicate: need >=2 parts, got ${rows.length}`);
     return 1;
   }
   const instruments = rows.map((r) => r.instrument);
-  const readIfExists = (p) => (0, import_node_fs28.existsSync)(p) ? (0, import_node_fs28.readFileSync)(p, "utf8") : "";
+  const readIfExists = (p) => (0, import_node_fs29.existsSync)(p) ? (0, import_node_fs29.readFileSync)(p, "utf8") : "";
   const verify = {};
   const vs = {};
   for (const r of rows) {
-    verify[r.instrument] = readIfExists((0, import_node_path23.join)(partDir(r.instrument, r.provider, topic), "verify.md"));
-    vs[r.instrument] = lastTag(readIfExists((0, import_node_path23.join)(art, `verify-${r.instrument}.txt`)), "VS") ?? "skipped";
+    verify[r.instrument] = readIfExists((0, import_node_path24.join)(partDir(r.instrument, r.provider, topic), "verify.md"));
+    vs[r.instrument] = lastTag(readIfExists((0, import_node_path24.join)(art, `verify-${r.instrument}.txt`)), "VS") ?? "skipped";
   }
   const buckets = {};
   const addBucket = (f) => {
-    buckets[f] = readIfExists((0, import_node_path23.join)(art, f));
+    buckets[f] = readIfExists((0, import_node_path24.join)(art, f));
   };
   for (const c3 of instruments) addBucket(`${c3}_only_items.txt`);
   if (instruments.length >= 3) {
@@ -19520,8 +19574,8 @@ async function adjudicateRun(rest) {
     for (let i2 = 0; i2 < instruments.length; i2++) for (let j = i2 + 1; j < instruments.length; j++) addBucket(`${instruments[i2]}+${instruments[j]}_only.txt`);
   }
   const input = { parts: rows.map((r) => ({ instrument: r.instrument, provider: r.provider })), verify, vs, buckets };
-  atomicWrite((0, import_node_path23.join)(art, "adjudicated-draft.md"), adjudicate(input));
-  log.ok(`score adjudicate: wrote ${(0, import_node_path23.join)(art, "adjudicated-draft.md")}`);
+  atomicWrite((0, import_node_path24.join)(art, "adjudicated-draft.md"), adjudicate(input));
+  log.ok(`score adjudicate: wrote ${(0, import_node_path24.join)(art, "adjudicated-draft.md")}`);
   log.info("  cp adjudicated-draft.md -> adjudicated.md, then resolve every '- PENDING:' line");
   return 0;
 }
@@ -19532,20 +19586,20 @@ async function synthesizeRun(rest) {
     return 2;
   }
   const art = scoreArtDir(topic);
-  const adj = (0, import_node_path23.join)(art, "adjudicated.md");
-  if (!(0, import_node_fs28.existsSync)(adj)) {
+  const adj = (0, import_node_path24.join)(art, "adjudicated.md");
+  if (!(0, import_node_fs29.existsSync)(adj)) {
     log.error(`score synthesize: ${adj} missing \u2014 cp adjudicated-draft.md -> adjudicated.md and resolve PENDINGs first`);
     return 1;
   }
-  const adjText = (0, import_node_fs28.readFileSync)(adj, "utf8");
+  const adjText = (0, import_node_fs29.readFileSync)(adj, "utf8");
   if (adjText.split("\n").some((l) => /^- PENDING:/.test(l))) {
     log.error("score synthesize: adjudicated.md still has '- PENDING:' lines; resolve them first");
     return 1;
   }
   const draftDir = scoreDraftDir(topic);
-  (0, import_node_fs28.mkdirSync)(draftDir, { recursive: true });
+  (0, import_node_fs29.mkdirSync)(draftDir, { recursive: true });
   const seeds = synthesizeSeeds(adjText);
-  for (const s of seeds) atomicWrite((0, import_node_path23.join)(draftDir, `${s.section}.md`), s.body);
+  for (const s of seeds) atomicWrite((0, import_node_path24.join)(draftDir, `${s.section}.md`), s.body);
   log.ok(`score synthesize: wrote ${seeds.length} seed drafts to ${draftDir}`);
   return 0;
 }
@@ -19570,8 +19624,8 @@ async function detectMultiRepoRun(rest) {
   const ci = rest.indexOf("--cwd");
   if (ci >= 0 && rest[ci + 1]) cwd = rest[ci + 1];
   const art = scoreArtDir(topic);
-  const adj = (0, import_node_path23.join)(art, "adjudicated.md");
-  const corpus = (0, import_node_fs28.existsSync)(adj) ? (0, import_node_fs28.readFileSync)(adj, "utf8") : (0, import_node_fs28.existsSync)((0, import_node_path23.join)(art, "topic.txt")) ? (0, import_node_fs28.readFileSync)((0, import_node_path23.join)(art, "topic.txt"), "utf8") : "";
+  const adj = (0, import_node_path24.join)(art, "adjudicated.md");
+  const corpus = (0, import_node_fs29.existsSync)(adj) ? (0, import_node_fs29.readFileSync)(adj, "utf8") : (0, import_node_fs29.existsSync)((0, import_node_path24.join)(art, "topic.txt")) ? (0, import_node_fs29.readFileSync)((0, import_node_path24.join)(art, "topic.txt"), "utf8") : "";
   if (!corpus) log.warn(`score detect-multi-repo: no adjudicated.md/topic.txt corpus at ${art}; scanning anyway`);
   const hits = detectMultiRepo(cwd, corpus);
   for (const h2 of hits) process.stdout.write(`${h2.slug}	${h2.marker}
@@ -19586,18 +19640,18 @@ async function emitDagRun(rest) {
     return 2;
   }
   const art = scoreArtDir(topic);
-  const rowsPath = (0, import_node_path23.join)(art, "dag-rows.tsv");
-  if (!(0, import_node_fs28.existsSync)(rowsPath)) {
+  const rowsPath = (0, import_node_path24.join)(art, "dag-rows.tsv");
+  if (!(0, import_node_fs29.existsSync)(rowsPath)) {
     log.error(`score emit-dag: ${rowsPath} missing (the directive writes step\\trepo\\tdesc\\tdeps rows)`);
     return 1;
   }
-  const rows = (0, import_node_fs28.readFileSync)(rowsPath, "utf8").split("\n").map((l) => l.replace(/\r$/, "")).filter((l) => l.length > 0 && !l.startsWith("#")).map((l) => {
+  const rows = (0, import_node_fs29.readFileSync)(rowsPath, "utf8").split("\n").map((l) => l.replace(/\r$/, "")).filter((l) => l.length > 0 && !l.startsWith("#")).map((l) => {
     const [step, repo, desc, deps] = l.split("	");
     return { step, repo, desc, deps: deps ?? "none" };
   }).filter((r) => r.step && r.repo);
   const draftDir = scoreDraftDir(topic);
-  (0, import_node_fs28.mkdirSync)(draftDir, { recursive: true });
-  atomicWrite((0, import_node_path23.join)(draftDir, "execution-dag.md"), `## Execution DAG
+  (0, import_node_fs29.mkdirSync)(draftDir, { recursive: true });
+  atomicWrite((0, import_node_path24.join)(draftDir, "execution-dag.md"), `## Execution DAG
 
 ${emitSoftDag(rows)}
 `);
@@ -19610,12 +19664,12 @@ async function checkDagRun(rest) {
     log.error("usage: score check-dag <topic>");
     return 2;
   }
-  const draft = (0, import_node_path23.join)(scoreDraftDir(topic), "execution-dag.md");
-  if (!(0, import_node_fs28.existsSync)(draft)) {
+  const draft = (0, import_node_path24.join)(scoreDraftDir(topic), "execution-dag.md");
+  if (!(0, import_node_fs29.existsSync)(draft)) {
     log.error(`score check-dag: ${draft} missing (run score emit-dag first / draft the section)`);
     return 1;
   }
-  const text = (0, import_node_fs28.readFileSync)(draft, "utf8");
+  const text = (0, import_node_fs29.readFileSync)(draft, "utf8");
   if (checkDagSection(text)) {
     log.ok("score check-dag: Execution DAG parses");
     return 0;
@@ -19647,33 +19701,69 @@ async function drilldownWith(rest, d, hooks) {
     m2 = rest[8];
     subproject = rest[9];
   }
-  if (!(0, import_node_fs28.existsSync)(ddDir)) {
+  if (!(0, import_node_fs29.existsSync)(ddDir)) {
     log.error(`score drilldown: dd-dir not found: ${ddDir}`);
     return 2;
   }
-  if (!(0, import_node_fs28.existsSync)(designDoc)) {
+  if (!(0, import_node_fs29.existsSync)(designDoc)) {
     log.error(`score drilldown: design-doc not found: ${designDoc}`);
     return 2;
   }
-  const scratch = (0, import_node_path23.join)(ddDir, "_scratch");
-  (0, import_node_fs28.mkdirSync)(scratch, { recursive: true });
+  const scratch = (0, import_node_path24.join)(ddDir, "_scratch");
+  (0, import_node_fs29.mkdirSync)(scratch, { recursive: true });
   const parts = [{ inst: i1, model: m1 }, ...i2 ? [{ inst: i2, model: m2 }] : []];
   const jobs = parts.map((p) => ({ ...p, outPath: resolveDrilldownPath(scratch, section, p.inst, subproject || void 0) }));
   const timeout = (provider) => scaledTimeout(DRILLDOWN_TIMEOUT(), d.multiplier(provider));
   const results = await Promise.all(jobs.map(async (j) => {
-    const promptFile = (0, import_node_path23.join)(scratch, `.${j.inst}-drill-prompt.md`);
+    const promptFile = (0, import_node_path24.join)(scratch, `.${j.inst}-drill-prompt.md`);
     atomicWrite(promptFile, composeDrilldownPrompt({ section, designDocPath: designDoc, focus, outPath: j.outPath }));
     const offset = d.offsetFor(j.inst, j.model, topic);
     const rc = await d.send(["--from", "maestro", j.inst, topic, `@${promptFile}`]);
     if (rc !== 0) return "missing";
     hooks.writeProbe?.(j.outPath);
     const ev = await d.wait(j.inst, j.model, topic, offset, ["done", "error"], timeout(j.model));
-    const fileText = (0, import_node_fs28.existsSync)(j.outPath) ? (0, import_node_fs28.readFileSync)(j.outPath, "utf8") : null;
+    const fileText = (0, import_node_fs29.existsSync)(j.outPath) ? (0, import_node_fs29.readFileSync)(j.outPath, "utf8") : null;
     return drilldownState(ev, fileText);
   }));
   const ok = results.filter((r) => r === "ok").length;
   log.ok(`score drilldown: ${ok}/${jobs.length} parts produced notes`);
   return ok > 0 ? 0 : 1;
+}
+async function offsetResetRun(rest) {
+  const keepFindings = rest.includes("--keep-findings");
+  const pos = rest.filter((t) => !t.startsWith("--"));
+  const [topic, instrument, phase] = pos;
+  if (!topic || !instrument || !phase) {
+    log.error("usage: score offset-reset <topic> <instrument> <phase> [--keep-findings]");
+    return 2;
+  }
+  if (phase !== "research" && phase !== "verify") {
+    log.error(`score offset-reset: phase must be research|verify (got ${phase})`);
+    return 2;
+  }
+  const art = scoreArtDir(topic);
+  if (!(0, import_node_fs29.existsSync)(art)) {
+    log.error(`score offset-reset: art dir missing: ${art}`);
+    return 1;
+  }
+  for (const f of [`${phase}-${instrument}.txt`, `${phase}-${instrument}.done`, `question-${instrument}.txt`])
+    (0, import_node_fs29.rmSync)((0, import_node_path24.join)(art, f), { force: true });
+  const c3 = cascadeTargets(phase, keepFindings);
+  if (!keepFindings) {
+    const td = topicDir(topic);
+    if ((0, import_node_fs29.existsSync)(td)) {
+      for (const name of (0, import_node_fs29.readdirSync)(td))
+        if (name.startsWith(`${instrument}-`)) (0, import_node_fs29.rmSync)((0, import_node_path24.join)(td, name, c3.partFile), { force: true });
+    }
+    for (const f of c3.artFiles) (0, import_node_fs29.rmSync)((0, import_node_path24.join)(art, f), { force: true });
+    const names = (0, import_node_fs29.readdirSync)(art);
+    for (const g of c3.artGlobs) {
+      const re = new RegExp("^" + g.replace(/[.]/g, "\\.").replace(/\*/g, ".*") + "$");
+      for (const n2 of names) if (re.test(n2)) (0, import_node_fs29.rmSync)((0, import_node_path24.join)(art, n2), { force: true });
+    }
+  }
+  log.ok(`score offset-reset: ${phase}/${instrument}${keepFindings ? " (kept findings)" : ""}`);
+  return 0;
 }
 async function forensicsRun(rest) {
   const topic = rest[0];
@@ -19698,12 +19788,12 @@ async function archiveRun(rest) {
   log.ok(`score archive: archived _score for ${topic}`);
   return 0;
 }
-var import_node_fs28, import_node_path23, liveInitDeps2, liveSpawnAllDeps, liveResearchSendDeps, liveResearchWaitDeps, DRILLDOWN_TIMEOUT;
+var import_node_fs29, import_node_path24, liveInitDeps2, liveSpawnAllDeps, liveResearchSendDeps, liveResearchWaitDeps, DRILLDOWN_TIMEOUT;
 var init_score2 = __esm({
   "src/commands/score.ts"() {
     "use strict";
-    import_node_fs28 = require("node:fs");
-    import_node_path23 = require("node:path");
+    import_node_fs29 = require("node:fs");
+    import_node_path24 = require("node:path");
     init_log();
     init_args();
     init_atomic();
@@ -19722,6 +19812,7 @@ var init_score2 = __esm({
     init_scoreDiff();
     init_dag();
     init_scoreAdjudicate();
+    init_scoreSkill();
     init_scoreWalk();
     init_send2();
     init_spawn();
@@ -19749,11 +19840,11 @@ var init_score2 = __esm({
 function performArtDir(topic, opts) {
   const override = process.env.CONSORT_PERFORM_ART_DIR_OVERRIDE;
   if (override) return override;
-  return (0, import_node_path24.join)(topicDir(topic, opts), "_perform");
+  return (0, import_node_path25.join)(topicDir(topic, opts), "_perform");
 }
 function deriveTopicFromPath(p) {
   if (!p) return "";
-  let base = (0, import_node_path24.basename)(p);
+  let base = (0, import_node_path25.basename)(p);
   base = base.replace(/^\d{4}-\d{2}-\d{2}-/, "");
   if (base.endsWith("-design.md")) base = base.slice(0, -"-design.md".length);
   else if (base.endsWith(".md")) base = base.slice(0, -".md".length);
@@ -19764,11 +19855,16 @@ function parsePerformArgs(tokens) {
   let branchName;
   let topic;
   let targets = [];
+  let force = false;
   const rest = [];
   for (let i2 = 0; i2 < tokens.length; i2++) {
     const t = tokens[i2];
     if (t === "--max-rounds" || t.startsWith("--max-rounds=")) {
       throw new PerformArgError("--max-rounds must be stripped by the directive before init");
+    }
+    if (t === "--force") {
+      force = true;
+      continue;
     }
     if (t === "--no-branch") {
       branchMode = "no-branch";
@@ -19794,13 +19890,13 @@ function parsePerformArgs(tokens) {
     }
     rest.push(t);
   }
-  return { rest: rest.join(" "), branchMode, branchName, topic, targets };
+  return { rest: rest.join(" "), branchMode, branchName, topic, targets, force };
 }
 function hasGitDir(dir) {
-  const dotgit = (0, import_node_path24.join)(dir, ".git");
-  if (!(0, import_node_fs29.existsSync)(dotgit)) return false;
+  const dotgit = (0, import_node_path25.join)(dir, ".git");
+  if (!(0, import_node_fs30.existsSync)(dotgit)) return false;
   try {
-    const st = (0, import_node_fs29.statSync)(dotgit);
+    const st = (0, import_node_fs30.statSync)(dotgit);
     return st.isDirectory() || st.isFile();
   } catch {
     return false;
@@ -19809,7 +19905,7 @@ function hasGitDir(dir) {
 function resolveTarget(docPath, cwd) {
   let docText;
   try {
-    docText = (0, import_node_fs29.readFileSync)(docPath, "utf8");
+    docText = (0, import_node_fs30.readFileSync)(docPath, "utf8");
   } catch {
     throw new PerformResolveError(`resolveTarget: doc unreadable: ${docPath}`);
   }
@@ -19819,10 +19915,10 @@ function resolveTarget(docPath, cwd) {
   }
   if (!t.present) return cwd;
   const slug = t.slug;
-  const sub = (0, import_node_path24.join)(cwd, slug);
+  const sub = (0, import_node_path25.join)(cwd, slug);
   let isDir2 = false;
   try {
-    isDir2 = (0, import_node_fs29.statSync)(sub).isDirectory();
+    isDir2 = (0, import_node_fs30.statSync)(sub).isDirectory();
   } catch {
     isDir2 = false;
   }
@@ -19842,33 +19938,33 @@ function detectProvider(repoRoot2, override) {
     }
     throw new ProviderError(`perform: unknown provider override '${override}' (allowed: codex, claude)`);
   }
-  return (0, import_node_fs29.existsSync)((0, import_node_path24.join)(repoRoot2, ".claude-plugin", "plugin.json")) ? "claude" : "codex";
+  return (0, import_node_fs30.existsSync)((0, import_node_path25.join)(repoRoot2, ".claude-plugin", "plugin.json")) ? "claude" : "codex";
 }
 function iterTargets(topic, opts) {
   const art = performArtDir(topic, opts);
-  const partsFile = (0, import_node_path24.join)(art, "parts.txt");
-  if ((0, import_node_fs29.existsSync)(partsFile)) {
+  const partsFile = (0, import_node_path25.join)(art, "parts.txt");
+  if ((0, import_node_fs30.existsSync)(partsFile)) {
     const out = [];
-    for (const line of (0, import_node_fs29.readFileSync)(partsFile, "utf8").split("\n")) {
+    for (const line of (0, import_node_fs30.readFileSync)(partsFile, "utf8").split("\n")) {
       if (line.length === 0) continue;
       const cols = line.split("	");
       out.push({ slug: cols[0] ?? "", cwd: cols[1] ?? "" });
     }
     return out;
   }
-  const targetCwdFile = (0, import_node_path24.join)(art, "target_cwd.txt");
-  if ((0, import_node_fs29.existsSync)(targetCwdFile)) {
-    const cwd = (0, import_node_fs29.readFileSync)(targetCwdFile, "utf8").replace(/\n$/, "");
+  const targetCwdFile = (0, import_node_path25.join)(art, "target_cwd.txt");
+  if ((0, import_node_fs30.existsSync)(targetCwdFile)) {
+    const cwd = (0, import_node_fs30.readFileSync)(targetCwdFile, "utf8").replace(/\n$/, "");
     return [{ slug: "main", cwd }];
   }
   return [];
 }
-var import_node_path24, import_node_fs29, PerformArgError, PerformResolveError, ProviderError;
+var import_node_path25, import_node_fs30, PerformArgError, PerformResolveError, ProviderError;
 var init_perform = __esm({
   "src/core/perform.ts"() {
     "use strict";
-    import_node_path24 = require("node:path");
-    import_node_fs29 = require("node:fs");
+    import_node_path25 = require("node:path");
+    import_node_fs30 = require("node:fs");
     init_paths();
     init_audit();
     init_args();
@@ -19974,7 +20070,7 @@ function performState(ev, verifyText) {
 function composeRound1Prompt2(args) {
   const { designPath, planPath, verifyPath } = args;
   const round = args.round ?? 1;
-  const testLog = `${(0, import_node_path25.dirname)(verifyPath)}/test-output-${round}.log`;
+  const testLog = `${(0, import_node_path26.dirname)(verifyPath)}/test-output-${round}.log`;
   return [
     `You are entering ROUND ${round} of /consort:perform.`,
     "",
@@ -20053,7 +20149,7 @@ function composeDagUnitPrompt(args) {
   ].join("\n");
 }
 function composeFixPrompt2(round, bundleText, verifyPath) {
-  const testLog = `${(0, import_node_path25.dirname)(verifyPath)}/test-output-${round}.log`;
+  const testLog = `${(0, import_node_path26.dirname)(verifyPath)}/test-output-${round}.log`;
   return [
     `You are entering ROUND ${round} of /consort:perform (fix loop).`,
     "",
@@ -20098,11 +20194,11 @@ function composeFixPrompt2(round, bundleText, verifyPath) {
     BLOCKERS2
   ].join("\n");
 }
-var import_node_path25, BRANCH_DISCIPLINE2, BLOCKERS2;
+var import_node_path26, BRANCH_DISCIPLINE2, BLOCKERS2;
 var init_performTurn = __esm({
   "src/core/performTurn.ts"() {
     "use strict";
-    import_node_path25 = require("node:path");
+    import_node_path26 = require("node:path");
     BRANCH_DISCIPLINE2 = `BRANCH DISCIPLINE (hard rule):
 - You are operating on the conductor's current branch in the target
   repository. Do NOT run 'git checkout', 'git switch',
@@ -20157,17 +20253,17 @@ function enumerateSiblings(hub, declaredTargets) {
   const excluded = new Set(declaredTargets);
   let entries;
   try {
-    entries = (0, import_node_fs30.readdirSync)(hub, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+    entries = (0, import_node_fs31.readdirSync)(hub, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
   } catch {
     return { outcome: "not-a-directory", siblings: [] };
   }
   const siblings = [];
   for (const slug of entries) {
     if (slug.startsWith(".")) continue;
-    const dotGit = (0, import_node_path26.join)(hub, slug, ".git");
+    const dotGit = (0, import_node_path27.join)(hub, slug, ".git");
     let isRepo = false;
     try {
-      isRepo = (0, import_node_fs30.statSync)(dotGit).isDirectory();
+      isRepo = (0, import_node_fs31.statSync)(dotGit).isDirectory();
     } catch {
       isRepo = false;
     }
@@ -20184,7 +20280,7 @@ function captureSiblingBaseline(r, siblingCwd) {
   if (symref.code !== 0) return { outcome: "detached" };
   const branch = symref.stdout.trim();
   const sha = r.run("git", ["rev-parse", "HEAD"]).stdout.trim();
-  const slug = (0, import_node_path26.basename)(siblingCwd);
+  const slug = (0, import_node_path27.basename)(siblingCwd);
   const row = `${slug}	${sha}	${branch}
 `;
   return { outcome: "ok", row, slug, sha, branch };
@@ -20236,12 +20332,12 @@ function revertAndReplay(r, topic, baselineSha, branch, shaList) {
   }
   return { outcome: "ok", rescue };
 }
-var import_node_fs30, import_node_path26;
+var import_node_fs31, import_node_path27;
 var init_performSibling = __esm({
   "src/core/performSibling.ts"() {
     "use strict";
-    import_node_fs30 = require("node:fs");
-    import_node_path26 = require("node:path");
+    import_node_fs31 = require("node:fs");
+    import_node_path27 = require("node:path");
   }
 });
 
@@ -20270,15 +20366,76 @@ __export(perform_exports, {
   waveWaitWith: () => waveWaitWith
 });
 function partModel(art) {
-  const p = (0, import_node_path27.join)(art, "provider.txt");
-  return (0, import_node_fs31.existsSync)(p) ? (0, import_node_fs31.readFileSync)(p, "utf8").trim() || "codex" : "codex";
+  const p = (0, import_node_path28.join)(art, "provider.txt");
+  return (0, import_node_fs32.existsSync)(p) ? (0, import_node_fs32.readFileSync)(p, "utf8").trim() || "codex" : "codex";
 }
 function detectRouting(docText) {
   return /^\*\*Target Sub-Project\(s\):\*\*/m.test(docText) && /^## Execution DAG[ \t]*$/m.test(docText) ? "multi" : "single";
 }
 function usage3() {
-  log.error("usage: perform <init|pre-snapshot|branch|turn-send|turn-wait|scope-check|sibling-baseline|sibling-verify|sibling-rescue|cross-signal|summary|finish|finish-one|forensics|archive|dag-parse|wave-wait|multi-init|send-unit> ...");
+  log.error("usage: perform <init|audit|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|sibling-baseline|sibling-verify|sibling-rescue|cross-signal|summary|finish|finish-one|forensics|archive|dag-parse|wave-wait|multi-init|send-unit|drop-part|find-latest-doc|verify-dag-repos> ...");
   return 2;
+}
+async function findLatestDocRun(rest) {
+  let cwd;
+  for (let i2 = 0; i2 < rest.length; i2++) {
+    if (rest[i2] === "--cwd") {
+      cwd = rest[i2 + 1];
+      i2++;
+    } else if (rest[i2].startsWith("--cwd=")) {
+      cwd = rest[i2].slice("--cwd=".length);
+    }
+  }
+  const stateDir = repoStateDir(cwd ? { cwd } : void 0);
+  let best = null;
+  if ((0, import_node_fs32.existsSync)(stateDir)) for (const topic of (0, import_node_fs32.readdirSync)(stateDir)) {
+    const dd = (0, import_node_path28.join)(stateDir, topic, "_score", "design-doc");
+    if (!(0, import_node_fs32.existsSync)(dd)) continue;
+    for (const f of (0, import_node_fs32.readdirSync)(dd)) {
+      if (!f.endsWith("-design.md")) continue;
+      const p = (0, import_node_path28.join)(dd, f);
+      let mt = 0;
+      try {
+        mt = (0, import_node_fs32.statSync)(p).mtimeMs;
+      } catch {
+        continue;
+      }
+      if (!best || mt > best.mt) best = { path: p, mt };
+    }
+  }
+  if (!best) {
+    log.error("perform find-latest-doc: no *-design.md found");
+    return 1;
+  }
+  process.stdout.write(`DOC=${best.path}
+`);
+  return 0;
+}
+async function auditRun(rest) {
+  const doc = rest[0];
+  if (!doc || rest.length !== 1) {
+    log.error("usage: perform audit <doc>");
+    return 2;
+  }
+  if (!(0, import_node_fs32.existsSync)(doc)) {
+    log.error(`perform audit: doc unreadable: ${doc}`);
+    return 2;
+  }
+  let text;
+  try {
+    text = (0, import_node_fs32.readFileSync)(doc, "utf8");
+  } catch {
+    log.error(`perform audit: doc unreadable: ${doc}`);
+    return 2;
+  }
+  const ad = auditDoc(text);
+  if (ad.verdict === "FAIL") {
+    for (const i2 of ad.issues) process.stderr.write(`ISSUE=${i2}
+`);
+    return 1;
+  }
+  log.ok(`perform audit: PASS ${doc}`);
+  return 0;
 }
 async function run11(args) {
   const verb = args[0];
@@ -20286,10 +20443,14 @@ async function run11(args) {
   switch (verb) {
     case "init":
       return initRun3(applyArgsFile(rest));
+    case "audit":
+      return auditRun(rest);
     case "turn-send":
       return turnSendRun2(rest);
     case "turn-wait":
       return turnWaitRun2(rest);
+    case "reset-status":
+      return resetStatusRun(rest);
     case "pre-snapshot":
       return preSnapshotRun(rest);
     case "branch":
@@ -20322,6 +20483,12 @@ async function run11(args) {
       return multiInitRun(rest);
     case "send-unit":
       return sendUnitRun(rest);
+    case "drop-part":
+      return dropPartRun(rest);
+    case "find-latest-doc":
+      return findLatestDocRun(rest);
+    case "verify-dag-repos":
+      return verifyDagReposRun(rest);
     default:
       return usage3();
   }
@@ -20345,11 +20512,11 @@ async function initWith3(tokens, d) {
     log.error("perform init: exactly one design-doc path is required");
     return 2;
   }
-  if (!(0, import_node_fs31.existsSync)(designPath)) {
+  if (!(0, import_node_fs32.existsSync)(designPath)) {
     log.error(`perform init: design doc unreadable: ${designPath}`);
     return 1;
   }
-  const text = (0, import_node_fs31.readFileSync)(designPath, "utf8");
+  const text = (0, import_node_fs32.readFileSync)(designPath, "utf8");
   const topic = parsed.topic || deriveTopicFromPath(designPath);
   if (!topic) {
     log.error("perform init: could not derive topic; pass --topic <slug>");
@@ -20359,11 +20526,14 @@ async function initWith3(tokens, d) {
   if (ad.verdict === "FAIL") {
     for (const i2 of ad.issues) process.stderr.write(`ISSUE=${i2}
 `);
-    log.error(`perform init: audit FAILED on ${designPath}`);
-    return 1;
+    if (!parsed.force) {
+      log.error(`perform init: audit FAILED on ${designPath}`);
+      return 1;
+    }
+    log.warn(`perform init: audit FAILED on ${designPath} but --force given; proceeding`);
   }
   const art = performArtDir(topic);
-  if ((0, import_node_fs31.existsSync)(art)) {
+  if ((0, import_node_fs32.existsSync)(art)) {
     log.error(`perform init: topic already in flight: ${art} (run /consort:coda or pick a different --topic)`);
     return 2;
   }
@@ -20388,12 +20558,13 @@ async function initWith3(tokens, d) {
     }
     throw e;
   }
-  (0, import_node_fs31.mkdirSync)(art, { recursive: true });
-  atomicWrite((0, import_node_path27.join)(art, "design.md"), text);
-  atomicWrite((0, import_node_path27.join)(art, "topic.txt"), topic);
-  atomicWrite((0, import_node_path27.join)(art, "target_cwd.txt"), targetCwd + "\n");
-  atomicWrite((0, import_node_path27.join)(art, "provider.txt"), provider + "\n");
-  atomicWrite((0, import_node_path27.join)(art, "multi-repo.txt"), (routing === "multi" ? "multi" : "single") + "\n");
+  (0, import_node_fs32.mkdirSync)(art, { recursive: true });
+  atomicWrite((0, import_node_path28.join)(art, "design.md"), text);
+  atomicWrite((0, import_node_path28.join)(art, "topic.txt"), topic);
+  atomicWrite((0, import_node_path28.join)(art, "target_cwd.txt"), targetCwd + "\n");
+  atomicWrite((0, import_node_path28.join)(art, "provider.txt"), provider + "\n");
+  atomicWrite((0, import_node_path28.join)(art, "auto_provider.txt"), provider + "\n");
+  atomicWrite((0, import_node_path28.join)(art, "multi-repo.txt"), (routing === "multi" ? "multi" : "single") + "\n");
   log.ok(`perform init: topic=${topic} routing=${routing} provider=${provider}`);
   process.stdout.write(`ART=${art}
 TOPIC=${topic}
@@ -20417,38 +20588,38 @@ async function turnSendRun2(rest) {
 }
 async function turnSendWith2(topic, round, d) {
   const art = performArtDir(topic);
-  if (!(0, import_node_fs31.existsSync)(art)) {
+  if (!(0, import_node_fs32.existsSync)(art)) {
     log.error(`perform turn-send: ${art} not found \u2014 run perform init first`);
     return 1;
   }
   const model = partModel(art);
-  const stateFile = (0, import_node_path27.join)(art, `turn-cody-${round}.txt`);
-  if ((0, import_node_fs31.existsSync)(stateFile)) {
+  const stateFile = (0, import_node_path28.join)(art, `turn-cody-${round}.txt`);
+  if ((0, import_node_fs32.existsSync)(stateFile)) {
     log.error(`perform turn-send: ${stateFile} already exists; rm to retry`);
     return 1;
   }
   const outbox = outboxPath(PART, model, topic);
-  if (!(0, import_node_fs31.existsSync)(outbox)) {
+  if (!(0, import_node_fs32.existsSync)(outbox)) {
     log.error(`perform turn-send: outbox not found at ${outbox} \u2014 was cody spawned?`);
     return 1;
   }
   const sp = statusPath(PART, model, topic);
-  if ((0, import_node_fs31.existsSync)(sp)) {
-    const m = (0, import_node_fs31.readFileSync)(sp, "utf8").match(/"state":"([^"]*)"/);
+  if ((0, import_node_fs32.existsSync)(sp)) {
+    const m = (0, import_node_fs32.readFileSync)(sp, "utf8").match(/"state":"([^"]*)"/);
     if (m && m[1] && m[1] !== "idle") {
       log.error(`perform turn-send: part not idle (state=${m[1]}); previous turn still in flight`);
       return 1;
     }
   }
-  const promptFile = (0, import_node_path27.join)(art, `cody_turn_prompt_${round}.md`);
-  if (round === 1) atomicWrite(promptFile, composeRound1Prompt2({ designPath: (0, import_node_path27.join)(art, "design.md"), planPath: (0, import_node_path27.join)(art, "plan.md"), verifyPath: (0, import_node_path27.join)(art, "verify-report-1.md"), round }));
+  const promptFile = (0, import_node_path28.join)(art, `cody_turn_prompt_${round}.md`);
+  if (round === 1) atomicWrite(promptFile, composeRound1Prompt2({ designPath: (0, import_node_path28.join)(art, "design.md"), planPath: (0, import_node_path28.join)(art, "plan.md"), verifyPath: (0, import_node_path28.join)(art, "verify-report-1.md"), round }));
   else {
-    const bundle = (0, import_node_path27.join)(art, `fix-prompt-${round}.md`);
-    if (!(0, import_node_fs31.existsSync)(bundle)) {
+    const bundle = (0, import_node_path28.join)(art, `fix-prompt-${round}.md`);
+    if (!(0, import_node_fs32.existsSync)(bundle)) {
       log.error(`perform turn-send: fix-prompt-${round}.md not found at ${bundle}; the directive must write it first`);
       return 1;
     }
-    atomicWrite(promptFile, composeFixPrompt2(round, (0, import_node_fs31.readFileSync)(bundle, "utf8"), (0, import_node_path27.join)(art, `verify-report-${round}.md`)));
+    atomicWrite(promptFile, composeFixPrompt2(round, (0, import_node_fs32.readFileSync)(bundle, "utf8"), (0, import_node_path28.join)(art, `verify-report-${round}.md`)));
   }
   const offset = d.offsetFor(PART, model, topic);
   atomicWrite(stateFile, `OFFSET=${offset}
@@ -20476,12 +20647,12 @@ async function turnWaitRun2(rest) {
 async function turnWaitWith2(topic, round, d) {
   const art = performArtDir(topic);
   const model = partModel(art);
-  const stateFile = (0, import_node_path27.join)(art, `turn-cody-${round}.txt`);
-  if (!(0, import_node_fs31.existsSync)(stateFile)) {
+  const stateFile = (0, import_node_path28.join)(art, `turn-cody-${round}.txt`);
+  if (!(0, import_node_fs32.existsSync)(stateFile)) {
     log.error(`perform turn-wait: ${stateFile} missing \u2014 run perform turn-send first`);
     return 1;
   }
-  const offset = parseLatestOffset((0, import_node_fs31.readFileSync)(stateFile, "utf8"));
+  const offset = parseLatestOffset((0, import_node_fs32.readFileSync)(stateFile, "utf8"));
   if (offset === null) {
     log.error(`perform turn-wait: OFFSET not set in ${stateFile}`);
     return 1;
@@ -20489,39 +20660,55 @@ async function turnWaitWith2(topic, round, d) {
   const timeout = scaledTimeout(PERFORM_TURN_TIMEOUT(), d.multiplier(model));
   log.info(`[turn-wait] cody round=${round} offset=${offset} timeout=${timeout}s`);
   const ev = await d.wait(PART, model, topic, offset, ["done", "error", "question"], timeout);
-  const verifyPath = (0, import_node_path27.join)(art, `verify-report-${round}.md`);
-  const verifyText = (0, import_node_fs31.existsSync)(verifyPath) ? (0, import_node_fs31.readFileSync)(verifyPath, "utf8") : null;
+  const verifyPath = (0, import_node_path28.join)(art, `verify-report-${round}.md`);
+  const verifyText = (0, import_node_fs32.existsSync)(verifyPath) ? (0, import_node_fs32.readFileSync)(verifyPath, "utf8") : null;
   let ts = performState(ev, verifyText);
   if (ts === "question" && ev) {
     const payload = extractQuestionPayload(ev, d.now());
     if (payload !== null) {
-      atomicWrite((0, import_node_path27.join)(art, `question-cody-${round}.txt`), payload);
+      atomicWrite((0, import_node_path28.join)(art, `question-cody-${round}.txt`), payload);
       const bumped = outboxOffset(outboxPath(PART, model, topic));
-      (0, import_node_fs31.appendFileSync)(stateFile, `OFFSET=${bumped}
+      (0, import_node_fs32.appendFileSync)(stateFile, `OFFSET=${bumped}
 TS=question
 `);
     } else {
       ts = "failed";
-      (0, import_node_fs31.appendFileSync)(stateFile, "TS=failed\n");
+      (0, import_node_fs32.appendFileSync)(stateFile, "TS=failed\n");
       log.warn("[turn-wait] malformed question (no message); downgraded to failed");
     }
-  } else (0, import_node_fs31.appendFileSync)(stateFile, `TS=${ts}
+  } else (0, import_node_fs32.appendFileSync)(stateFile, `TS=${ts}
 `);
-  (0, import_node_fs31.writeFileSync)((0, import_node_path27.join)(art, `turn-cody-${round}.done`), "");
+  (0, import_node_fs32.writeFileSync)((0, import_node_path28.join)(art, `turn-cody-${round}.done`), "");
   log.ok(`[turn-wait] cody round=${round} TS=${ts}`);
   return 0;
 }
+async function resetStatusRun(rest) {
+  const [topic, instrument] = rest;
+  if (!topic || !instrument || rest.length !== 2) {
+    log.error("usage: perform reset-status <topic> <instrument>");
+    return 2;
+  }
+  const model = resolveModel(instrument, topic);
+  if (model === null) {
+    log.error(`perform reset-status: no part for instrument=${instrument} on topic=${topic}`);
+    return 1;
+  }
+  atomicWrite(statusPath(instrument, model, topic), `{"state":"idle","last_event":"force-reset"}
+`);
+  log.ok(`perform reset-status: ${instrument} state=idle`);
+  return 0;
+}
 function kvFileField(file, key) {
-  if (!(0, import_node_fs31.existsSync)(file)) return "";
-  for (const line of (0, import_node_fs31.readFileSync)(file, "utf8").split("\n")) {
+  if (!(0, import_node_fs32.existsSync)(file)) return "";
+  for (const line of (0, import_node_fs32.readFileSync)(file, "utf8").split("\n")) {
     const eq = line.indexOf("=");
     if (eq > 0 && line.slice(0, eq) === key) return line.slice(eq + 1);
   }
   return "";
 }
 function branchMapField(map, slug) {
-  if (!(0, import_node_fs31.existsSync)(map)) return "";
-  for (const line of (0, import_node_fs31.readFileSync)(map, "utf8").split("\n")) {
+  if (!(0, import_node_fs32.existsSync)(map)) return "";
+  for (const line of (0, import_node_fs32.readFileSync)(map, "utf8").split("\n")) {
     const [s, b] = line.split("	");
     if (s === slug) return b ?? "";
   }
@@ -20529,7 +20716,7 @@ function branchMapField(map, slug) {
 }
 function isDir(p) {
   try {
-    return (0, import_node_fs31.statSync)(p).isDirectory();
+    return (0, import_node_fs32.statSync)(p).isDirectory();
   } catch {
     return false;
   }
@@ -20543,21 +20730,21 @@ async function preSnapshotRun(rest) {
 }
 async function preSnapshotWith(topic, opts, runnerFor) {
   const art = performArtDir(topic, opts);
-  if (!(0, import_node_fs31.existsSync)(art)) {
+  if (!(0, import_node_fs32.existsSync)(art)) {
     log.error(`perform pre-snapshot: art-dir missing: ${art} (run perform init first)`);
     return 1;
   }
-  (0, import_node_fs31.mkdirSync)((0, import_node_path27.join)(art, "baselines"), { recursive: true });
+  (0, import_node_fs32.mkdirSync)((0, import_node_path28.join)(art, "baselines"), { recursive: true });
   let clean = 0, committed = 0, blocked = 0;
   for (const { slug, cwd } of iterTargets(topic, opts)) {
     if (!slug || !cwd) continue;
-    const snap = preSnapshot(runnerFor(cwd), topic);
+    const snap = preSnapshot(runnerFor(cwd), "perform", topic);
     if (snap.state === "not-git") {
       log.error(`perform pre-snapshot: not a git repository: ${cwd}`);
       return 2;
     }
     atomicWrite(
-      (0, import_node_path27.join)(art, "baselines", `${slug}.tsv`),
+      (0, import_node_path28.join)(art, "baselines", `${slug}.tsv`),
       `slug=${slug}
 cwd=${cwd}
 branch=${snap.branch}
@@ -20598,7 +20785,7 @@ async function branchRun2(rest) {
 }
 async function branchWith2(a2, opts, runnerFor) {
   const art = performArtDir(a2.topic, opts);
-  if (!(0, import_node_fs31.existsSync)(art)) {
+  if (!(0, import_node_fs32.existsSync)(art)) {
     log.error(`perform branch: art-dir missing: ${art} (run perform init first)`);
     return 1;
   }
@@ -20623,13 +20810,13 @@ async function branchWith2(a2, opts, runnerFor) {
       log.warn(`branch: checkout -b failed in ${cwd}; staying on current branch`);
     }
     rows.push(`${slug}	${recorded}`);
-    const baseline = (0, import_node_path27.join)(art, "baselines", `${slug}.tsv`);
-    if ((0, import_node_fs31.existsSync)(baseline)) {
-      const m = (0, import_node_fs31.readFileSync)(baseline, "utf8").match(/^baseline_sha=(.*)$/m);
-      if (m) atomicWrite((0, import_node_path27.join)(art, "branch-base.sha"), m[1] + "\n");
+    const baseline = (0, import_node_path28.join)(art, "baselines", `${slug}.tsv`);
+    if ((0, import_node_fs32.existsSync)(baseline)) {
+      const m = (0, import_node_fs32.readFileSync)(baseline, "utf8").match(/^baseline_sha=(.*)$/m);
+      if (m) atomicWrite((0, import_node_path28.join)(art, "branch-base.sha"), m[1] + "\n");
     }
   }
-  atomicWrite((0, import_node_path27.join)(art, "perform-branches.tsv"), rows.length ? rows.join("\n") + "\n" : "");
+  atomicWrite((0, import_node_path28.join)(art, "perform-branches.tsv"), rows.length ? rows.join("\n") + "\n" : "");
   log.ok(`perform branch: ${rows.length} target(s) recorded`);
   return 0;
 }
@@ -20643,42 +20830,42 @@ async function scopeCheckRun(rest) {
 }
 async function scopeCheckWith(topic, d) {
   const art = performArtDir(topic);
-  const designFile = (0, import_node_path27.join)(art, "design.md");
-  const partsFile = (0, import_node_path27.join)(art, "parts.txt");
+  const designFile = (0, import_node_path28.join)(art, "design.md");
+  const partsFile = (0, import_node_path28.join)(art, "parts.txt");
   let diffPaths;
-  if ((0, import_node_fs31.existsSync)(partsFile)) {
-    if (!(0, import_node_fs31.existsSync)(designFile)) {
+  if ((0, import_node_fs32.existsSync)(partsFile)) {
+    if (!(0, import_node_fs32.existsSync)(designFile)) {
       log.error(`perform scope-check: design.md missing under ${art}`);
       return 1;
     }
     diffPaths = [];
     for (const t of iterTargets(topic)) {
       if (!t.slug || !t.cwd) continue;
-      const base = kvFileField((0, import_node_path27.join)(art, "baselines", `${t.slug}.tsv`), "baseline_sha");
+      const base = kvFileField((0, import_node_path28.join)(art, "baselines", `${t.slug}.tsv`), "baseline_sha");
       if (!base) continue;
-      const repo = (0, import_node_path27.basename)(t.cwd);
+      const repo = (0, import_node_path28.basename)(t.cwd);
       const sub = d.runnerFor(t.cwd).run("git", ["diff", "--name-only", `${base}..HEAD`]).stdout.split("\n").filter((x) => x.length > 0);
       for (const p of sub) diffPaths.push(`${repo}/${p}`);
     }
   } else {
-    const targetFile = (0, import_node_path27.join)(art, "target_cwd.txt"), baseFile = (0, import_node_path27.join)(art, "branch-base.sha");
-    if (!(0, import_node_fs31.existsSync)(targetFile) || !(0, import_node_fs31.existsSync)(baseFile)) {
+    const targetFile = (0, import_node_path28.join)(art, "target_cwd.txt"), baseFile = (0, import_node_path28.join)(art, "branch-base.sha");
+    if (!(0, import_node_fs32.existsSync)(targetFile) || !(0, import_node_fs32.existsSync)(baseFile)) {
       log.error(`perform scope-check: target_cwd.txt/branch-base.sha missing under ${art}`);
       return 1;
     }
-    if (!(0, import_node_fs31.existsSync)(designFile)) {
+    if (!(0, import_node_fs32.existsSync)(designFile)) {
       log.error(`perform scope-check: design.md missing under ${art}`);
       return 1;
     }
-    const targetCwd = (0, import_node_fs31.readFileSync)(targetFile, "utf8").split("\n")[0].trim();
-    const base = (0, import_node_fs31.readFileSync)(baseFile, "utf8").split("\n")[0].trim();
+    const targetCwd = (0, import_node_fs32.readFileSync)(targetFile, "utf8").split("\n")[0].trim();
+    const base = (0, import_node_fs32.readFileSync)(baseFile, "utf8").split("\n")[0].trim();
     diffPaths = d.runnerFor(targetCwd).run("git", ["diff", "--name-only", `${base}..HEAD`]).stdout.split("\n").filter((x) => x.length > 0);
   }
-  atomicWrite((0, import_node_path27.join)(art, "diff-paths.txt"), diffPaths.length ? diffPaths.join("\n") + "\n" : "");
-  const compPaths = extractComponentsPaths((0, import_node_fs31.readFileSync)(designFile, "utf8"));
-  atomicWrite((0, import_node_path27.join)(art, "components-paths.txt"), compPaths.length ? compPaths.join("\n") + "\n" : "");
+  atomicWrite((0, import_node_path28.join)(art, "diff-paths.txt"), diffPaths.length ? diffPaths.join("\n") + "\n" : "");
+  const compPaths = extractComponentsPaths((0, import_node_fs32.readFileSync)(designFile, "utf8"));
+  atomicWrite((0, import_node_path28.join)(art, "components-paths.txt"), compPaths.length ? compPaths.join("\n") + "\n" : "");
   const oos = matchDiffAgainstComponents(diffPaths, compPaths);
-  const oosPath = (0, import_node_path27.join)(art, "scope-out-of-scope.txt");
+  const oosPath = (0, import_node_path28.join)(art, "scope-out-of-scope.txt");
   atomicWrite(oosPath, oos.length ? oos.join("\n") + "\n" : "");
   if (oos.length > 0) log.warn(`scope conformance: ${oos.length} out-of-scope path(s) detected`);
   process.stdout.write(`OOS_COUNT=${oos.length}
@@ -20696,7 +20883,7 @@ async function siblingBaselineRun(rest) {
 }
 async function siblingBaselineWith(topic, hubCwd, d) {
   const art = performArtDir(topic);
-  if (!(0, import_node_fs31.existsSync)(art)) {
+  if (!(0, import_node_fs32.existsSync)(art)) {
     log.error(`perform sibling-baseline: art-dir missing: ${art}`);
     return 1;
   }
@@ -20704,7 +20891,7 @@ async function siblingBaselineWith(topic, hubCwd, d) {
     log.error(`perform sibling-baseline: hub-cwd not a directory: ${hubCwd}`);
     return 1;
   }
-  const declared = iterTargets(topic).map((t) => (0, import_node_path27.basename)(t.cwd)).filter((x) => x.length > 0);
+  const declared = iterTargets(topic).map((t) => (0, import_node_path28.basename)(t.cwd)).filter((x) => x.length > 0);
   const { outcome, siblings } = enumerateSiblings(hubCwd, declared);
   if (outcome === "not-a-directory") {
     log.error(`perform sibling-baseline: hub-cwd not enumerable: ${hubCwd}`);
@@ -20712,12 +20899,12 @@ async function siblingBaselineWith(topic, hubCwd, d) {
   }
   const rows = [];
   for (const slug of siblings) {
-    const sibCwd = (0, import_node_path27.join)(hubCwd, slug);
+    const sibCwd = (0, import_node_path28.join)(hubCwd, slug);
     const res = captureSiblingBaseline(d.runnerFor(sibCwd), sibCwd);
     if (res.outcome === "ok" && res.row) rows.push(res.row);
     else log.warn(`perform sibling-baseline: skipped ${slug} (${res.outcome})`);
   }
-  atomicWrite((0, import_node_path27.join)(art, "sibling-baseline.txt"), formatBaselineFile(rows));
+  atomicWrite((0, import_node_path28.join)(art, "sibling-baseline.txt"), formatBaselineFile(rows));
   log.info(`perform sibling-baseline: ${rows.length} sibling repo(s) captured`);
   return 0;
 }
@@ -20731,19 +20918,19 @@ async function siblingVerifyRun(rest) {
 }
 async function siblingVerifyWith(topic, hubCwd, d) {
   const art = performArtDir(topic);
-  const baselineFile = (0, import_node_path27.join)(art, "sibling-baseline.txt");
+  const baselineFile = (0, import_node_path28.join)(art, "sibling-baseline.txt");
   if (!isDir(hubCwd)) {
     log.error(`perform sibling-verify: hub-cwd not a directory: ${hubCwd}`);
     return 1;
   }
-  if (!(0, import_node_fs31.existsSync)(baselineFile)) {
+  if (!(0, import_node_fs32.existsSync)(baselineFile)) {
     log.error(`perform sibling-verify: no sibling-baseline.txt under ${art} (run sibling-baseline first)`);
     return 1;
   }
-  const rows = parseBaselineFile((0, import_node_fs31.readFileSync)(baselineFile, "utf8"));
+  const rows = parseBaselineFile((0, import_node_fs32.readFileSync)(baselineFile, "utf8"));
   const out = [];
   for (const { slug, sha, branch } of rows) {
-    const sibCwd = (0, import_node_path27.join)(hubCwd, slug);
+    const sibCwd = (0, import_node_path28.join)(hubCwd, slug);
     const res = diffSiblingAgainstBaseline(d.runnerFor(sibCwd), sha, branch);
     if (res.outcome !== "ok") {
       log.warn(`perform sibling-verify: diff failed for ${slug} (${res.outcome}); skipping`);
@@ -20757,7 +20944,7 @@ async function siblingVerifyWith(topic, hubCwd, d) {
       out.push(`${slug}	${csha}	${subject}`);
     }
   }
-  atomicWrite((0, import_node_path27.join)(art, "sibling-rogue.txt"), out.length ? out.join("\n") + "\n" : "");
+  atomicWrite((0, import_node_path28.join)(art, "sibling-rogue.txt"), out.length ? out.join("\n") + "\n" : "");
   if (out.length > 0) log.warn(`perform sibling-verify: ${out.length} rogue commit(s) on undeclared sibling main branches`);
   return 0;
 }
@@ -20771,18 +20958,18 @@ async function siblingRescueRun(rest) {
 }
 async function siblingRescueWith(topic, hubCwd, d) {
   const art = performArtDir(topic);
-  const rogueFile = (0, import_node_path27.join)(art, "sibling-rogue.txt"), baselineFile = (0, import_node_path27.join)(art, "sibling-baseline.txt");
-  if (!(0, import_node_fs31.existsSync)(rogueFile)) {
+  const rogueFile = (0, import_node_path28.join)(art, "sibling-rogue.txt"), baselineFile = (0, import_node_path28.join)(art, "sibling-baseline.txt");
+  if (!(0, import_node_fs32.existsSync)(rogueFile)) {
     log.error(`perform sibling-rescue: no sibling-rogue.txt under ${art}`);
     return 1;
   }
-  if (!(0, import_node_fs31.existsSync)(baselineFile)) {
+  if (!(0, import_node_fs32.existsSync)(baselineFile)) {
     log.error(`perform sibling-rescue: no sibling-baseline.txt under ${art}`);
     return 1;
   }
   const shasBySlug = /* @__PURE__ */ new Map();
   const order = [];
-  for (const line of (0, import_node_fs31.readFileSync)(rogueFile, "utf8").split("\n")) {
+  for (const line of (0, import_node_fs32.readFileSync)(rogueFile, "utf8").split("\n")) {
     if (line.length === 0) continue;
     const [slug, sha] = line.split("	");
     if (!slug) continue;
@@ -20792,7 +20979,7 @@ async function siblingRescueWith(topic, hubCwd, d) {
     }
     if (sha) shasBySlug.get(slug).push(sha);
   }
-  const baseBySlug = new Map(parseBaselineFile((0, import_node_fs31.readFileSync)(baselineFile, "utf8")).map((r) => [r.slug, r]));
+  const baseBySlug = new Map(parseBaselineFile((0, import_node_fs32.readFileSync)(baselineFile, "utf8")).map((r) => [r.slug, r]));
   const resultRows = [];
   for (const slug of order) {
     const b = baseBySlug.get(slug);
@@ -20800,7 +20987,7 @@ async function siblingRescueWith(topic, hubCwd, d) {
       log.warn(`perform sibling-rescue: no baseline row for ${slug}; skipping`);
       continue;
     }
-    const sibCwd = (0, import_node_path27.join)(hubCwd, slug);
+    const sibCwd = (0, import_node_path28.join)(hubCwd, slug);
     const res = revertAndReplay(d.runnerFor(sibCwd), topic, b.sha, b.branch, shasBySlug.get(slug));
     if (res.outcome === "ok") {
       log.ok(`perform sibling-rescue: rescued ${slug} (${res.rescue})`);
@@ -20810,7 +20997,7 @@ async function siblingRescueWith(topic, hubCwd, d) {
       resultRows.push(`${slug}	rescue-failed`);
     }
   }
-  (0, import_node_fs31.appendFileSync)((0, import_node_path27.join)(art, "sibling-rescue.txt"), resultRows.length ? resultRows.join("\n") + "\n" : "");
+  (0, import_node_fs32.appendFileSync)((0, import_node_path28.join)(art, "sibling-rescue.txt"), resultRows.length ? resultRows.join("\n") + "\n" : "");
   return 0;
 }
 async function crossSignalRun(rest) {
@@ -20823,13 +21010,13 @@ async function crossSignalRun(rest) {
 }
 async function crossSignalWith(topic, d) {
   const art = performArtDir(topic);
-  const wavesFile = (0, import_node_path27.join)(art, "dag-waves.txt"), edgesFile = (0, import_node_path27.join)(art, "dag-edges.txt");
-  if (!(0, import_node_fs31.existsSync)(wavesFile)) {
+  const wavesFile = (0, import_node_path28.join)(art, "dag-waves.txt"), edgesFile = (0, import_node_path28.join)(art, "dag-edges.txt");
+  if (!(0, import_node_fs32.existsSync)(wavesFile)) {
     log.error(`perform cross-signal: dag-waves.txt missing under ${art} (run dag-parse first)`);
     return 1;
   }
-  const wavesText = (0, import_node_fs31.readFileSync)(wavesFile, "utf8");
-  const edgesText = (0, import_node_fs31.existsSync)(edgesFile) ? (0, import_node_fs31.readFileSync)(edgesFile, "utf8") : "";
+  const wavesText = (0, import_node_fs32.readFileSync)(wavesFile, "utf8");
+  const edgesText = (0, import_node_fs32.existsSync)(edgesFile) ? (0, import_node_fs32.readFileSync)(edgesFile, "utf8") : "";
   const waves = /* @__PURE__ */ new Set();
   for (const line of wavesText.split("\n")) {
     if (line.length === 0) continue;
@@ -20840,7 +21027,7 @@ async function crossSignalWith(topic, d) {
   const pathCount = /* @__PURE__ */ new Map();
   for (const t of iterTargets(topic)) {
     if (!t.slug || !t.cwd) continue;
-    const base = kvFileField((0, import_node_path27.join)(art, "baselines", `${t.slug}.tsv`), "baseline_sha");
+    const base = kvFileField((0, import_node_path28.join)(art, "baselines", `${t.slug}.tsv`), "baseline_sha");
     if (!base) continue;
     const diff = d.runnerFor(t.cwd).run("git", ["diff", "--name-only", `${base}..HEAD`]).stdout;
     for (const p of diff.split("\n")) {
@@ -20870,15 +21057,15 @@ async function summaryRun2(rest) {
 }
 async function summaryWith(topic, d) {
   const art = performArtDir(topic);
-  if (!(0, import_node_fs31.existsSync)(art)) {
+  if (!(0, import_node_fs32.existsSync)(art)) {
     log.error(`perform summary: art-dir missing: ${art}`);
     return 1;
   }
-  (0, import_node_fs31.mkdirSync)((0, import_node_path27.join)(art, "posts"), { recursive: true });
+  (0, import_node_fs32.mkdirSync)((0, import_node_path28.join)(art, "posts"), { recursive: true });
   for (const t of iterTargets(topic)) {
     if (!t.slug || !t.cwd) continue;
-    const baseline = (0, import_node_path27.join)(art, "baselines", `${t.slug}.tsv`), post = (0, import_node_path27.join)(art, "posts", `${t.slug}.tsv`);
-    if (!(0, import_node_fs31.existsSync)(baseline)) {
+    const baseline = (0, import_node_path28.join)(art, "baselines", `${t.slug}.tsv`), post = (0, import_node_path28.join)(art, "posts", `${t.slug}.tsv`);
+    if (!(0, import_node_fs32.existsSync)(baseline)) {
       log.error(`perform summary: baseline missing for slug=${t.slug} (${baseline})`);
       continue;
     }
@@ -20943,23 +21130,23 @@ async function finishRun2(rest) {
   return finishWith2(topic, action, liveFinishDeps);
 }
 function applyFinish(art, t, action, d) {
-  const branch = branchMapField((0, import_node_path27.join)(art, "perform-branches.tsv"), t.slug);
-  const startBranch = kvFileField((0, import_node_path27.join)(art, "baselines", `${t.slug}.tsv`), "branch");
+  const branch = branchMapField((0, import_node_path28.join)(art, "perform-branches.tsv"), t.slug);
+  const startBranch = kvFileField((0, import_node_path28.join)(art, "baselines", `${t.slug}.tsv`), "branch");
   return finishBranchAction(d.runnerFor(t.cwd), { branch, startBranch, action, hasGh: d.hasGh });
 }
 async function finishWith2(topic, action, d) {
   const art = performArtDir(topic);
-  if (!(0, import_node_fs31.existsSync)(art)) {
+  if (!(0, import_node_fs32.existsSync)(art)) {
     log.error(`perform finish: art-dir missing: ${art}`);
     return 1;
   }
-  const results = (0, import_node_path27.join)(art, "finish-results.tsv");
-  (0, import_node_fs31.writeFileSync)(results, "");
+  const results = (0, import_node_path28.join)(art, "finish-results.tsv");
+  (0, import_node_fs32.writeFileSync)(results, "");
   let n2 = 0;
   for (const t of iterTargets(topic)) {
     if (!t.slug || !t.cwd) continue;
     const outcome = applyFinish(art, { slug: t.slug, cwd: t.cwd }, action, d);
-    (0, import_node_fs31.appendFileSync)(results, `${t.slug}	${action}	${outcome}
+    (0, import_node_fs32.appendFileSync)(results, `${t.slug}	${action}	${outcome}
 `);
     log.info(`finish: ${t.slug} -> ${action} -> ${outcome}`);
     n2++;
@@ -20981,7 +21168,7 @@ async function finishOneRun(rest) {
 }
 async function finishOneWith(topic, slug, action, d) {
   const art = performArtDir(topic);
-  if (!(0, import_node_fs31.existsSync)(art)) {
+  if (!(0, import_node_fs32.existsSync)(art)) {
     log.error(`perform finish-one: art-dir missing: ${art}`);
     return 1;
   }
@@ -20991,7 +21178,7 @@ async function finishOneWith(topic, slug, action, d) {
     return 1;
   }
   const outcome = applyFinish(art, { slug: target.slug, cwd: target.cwd }, action, d);
-  (0, import_node_fs31.appendFileSync)((0, import_node_path27.join)(art, "finish-results.tsv"), `${slug}	${action}	${outcome}
+  (0, import_node_fs32.appendFileSync)((0, import_node_path28.join)(art, "finish-results.tsv"), `${slug}	${action}	${outcome}
 `);
   log.info(`finish: ${slug} -> ${action} -> ${outcome}`);
   return 0;
@@ -21028,12 +21215,12 @@ async function dagParseRun(rest) {
 }
 async function dagParseWith(topic, d) {
   const art = d.artDir(topic);
-  const docPath = (0, import_node_path27.join)(art, "design.md");
-  if (!(0, import_node_fs31.existsSync)(docPath)) {
+  const docPath = (0, import_node_path28.join)(art, "design.md");
+  if (!(0, import_node_fs32.existsSync)(docPath)) {
     log.error(`perform dag-parse: design.md not found under ${art} (run perform init first)`);
     return 1;
   }
-  const body = dagSectionBody((0, import_node_fs31.readFileSync)(docPath, "utf8"));
+  const body = dagSectionBody((0, import_node_fs32.readFileSync)(docPath, "utf8"));
   if (body.length === 0) {
     log.error("perform dag-parse: design doc missing '## Execution DAG' section");
     return 1;
@@ -21065,8 +21252,8 @@ async function dagParseWith(topic, d) {
     return `${w}	${s}	${x.repo}	${x.path}	${x.desc}`;
   }).join("\n") + "\n";
   const edgesText = edges.length ? edges.map(([f, t]) => `${f}	${t}`).join("\n") + "\n" : "";
-  atomicWrite((0, import_node_path27.join)(art, "dag-waves.txt"), wavesText);
-  atomicWrite((0, import_node_path27.join)(art, "dag-edges.txt"), edgesText);
+  atomicWrite((0, import_node_path28.join)(art, "dag-waves.txt"), wavesText);
+  atomicWrite((0, import_node_path28.join)(art, "dag-edges.txt"), edgesText);
   const waveCount = Number(topo[topo.length - 1].split("	")[0]);
   log.ok(`perform dag-parse: ${nodes.length} steps in ${waveCount} wave(s)`);
   process.stdout.write(`WAVES=${waveCount}
@@ -21088,7 +21275,7 @@ async function waveWaitRun(rest) {
 }
 async function waveWaitWith(topic, instrument, provider, d) {
   const art = performArtDir(topic);
-  if (!(0, import_node_fs31.existsSync)(art)) {
+  if (!(0, import_node_fs32.existsSync)(art)) {
     log.error(`perform wave-wait: _perform art-dir missing for ${topic}`);
     return 1;
   }
@@ -21114,12 +21301,12 @@ async function waveWaitWith(topic, instrument, provider, d) {
     extra.push("EVENT=unknown");
     log.error(`[wave-wait] ${instrument} TS=failed (unknown event)`);
   }
-  atomicWrite((0, import_node_path27.join)(art, `wave-${instrument}.txt`), `TS=${ts}
+  atomicWrite((0, import_node_path28.join)(art, `wave-${instrument}.txt`), `TS=${ts}
 INSTRUMENT=${instrument}
 PROVIDER=${provider}
 TOPIC=${topic}
 ` + extra.map((l) => l + "\n").join(""));
-  (0, import_node_fs31.writeFileSync)((0, import_node_path27.join)(art, `wave-${instrument}.done`), "");
+  (0, import_node_fs32.writeFileSync)((0, import_node_path28.join)(art, `wave-${instrument}.done`), "");
   return 0;
 }
 async function multiInitRun(rest) {
@@ -21131,15 +21318,15 @@ async function multiInitRun(rest) {
 }
 async function multiInitWith(topic, hubCwd, d) {
   const art = performArtDir(topic);
-  const wavesFile = (0, import_node_path27.join)(art, "dag-waves.txt");
-  if (!(0, import_node_fs31.existsSync)(wavesFile)) {
+  const wavesFile = (0, import_node_path28.join)(art, "dag-waves.txt");
+  if (!(0, import_node_fs32.existsSync)(wavesFile)) {
     log.error(`perform multi-init: dag-waves.txt not found at ${wavesFile} (run perform dag-parse first)`);
     return 1;
   }
   const reposOrdered = [];
   const seen = /* @__PURE__ */ new Set();
   const repoToPath = /* @__PURE__ */ new Map();
-  for (const line of (0, import_node_fs31.readFileSync)(wavesFile, "utf8").split("\n")) {
+  for (const line of (0, import_node_fs32.readFileSync)(wavesFile, "utf8").split("\n")) {
     const cols = line.split("	");
     const repo = cols[2];
     if (!repo) continue;
@@ -21162,12 +21349,12 @@ async function multiInitWith(topic, hubCwd, d) {
   for (let i2 = 0; i2 < reposOrdered.length; i2++) {
     const repo = reposOrdered[i2];
     const p = repoToPath.get(repo);
-    const cwd = p !== "none" && p !== "" ? p : (0, import_node_path27.join)(hubCwd, repo);
-    if (!(0, import_node_fs31.existsSync)(cwd) || !(0, import_node_fs31.statSync)(cwd).isDirectory()) {
+    const cwd = p !== "none" && p !== "" ? p : (0, import_node_path28.join)(hubCwd, repo);
+    if (!(0, import_node_fs32.existsSync)(cwd) || !(0, import_node_fs32.statSync)(cwd).isDirectory()) {
       log.error(`perform multi-init: sub-repo '${repo}' not found at ${cwd}`);
       return 1;
     }
-    if (!(0, import_node_fs31.existsSync)((0, import_node_path27.join)(cwd, "CLAUDE.md")) && !(0, import_node_fs31.existsSync)((0, import_node_path27.join)(cwd, "AGENTS.md"))) {
+    if (!(0, import_node_fs32.existsSync)((0, import_node_path28.join)(cwd, "CLAUDE.md")) && !(0, import_node_fs32.existsSync)((0, import_node_path28.join)(cwd, "AGENTS.md"))) {
       log.error(`perform multi-init: sub-repo '${repo}' has no CLAUDE.md or AGENTS.md at ${cwd}`);
       return 1;
     }
@@ -21175,9 +21362,9 @@ async function multiInitWith(topic, hubCwd, d) {
     const instrument = instruments[i2];
     rows.push(`${instrument}	${cwd}	${provider}`);
     const sha = d.runnerFor(cwd).run("git", ["rev-parse", "HEAD"]).stdout.trim();
-    atomicWrite((0, import_node_path27.join)(art, `${instrument}-branch-base.sha`), sha + "\n");
+    atomicWrite((0, import_node_path28.join)(art, `${instrument}-branch-base.sha`), sha + "\n");
   }
-  atomicWrite((0, import_node_path27.join)(art, "parts.txt"), rows.join("\n") + "\n");
+  atomicWrite((0, import_node_path28.join)(art, "parts.txt"), rows.join("\n") + "\n");
   log.ok(`perform multi-init: ${reposOrdered.length} part(s) assigned for ${topic}`);
   return 0;
 }
@@ -21191,10 +21378,10 @@ async function sendUnitRun(rest) {
 async function sendUnitWith(topic, repo, d) {
   const art = performArtDir(topic);
   let instrument = "";
-  const partsFile = (0, import_node_path27.join)(art, "parts.txt");
-  for (const line of (0, import_node_fs31.existsSync)(partsFile) ? (0, import_node_fs31.readFileSync)(partsFile, "utf8").split("\n") : []) {
+  const partsFile = (0, import_node_path28.join)(art, "parts.txt");
+  for (const line of (0, import_node_fs32.existsSync)(partsFile) ? (0, import_node_fs32.readFileSync)(partsFile, "utf8").split("\n") : []) {
     const c3 = line.split("	");
-    if (c3[1] && (0, import_node_path27.basename)(c3[1]) === repo) {
+    if (c3[1] && (0, import_node_path28.basename)(c3[1]) === repo) {
       instrument = c3[0];
       break;
     }
@@ -21203,16 +21390,16 @@ async function sendUnitWith(topic, repo, d) {
     log.error(`perform send-unit: no part for repo '${repo}' in parts.txt`);
     return 1;
   }
-  const waves = (0, import_node_fs31.readFileSync)((0, import_node_path27.join)(art, "dag-waves.txt"), "utf8").split("\n").filter(Boolean).map((l) => l.split("	"));
+  const waves = (0, import_node_fs32.readFileSync)((0, import_node_path28.join)(art, "dag-waves.txt"), "utf8").split("\n").filter(Boolean).map((l) => l.split("	"));
   const total = new Set(waves.map((w) => w[2])).size;
   const myStep = waves.find((w) => w[2] === repo)?.[1] ?? "";
   const stepToRepo = new Map(waves.map((w) => [w[1], w[2]]));
-  const edgesFile = (0, import_node_path27.join)(art, "dag-edges.txt");
-  const edges = ((0, import_node_fs31.existsSync)(edgesFile) ? (0, import_node_fs31.readFileSync)(edgesFile, "utf8") : "").split("\n").filter(Boolean).map((l) => l.split("	"));
+  const edgesFile = (0, import_node_path28.join)(art, "dag-edges.txt");
+  const edges = ((0, import_node_fs32.existsSync)(edgesFile) ? (0, import_node_fs32.readFileSync)(edgesFile, "utf8") : "").split("\n").filter(Boolean).map((l) => l.split("	"));
   const upstreamRepos = edges.filter(([, to]) => to === myStep).map(([from]) => stepToRepo.get(from)).filter((x) => Boolean(x));
   const upstreamCsv = upstreamRepos.join(",");
-  const prompt = composeDagUnitPrompt({ slug: repo, designPath: (0, import_node_path27.join)(art, "design.md"), step: myStep, total, upstreamCsv });
-  const promptFile = (0, import_node_path27.join)(art, `${instrument}_dag_unit_prompt.md`);
+  const prompt = composeDagUnitPrompt({ slug: repo, designPath: (0, import_node_path28.join)(art, "design.md"), step: myStep, total, upstreamCsv });
+  const promptFile = (0, import_node_path28.join)(art, `${instrument}_dag_unit_prompt.md`);
   atomicWrite(promptFile, prompt);
   const rc = await d.send(["--from", "maestro", instrument, topic, `@${promptFile}`]);
   if (rc !== 0) {
@@ -21222,12 +21409,83 @@ async function sendUnitWith(topic, repo, d) {
   log.info(`[send-unit] ${instrument} -> ${repo} (step ${myStep}/${total}, upstream: ${upstreamCsv || "none"})`);
   return 0;
 }
-var import_node_fs31, import_node_path27, PART, PERFORM_TURN_TIMEOUT, liveInitDeps3, liveSendDeps, liveWaitDeps, liveScopeDeps, liveSiblingDeps, liveCrossSignalDeps, liveSummaryDeps, liveFinishDeps, liveDagParseDeps, PERFORM_WAVE_TIMEOUT, liveMultiInitDeps, liveSendUnitDeps;
+async function dropPartRun(rest) {
+  const [topic, instrument] = rest;
+  if (!topic || !instrument || rest.length !== 2) {
+    log.error("usage: perform drop-part <topic> <instrument>");
+    return 2;
+  }
+  const partsFile = (0, import_node_path28.join)(performArtDir(topic), "parts.txt");
+  if (!(0, import_node_fs32.existsSync)(partsFile)) {
+    log.error(`perform drop-part: parts.txt missing`);
+    return 1;
+  }
+  const kept = [];
+  let dropped = false;
+  for (const line of (0, import_node_fs32.readFileSync)(partsFile, "utf8").split("\n")) {
+    if (line.length === 0) continue;
+    if (line.split("	")[0] === instrument) {
+      dropped = true;
+      continue;
+    }
+    kept.push(line);
+  }
+  if (!dropped) {
+    log.error(`perform drop-part: no part for instrument=${instrument}`);
+    return 1;
+  }
+  atomicWrite(partsFile, kept.length ? kept.join("\n") + "\n" : "");
+  log.ok(`perform drop-part: dropped ${instrument}, ${kept.length} part(s) remain`);
+  process.stdout.write(`N=${kept.length}
+`);
+  return 0;
+}
+async function verifyDagReposRun(rest) {
+  let topic;
+  let hub;
+  for (let i2 = 0; i2 < rest.length; i2++) {
+    const t = rest[i2];
+    if (t === "--cwd") {
+      hub = rest[i2 + 1];
+      i2++;
+    } else if (t.startsWith("--cwd=")) {
+      hub = t.slice("--cwd=".length);
+    } else if (!topic) topic = t;
+  }
+  if (!topic) {
+    log.error("usage: perform verify-dag-repos <topic> [--cwd <hub>]");
+    return 2;
+  }
+  const doc = (0, import_node_path28.join)(performArtDir(topic), "design.md");
+  if (!(0, import_node_fs32.existsSync)(doc)) {
+    log.error(`perform verify-dag-repos: design.md missing under ${performArtDir(topic)}`);
+    return 1;
+  }
+  const hubDir = hub ?? repoRoot();
+  const slugs = [];
+  for (const line of dagSectionBody((0, import_node_fs32.readFileSync)(doc, "utf8"))) {
+    const node = parseDagLine(line);
+    if (node && !slugs.includes(node.repo)) slugs.push(node.repo);
+  }
+  let bad = 0;
+  for (const slug of slugs) {
+    const dir = (0, import_node_path28.join)(hubDir, slug);
+    let st;
+    if (!(0, import_node_fs32.existsSync)(dir) || !(0, import_node_fs32.statSync)(dir).isDirectory()) st = "missing-dir";
+    else if (!(0, import_node_fs32.existsSync)((0, import_node_path28.join)(dir, "CLAUDE.md")) && !(0, import_node_fs32.existsSync)((0, import_node_path28.join)(dir, "AGENTS.md"))) st = "missing-marker";
+    else st = "ok";
+    if (st !== "ok") bad++;
+    process.stdout.write(`REPO=${slug}	STATUS=${st}
+`);
+  }
+  return bad > 0 ? 1 : 0;
+}
+var import_node_fs32, import_node_path28, PART, PERFORM_TURN_TIMEOUT, liveInitDeps3, liveSendDeps, liveWaitDeps, liveScopeDeps, liveSiblingDeps, liveCrossSignalDeps, liveSummaryDeps, liveFinishDeps, liveDagParseDeps, PERFORM_WAVE_TIMEOUT, liveMultiInitDeps, liveSendUnitDeps;
 var init_perform2 = __esm({
   "src/commands/perform.ts"() {
     "use strict";
-    import_node_fs31 = require("node:fs");
-    import_node_path27 = require("node:path");
+    import_node_fs32 = require("node:fs");
+    import_node_path28 = require("node:path");
     init_log();
     init_args();
     init_atomic();
@@ -21366,31 +21624,31 @@ __export(playback_exports, {
   surveyWith: () => surveyWith
 });
 function forensicsRoot() {
-  return (0, import_node_path28.join)(globalRoot(), "forensics");
+  return (0, import_node_path29.join)(globalRoot(), "forensics");
 }
 function walkForensics(root, includeReviewed) {
   const out = [];
   const walk = (dir) => {
     let entries;
     try {
-      entries = (0, import_node_fs32.readdirSync)(dir, { withFileTypes: true });
+      entries = (0, import_node_fs33.readdirSync)(dir, { withFileTypes: true });
     } catch {
       return;
     }
     for (const e of entries) {
-      const p = (0, import_node_path28.join)(dir, e.name);
+      const p = (0, import_node_path29.join)(dir, e.name);
       if (e.isDirectory()) {
         if (dir === root && e.name === ".reviewed" && !includeReviewed) continue;
         walk(p);
       } else if (e.isFile() && e.name.endsWith(".md")) out.push(p);
     }
   };
-  if ((0, import_node_fs32.existsSync)(root)) walk(root);
+  if ((0, import_node_fs33.existsSync)(root)) walk(root);
   return out.sort();
 }
 function readLedgerText(root) {
   try {
-    return (0, import_node_fs32.readFileSync)((0, import_node_path28.join)(root, ".trends.json"), "utf8");
+    return (0, import_node_fs33.readFileSync)((0, import_node_path29.join)(root, ".trends.json"), "utf8");
   } catch {
     return null;
   }
@@ -21411,7 +21669,7 @@ async function surveyWith(o2) {
   for (const f of files) {
     let text;
     try {
-      text = (0, import_node_fs32.readFileSync)(f, "utf8");
+      text = (0, import_node_fs33.readFileSync)(f, "utf8");
     } catch {
       continue;
     }
@@ -21420,7 +21678,7 @@ async function surveyWith(o2) {
     if (cutoff !== null) {
       let mt = 0;
       try {
-        mt = (0, import_node_fs32.statSync)(f).mtimeMs;
+        mt = (0, import_node_fs33.statSync)(f).mtimeMs;
       } catch {
       }
       if (mt < cutoff) continue;
@@ -21454,15 +21712,15 @@ async function archiveWith(paths, o2 = {}) {
     }
     let text;
     try {
-      text = (0, import_node_fs32.readFileSync)(p, "utf8");
+      text = (0, import_node_fs33.readFileSync)(p, "utf8");
     } catch {
       log.warn(`playback archive: skip (unreadable): ${p}`);
       continue;
     }
     const findings = parseMechanicalFindings(text);
     try {
-      (0, import_node_fs32.mkdirSync)((0, import_node_path28.dirname)(target), { recursive: true });
-      (0, import_node_fs32.renameSync)(p, target);
+      (0, import_node_fs33.mkdirSync)((0, import_node_path29.dirname)(target), { recursive: true });
+      (0, import_node_fs33.renameSync)(p, target);
     } catch (e) {
       log.warn(`playback archive: move failed for ${p}: ${e?.message ?? e}`);
       continue;
@@ -21470,7 +21728,7 @@ async function archiveWith(paths, o2 = {}) {
     accrue(ledger, findings, date);
     moved++;
   }
-  atomicWrite((0, import_node_path28.join)(root, ".trends.json"), JSON.stringify(ledger, null, 2) + "\n");
+  atomicWrite((0, import_node_path29.join)(root, ".trends.json"), JSON.stringify(ledger, null, 2) + "\n");
   log.ok(`playback archive: ${moved} file(s) moved to .reviewed/, trend updated`);
   return 0;
 }
@@ -21500,12 +21758,12 @@ async function run12(args) {
   log.error("usage: playback <survey|archive> ...");
   return 2;
 }
-var import_node_fs32, import_node_path28;
+var import_node_fs33, import_node_path29;
 var init_playback2 = __esm({
   "src/commands/playback.ts"() {
     "use strict";
-    import_node_fs32 = require("node:fs");
-    import_node_path28 = require("node:path");
+    import_node_fs33 = require("node:fs");
+    import_node_path29 = require("node:path");
     init_log();
     init_paths();
     init_atomic();
@@ -21633,25 +21891,41 @@ var init_rehearsalMetric = __esm({
 
 // src/core/rehearsal.ts
 function rehearsalArtDir(topic, opts) {
-  return (0, import_node_path29.join)(topicDir(topic, opts), "_rehearsal");
+  return (0, import_node_path30.join)(topicDir(topic, opts), "_rehearsal");
 }
 function partsDir(artDir) {
-  return (0, import_node_path29.join)(artDir, "parts");
+  return (0, import_node_path30.join)(artDir, "parts");
 }
 function partStateDir(artDir, instrument) {
-  return (0, import_node_path29.join)(partsDir(artDir), instrument);
+  return (0, import_node_path30.join)(partsDir(artDir), instrument);
 }
 function experimentsDir(artDir, instrument) {
-  return (0, import_node_path29.join)(partStateDir(artDir, instrument), "experiments");
+  return (0, import_node_path30.join)(partStateDir(artDir, instrument), "experiments");
 }
 function experimentDir(artDir, instrument, expId) {
-  return (0, import_node_path29.join)(experimentsDir(artDir, instrument), expId);
+  return (0, import_node_path30.join)(experimentsDir(artDir, instrument), expId);
 }
-var import_node_path29;
+function seedLib(art, configRoot) {
+  try {
+    const seedDir = (0, import_node_path30.join)(configRoot, "config", "rehearsal-lib-seed");
+    if (!(0, import_node_fs34.existsSync)(seedDir)) return;
+    const dest = (0, import_node_path30.join)(art, "lib");
+    (0, import_node_fs34.mkdirSync)(dest, { recursive: true });
+    for (const name of (0, import_node_fs34.readdirSync)(seedDir)) {
+      const src = (0, import_node_path30.join)(seedDir, name);
+      if (!(0, import_node_fs34.statSync)(src).isFile()) continue;
+      const target = (0, import_node_path30.join)(dest, name);
+      if (!(0, import_node_fs34.existsSync)(target)) (0, import_node_fs34.copyFileSync)(src, target);
+    }
+  } catch {
+  }
+}
+var import_node_fs34, import_node_path30;
 var init_rehearsal = __esm({
   "src/core/rehearsal.ts"() {
     "use strict";
-    import_node_path29 = require("node:path");
+    import_node_fs34 = require("node:fs");
+    import_node_path30 = require("node:path");
     init_paths();
   }
 });
@@ -21812,7 +22086,7 @@ function str(v) {
   return v === null || v === void 0 ? "" : String(v);
 }
 function computeScore(art, fs, now) {
-  const metricMd = fs.read((0, import_node_path30.join)(art, "metric.md"));
+  const metricMd = fs.read((0, import_node_path31.join)(art, "metric.md"));
   const primary = metricMd ? parseMetricMd(metricMd).primaryMetric : "";
   const expectedMetric = primary ? primary : void 0;
   const rows = [];
@@ -21825,9 +22099,9 @@ function computeScore(art, fs, now) {
     const exps = fs.listDir(experimentsDir(art, instrument));
     for (const expId of exps) {
       const branchDir = experimentDir(art, instrument, expId);
-      const resultPath = (0, import_node_path30.join)(branchDir, "result.json");
+      const resultPath = (0, import_node_path31.join)(branchDir, "result.json");
       if (!fs.exists(resultPath)) continue;
-      const sidecar = (0, import_node_path30.join)(branchDir, "result-validation.txt");
+      const sidecar = (0, import_node_path31.join)(branchDir, "result-validation.txt");
       let json;
       try {
         json = JSON.parse(fs.read(resultPath) ?? "");
@@ -21836,7 +22110,7 @@ function computeScore(art, fs, now) {
       }
       const v = validateResult(json, {
         expectedMetric,
-        logPathExists: (p) => p.startsWith("./") ? fs.exists((0, import_node_path30.join)(branchDir, p)) : true
+        logPathExists: (p) => p.startsWith("./") ? fs.exists((0, import_node_path31.join)(branchDir, p)) : true
       });
       if (!v.ok) {
         sidecars.push({ path: sidecar, body: `FAILED at ${now()}: ${v.error}
@@ -21868,12 +22142,12 @@ function computeScore(art, fs, now) {
   }
   const phaseClears = [];
   for (const instrument of parts) {
-    const statePath = (0, import_node_path30.join)(partStateDir(art, instrument), "state.txt");
+    const statePath = (0, import_node_path31.join)(partStateDir(art, instrument), "state.txt");
     const stateTxt = fs.read(statePath);
     if (stateTxt === null) continue;
     const cur = parseState(stateTxt).current_exp_id ?? "";
     if (!cur) continue;
-    if (!fs.exists((0, import_node_path30.join)(experimentDir(art, instrument, cur), "result.json"))) continue;
+    if (!fs.exists((0, import_node_path31.join)(experimentDir(art, instrument, cur), "result.json"))) continue;
     phaseClears.push({ statePath, merged: mergeState(stateTxt, {
       last_event: "scored",
       last_event_ts: now(),
@@ -21890,11 +22164,11 @@ function computeScore(art, fs, now) {
     warnings
   };
 }
-var import_node_path30, TSV_HEADER;
+var import_node_path31, TSV_HEADER;
 var init_rehearsalScore = __esm({
   "src/core/rehearsalScore.ts"() {
     "use strict";
-    import_node_path30 = require("node:path");
+    import_node_path31 = require("node:path");
     init_rehearsalResult();
     init_rehearsalState();
     init_rehearsalMetric();
@@ -22559,31 +22833,32 @@ async function initWith4(args, deps) {
     return 2;
   }
   const art = rehearsalArtDir(slug, deps.opts);
-  if ((0, import_node_fs33.existsSync)(art)) {
+  if ((0, import_node_fs35.existsSync)(art)) {
     log.error(`rehearsal init: topic already in flight: ${art}`);
     return 2;
   }
-  if (p.seedFrom && !(0, import_node_fs33.existsSync)(p.seedFrom)) {
+  if (p.seedFrom && !(0, import_node_fs35.existsSync)(p.seedFrom)) {
     log.error(`rehearsal init: --seed-from not found: ${p.seedFrom}`);
     return 1;
   }
-  (0, import_node_fs33.mkdirSync)(art, { recursive: true });
-  atomicWrite((0, import_node_path31.join)(art, "topic.txt"), p.topic);
-  atomicWrite((0, import_node_path31.join)(art, "metric.txt"), extractMetric(p.topic) + "\n");
-  if (p.seedFrom) atomicWrite((0, import_node_path31.join)(art, "seed-from.txt"), p.seedFrom + "\n");
+  (0, import_node_fs35.mkdirSync)(art, { recursive: true });
+  seedLib(art, deps.configRoot());
+  atomicWrite((0, import_node_path32.join)(art, "topic.txt"), p.topic);
+  atomicWrite((0, import_node_path32.join)(art, "metric.txt"), extractMetric(p.topic) + "\n");
+  if (p.seedFrom) atomicWrite((0, import_node_path32.join)(art, "seed-from.txt"), p.seedFrom + "\n");
   (deps.probeHardware ?? (() => {
-  }))((0, import_node_path31.join)(art, "hardware.txt"));
+  }))((0, import_node_path32.join)(art, "hardware.txt"));
   if (p.metric !== void 0) {
     try {
-      atomicWrite((0, import_node_path31.join)(art, "metric.md"), formatMetricBlock(parseKv(p.metric)));
+      atomicWrite((0, import_node_path32.join)(art, "metric.md"), formatMetricBlock(parseKv(p.metric)));
     } catch (e) {
       log.error(`rehearsal init: --metric: ${e.message}`);
       return 2;
     }
   }
   if (resolvedBudget !== void 0) {
-    atomicWrite((0, import_node_path31.join)(art, "time-budget.txt"), resolvedBudget + "\n");
-    atomicWrite((0, import_node_path31.join)(art, "session-start.txt"), deps.now() + "\n");
+    atomicWrite((0, import_node_path32.join)(art, "time-budget.txt"), resolvedBudget + "\n");
+    atomicWrite((0, import_node_path32.join)(art, "session-start.txt"), deps.now() + "\n");
   }
   out(`TOPIC=${slug}`);
   out(`ART=${art}`);
@@ -22615,7 +22890,7 @@ async function metricWith(args, v = {}) {
     return 2;
   }
   try {
-    atomicWrite((0, import_node_path31.join)(rehearsalArtDir(topic, v.opts), "metric.md"), formatMetricBlock(parseKv(kv)));
+    atomicWrite((0, import_node_path32.join)(rehearsalArtDir(topic, v.opts), "metric.md"), formatMetricBlock(parseKv(kv)));
   } catch (e) {
     log.error(`rehearsal metric: ${e.message}`);
     return 2;
@@ -22635,7 +22910,7 @@ async function sotaWith(args, v = {}) {
   }
   try {
     atomicWrite(
-      (0, import_node_path31.join)(rehearsalArtDir(topic, v.opts), "sota.md"),
+      (0, import_node_path32.join)(rehearsalArtDir(topic, v.opts), "sota.md"),
       formatSotaBlock({ topic: f.topic ?? "", metric: f.metric ?? "", sweep_date: f.sweep_date ?? "", queries: f.queries, refs })
     );
   } catch (e) {
@@ -22658,13 +22933,13 @@ async function spawnAllWith2(args, deps, opts) {
     return 2;
   }
   const rows = instruments.map((instrument) => ({ instrument, provider: "codex" }));
-  atomicWrite((0, import_node_path31.join)(art, "parts.txt"), instruments.join("\n") + "\n");
+  atomicWrite((0, import_node_path32.join)(art, "parts.txt"), instruments.join("\n") + "\n");
   const prc = await deps.preflight([topic, String(rows.length), "--roster", spawnRosterArg(rows), "--art-dir", art]);
   if (prc !== 0) {
     log.error(`rehearsal spawn-all: preflight failed (rc ${prc})`);
     return 2;
   }
-  const panes = parsePanesFile((0, import_node_fs33.readFileSync)((0, import_node_path31.join)(art, "preflight-panes.txt"), "utf8"));
+  const panes = parsePanesFile((0, import_node_fs35.readFileSync)((0, import_node_path32.join)(art, "preflight-panes.txt"), "utf8"));
   const orphans = rows.filter((r) => !panes.has(r.instrument));
   if (orphans.length) {
     log.error(`rehearsal spawn-all: parts missing a preflight pane: ${orphans.map((r) => r.instrument).join(", ")}`);
@@ -22676,7 +22951,7 @@ async function spawnAllWith2(args, deps, opts) {
     provider: r.provider,
     rc: await deps.spawn([r.instrument, r.provider, topic, "--target-pane", panes.get(r.instrument), "--cwd", cwd])
   })));
-  atomicWrite((0, import_node_path31.join)(art, "spawn-results.tsv"), spawnResultsTsv(results));
+  atomicWrite((0, import_node_path32.join)(art, "spawn-results.tsv"), spawnResultsTsv(results));
   const rc = spawnTally(results.map((r) => r.rc));
   const nOk = results.filter((r) => r.rc === 0).length;
   if (rc === 0) log.ok(`rehearsal spawn-all: ${nOk}/${rows.length} codex parts ready`);
@@ -22715,33 +22990,33 @@ function parseExperimentSendArgs(args) {
   return { topic, instrument, expId, approachLabel, approachBrief, inputs, contextFile, smokeTest, timeout };
 }
 function gatherPeers(art, self) {
-  const partsFile = (0, import_node_path31.join)(art, "parts.txt");
-  if (!(0, import_node_fs33.existsSync)(partsFile)) return [];
-  const peers = (0, import_node_fs33.readFileSync)(partsFile, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && l !== self);
+  const partsFile = (0, import_node_path32.join)(art, "parts.txt");
+  if (!(0, import_node_fs35.existsSync)(partsFile)) return [];
+  const peers = (0, import_node_fs35.readFileSync)(partsFile, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && l !== self);
   const rows = [];
   for (const peer of peers) {
     const peerDir = partStateDir(art, peer);
-    if (!(0, import_node_fs33.existsSync)(peerDir)) continue;
+    if (!(0, import_node_fs35.existsSync)(peerDir)) continue;
     let phase = "", currentExp = "";
-    const statePath = (0, import_node_path31.join)(peerDir, "state.txt");
-    if ((0, import_node_fs33.existsSync)(statePath)) {
-      const kv = parseState((0, import_node_fs33.readFileSync)(statePath, "utf8"));
+    const statePath = (0, import_node_path32.join)(peerDir, "state.txt");
+    if ((0, import_node_fs35.existsSync)(statePath)) {
+      const kv = parseState((0, import_node_fs35.readFileSync)(statePath, "utf8"));
       phase = kv.phase ?? "";
       currentExp = kv.current_exp_id ?? "";
     }
     let latest = currentExp;
-    const expsDir = (0, import_node_path31.join)(peerDir, "experiments");
-    if (!latest && (0, import_node_fs33.existsSync)(expsDir)) {
-      for (const name of (0, import_node_fs33.readdirSync)(expsDir)) {
+    const expsDir = (0, import_node_path32.join)(peerDir, "experiments");
+    if (!latest && (0, import_node_fs35.existsSync)(expsDir)) {
+      for (const name of (0, import_node_fs35.readdirSync)(expsDir)) {
         if (EXP_ID_RE.test(name) && name > latest) latest = name;
       }
     }
     let approach = "", metric = "", status = "", notes = "";
     if (latest) {
-      const resultPath = (0, import_node_path31.join)(expsDir, latest, "result.json");
-      if ((0, import_node_fs33.existsSync)(resultPath)) {
+      const resultPath = (0, import_node_path32.join)(expsDir, latest, "result.json");
+      if ((0, import_node_fs35.existsSync)(resultPath)) {
         try {
-          const r = JSON.parse((0, import_node_fs33.readFileSync)(resultPath, "utf8"));
+          const r = JSON.parse((0, import_node_fs35.readFileSync)(resultPath, "utf8"));
           approach = r.approach_label != null ? String(r.approach_label) : "";
           metric = r.metric_value != null ? String(r.metric_value) : "";
           status = r.status != null ? String(r.status) : "";
@@ -22777,7 +23052,7 @@ async function experimentSendWith(args, deps) {
     for (const path6 of p.inputs.split(",")) {
       if (!path6) continue;
       try {
-        (0, import_node_fs33.accessSync)(path6, import_node_fs33.constants.R_OK);
+        (0, import_node_fs35.accessSync)(path6, import_node_fs35.constants.R_OK);
       } catch {
         log.error(`rehearsal experiment-send: cannot read input path '${path6}'`);
         return 2;
@@ -22790,7 +23065,7 @@ async function experimentSendWith(args, deps) {
   }
   if (p.smokeTest) {
     try {
-      (0, import_node_fs33.accessSync)(p.smokeTest, import_node_fs33.constants.X_OK);
+      (0, import_node_fs35.accessSync)(p.smokeTest, import_node_fs35.constants.X_OK);
     } catch {
       log.error(`rehearsal experiment-send: smoke-test script not executable: ${p.smokeTest}`);
       return 2;
@@ -22799,29 +23074,29 @@ async function experimentSendWith(args, deps) {
   let taskContext = "";
   if (p.contextFile) {
     try {
-      taskContext = (0, import_node_fs33.readFileSync)(p.contextFile, "utf8");
+      taskContext = (0, import_node_fs35.readFileSync)(p.contextFile, "utf8");
     } catch {
       log.error(`rehearsal experiment-send: cannot read --context-file: ${p.contextFile}`);
       return 2;
     }
   }
   const art = rehearsalArtDir(topic, opts);
-  if (!(0, import_node_fs33.existsSync)(art)) {
+  if (!(0, import_node_fs35.existsSync)(art)) {
     log.error(`rehearsal experiment-send: topic state dir missing: ${art} (was rehearsal init run?)`);
     return 1;
   }
-  const metricMd = (0, import_node_path31.join)(art, "metric.md");
-  if (!(0, import_node_fs33.existsSync)(metricMd)) {
+  const metricMd = (0, import_node_path32.join)(art, "metric.md");
+  if (!(0, import_node_fs35.existsSync)(metricMd)) {
     log.error(`rehearsal experiment-send: metric.md missing at ${metricMd}`);
     return 1;
   }
   const stateDir = partStateDir(art, instrument);
-  const stateTxt = (0, import_node_path31.join)(stateDir, "state.txt");
-  if (!(0, import_node_fs33.existsSync)(stateTxt)) {
+  const stateTxt = (0, import_node_path32.join)(stateDir, "state.txt");
+  if (!(0, import_node_fs35.existsSync)(stateTxt)) {
     log.error(`rehearsal experiment-send: part state.txt missing: ${stateTxt}`);
     return 1;
   }
-  const phase = parseState((0, import_node_fs33.readFileSync)(stateTxt, "utf8")).phase ?? "";
+  const phase = parseState((0, import_node_fs35.readFileSync)(stateTxt, "utf8")).phase ?? "";
   if (phase === "abandoned") {
     log.error(`rehearsal experiment-send: part ${instrument} lane is abandoned; not dispatching`);
     return 2;
@@ -22831,12 +23106,12 @@ async function experimentSendWith(args, deps) {
     return 1;
   }
   const branchDir = experimentDir(art, instrument, expId);
-  (0, import_node_fs33.mkdirSync)((0, import_node_path31.join)(branchDir, "code"), { recursive: true });
+  (0, import_node_fs35.mkdirSync)((0, import_node_path32.join)(branchDir, "code"), { recursive: true });
   if (p.smokeTest) {
-    const r = deps.runSmokeTest(p.smokeTest, (0, import_node_path31.join)(branchDir, "code"), deps.smokeTimeoutSec ?? 60);
+    const r = deps.runSmokeTest(p.smokeTest, (0, import_node_path32.join)(branchDir, "code"), deps.smokeTimeoutSec ?? 60);
     if (!r.ok) {
-      atomicWrite((0, import_node_path31.join)(branchDir, "smoke-test.err"), r.stderr);
-      log.error(`rehearsal experiment-send: smoke-test failed for ${instrument}/${expId}; stderr -> ${(0, import_node_path31.join)(branchDir, "smoke-test.err")}`);
+      atomicWrite((0, import_node_path32.join)(branchDir, "smoke-test.err"), r.stderr);
+      log.error(`rehearsal experiment-send: smoke-test failed for ${instrument}/${expId}; stderr -> ${(0, import_node_path32.join)(branchDir, "smoke-test.err")}`);
       return 2;
     }
   }
@@ -22846,33 +23121,33 @@ async function experimentSendWith(args, deps) {
     return 1;
   }
   const outbox = outboxPath(instrument, model, topic);
-  if (!(0, import_node_fs33.existsSync)(outbox)) {
+  if (!(0, import_node_fs35.existsSync)(outbox)) {
     log.error(`rehearsal experiment-send: part outbox missing: ${outbox} (was spawn run for ${instrument}?)`);
     return 1;
   }
-  const metricBlock = (0, import_node_fs33.readFileSync)(metricMd, "utf8");
+  const metricBlock = (0, import_node_fs35.readFileSync)(metricMd, "utf8");
   const metricName = parseMetricMd(metricBlock).primaryMetric;
   if (!metricName) {
     log.error(`rehearsal experiment-send: could not parse Primary metric from ${metricMd}`);
     return 1;
   }
   const probe = deps.probeHardware();
-  const baselinePath = (0, import_node_path31.join)(art, "hardware.txt");
-  const baseline = (0, import_node_fs33.existsSync)(baselinePath) ? (0, import_node_fs33.readFileSync)(baselinePath, "utf8") : null;
+  const baselinePath = (0, import_node_path32.join)(art, "hardware.txt");
+  const baseline = (0, import_node_fs35.existsSync)(baselinePath) ? (0, import_node_fs35.readFileSync)(baselinePath, "utf8") : null;
   const hardwareBlock = assembleHardwareBlock(probe, hardwareDiffAlert(baseline, probe));
-  const topicTextPath = (0, import_node_path31.join)(art, "topic.txt");
-  const topicText = (0, import_node_fs33.existsSync)(topicTextPath) ? (0, import_node_fs33.readFileSync)(topicTextPath, "utf8") : "";
-  const sotaPath = (0, import_node_path31.join)(art, "sota.md");
-  const sotaBlock = buildSotaBlock((0, import_node_fs33.existsSync)(sotaPath) ? (0, import_node_fs33.readFileSync)(sotaPath, "utf8") : null);
+  const topicTextPath = (0, import_node_path32.join)(art, "topic.txt");
+  const topicText = (0, import_node_fs35.existsSync)(topicTextPath) ? (0, import_node_fs35.readFileSync)(topicTextPath, "utf8") : "";
+  const sotaPath = (0, import_node_path32.join)(art, "sota.md");
+  const sotaBlock = buildSotaBlock((0, import_node_fs35.existsSync)(sotaPath) ? (0, import_node_fs35.readFileSync)(sotaPath, "utf8") : null);
   const peersBlock = formatPeersBlock(gatherPeers(art, instrument));
   const timeBudgetS = String(p.timeout ?? deps.consultTimeout());
-  const pluginRoot6 = process.env.CLAUDE_PLUGIN_ROOT ?? process.cwd();
-  const templatePath = (0, import_node_path31.join)(pluginRoot6, "config", "prompt-templates", "rehearsal", "experiment.md");
-  if (!(0, import_node_fs33.existsSync)(templatePath)) {
+  const pluginRoot7 = process.env.CLAUDE_PLUGIN_ROOT ?? process.cwd();
+  const templatePath = (0, import_node_path32.join)(pluginRoot7, "config", "prompt-templates", "rehearsal", "experiment.md");
+  if (!(0, import_node_fs35.existsSync)(templatePath)) {
     log.error(`rehearsal experiment-send: template missing: ${templatePath}`);
     return 1;
   }
-  const template = (0, import_node_fs33.readFileSync)(templatePath, "utf8");
+  const template = (0, import_node_fs35.readFileSync)(templatePath, "utf8");
   let prompt;
   try {
     prompt = renderExperimentPrompt(template, {
@@ -22899,9 +23174,9 @@ async function experimentSendWith(args, deps) {
     log.error(`rehearsal experiment-send: prompt rendered empty (template substitution failed)`);
     return 1;
   }
-  atomicWrite((0, import_node_path31.join)(branchDir, "prompt.md"), prompt);
+  atomicWrite((0, import_node_path32.join)(branchDir, "prompt.md"), prompt);
   inboxWrite(instrument, model, topic, prompt, { from: "maestro" });
-  atomicWrite(stateTxt, buildDispatchState((0, import_node_fs33.readFileSync)(stateTxt, "utf8"), expId, deps.now()));
+  atomicWrite(stateTxt, buildDispatchState((0, import_node_fs35.readFileSync)(stateTxt, "utf8"), expId, deps.now()));
   if (!deps.dryRun) {
     const pane = paneMetaRead(instrument, model, topic);
     if (pane) {
@@ -22940,14 +23215,14 @@ async function scoreWith(args, deps) {
   const topic = positionals[0];
   const art = rehearsalArtDir(topic, deps.opts);
   const partsRoot = partsDir(art);
-  if (!(0, import_node_fs33.existsSync)(partsRoot)) {
+  if (!(0, import_node_fs35.existsSync)(partsRoot)) {
     log.error(`rehearsal score: parts dir missing: ${partsRoot}`);
     return 1;
   }
   const c3 = deps.computeScore(art, deps.fs, deps.now);
-  deps.writeAtomic((0, import_node_path31.join)(art, "scoreboard.md"), c3.scoreboardMd);
-  log.ok(`[score] scoreboard at ${(0, import_node_path31.join)(art, "scoreboard.md")}`);
-  deps.writeAtomic((0, import_node_path31.join)(art, "results.tsv"), c3.resultsTsv);
+  deps.writeAtomic((0, import_node_path32.join)(art, "scoreboard.md"), c3.scoreboardMd);
+  log.ok(`[score] scoreboard at ${(0, import_node_path32.join)(art, "scoreboard.md")}`);
+  deps.writeAtomic((0, import_node_path32.join)(art, "results.tsv"), c3.resultsTsv);
   for (const s of c3.sidecars) deps.writeAtomic(s.path, s.body);
   for (const p of c3.staleSidecars) deps.removeFile(p);
   for (const pc of c3.phaseClears) deps.writeAtomic(pc.statePath, pc.merged);
@@ -22963,7 +23238,7 @@ async function monitorRun(args, opts) {
   }
   const [topic, instrument] = pos;
   const art = rehearsalArtDir(topic, opts);
-  if (!(0, import_node_fs33.existsSync)(art)) {
+  if (!(0, import_node_fs35.existsSync)(art)) {
     log.error(`rehearsal monitor: art dir missing: ${art}`);
     return 2;
   }
@@ -22974,34 +23249,34 @@ async function monitorRun(args, opts) {
   }
   const outbox = outboxPath(instrument, model, topic);
   const stateDir = partStateDir(art, instrument);
-  (0, import_node_fs33.mkdirSync)(stateDir, { recursive: true });
-  const cursorFile = (0, import_node_path31.join)(stateDir, "liveness-cursor.txt");
-  const rescanFile = (0, import_node_path31.join)(stateDir, "liveness-rescan-emitted.txt");
-  const stateTxt = (0, import_node_path31.join)(stateDir, "state.txt");
+  (0, import_node_fs35.mkdirSync)(stateDir, { recursive: true });
+  const cursorFile = (0, import_node_path32.join)(stateDir, "liveness-cursor.txt");
+  const rescanFile = (0, import_node_path32.join)(stateDir, "liveness-rescan-emitted.txt");
+  const stateTxt = (0, import_node_path32.join)(stateDir, "state.txt");
   const thresholds = {
     probeS: Number(process.env.CONSORT_PROBE_S ?? 900),
     stuckS: Number(process.env.CONSORT_STUCK_S ?? 1800),
     rescanEveryS: Number(process.env.CONSORT_RESCAN_EVERY_S ?? 30)
   };
   const persist = (state2) => {
-    (0, import_node_fs33.writeFileSync)(cursorFile, String(state2.offset));
-    (0, import_node_fs33.writeFileSync)(rescanFile, [...state2.rescanEmitted].join("\n"));
+    (0, import_node_fs35.writeFileSync)(cursorFile, String(state2.offset));
+    (0, import_node_fs35.writeFileSync)(rescanFile, [...state2.rescanEmitted].join("\n"));
   };
-  const initBuf = (0, import_node_fs33.existsSync)(outbox) ? (0, import_node_fs33.readFileSync)(outbox) : Buffer.alloc(0);
+  const initBuf = (0, import_node_fs35.existsSync)(outbox) ? (0, import_node_fs35.readFileSync)(outbox) : Buffer.alloc(0);
   let state = initScanState(
     initBuf.length,
     initBuf.toString("utf8"),
-    (0, import_node_fs33.existsSync)(cursorFile) ? (0, import_node_fs33.readFileSync)(cursorFile, "utf8") : null,
-    (0, import_node_fs33.existsSync)(rescanFile) ? (0, import_node_fs33.readFileSync)(rescanFile, "utf8") : null
+    (0, import_node_fs35.existsSync)(cursorFile) ? (0, import_node_fs35.readFileSync)(cursorFile, "utf8") : null,
+    (0, import_node_fs35.existsSync)(rescanFile) ? (0, import_node_fs35.readFileSync)(rescanFile, "utf8") : null
   );
   persist(state);
   do {
-    const buf = (0, import_node_fs33.existsSync)(outbox) ? (0, import_node_fs33.readFileSync)(outbox) : Buffer.alloc(0);
+    const buf = (0, import_node_fs35.existsSync)(outbox) ? (0, import_node_fs35.readFileSync)(outbox) : Buffer.alloc(0);
     const size = buf.length;
     const full = buf.toString("utf8");
     const text = buf.subarray(state.offset).toString("utf8");
-    const mtime = (0, import_node_fs33.existsSync)(outbox) ? Math.floor((0, import_node_fs33.statSync)(outbox).mtimeMs / 1e3) : 0;
-    const phase = ((0, import_node_fs33.existsSync)(stateTxt) ? parseState((0, import_node_fs33.readFileSync)(stateTxt, "utf8")).phase : "") ?? "";
+    const mtime = (0, import_node_fs35.existsSync)(outbox) ? Math.floor((0, import_node_fs35.statSync)(outbox).mtimeMs / 1e3) : 0;
+    const phase = ((0, import_node_fs35.existsSync)(stateTxt) ? parseState((0, import_node_fs35.readFileSync)(stateTxt, "utf8")).phase : "") ?? "";
     const r = monitorScan(outbox, instrument, state, {
       outboxText: text,
       outboxFullText: full,
@@ -23021,17 +23296,17 @@ async function monitorRun(args, opts) {
   return 0;
 }
 function approachFromPrompt(promptPath) {
-  if (!(0, import_node_fs33.existsSync)(promptPath)) return "";
-  for (const line of (0, import_node_fs33.readFileSync)(promptPath, "utf8").split("\n")) {
+  if (!(0, import_node_fs35.existsSync)(promptPath)) return "";
+  for (const line of (0, import_node_fs35.readFileSync)(promptPath, "utf8").split("\n")) {
     const m = /^\s*Approach label:\s+(.*?)\s*$/.exec(line);
     if (m) return m[1];
   }
   return "";
 }
 function readResultCells(resultPath) {
-  if (!(0, import_node_fs33.existsSync)(resultPath)) return { approach: "", metric: "\u2014" };
+  if (!(0, import_node_fs35.existsSync)(resultPath)) return { approach: "", metric: "\u2014" };
   try {
-    const r = JSON.parse((0, import_node_fs33.readFileSync)(resultPath, "utf8"));
+    const r = JSON.parse((0, import_node_fs35.readFileSync)(resultPath, "utf8"));
     const approach = r.approach_label != null ? String(r.approach_label) : "";
     const m = r.metric_value != null ? String(r.metric_value) : "";
     const s = r.status != null ? String(r.status) : "";
@@ -23062,15 +23337,15 @@ async function statusBriefWith(args, v = {}) {
   }
   const art = rehearsalArtDir(p.topic, v.opts);
   const parts = [];
-  const partsFile = (0, import_node_path31.join)(art, "parts.txt");
-  if ((0, import_node_fs33.existsSync)(partsFile)) {
-    const instruments = (0, import_node_fs33.readFileSync)(partsFile, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+  const partsFile = (0, import_node_path32.join)(art, "parts.txt");
+  if ((0, import_node_fs35.existsSync)(partsFile)) {
+    const instruments = (0, import_node_fs35.readFileSync)(partsFile, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
     for (const instrument of instruments) {
       let phase = "?", currentOrLast = "\u2014";
-      const stateTxt = (0, import_node_path31.join)(partStateDir(art, instrument), "state.txt");
+      const stateTxt = (0, import_node_path32.join)(partStateDir(art, instrument), "state.txt");
       let curExp = "";
-      if ((0, import_node_fs33.existsSync)(stateTxt)) {
-        const kv = parseState((0, import_node_fs33.readFileSync)(stateTxt, "utf8"));
+      if ((0, import_node_fs35.existsSync)(stateTxt)) {
+        const kv = parseState((0, import_node_fs35.readFileSync)(stateTxt, "utf8"));
         phase = kv.phase || "?";
         curExp = kv.current_exp_id ?? "";
       }
@@ -23078,17 +23353,17 @@ async function statusBriefWith(args, v = {}) {
         currentOrLast = curExp;
       } else {
         const expsRoot = experimentsDir(art, instrument);
-        if ((0, import_node_fs33.existsSync)(expsRoot)) {
+        if ((0, import_node_fs35.existsSync)(expsRoot)) {
           let newest = "";
-          for (const name of (0, import_node_fs33.readdirSync)(expsRoot)) {
+          for (const name of (0, import_node_fs35.readdirSync)(expsRoot)) {
             if (EXP_ID_RE.test(name) && name > newest) newest = name;
           }
           if (newest) currentOrLast = newest;
         }
       }
       const expForFiles = curExp || (currentOrLast !== "\u2014" ? currentOrLast : "");
-      const promptPath = expForFiles ? (0, import_node_path31.join)(experimentDir(art, instrument, expForFiles), "prompt.md") : "";
-      const resultPath = expForFiles ? (0, import_node_path31.join)(experimentDir(art, instrument, expForFiles), "result.json") : "";
+      const promptPath = expForFiles ? (0, import_node_path32.join)(experimentDir(art, instrument, expForFiles), "prompt.md") : "";
+      const resultPath = expForFiles ? (0, import_node_path32.join)(experimentDir(art, instrument, expForFiles), "result.json") : "";
       let approach, metric;
       if (phase === "working") {
         approach = promptPath && approachFromPrompt(promptPath) || "\u2014";
@@ -23101,24 +23376,24 @@ async function statusBriefWith(args, v = {}) {
       parts.push({ instrument, phase, currentOrLast, approach, metric });
     }
   }
-  const sbPath = (0, import_node_path31.join)(art, "scoreboard.md");
-  const scoreboardMd = (0, import_node_fs33.existsSync)(sbPath) ? (0, import_node_fs33.readFileSync)(sbPath, "utf8") : null;
-  const metricPath = (0, import_node_path31.join)(art, "metric.md");
-  const completion = scoreboardMd !== null && (0, import_node_fs33.existsSync)(metricPath) ? checkCompletion(scoreboardMd, (0, import_node_fs33.readFileSync)(metricPath, "utf8")) : null;
+  const sbPath = (0, import_node_path32.join)(art, "scoreboard.md");
+  const scoreboardMd = (0, import_node_fs35.existsSync)(sbPath) ? (0, import_node_fs35.readFileSync)(sbPath, "utf8") : null;
+  const metricPath = (0, import_node_path32.join)(art, "metric.md");
+  const completion = scoreboardMd !== null && (0, import_node_fs35.existsSync)(metricPath) ? checkCompletion(scoreboardMd, (0, import_node_fs35.readFileSync)(metricPath, "utf8")) : null;
   const latest = p.latestInstrument && p.latestExp ? { instrument: p.latestInstrument, exp: p.latestExp } : void 0;
   out(buildStatusBrief({ parts, scoreboardMd, completion, latest }));
   return 0;
 }
 function readOr(path6, fallback = "") {
   try {
-    return (0, import_node_fs33.readFileSync)(path6, "utf8");
+    return (0, import_node_fs35.readFileSync)(path6, "utf8");
   } catch {
     return fallback;
   }
 }
 function listExpDirs(expsRoot) {
   try {
-    return (0, import_node_fs33.readdirSync)(expsRoot, { withFileTypes: true }).filter((e) => e.isDirectory() && EXP_ID_RE.test(e.name)).map((e) => e.name).sort();
+    return (0, import_node_fs35.readdirSync)(expsRoot, { withFileTypes: true }).filter((e) => e.isDirectory() && EXP_ID_RE.test(e.name)).map((e) => e.name).sort();
   } catch {
     return [];
   }
@@ -23127,16 +23402,16 @@ function dirByteSize(dir) {
   let total = 0;
   let entries;
   try {
-    entries = (0, import_node_fs33.readdirSync)(dir, { withFileTypes: true });
+    entries = (0, import_node_fs35.readdirSync)(dir, { withFileTypes: true });
   } catch {
     return 0;
   }
   for (const e of entries) {
-    const p = (0, import_node_path31.join)(dir, e.name);
+    const p = (0, import_node_path32.join)(dir, e.name);
     if (e.isDirectory()) total += dirByteSize(p);
     else if (e.isFile()) {
       try {
-        total += (0, import_node_fs33.statSync)(p).size;
+        total += (0, import_node_fs35.statSync)(p).size;
       } catch {
       }
     }
@@ -23145,7 +23420,7 @@ function dirByteSize(dir) {
 }
 function fileCountDepth1(dir) {
   try {
-    return (0, import_node_fs33.readdirSync)(dir, { withFileTypes: true }).filter((e) => e.isFile()).length;
+    return (0, import_node_fs35.readdirSync)(dir, { withFileTypes: true }).filter((e) => e.isFile()).length;
   } catch {
     return 0;
   }
@@ -23164,30 +23439,30 @@ async function finalizeWith(args, deps) {
   }
   const topic = rest[0];
   const art = rehearsalArtDir(topic, opts);
-  if (!(0, import_node_fs33.existsSync)(art) || !(0, import_node_fs33.statSync)(art).isDirectory()) {
+  if (!(0, import_node_fs35.existsSync)(art) || !(0, import_node_fs35.statSync)(art).isDirectory()) {
     log.error(`finalize: art-dir missing: ${art}`);
     return 1;
   }
-  const partsFile = (0, import_node_path31.join)(art, "parts.txt");
-  const instruments = (0, import_node_fs33.existsSync)(partsFile) ? (0, import_node_fs33.readFileSync)(partsFile, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#")) : [];
+  const partsFile = (0, import_node_path32.join)(art, "parts.txt");
+  const instruments = (0, import_node_fs35.existsSync)(partsFile) ? (0, import_node_fs35.readFileSync)(partsFile, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#")) : [];
   for (const instrument of instruments) {
     const stateDir = partStateDir(art, instrument);
-    const stateTxt = (0, import_node_path31.join)(stateDir, "state.txt");
-    if (!(0, import_node_fs33.existsSync)(stateTxt)) continue;
-    const cursorRaw = readOr((0, import_node_path31.join)(stateDir, "liveness-cursor.txt"));
+    const stateTxt = (0, import_node_path32.join)(stateDir, "state.txt");
+    if (!(0, import_node_fs35.existsSync)(stateTxt)) continue;
+    const cursorRaw = readOr((0, import_node_path32.join)(stateDir, "liveness-cursor.txt"));
     const offset = Number.parseInt(cursorRaw.trim(), 10) || 0;
     const model = resolveModel(instrument, topic);
     const ob = model ? outboxPath(instrument, model, topic) : "";
     let tail = "";
-    if (ob && (0, import_node_fs33.existsSync)(ob)) {
+    if (ob && (0, import_node_fs35.existsSync)(ob)) {
       try {
-        tail = (0, import_node_fs33.readFileSync)(ob).subarray(offset).toString("utf8");
+        tail = (0, import_node_fs35.readFileSync)(ob).subarray(offset).toString("utf8");
       } catch {
         tail = "";
       }
     }
     const curExp = parseState(readOr(stateTxt)).current_exp_id ?? "";
-    const doneResultExists = !!curExp && (0, import_node_fs33.existsSync)((0, import_node_path31.join)(experimentDir(art, instrument, curExp), "result.json"));
+    const doneResultExists = !!curExp && (0, import_node_fs35.existsSync)((0, import_node_path32.join)(experimentDir(art, instrument, curExp), "result.json"));
     const recon = reconcileFromOutbox(tail, doneResultExists);
     if (recon === "failed" || recon === "idle") {
       atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: recon }));
@@ -23199,11 +23474,11 @@ async function finalizeWith(args, deps) {
   for (const instrument of instruments) {
     const expsRoot = experimentsDir(art, instrument);
     for (const expId of listExpDirs(expsRoot)) {
-      const resultPath = (0, import_node_path31.join)(expsRoot, expId, "result.json");
-      if (!(0, import_node_fs33.existsSync)(resultPath)) continue;
+      const resultPath = (0, import_node_path32.join)(expsRoot, expId, "result.json");
+      if (!(0, import_node_fs35.existsSync)(resultPath)) continue;
       let parsed;
       try {
-        parsed = JSON.parse((0, import_node_fs33.readFileSync)(resultPath, "utf8"));
+        parsed = JSON.parse((0, import_node_fs35.readFileSync)(resultPath, "utf8"));
       } catch {
         continue;
       }
@@ -23218,34 +23493,34 @@ async function finalizeWith(args, deps) {
     for (const instrument of instruments) {
       const expsRoot = experimentsDir(art, instrument);
       for (const expId of listExpDirs(expsRoot)) {
-        const expDir = (0, import_node_path31.join)(expsRoot, expId);
-        const resultPath = (0, import_node_path31.join)(expDir, "result.json");
-        if (!(0, import_node_fs33.existsSync)(resultPath)) continue;
+        const expDir = (0, import_node_path32.join)(expsRoot, expId);
+        const resultPath = (0, import_node_path32.join)(expDir, "result.json");
+        if (!(0, import_node_fs35.existsSync)(resultPath)) continue;
         let keptRel;
         try {
-          const r = JSON.parse((0, import_node_fs33.readFileSync)(resultPath, "utf8"));
+          const r = JSON.parse((0, import_node_fs35.readFileSync)(resultPath, "utf8"));
           keptRel = r.checkpoint_path != null ? String(r.checkpoint_path) : "";
         } catch {
           continue;
         }
         if (!keptRel || keptRel === "null") continue;
-        const keptAbs = (0, import_node_path31.resolve)(expDir, keptRel);
+        const keptAbs = (0, import_node_path32.resolve)(expDir, keptRel);
         if (keptAbs !== expDir && !keptAbs.startsWith(expDir + "/")) {
           log.warn(`prune: checkpoint_path escapes exp dir: ${keptRel} (in ${expDir}); skipping`);
           continue;
         }
         let entries;
         try {
-          entries = (0, import_node_fs33.readdirSync)(expDir);
+          entries = (0, import_node_fs35.readdirSync)(expDir);
         } catch {
           continue;
         }
         for (const name of entries) {
           if (!name.endsWith(".pt")) continue;
-          const pt = (0, import_node_path31.join)(expDir, name);
+          const pt = (0, import_node_path32.join)(expDir, name);
           if (pt === keptAbs) continue;
           try {
-            if ((0, import_node_fs33.statSync)(pt).isFile()) (0, import_node_fs33.rmSync)(pt, { force: true });
+            if ((0, import_node_fs35.statSync)(pt).isFile()) (0, import_node_fs35.rmSync)(pt, { force: true });
           } catch {
           }
         }
@@ -23256,35 +23531,35 @@ async function finalizeWith(args, deps) {
     const model = resolveModel(instrument, topic);
     if (!model) continue;
     const targetDir = partStateDir(art, instrument);
-    (0, import_node_fs33.mkdirSync)(targetDir, { recursive: true });
+    (0, import_node_fs35.mkdirSync)(targetDir, { recursive: true });
     const paneFiles = [
       ["outbox.jsonl", outboxPath(instrument, model, topic)],
       ["inbox.md", inboxPath(instrument, model, topic)]
     ];
     for (const [name, src] of paneFiles) {
-      if (!(0, import_node_fs33.existsSync)(src)) {
+      if (!(0, import_node_fs35.existsSync)(src)) {
         log.warn(`link_pane_artifacts: pane file missing for ${instrument}: ${name}`);
         continue;
       }
-      const linkPath = (0, import_node_path31.join)(targetDir, name);
-      const rel = (0, import_node_path31.relative)(targetDir, src);
+      const linkPath = (0, import_node_path32.join)(targetDir, name);
+      const rel = (0, import_node_path32.relative)(targetDir, src);
       try {
         try {
-          if ((0, import_node_fs33.lstatSync)(linkPath)) (0, import_node_fs33.unlinkSync)(linkPath);
+          if ((0, import_node_fs35.lstatSync)(linkPath)) (0, import_node_fs35.unlinkSync)(linkPath);
         } catch {
         }
-        (0, import_node_fs33.symlinkSync)(rel, linkPath);
+        (0, import_node_fs35.symlinkSync)(rel, linkPath);
       } catch {
       }
     }
   }
-  const warningsPath = (0, import_node_path31.join)(art, "warnings.txt");
+  const warningsPath = (0, import_node_path32.join)(art, "warnings.txt");
   const threshold = (deps.sizeWarnGb ?? 2) * GIB;
   const sizeLines = [];
   for (const instrument of instruments) {
     const expsRoot = experimentsDir(art, instrument);
     for (const expId of listExpDirs(expsRoot)) {
-      const expDir = (0, import_node_path31.join)(expsRoot, expId);
+      const expDir = (0, import_node_path32.join)(expsRoot, expId);
       const bytes = dirByteSize(expDir);
       if (bytes >= threshold) {
         const gb = (bytes / GIB).toFixed(1);
@@ -23297,17 +23572,17 @@ async function finalizeWith(args, deps) {
   for (const instrument of instruments) {
     const expsRoot = experimentsDir(art, instrument);
     for (const expId of listExpDirs(expsRoot)) {
-      const expDir = (0, import_node_path31.join)(expsRoot, expId);
-      const promptMd = (0, import_node_path31.join)(expDir, "prompt.md");
-      const auditJson = (0, import_node_path31.join)(expDir, "audit.json");
-      if (!(0, import_node_fs33.existsSync)(promptMd) || !(0, import_node_fs33.existsSync)(auditJson)) continue;
+      const expDir = (0, import_node_path32.join)(expsRoot, expId);
+      const promptMd = (0, import_node_path32.join)(expDir, "prompt.md");
+      const auditJson = (0, import_node_path32.join)(expDir, "audit.json");
+      if (!(0, import_node_fs35.existsSync)(promptMd) || !(0, import_node_fs35.existsSync)(auditJson)) continue;
       let audit;
       try {
-        audit = JSON.parse((0, import_node_fs33.readFileSync)(auditJson, "utf8"));
+        audit = JSON.parse((0, import_node_fs35.readFileSync)(auditJson, "utf8"));
       } catch {
         continue;
       }
-      for (const { key, value } of parseHardConstraints((0, import_node_fs33.readFileSync)(promptMd, "utf8"))) {
+      for (const { key, value } of parseHardConstraints((0, import_node_fs35.readFileSync)(promptMd, "utf8"))) {
         const actual = audit[key];
         if (actual == null || String(actual) === "null") continue;
         if (String(value) !== String(actual)) {
@@ -23322,8 +23597,8 @@ async function finalizeWith(args, deps) {
   }
   const statusRows = [];
   for (const instrument of instruments) {
-    const stateTxt = (0, import_node_path31.join)(partStateDir(art, instrument), "state.txt");
-    if ((0, import_node_fs33.existsSync)(stateTxt)) {
+    const stateTxt = (0, import_node_path32.join)(partStateDir(art, instrument), "state.txt");
+    if ((0, import_node_fs35.existsSync)(stateTxt)) {
       const kv = parseState(readOr(stateTxt));
       statusRows.push({
         instrument,
@@ -23336,18 +23611,18 @@ async function finalizeWith(args, deps) {
       statusRows.push({ instrument, phase: "?", current: "", lastTs: "?", lastEvent: "?" });
     }
   }
-  const scoreboardPath = (0, import_node_path31.join)(art, "scoreboard.md");
-  const scoreboardMd = (0, import_node_fs33.existsSync)(scoreboardPath) ? (0, import_node_fs33.readFileSync)(scoreboardPath, "utf8") : null;
-  const metricPath = (0, import_node_path31.join)(art, "metric.md");
-  const completion = scoreboardMd !== null && (0, import_node_fs33.existsSync)(metricPath) ? checkCompletion(scoreboardMd, (0, import_node_fs33.readFileSync)(metricPath, "utf8")) : null;
-  const budgetPath = (0, import_node_path31.join)(art, "time-budget.txt");
-  const startPath = (0, import_node_path31.join)(art, "session-start.txt");
+  const scoreboardPath = (0, import_node_path32.join)(art, "scoreboard.md");
+  const scoreboardMd = (0, import_node_fs35.existsSync)(scoreboardPath) ? (0, import_node_fs35.readFileSync)(scoreboardPath, "utf8") : null;
+  const metricPath = (0, import_node_path32.join)(art, "metric.md");
+  const completion = scoreboardMd !== null && (0, import_node_fs35.existsSync)(metricPath) ? checkCompletion(scoreboardMd, (0, import_node_fs35.readFileSync)(metricPath, "utf8")) : null;
+  const budgetPath = (0, import_node_path32.join)(art, "time-budget.txt");
+  const startPath = (0, import_node_path32.join)(art, "session-start.txt");
   let hardCap = null;
-  if ((0, import_node_fs33.existsSync)(budgetPath) && (0, import_node_fs33.existsSync)(startPath)) {
+  if ((0, import_node_fs35.existsSync)(budgetPath) && (0, import_node_fs35.existsSync)(startPath)) {
     try {
       hardCap = checkTimeBudget(
-        (0, import_node_fs33.readFileSync)(budgetPath, "utf8").trim(),
-        (0, import_node_fs33.readFileSync)(startPath, "utf8").trim(),
+        (0, import_node_fs35.readFileSync)(budgetPath, "utf8").trim(),
+        (0, import_node_fs35.readFileSync)(startPath, "utf8").trim(),
         Math.floor(Date.parse(deps.now()) / 1e3)
       );
     } catch {
@@ -23359,7 +23634,7 @@ async function finalizeWith(args, deps) {
     const model = resolveModel(instrument, topic);
     if (!model) continue;
     const ob = outboxPath(instrument, model, topic);
-    if (!(0, import_node_fs33.existsSync)(ob)) continue;
+    if (!(0, import_node_fs35.existsSync)(ob)) continue;
     const lines = readOr(ob).split("\n").filter((l) => l.trim() !== "").slice(-10);
     for (const line of lines) {
       try {
@@ -23381,10 +23656,10 @@ async function finalizeWith(args, deps) {
       warnings.push(`- audit_warn: ${f[1]} ${f[2]} (${f[3]})`);
     }
   }
-  const haltPath = (0, import_node_path31.join)(art, "halt.flag");
-  const halt = readHaltFlag((0, import_node_fs33.existsSync)(haltPath) ? (0, import_node_fs33.readFileSync)(haltPath, "utf8") : null);
-  const startedIso = (0, import_node_fs33.existsSync)(startPath) ? (0, import_node_fs33.readFileSync)(startPath, "utf8").trim() : "(unknown)";
-  const budget = (0, import_node_fs33.existsSync)(budgetPath) ? (0, import_node_fs33.readFileSync)(budgetPath, "utf8").trim() : "none";
+  const haltPath = (0, import_node_path32.join)(art, "halt.flag");
+  const halt = readHaltFlag((0, import_node_fs35.existsSync)(haltPath) ? (0, import_node_fs35.readFileSync)(haltPath, "utf8") : null);
+  const startedIso = (0, import_node_fs35.existsSync)(startPath) ? (0, import_node_fs35.readFileSync)(startPath, "utf8").trim() : "(unknown)";
+  const budget = (0, import_node_fs35.existsSync)(budgetPath) ? (0, import_node_fs35.readFileSync)(budgetPath, "utf8").trim() : "none";
   const summary = renderSessionSummary({
     topic,
     updatedIso: deps.now(),
@@ -23399,7 +23674,7 @@ async function finalizeWith(args, deps) {
     halt,
     finalizedIso: deps.now()
   });
-  atomicWrite((0, import_node_path31.join)(art, "session-summary.md"), summary);
+  atomicWrite((0, import_node_path32.join)(art, "session-summary.md"), summary);
   log.ok("finalize: cleanup complete");
   return 0;
 }
@@ -23425,13 +23700,13 @@ async function refineWith(args, deps) {
   }
   const art = rehearsalArtDir(topic, deps.opts);
   const branchDir = experimentDir(art, instrument, expId);
-  if (!(0, import_node_fs33.existsSync)(branchDir) || !(0, import_node_fs33.statSync)(branchDir).isDirectory()) {
+  if (!(0, import_node_fs35.existsSync)(branchDir) || !(0, import_node_fs35.statSync)(branchDir).isDirectory()) {
     log.error(`branch dir missing: ${branchDir}`);
     return 1;
   }
   let n2 = 1;
-  while ((0, import_node_fs33.existsSync)((0, import_node_path31.join)(branchDir, `refine-${n2}.md`))) n2++;
-  const refinePath = (0, import_node_path31.join)(branchDir, `refine-${n2}.md`);
+  while ((0, import_node_fs35.existsSync)((0, import_node_path32.join)(branchDir, `refine-${n2}.md`))) n2++;
+  const refinePath = (0, import_node_path32.join)(branchDir, `refine-${n2}.md`);
   atomicWrite(refinePath, text + "\n");
   log.info(`[refine] wrote ${refinePath}`);
   if (!deps.dryRun) {
@@ -23447,42 +23722,42 @@ async function refineWith(args, deps) {
   return 0;
 }
 function readResultJson(path6) {
-  if (!(0, import_node_fs33.existsSync)(path6)) return {};
+  if (!(0, import_node_fs35.existsSync)(path6)) return {};
   try {
-    return JSON.parse((0, import_node_fs33.readFileSync)(path6, "utf8"));
+    return JSON.parse((0, import_node_fs35.readFileSync)(path6, "utf8"));
   } catch {
     return {};
   }
 }
 async function handoffExtractWith(args, deps) {
   const art = args[0];
-  if (!art || !(0, import_node_fs33.existsSync)(art) || !(0, import_node_fs33.statSync)(art).isDirectory()) {
+  if (!art || !(0, import_node_fs35.existsSync)(art) || !(0, import_node_fs35.statSync)(art).isDirectory()) {
     log.error(`rehearsal handoff-extract: art-dir required (got '${art ?? ""}')`);
     return 2;
   }
-  const topicTxt = (0, import_node_path31.join)(art, "topic.txt");
-  if (!(0, import_node_fs33.existsSync)(topicTxt)) {
+  const topicTxt = (0, import_node_path32.join)(art, "topic.txt");
+  if (!(0, import_node_fs35.existsSync)(topicTxt)) {
     log.error(`rehearsal handoff-extract: topic.txt missing under ${art}`);
     return 2;
   }
-  const topic = (0, import_node_fs33.readFileSync)(topicTxt, "utf8").replace(/\n/g, " ").replace(/\s+$/, "");
-  const sbPath = (0, import_node_path31.join)(art, "scoreboard.md");
-  const { winner, runnerUps } = parseScoreboard((0, import_node_fs33.existsSync)(sbPath) ? (0, import_node_fs33.readFileSync)(sbPath, "utf8") : "");
+  const topic = (0, import_node_fs35.readFileSync)(topicTxt, "utf8").replace(/\n/g, " ").replace(/\s+$/, "");
+  const sbPath = (0, import_node_path32.join)(art, "scoreboard.md");
+  const { winner, runnerUps } = parseScoreboard((0, import_node_fs35.existsSync)(sbPath) ? (0, import_node_fs35.readFileSync)(sbPath, "utf8") : "");
   let landscapeDoc;
-  for (const name of (0, import_node_fs33.readdirSync)(art).sort()) {
-    if (/^rehearsal-.*\.md$/.test(name) && (0, import_node_fs33.statSync)((0, import_node_path31.join)(art, name)).isFile()) {
+  for (const name of (0, import_node_fs35.readdirSync)(art).sort()) {
+    if (/^rehearsal-.*\.md$/.test(name) && (0, import_node_fs35.statSync)((0, import_node_path32.join)(art, name)).isFile()) {
       landscapeDoc = name;
       break;
     }
   }
-  const hasMetricMd = (0, import_node_fs33.existsSync)((0, import_node_path31.join)(art, "metric.md"));
+  const hasMetricMd = (0, import_node_fs35.existsSync)((0, import_node_path32.join)(art, "metric.md"));
   const generatedTs = deps.now();
   let input;
   if (!winner) {
     input = { topic, landscapeDoc, hasMetricMd, generatedTs, winner: null, runnerUps: [] };
   } else {
     const expRel = `parts/${winner.instrument}/experiments/${winner.expId}`;
-    const result = readResultJson((0, import_node_path31.join)(art, expRel, "result.json"));
+    const result = readResultJson((0, import_node_path32.join)(art, expRel, "result.json"));
     const approach = result.approach_label != null ? String(result.approach_label) : "";
     const notes = String(result.notes ?? "").replace(/\n/g, " ");
     let checkpoint;
@@ -23491,7 +23766,7 @@ async function handoffExtractWith(args, deps) {
       checkpoint = ckptRaw.startsWith("/") ? ckptRaw : `${expRel}/${ckptRaw}`;
     }
     const runners = runnerUps.map((r) => {
-      const rr = readResultJson((0, import_node_path31.join)(art, `parts/${r.instrument}/experiments/${r.expId}`, "result.json"));
+      const rr = readResultJson((0, import_node_path32.join)(art, `parts/${r.instrument}/experiments/${r.expId}`, "result.json"));
       return { instrument: r.instrument, exp: r.expId, metric: r.metric, approach: rr.approach_label != null ? String(rr.approach_label) : "" };
     });
     input = {
@@ -23511,25 +23786,25 @@ async function handoffExtractWith(args, deps) {
       runnerUps: runners
     };
   }
-  atomicWrite((0, import_node_path31.join)(art, "handoff-data.kv"), buildHandoffKv(input));
-  log.ok(`handoff-data.kv written: ${(0, import_node_path31.join)(art, "handoff-data.kv")}`);
+  atomicWrite((0, import_node_path32.join)(art, "handoff-data.kv"), buildHandoffKv(input));
+  log.ok(`handoff-data.kv written: ${(0, import_node_path32.join)(art, "handoff-data.kv")}`);
   return 0;
 }
 function sweepTmpLock(dir, depth) {
   if (depth < 0) return;
   let entries;
   try {
-    entries = (0, import_node_fs33.readdirSync)(dir, { withFileTypes: true });
+    entries = (0, import_node_fs35.readdirSync)(dir, { withFileTypes: true });
   } catch {
     return;
   }
   for (const e of entries) {
-    const p = (0, import_node_path31.join)(dir, e.name);
+    const p = (0, import_node_path32.join)(dir, e.name);
     if (e.isDirectory()) {
       sweepTmpLock(p, depth - 1);
     } else if (e.isFile() && (e.name.endsWith(".tmp") || e.name.endsWith(".lock"))) {
       try {
-        (0, import_node_fs33.rmSync)(p, { force: true });
+        (0, import_node_fs35.rmSync)(p, { force: true });
       } catch {
       }
     }
@@ -23545,13 +23820,13 @@ async function teardownWith(args, deps) {
     return 2;
   }
   const art = rehearsalArtDir(topic, deps.opts);
-  if (!(0, import_node_fs33.existsSync)(art) || !(0, import_node_fs33.statSync)(art).isDirectory()) {
+  if (!(0, import_node_fs35.existsSync)(art) || !(0, import_node_fs35.statSync)(art).isDirectory()) {
     log.error(`${art} not found`);
     return 1;
   }
-  const pf = (0, import_node_path31.join)(art, "preflight-panes.txt");
-  if ((0, import_node_fs33.existsSync)(pf)) {
-    for (const line of (0, import_node_fs33.readFileSync)(pf, "utf8").split("\n")) {
+  const pf = (0, import_node_path32.join)(art, "preflight-panes.txt");
+  if ((0, import_node_fs35.existsSync)(pf)) {
+    for (const line of (0, import_node_fs35.readFileSync)(pf, "utf8").split("\n")) {
       const pane = line.trim();
       if (!pane) continue;
       try {
@@ -23560,23 +23835,23 @@ async function teardownWith(args, deps) {
       }
     }
   }
-  const shared = (0, import_node_path31.join)(art, "shared");
-  if ((0, import_node_fs33.existsSync)(shared) && (0, import_node_fs33.statSync)(shared).isDirectory()) sweepTmpLock(shared, 2);
-  const sbPath = (0, import_node_path31.join)(art, "scoreboard.md");
-  if ((0, import_node_fs33.existsSync)(sbPath)) {
-    const { winner } = parseScoreboard((0, import_node_fs33.readFileSync)(sbPath, "utf8"));
+  const shared = (0, import_node_path32.join)(art, "shared");
+  if ((0, import_node_fs35.existsSync)(shared) && (0, import_node_fs35.statSync)(shared).isDirectory()) sweepTmpLock(shared, 2);
+  const sbPath = (0, import_node_path32.join)(art, "scoreboard.md");
+  if ((0, import_node_fs35.existsSync)(sbPath)) {
+    const { winner } = parseScoreboard((0, import_node_fs35.readFileSync)(sbPath, "utf8"));
     if (winner) {
       const rel = `parts/${winner.instrument}/experiments/${winner.expId}/code`;
-      if ((0, import_node_fs33.existsSync)((0, import_node_path31.join)(art, rel)) && (0, import_node_fs33.statSync)((0, import_node_path31.join)(art, rel)).isDirectory()) {
-        const link = (0, import_node_path31.join)(art, "winner");
+      if ((0, import_node_fs35.existsSync)((0, import_node_path32.join)(art, rel)) && (0, import_node_fs35.statSync)((0, import_node_path32.join)(art, rel)).isDirectory()) {
+        const link = (0, import_node_path32.join)(art, "winner");
         try {
-          (0, import_node_fs33.rmSync)(link, { force: true });
+          (0, import_node_fs35.rmSync)(link, { force: true });
         } catch {
         }
-        (0, import_node_fs33.symlinkSync)(rel, link);
+        (0, import_node_fs35.symlinkSync)(rel, link);
         log.ok(`[teardown] winner symlink -> ${rel} (${winner.instrument}/${winner.expId})`);
       } else {
-        log.warn(`[teardown] scoreboard top-1 dir missing: ${(0, import_node_path31.join)(art, rel)}; no symlink`);
+        log.warn(`[teardown] scoreboard top-1 dir missing: ${(0, import_node_path32.join)(art, rel)}; no symlink`);
       }
     } else {
       log.info("[teardown] scoreboard has no ok rows; no winner symlink");
@@ -23613,12 +23888,12 @@ async function freshPartWith(args, deps) {
     return 2;
   }
   const art = rehearsalArtDir(topic, deps.opts);
-  const stateTxt = (0, import_node_path31.join)(partStateDir(art, instrument), "state.txt");
-  if (!(0, import_node_fs33.existsSync)(stateTxt)) {
+  const stateTxt = (0, import_node_path32.join)(partStateDir(art, instrument), "state.txt");
+  if (!(0, import_node_fs35.existsSync)(stateTxt)) {
     log.error(`part state.txt missing: ${stateTxt}`);
     return 1;
   }
-  const prev = parseState((0, import_node_fs33.readFileSync)(stateTxt, "utf8"));
+  const prev = parseState((0, import_node_fs35.readFileSync)(stateTxt, "utf8"));
   if (prev.phase === "working") {
     log.error(`part ${instrument} is mid-experiment (phase=working); abort or wait for done before fresh-part.`);
     return 1;
@@ -23635,7 +23910,7 @@ async function freshPartWith(args, deps) {
     log.error(`spawn failed for ${instrument} on ${topic}`);
     return 1;
   }
-  atomicWrite(stateTxt, mergeState((0, import_node_fs33.readFileSync)(stateTxt, "utf8"), {
+  atomicWrite(stateTxt, mergeState((0, import_node_fs35.readFileSync)(stateTxt, "utf8"), {
     last_event: "fresh-part-respawn",
     last_event_ts: deps.now(),
     phase: "idle",
@@ -23654,13 +23929,13 @@ async function abortWith(args, deps) {
   const topic = args[0];
   const reason = args[1] ?? "unspecified";
   const art = rehearsalArtDir(topic, deps.opts);
-  if (!(0, import_node_fs33.existsSync)(art) || !(0, import_node_fs33.statSync)(art).isDirectory()) {
+  if (!(0, import_node_fs35.existsSync)(art) || !(0, import_node_fs35.statSync)(art).isDirectory()) {
     log.error(`no active rehearsal session for topic: ${topic} (art-dir ${art} missing)`);
     return 1;
   }
-  const mt = (0, import_node_path31.join)(art, "monitor-tasks.txt");
-  const ids = (0, import_node_fs33.existsSync)(mt) ? (0, import_node_fs33.readFileSync)(mt, "utf8").split("\n").map((l) => l.trim()).filter(Boolean) : [];
-  (0, import_node_fs33.writeFileSync)((0, import_node_path31.join)(art, "halt.flag"), `halted_by=user
+  const mt = (0, import_node_path32.join)(art, "monitor-tasks.txt");
+  const ids = (0, import_node_fs35.existsSync)(mt) ? (0, import_node_fs35.readFileSync)(mt, "utf8").split("\n").map((l) => l.trim()).filter(Boolean) : [];
+  (0, import_node_fs35.writeFileSync)((0, import_node_path32.join)(art, "halt.flag"), `halted_by=user
 halted_at=${deps.now()}
 reason=${reason}
 `);
@@ -23713,14 +23988,14 @@ async function consensusWith(args, deps) {
   const epsilon = deps.epsilon ?? p.epsilon;
   const art = rehearsalArtDir(p.topic, deps.opts);
   const partsRoot = partsDir(art);
-  if (!(0, import_node_fs33.existsSync)(partsRoot)) {
+  if (!(0, import_node_fs35.existsSync)(partsRoot)) {
     log.error(`rehearsal consensus: no parts dir under ${art}`);
     return 1;
   }
   const latestOk = {};
   let instruments;
   try {
-    instruments = (0, import_node_fs33.readdirSync)(partsRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+    instruments = (0, import_node_fs35.readdirSync)(partsRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
   } catch {
     instruments = [];
   }
@@ -23728,17 +24003,17 @@ async function consensusWith(args, deps) {
     const expsRoot = experimentsDir(art, instrument);
     let names;
     try {
-      names = (0, import_node_fs33.readdirSync)(expsRoot).filter((n2) => EXP_ID_RE.test(n2)).sort();
+      names = (0, import_node_fs35.readdirSync)(expsRoot).filter((n2) => EXP_ID_RE.test(n2)).sort();
     } catch {
       continue;
     }
     let newest = "";
     for (const exp of names) {
-      const resultPath = (0, import_node_path31.join)(experimentDir(art, instrument, exp), "result.json");
-      if (!(0, import_node_fs33.existsSync)(resultPath)) continue;
+      const resultPath = (0, import_node_path32.join)(experimentDir(art, instrument, exp), "result.json");
+      if (!(0, import_node_fs35.existsSync)(resultPath)) continue;
       let parsed;
       try {
-        parsed = JSON.parse((0, import_node_fs33.readFileSync)(resultPath, "utf8"));
+        parsed = JSON.parse((0, import_node_fs35.readFileSync)(resultPath, "utf8"));
       } catch {
         continue;
       }
@@ -23754,8 +24029,8 @@ async function consensusWith(args, deps) {
     return 1;
   }
   const md = buildConsensus(latestOk, { topic: p.topic, nowIso: deps.now(), epsilon });
-  atomicWrite((0, import_node_path31.join)(art, "consensus.md"), md);
-  log.ok(`[consensus] wrote ${(0, import_node_path31.join)(art, "consensus.md")} (${Object.keys(latestOk).length} parts)`);
+  atomicWrite((0, import_node_path32.join)(art, "consensus.md"), md);
+  log.ok(`[consensus] wrote ${(0, import_node_path32.join)(art, "consensus.md")} (${Object.keys(latestOk).length} parts)`);
   return 0;
 }
 async function run13(args) {
@@ -23798,13 +24073,13 @@ async function run13(args) {
       return 2;
   }
 }
-var import_node_fs33, import_node_child_process9, import_node_path31, liveInitDeps4, liveSpawnAllDeps2, liveExperimentSendDeps, liveScoreDeps, sleep4, GIB, liveFinalizeDeps, liveRefineDeps, liveHandoffDeps, liveTeardownDeps, liveFreshPartDeps, liveAbortDeps, liveConsensusDeps;
+var import_node_fs35, import_node_child_process9, import_node_path32, liveInitDeps4, liveSpawnAllDeps2, liveExperimentSendDeps, liveScoreDeps, sleep4, GIB, liveFinalizeDeps, liveRefineDeps, liveHandoffDeps, liveTeardownDeps, liveFreshPartDeps, liveAbortDeps, liveConsensusDeps;
 var init_rehearsal2 = __esm({
   "src/commands/rehearsal.ts"() {
     "use strict";
-    import_node_fs33 = require("node:fs");
+    import_node_fs35 = require("node:fs");
     import_node_child_process9 = require("node:child_process");
-    import_node_path31 = require("node:path");
+    import_node_path32 = require("node:path");
     init_log();
     init_args();
     init_atomic();
@@ -23838,7 +24113,8 @@ var init_rehearsal2 = __esm({
     liveInitDeps4 = {
       haveCmd,
       instrumentBinary,
-      now: () => isoUtc()
+      now: () => isoUtc(),
+      configRoot: () => process.env.CLAUDE_PLUGIN_ROOT ?? process.cwd()
     };
     liveSpawnAllDeps2 = { preflight: run7, spawn: run, repoRoot, pickInstruments };
     liveExperimentSendDeps = {
@@ -23860,11 +24136,11 @@ var init_rehearsal2 = __esm({
     liveScoreDeps = {
       computeScore,
       fs: {
-        exists: import_node_fs33.existsSync,
-        read: (p) => (0, import_node_fs33.existsSync)(p) ? (0, import_node_fs33.readFileSync)(p, "utf8") : null,
+        exists: import_node_fs35.existsSync,
+        read: (p) => (0, import_node_fs35.existsSync)(p) ? (0, import_node_fs35.readFileSync)(p, "utf8") : null,
         listDir: (p) => {
           try {
-            return (0, import_node_fs33.readdirSync)(p).sort();
+            return (0, import_node_fs35.readdirSync)(p).sort();
           } catch {
             return [];
           }
@@ -23874,7 +24150,7 @@ var init_rehearsal2 = __esm({
       writeAtomic: atomicWrite,
       removeFile: (p) => {
         try {
-          (0, import_node_fs33.rmSync)(p, { force: true });
+          (0, import_node_fs35.rmSync)(p, { force: true });
         } catch {
         }
       },
@@ -23913,13 +24189,13 @@ var init_rehearsal2 = __esm({
 
 // src/core/prelude.ts
 function preludeArtDir(topic, opts) {
-  return (0, import_node_path32.join)(topicDir(topic, opts), "_prelude");
+  return (0, import_node_path33.join)(topicDir(topic, opts), "_prelude");
 }
-var import_node_path32;
+var import_node_path33;
 var init_prelude = __esm({
   "src/core/prelude.ts"() {
     "use strict";
-    import_node_path32 = require("node:path");
+    import_node_path33 = require("node:path");
     init_paths();
     init_solo();
   }
@@ -24016,26 +24292,26 @@ function buildHandoffKv2(i2) {
   return L.join("\n") + "\n";
 }
 function readIf2(p) {
-  return (0, import_node_fs34.existsSync)(p) ? (0, import_node_fs34.readFileSync)(p, "utf8") : null;
+  return (0, import_node_fs36.existsSync)(p) ? (0, import_node_fs36.readFileSync)(p, "utf8") : null;
 }
 function extractHandoffData(artDir, now) {
-  if (!(0, import_node_fs34.existsSync)(artDir) || !(0, import_node_fs34.statSync)(artDir).isDirectory()) return null;
-  const topicTxt = readIf2((0, import_node_path33.join)(artDir, "topic.txt"));
+  if (!(0, import_node_fs36.existsSync)(artDir) || !(0, import_node_fs36.statSync)(artDir).isDirectory()) return null;
+  const topicTxt = readIf2((0, import_node_path34.join)(artDir, "topic.txt"));
   if (topicTxt === null) return null;
   const topic = topicTxt.replace(/\n/g, " ").replace(/ +$/, "");
-  const names = (0, import_node_fs34.readdirSync)(artDir);
+  const names = (0, import_node_fs36.readdirSync)(artDir);
   const landscapes = names.filter((n2) => /^landscape-.*\.md$/.test(n2)).sort();
   const landscapeDoc = landscapes.find((n2) => n2 !== "landscape-draft.md") ?? (landscapes.includes("landscape-draft.md") ? "landscape-draft.md" : void 0);
   const findingsPaths = names.filter((n2) => /^findings-.*\.md$/.test(n2)).sort();
   const adversaryFindingsPaths = names.filter((n2) => /^adversary-.*\.md$/.test(n2)).sort();
   let top = "", tradeoff = false;
   if (landscapeDoc) {
-    const doc = (0, import_node_fs34.readFileSync)((0, import_node_path33.join)(artDir, landscapeDoc), "utf8");
+    const doc = (0, import_node_fs36.readFileSync)((0, import_node_path34.join)(artDir, landscapeDoc), "utf8");
     top = topApproach(doc);
     tradeoff = /^## Tradeoff matrix/m.test(doc);
   }
   let confidenceSignals = "";
-  const skip = readIf2((0, import_node_path33.join)(artDir, "adversary-skip.txt"));
+  const skip = readIf2((0, import_node_path34.join)(artDir, "adversary-skip.txt"));
   if (skip) {
     const m = skip.split("\n").find((l) => l.startsWith("signals_passed:"));
     if (m) confidenceSignals = m.replace(/^signals_passed:\s*/, "").trim().replace(/\s+/g, ",");
@@ -24050,16 +24326,16 @@ function extractHandoffData(artDir, now) {
     tradeoffMatrixPresent: tradeoff,
     generatedTs: isoUtc(now)
   });
-  const dest = (0, import_node_path33.join)(artDir, "handoff-data.kv");
+  const dest = (0, import_node_path34.join)(artDir, "handoff-data.kv");
   atomicWrite(dest, body);
   return dest;
 }
-var import_node_fs34, import_node_path33;
+var import_node_fs36, import_node_path34;
 var init_preludeHandoff = __esm({
   "src/core/preludeHandoff.ts"() {
     "use strict";
-    import_node_fs34 = require("node:fs");
-    import_node_path33 = require("node:path");
+    import_node_fs36 = require("node:fs");
+    import_node_path34 = require("node:path");
     init_atomic();
     init_archive();
     init_preludeConfidence();
@@ -24070,7 +24346,7 @@ var init_preludeHandoff = __esm({
 function esc(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-function classifyTopic(topic) {
+function classifyTopic2(topic) {
   const t = (topic ?? "").trim();
   if (!t) return "OFF";
   const padded = ` ${t.toLowerCase()} `;
@@ -24336,7 +24612,7 @@ async function initWith5(tokens, d) {
     roster = roster.slice(0, 3);
   }
   const art = preludeArtDir(topic);
-  if ((0, import_node_fs35.existsSync)(art)) {
+  if ((0, import_node_fs37.existsSync)(art)) {
     log.error(`prelude init: topic already in flight: ${art}`);
     log.error("  run /consort:coda or pick a different topic");
     return 2;
@@ -24347,9 +24623,9 @@ async function initWith5(tokens, d) {
     return 1;
   }
   const rows = roster.map((provider, i2) => ({ provider, instrument: instruments[i2] }));
-  (0, import_node_fs35.mkdirSync)(art, { recursive: true });
-  atomicWrite((0, import_node_path34.join)(art, "topic.txt"), topicText);
-  atomicWrite((0, import_node_path34.join)(art, "roster.txt"), formatRosterFile(rows, isoUtc()));
+  (0, import_node_fs37.mkdirSync)(art, { recursive: true });
+  atomicWrite((0, import_node_path35.join)(art, "topic.txt"), topicText);
+  atomicWrite((0, import_node_path35.join)(art, "roster.txt"), formatRosterFile(rows, isoUtc()));
   log.ok(`prelude init: topic=${topic} N=${rows.length}`);
   process.stdout.write(
     `TOPIC=${topic}
@@ -24366,13 +24642,13 @@ async function classifyRun(rest) {
     return 2;
   }
   const art = preludeArtDir(topic);
-  if (!(0, import_node_fs35.existsSync)(art)) {
+  if (!(0, import_node_fs37.existsSync)(art)) {
     log.error(`prelude classify: ${art} not found (run prelude init)`);
     return 1;
   }
-  const topicText = readIf3((0, import_node_path34.join)(art, "topic.txt")).trim();
-  const track = classifyTopic(topicText);
-  atomicWrite((0, import_node_path34.join)(art, "lit-track.txt"), `${track}
+  const topicText = readIf3((0, import_node_path35.join)(art, "topic.txt")).trim();
+  const track = classifyTopic2(topicText);
+  atomicWrite((0, import_node_path35.join)(art, "lit-track.txt"), `${track}
 reason: auto-detect via keyword scan
 `);
   log.ok(`prelude classify: lit-track=${track}`);
@@ -24388,12 +24664,12 @@ async function spawnAllRun2(rest) {
 }
 async function spawnAllWith3(topic, d) {
   const art = preludeArtDir(topic);
-  const rosterPath = (0, import_node_path34.join)(art, "roster.txt");
-  if (!(0, import_node_fs35.existsSync)(rosterPath)) {
+  const rosterPath = (0, import_node_path35.join)(art, "roster.txt");
+  if (!(0, import_node_fs37.existsSync)(rosterPath)) {
     log.error(`prelude spawn-all: roster.txt missing at ${rosterPath} (run prelude init)`);
     return 2;
   }
-  const rows = parseRosterFile((0, import_node_fs35.readFileSync)(rosterPath, "utf8"));
+  const rows = parseRosterFile((0, import_node_fs37.readFileSync)(rosterPath, "utf8"));
   if (rows.length < 2) {
     log.error(`prelude spawn-all: need >=2 parts in roster.txt, got ${rows.length}`);
     return 2;
@@ -24403,12 +24679,12 @@ async function spawnAllWith3(topic, d) {
     log.error(`prelude spawn-all: preflight failed (rc=${pf})`);
     return 2;
   }
-  const panesPath = (0, import_node_path34.join)(art, "preflight-panes.txt");
-  if (!(0, import_node_fs35.existsSync)(panesPath)) {
+  const panesPath = (0, import_node_path35.join)(art, "preflight-panes.txt");
+  if (!(0, import_node_fs37.existsSync)(panesPath)) {
     log.error(`prelude spawn-all: preflight wrote no ${panesPath}`);
     return 2;
   }
-  const panes = parsePanesFile((0, import_node_fs35.readFileSync)(panesPath, "utf8"));
+  const panes = parsePanesFile((0, import_node_fs37.readFileSync)(panesPath, "utf8"));
   const orphans = rows.filter((r) => !panes.has(r.instrument));
   if (orphans.length) {
     log.error(`prelude spawn-all: parts missing a preflight pane: ${orphans.map((r) => r.instrument).join(", ")}`);
@@ -24419,7 +24695,7 @@ async function spawnAllWith3(topic, d) {
     const rc2 = await d.spawn([r.instrument, r.provider, topic, "--target-pane", panes.get(r.instrument), "--cwd", cwd]);
     return { instrument: r.instrument, provider: r.provider, rc: rc2 };
   }));
-  atomicWrite((0, import_node_path34.join)(art, "spawn-results.tsv"), spawnResultsTsv(results));
+  atomicWrite((0, import_node_path35.join)(art, "spawn-results.tsv"), spawnResultsTsv(results));
   const rc = spawnTally(results.map((r) => r.rc));
   const nOk = results.filter((r) => r.rc === 0).length;
   if (rc === 0) log.ok(`prelude spawn-all: ${nOk}/${rows.length} parts ready`);
@@ -24436,19 +24712,19 @@ async function researchSendRun2(rest) {
 }
 async function researchSendWith2(topic, instrument, provider, d) {
   const art = preludeArtDir(topic);
-  const stateFile = (0, import_node_path34.join)(art, `research-${instrument}.txt`);
-  if ((0, import_node_fs35.existsSync)(stateFile)) {
+  const stateFile = (0, import_node_path35.join)(art, `research-${instrument}.txt`);
+  if ((0, import_node_fs37.existsSync)(stateFile)) {
     log.error(`prelude research-send: ${stateFile} exists; rm to retry`);
     return 1;
   }
-  const topicText = readIf3((0, import_node_path34.join)(art, "topic.txt")).trim();
+  const topicText = readIf3((0, import_node_path35.join)(art, "topic.txt")).trim();
   if (!topicText) {
     log.error(`prelude research-send: topic.txt missing/empty at ${art} (run prelude init)`);
     return 1;
   }
-  const track = readIf3((0, import_node_path34.join)(art, "lit-track.txt")).startsWith("ON") ? "ON" : "OFF";
-  const findingsPath = (0, import_node_path34.join)(art, `findings-${instrument}.md`);
-  const promptFile = (0, import_node_path34.join)(art, `${instrument}_research_prompt.md`);
+  const track = readIf3((0, import_node_path35.join)(art, "lit-track.txt")).startsWith("ON") ? "ON" : "OFF";
+  const findingsPath = (0, import_node_path35.join)(art, `findings-${instrument}.md`);
+  const promptFile = (0, import_node_path35.join)(art, `${instrument}_research_prompt.md`);
   atomicWrite(promptFile, composePreludeResearchPrompt(topicText, findingsPath, litGuidance(track)));
   const offset = d.offsetFor(instrument, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}
@@ -24471,12 +24747,12 @@ async function researchWaitRun2(rest) {
 }
 async function researchWaitWith2(topic, instrument, provider, d) {
   const art = preludeArtDir(topic);
-  const stateFile = (0, import_node_path34.join)(art, `research-${instrument}.txt`);
-  if (!(0, import_node_fs35.existsSync)(stateFile)) {
+  const stateFile = (0, import_node_path35.join)(art, `research-${instrument}.txt`);
+  if (!(0, import_node_fs37.existsSync)(stateFile)) {
     log.error(`prelude research-wait: ${stateFile} missing (run prelude research-send first)`);
     return 1;
   }
-  const offset = parseLatestOffset((0, import_node_fs35.readFileSync)(stateFile, "utf8"));
+  const offset = parseLatestOffset((0, import_node_fs37.readFileSync)(stateFile, "utf8"));
   if (offset === null) {
     log.error(`prelude research-wait: OFFSET not set in ${stateFile}`);
     return 1;
@@ -24484,20 +24760,20 @@ async function researchWaitWith2(topic, instrument, provider, d) {
   const timeout = scaledTimeout(consultTimeout("research"), d.multiplier(provider));
   log.info(`prelude research-wait: ${instrument} offset=${offset} timeout=${timeout}s`);
   const ev = await d.wait(instrument, provider, topic, offset, ["done", "error", "question"], timeout);
-  const findingsPath = (0, import_node_path34.join)(art, `findings-${instrument}.md`);
-  const findingsText = (0, import_node_fs35.existsSync)(findingsPath) ? (0, import_node_fs35.readFileSync)(findingsPath, "utf8") : null;
+  const findingsPath = (0, import_node_path35.join)(art, `findings-${instrument}.md`);
+  const findingsText = (0, import_node_fs37.existsSync)(findingsPath) ? (0, import_node_fs37.readFileSync)(findingsPath, "utf8") : null;
   const fs = researchState(ev, findingsText);
   if (fs === "question" && ev) {
-    atomicWrite((0, import_node_path34.join)(art, `question-${instrument}.txt`), JSON.stringify(ev) + "\n");
+    atomicWrite((0, import_node_path35.join)(art, `question-${instrument}.txt`), JSON.stringify(ev) + "\n");
     const bumped = outboxOffset(outboxPath(instrument, provider, topic));
-    (0, import_node_fs35.appendFileSync)(stateFile, `OFFSET=${bumped}
+    (0, import_node_fs37.appendFileSync)(stateFile, `OFFSET=${bumped}
 FS=question
 `);
   } else {
-    (0, import_node_fs35.appendFileSync)(stateFile, `FS=${fs}
+    (0, import_node_fs37.appendFileSync)(stateFile, `FS=${fs}
 `);
   }
-  (0, import_node_fs35.writeFileSync)((0, import_node_path34.join)(art, `research-${instrument}.done`), "");
+  (0, import_node_fs37.writeFileSync)((0, import_node_path35.join)(art, `research-${instrument}.done`), "");
   log.ok(`prelude research-wait: ${instrument} FS=${fs}`);
   return 0;
 }
@@ -24508,24 +24784,24 @@ async function synthPreliminaryRun(rest) {
     return 2;
   }
   const art = preludeArtDir(topic);
-  if (!(0, import_node_fs35.existsSync)(art)) {
+  if (!(0, import_node_fs37.existsSync)(art)) {
     log.error(`prelude synth-preliminary: ${art} not found \u2014 run prelude init`);
     return 1;
   }
   for (const f of ["topic.txt", "roster.txt"]) {
-    if (!readIf3((0, import_node_path34.join)(art, f)).trim()) {
-      log.error(`prelude synth-preliminary: missing or empty: ${(0, import_node_path34.join)(art, f)}`);
+    if (!readIf3((0, import_node_path35.join)(art, f)).trim()) {
+      log.error(`prelude synth-preliminary: missing or empty: ${(0, import_node_path35.join)(art, f)}`);
       return 1;
     }
   }
-  const rows = parseRosterFile(readIf3((0, import_node_path34.join)(art, "roster.txt")));
-  const missing = rows.filter((r) => !readIf3((0, import_node_path34.join)(art, `findings-${r.instrument}.md`)).trim()).map((r) => `findings-${r.instrument}.md`);
+  const rows = parseRosterFile(readIf3((0, import_node_path35.join)(art, "roster.txt")));
+  const missing = rows.filter((r) => !readIf3((0, import_node_path35.join)(art, `findings-${r.instrument}.md`)).trim()).map((r) => `findings-${r.instrument}.md`);
   if (missing.length) {
     log.error("prelude synth-preliminary: blocked \u2014 missing or empty findings:");
-    for (const m of missing) log.error(`  - ${(0, import_node_path34.join)(art, m)}`);
+    for (const m of missing) log.error(`  - ${(0, import_node_path35.join)(art, m)}`);
     return 1;
   }
-  const out = (0, import_node_path34.join)(art, "landscape-draft.md");
+  const out = (0, import_node_path35.join)(art, "landscape-draft.md");
   log.ok(`prelude synth-preliminary: inputs validated for ${topic}`);
   process.stdout.write(out + "\n");
   return 0;
@@ -24547,23 +24823,23 @@ async function confidenceRun(rest) {
     decision = v;
   }
   const art = preludeArtDir(topic);
-  const draft = readIf3((0, import_node_path34.join)(art, "landscape-draft.md"));
+  const draft = readIf3((0, import_node_path35.join)(art, "landscape-draft.md"));
   if (!draft.trim()) {
     log.error(`prelude confidence: landscape-draft.md missing/empty at ${art}`);
     return 1;
   }
-  const rows = parseRosterFile(readIf3((0, import_node_path34.join)(art, "roster.txt")));
-  const findings = rows.map((r) => readIf3((0, import_node_path34.join)(art, `findings-${r.instrument}.md`)));
+  const rows = parseRosterFile(readIf3((0, import_node_path35.join)(art, "roster.txt")));
+  const findings = rows.map((r) => readIf3((0, import_node_path35.join)(art, `findings-${r.instrument}.md`)));
   const s = computeSignals(draft, findings);
   log.info(`prelude confidence: S1=${s.s1} S2=${s.s2} S3=${s.s3} S4=${s.s4} S5=${s.s5} \u2014 ALL_HOLD=${s.allHold}`);
   process.stdout.write(`ALL_HOLD=${s.allHold}
 `);
   if (decision) {
-    atomicWrite((0, import_node_path34.join)(art, "adversary-skip.txt"), renderSkipRecord({ signals: s, decision, now: isoUtc() }));
+    atomicWrite((0, import_node_path35.join)(art, "adversary-skip.txt"), renderSkipRecord({ signals: s, decision, now: isoUtc() }));
     return 0;
   }
   if (!s.allHold) {
-    atomicWrite((0, import_node_path34.join)(art, "adversary-skip.txt"), renderSkipRecord({ signals: s, decision: "not-offered", now: isoUtc() }));
+    atomicWrite((0, import_node_path35.join)(art, "adversary-skip.txt"), renderSkipRecord({ signals: s, decision: "not-offered", now: isoUtc() }));
   }
   return 0;
 }
@@ -24577,18 +24853,18 @@ async function adversarySendRun(rest) {
 }
 async function adversarySendWith(topic, instrument, provider, d) {
   const art = preludeArtDir(topic);
-  const draft = readIf3((0, import_node_path34.join)(art, "landscape-draft.md"));
+  const draft = readIf3((0, import_node_path35.join)(art, "landscape-draft.md"));
   if (!draft.trim()) {
     log.error("prelude adversary-send: landscape-draft.md missing or empty \u2014 run synth-preliminary first");
     return 1;
   }
-  const stateFile = (0, import_node_path34.join)(art, `adversary-${instrument}.txt`);
-  if ((0, import_node_fs35.existsSync)(stateFile)) {
+  const stateFile = (0, import_node_path35.join)(art, `adversary-${instrument}.txt`);
+  if ((0, import_node_fs37.existsSync)(stateFile)) {
     log.error(`prelude adversary-send: ${stateFile} exists; rm to retry`);
     return 1;
   }
-  const outPath = (0, import_node_path34.join)(art, `adversary-${instrument}.md`);
-  const promptFile = (0, import_node_path34.join)(art, `${instrument}_adversary_prompt.md`);
+  const outPath = (0, import_node_path35.join)(art, `adversary-${instrument}.md`);
+  const promptFile = (0, import_node_path35.join)(art, `${instrument}_adversary_prompt.md`);
   atomicWrite(promptFile, composeAdversaryPrompt(draft, instrument, outPath));
   const offset = d.offsetFor(instrument, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}
@@ -24611,12 +24887,12 @@ async function adversaryWaitRun(rest) {
 }
 async function adversaryWaitWith(topic, instrument, provider, d) {
   const art = preludeArtDir(topic);
-  const stateFile = (0, import_node_path34.join)(art, `adversary-${instrument}.txt`);
-  if (!(0, import_node_fs35.existsSync)(stateFile)) {
+  const stateFile = (0, import_node_path35.join)(art, `adversary-${instrument}.txt`);
+  if (!(0, import_node_fs37.existsSync)(stateFile)) {
     log.error(`prelude adversary-wait: ${stateFile} missing (run prelude adversary-send first)`);
     return 1;
   }
-  const offset = parseLatestOffset((0, import_node_fs35.readFileSync)(stateFile, "utf8"));
+  const offset = parseLatestOffset((0, import_node_fs37.readFileSync)(stateFile, "utf8"));
   if (offset === null) {
     log.error(`prelude adversary-wait: OFFSET not set in ${stateFile}`);
     return 1;
@@ -24624,20 +24900,20 @@ async function adversaryWaitWith(topic, instrument, provider, d) {
   const timeout = scaledTimeout(consultTimeout("adversary"), d.multiplier(provider));
   log.info(`prelude adversary-wait: ${instrument} offset=${offset} timeout=${timeout}s`);
   const ev = await d.wait(instrument, provider, topic, offset, ["done", "error", "question"], timeout);
-  const outPath = (0, import_node_path34.join)(art, `adversary-${instrument}.md`);
-  const text = (0, import_node_fs35.existsSync)(outPath) ? (0, import_node_fs35.readFileSync)(outPath, "utf8") : null;
+  const outPath = (0, import_node_path35.join)(art, `adversary-${instrument}.md`);
+  const text = (0, import_node_fs37.existsSync)(outPath) ? (0, import_node_fs37.readFileSync)(outPath, "utf8") : null;
   const as = verifyState(ev, text);
   if (as === "question" && ev) {
-    atomicWrite((0, import_node_path34.join)(art, `question-${instrument}.txt`), JSON.stringify(ev) + "\n");
+    atomicWrite((0, import_node_path35.join)(art, `question-${instrument}.txt`), JSON.stringify(ev) + "\n");
     const bumped = outboxOffset(outboxPath(instrument, provider, topic));
-    (0, import_node_fs35.appendFileSync)(stateFile, `OFFSET=${bumped}
+    (0, import_node_fs37.appendFileSync)(stateFile, `OFFSET=${bumped}
 AS=question
 `);
   } else {
-    (0, import_node_fs35.appendFileSync)(stateFile, `AS=${as}
+    (0, import_node_fs37.appendFileSync)(stateFile, `AS=${as}
 `);
   }
-  (0, import_node_fs35.writeFileSync)((0, import_node_path34.join)(art, `adversary-${instrument}.done`), "");
+  (0, import_node_fs37.writeFileSync)((0, import_node_path35.join)(art, `adversary-${instrument}.done`), "");
   log.ok(`prelude adversary-wait: ${instrument} AS=${as}`);
   return 0;
 }
@@ -24648,30 +24924,30 @@ async function synthFinalRun(rest) {
     return 2;
   }
   const art = preludeArtDir(topic);
-  if (!(0, import_node_fs35.existsSync)(art)) {
+  if (!(0, import_node_fs37.existsSync)(art)) {
     log.error(`prelude synth-final: ${art} not found`);
     return 1;
   }
-  if (!readIf3((0, import_node_path34.join)(art, "landscape-draft.md")).trim()) {
+  if (!readIf3((0, import_node_path35.join)(art, "landscape-draft.md")).trim()) {
     log.error("prelude synth-final: landscape-draft.md missing");
     return 1;
   }
-  if (!readIf3((0, import_node_path34.join)(art, "topic.txt")).trim()) {
+  if (!readIf3((0, import_node_path35.join)(art, "topic.txt")).trim()) {
     log.error("prelude synth-final: topic.txt missing");
     return 1;
   }
-  const skipped = /^user_decision: skip$/m.test(readIf3((0, import_node_path34.join)(art, "adversary-skip.txt")));
+  const skipped = /^user_decision: skip$/m.test(readIf3((0, import_node_path35.join)(art, "adversary-skip.txt")));
   if (!skipped) {
-    const rows = parseRosterFile(readIf3((0, import_node_path34.join)(art, "roster.txt")));
-    const missing = rows.filter((r) => !readIf3((0, import_node_path34.join)(art, `adversary-${r.instrument}.md`)).trim()).map((r) => `adversary-${r.instrument}.md`);
+    const rows = parseRosterFile(readIf3((0, import_node_path35.join)(art, "roster.txt")));
+    const missing = rows.filter((r) => !readIf3((0, import_node_path35.join)(art, `adversary-${r.instrument}.md`)).trim()).map((r) => `adversary-${r.instrument}.md`);
     if (missing.length) {
       log.error("prelude synth-final: blocked \u2014 adversary ran but critiques missing:");
-      for (const m of missing) log.error(`  - ${(0, import_node_path34.join)(art, m)}`);
+      for (const m of missing) log.error(`  - ${(0, import_node_path35.join)(art, m)}`);
       return 1;
     }
   }
   const today = isoUtc().slice(0, 10);
-  const out = (0, import_node_path34.join)(art, `landscape-${today}-${topic}.md`);
+  const out = (0, import_node_path35.join)(art, `landscape-${today}-${topic}.md`);
   log.ok(`prelude synth-final: inputs validated for ${topic} (adversary_ran=${skipped ? 0 : 1})`);
   process.stdout.write(out + "\n");
   return 0;
@@ -24702,13 +24978,13 @@ async function teardownWith2(args, deps) {
     return 2;
   }
   const art = preludeArtDir(topic);
-  if (!(0, import_node_fs35.existsSync)(art) || !(0, import_node_fs35.statSync)(art).isDirectory()) {
+  if (!(0, import_node_fs37.existsSync)(art) || !(0, import_node_fs37.statSync)(art).isDirectory()) {
     log.error(`${art} not found`);
     return 1;
   }
-  const pf = (0, import_node_path34.join)(art, "preflight-panes.txt");
-  if ((0, import_node_fs35.existsSync)(pf)) {
-    for (const line of (0, import_node_fs35.readFileSync)(pf, "utf8").split("\n")) {
+  const pf = (0, import_node_path35.join)(art, "preflight-panes.txt");
+  if ((0, import_node_fs37.existsSync)(pf)) {
+    for (const line of (0, import_node_fs37.readFileSync)(pf, "utf8").split("\n")) {
       const pane = line.trim();
       if (!pane) continue;
       try {
@@ -24739,12 +25015,12 @@ async function handoffExtractRun(rest) {
   process.stdout.write(path6 + "\n");
   return 0;
 }
-var import_node_fs35, import_node_path34, readIf3, livePreludeInitDeps, livePreludeSpawnAllDeps, liveResearchSendDeps2, liveResearchWaitDeps2, livePreludeTeardownDeps;
+var import_node_fs37, import_node_path35, readIf3, livePreludeInitDeps, livePreludeSpawnAllDeps, liveResearchSendDeps2, liveResearchWaitDeps2, livePreludeTeardownDeps;
 var init_prelude2 = __esm({
   "src/commands/prelude.ts"() {
     "use strict";
-    import_node_fs35 = require("node:fs");
-    import_node_path34 = require("node:path");
+    import_node_fs37 = require("node:fs");
+    import_node_path35 = require("node:path");
     init_log();
     init_args();
     init_atomic();
@@ -24766,7 +25042,7 @@ var init_prelude2 = __esm({
     init_send2();
     init_spawn();
     init_preflight();
-    readIf3 = (p) => (0, import_node_fs35.existsSync)(p) ? (0, import_node_fs35.readFileSync)(p, "utf8") : "";
+    readIf3 = (p) => (0, import_node_fs37.existsSync)(p) ? (0, import_node_fs37.readFileSync)(p, "utf8") : "";
     livePreludeInitDeps = {
       activeProviders: () => readProviderList(activeProvidersPath()),
       isValidated: instrumentConsultValidated,
