@@ -121,7 +121,13 @@ function globalRoot(home) {
   return home ?? process.env.CONSORT_HOME ?? (0, import_node_path.join)((0, import_node_os.homedir)(), ".consort");
 }
 function pluginRoot() {
-  return process.env.CLAUDE_PLUGIN_ROOT ?? process.cwd();
+  if (process.env.CLAUDE_PLUGIN_ROOT) return process.env.CLAUDE_PLUGIN_ROOT;
+  try {
+    const root = (0, import_node_path.dirname)((0, import_node_path.dirname)((0, import_node_fs2.realpathSync)(process.argv[1])));
+    if ((0, import_node_fs2.existsSync)((0, import_node_path.join)(root, "config", "prompt-templates", "identity.md"))) return root;
+  } catch {
+  }
+  return process.cwd();
 }
 function stateRoot(opts) {
   if (opts?.home) return opts.home;
@@ -493,7 +499,13 @@ END_OF_INSTRUCTION
   atomicWrite(inboxPath(i2, m, t), body);
 }
 function identityWrite(i2, m, t) {
-  const tplPath = (0, import_node_path3.join)(pluginRoot(), "config", "prompt-templates", "identity.md");
+  const root = pluginRoot();
+  const tplPath = (0, import_node_path3.join)(root, "config", "prompt-templates", "identity.md");
+  if (!(0, import_node_fs5.existsSync)(tplPath)) {
+    throw new Error(
+      `identityWrite: identity template not found at ${tplPath} (resolved pluginRoot=${root}). Set CLAUDE_PLUGIN_ROOT to the consort plugin directory, or run consort from it.`
+    );
+  }
   const stateDir = partDir(i2, m, t);
   const outbox = outboxPath(i2, m, t);
   let body = (0, import_node_fs5.readFileSync)(tplPath, "utf8").replaceAll("{{instrument}}", i2).replaceAll("{{model}}", m).replaceAll("{{topic}}", t).replaceAll("{{state_dir}}", stateDir);
