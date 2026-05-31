@@ -9,7 +9,7 @@ import {
   deriveSlug, parseScoreArgs, scoreArtDir, scoreDraftDir,
   formatRosterFile, scoreDocPath, parseMultiRepoMode, parseRosterFile,
   spawnRosterArg, spawnResultsTsv, spawnTally, parsePanesFile, verifyScopeFiles, lastTag, writeTargetsTsv,
-  resolveDrilldownPath, cascadeTargets,
+  parseRosterTargets, resolveDrilldownPath, cascadeTargets,
   type RosterRow, type SpawnResult, type ResetPhase,
 } from "../core/score.js";
 import { detectMultiRepo, validateTargets, type RepoHit } from "../core/multirepo.js";
@@ -498,12 +498,6 @@ export async function checkDagRun(rest: string[]): Promise<number> {
   for (const l of dagMalformedLines(text)) process.stderr.write(l + "\n");
   log.error("score check-dag: Execution DAG has malformed numbered lines (see above)");
   return 1;
-}
-
-/** targets.txt may be a plain slug-per-line list (init) or a TSV (multi-repo detect, Phase E). */
-function parseRosterTargets(text: string): string[] {
-  return text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#"))
-    .map((l) => l.split("\t")[0]).filter(Boolean);
 }
 
 // ---- Phase F: drilldown (optional, parts still live) ----

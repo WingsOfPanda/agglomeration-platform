@@ -297,16 +297,11 @@ function gatherPeers(art: string, self: string): PeerRow[] {
     }
     let approach = "", metric = "", status = "", notes = "";
     if (latest) {
-      const resultPath = join(expsDir, latest, "result.json");
-      if (existsSync(resultPath)) {
-        try {
-          const r = JSON.parse(readFileSync(resultPath, "utf8")) as Record<string, unknown>;
-          approach = r.approach_label != null ? String(r.approach_label) : "";
-          metric = r.metric_value != null ? String(r.metric_value) : "";
-          status = r.status != null ? String(r.status) : "";
-          notes = r.notes != null ? String(r.notes) : "";
-        } catch { /* missing/garbled result.json → empty cells */ }
-      }
+      const r = readResultJson(join(expsDir, latest, "result.json"));
+      approach = resultStr(r, "approach_label");
+      metric = resultStr(r, "metric_value");
+      status = resultStr(r, "status");
+      notes = resultStr(r, "notes");
     }
     rows.push({ instrument: peer, phase, currentExp: latest, approach, metric, status, notes });
   }
@@ -601,15 +596,21 @@ function approachFromPrompt(promptPath: string): string {
  *  approach comes from result.json approach_label (prompt.md is only the fallback,
  *  applied by the caller), metric is `"$m $s"`. */
 function readResultCells(resultPath: string): { approach: string; metric: string } {
-  if (!existsSync(resultPath)) return { approach: "", metric: "—" };
-  try {
-    const r = JSON.parse(readFileSync(resultPath, "utf8")) as Record<string, unknown>;
-    const approach = r.approach_label != null ? String(r.approach_label) : "";
-    const m = r.metric_value != null ? String(r.metric_value) : "";
-    const s = r.status != null ? String(r.status) : "";
-    const metric = `${m} ${s}`.trim() || "—";
-    return { approach, metric };
-  } catch { return { approach: "", metric: "—" }; }
+  const r = readResultJson(resultPath);
+  const approach = resultStr(r, "approach_label");
+  const metric = `${resultStr(r, "metric_value")} ${resultStr(r, "status")}`.trim() || "—";
+  return { approach, metric };
+}
+
+/** scoreboard.md text + completion signals (BOTH scoreboard.md and metric.md must exist, else nulls). */
+function gatherCompletion(art: string): { scoreboardMd: string | null; completion: ReturnType<typeof checkCompletion> | null } {
+  const sbPath = join(art, "scoreboard.md");
+  const scoreboardMd = existsSync(sbPath) ? readFileSync(sbPath, "utf8") : null;
+  const metricPath = join(art, "metric.md");
+  const completion = scoreboardMd !== null && existsSync(metricPath)
+    ? checkCompletion(scoreboardMd, readFileSync(metricPath, "utf8"))
+    : null;
+  return { scoreboardMd, completion };
 }
 
 /** Parse the --latest-instrument / --latest-exp flags + the single positional <topic>. */
@@ -682,14 +683,7 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
     }
   }
 
-  const sbPath = join(art, "scoreboard.md");
-  const scoreboardMd = existsSync(sbPath) ? readFileSync(sbPath, "utf8") : null;
-  const metricPath = join(art, "metric.md");
-  // Completion signals require BOTH scoreboard.md and metric.md; null otherwise so
-  // the renderer shows "_(scoreboard or metric absent)_" rather than an all-`no` row.
-  const completion = scoreboardMd !== null && existsSync(metricPath)
-    ? checkCompletion(scoreboardMd, readFileSync(metricPath, "utf8"))
-    : null;
+  const { scoreboardMd, completion } = gatherCompletion(art);
 
   const latest = p.latestInstrument && p.latestExp ? { instrument: p.latestInstrument, exp: p.latestExp } : undefined;
   out(buildStatusBrief({ parts, scoreboardMd, completion, latest }));
@@ -929,12 +923,7 @@ export async function finalizeWith(args: string[], deps: RehearsalFinalizeDeps):
     }
   }
 
-  const scoreboardPath = join(art, "scoreboard.md");
-  const scoreboardMd = existsSync(scoreboardPath) ? readFileSync(scoreboardPath, "utf8") : null;
-  const metricPath = join(art, "metric.md");
-  const completion = scoreboardMd !== null && existsSync(metricPath)
-    ? checkCompletion(scoreboardMd, readFileSync(metricPath, "utf8"))
-    : null;
+  const { scoreboardMd, completion } = gatherCompletion(art);
 
   const budgetPath = join(art, "time-budget.txt");
   const startPath = join(art, "session-start.txt");
@@ -1082,6 +1071,11 @@ function readResultJson(path: string): Record<string, unknown> {
   try { return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>; } catch { return {}; }
 }
 
+/** A result.json field coerced to string ("" when absent/null). */
+function resultStr(r: Record<string, unknown>, k: string): string {
+  return r[k] != null ? String(r[k]) : "";
+}
+
 export async function handoffExtractWith(args: string[], deps: RehearsalHandoffDeps): Promise<number> {
   const art = args[0];
   if (!art || !existsSync(art) || !statSync(art).isDirectory()) {
@@ -1108,7 +1102,7 @@ export async function handoffExtractWith(args: string[], deps: RehearsalHandoffD
   } else {
     const expRel = `parts/${winner.instrument}/experiments/${winner.expId}`;
     const result = readResultJson(join(art, expRel, "result.json"));
-    const approach = result.approach_label != null ? String(result.approach_label) : "";
+    const approach = resultStr(result, "approach_label");
     const notes = String(result.notes ?? "").replace(/\n/g, " ");
     let checkpoint: string | undefined;
     const ckptRaw = result.checkpoint_path != null ? String(result.checkpoint_path) : "";
@@ -1117,7 +1111,7 @@ export async function handoffExtractWith(args: string[], deps: RehearsalHandoffD
     }
     const runners = runnerUps.map((r) => {
       const rr = readResultJson(join(art, `parts/${r.instrument}/experiments/${r.expId}`, "result.json"));
-      return { instrument: r.instrument, exp: r.expId, metric: r.metric, approach: rr.approach_label != null ? String(rr.approach_label) : "" };
+      return { instrument: r.instrument, exp: r.expId, metric: r.metric, approach: resultStr(rr, "approach_label") };
     });
     input = {
       topic, landscapeDoc, hasMetricMd, generatedTs,

@@ -252,6 +252,9 @@ function branchMapField(map: string, slug: string): string {
   return "";
 }
 function isDir(p: string): boolean { try { return statSync(p).isDirectory(); } catch { return false; } }
+function hasRepoMarker(dir: string): boolean {
+  return existsSync(join(dir, "CLAUDE.md")) || existsSync(join(dir, "AGENTS.md"));
+}
 
 // ---- pre-snapshot (deploy-pre-snapshot.sh) ----
 async function preSnapshotRun(rest: string[]): Promise<number> {
@@ -686,7 +689,7 @@ export async function multiInitWith(topic: string, hubCwd: string, d: MultiInitD
     const p = repoToPath.get(repo)!;
     const cwd = p !== "none" && p !== "" ? p : join(hubCwd, repo);
     if (!existsSync(cwd) || !statSync(cwd).isDirectory()) { log.error(`perform multi-init: sub-repo '${repo}' not found at ${cwd}`); return 1; }
-    if (!existsSync(join(cwd, "CLAUDE.md")) && !existsSync(join(cwd, "AGENTS.md"))) { log.error(`perform multi-init: sub-repo '${repo}' has no CLAUDE.md or AGENTS.md at ${cwd}`); return 1; }
+    if (!hasRepoMarker(cwd)) { log.error(`perform multi-init: sub-repo '${repo}' has no CLAUDE.md or AGENTS.md at ${cwd}`); return 1; }
     const provider = d.detectProvider(cwd);
     const instrument = instruments[i];
     rows.push(`${instrument}\t${cwd}\t${provider}`);
@@ -780,7 +783,7 @@ async function verifyDagReposRun(rest: string[]): Promise<number> {
     const dir = join(hubDir, slug);
     let st: string;
     if (!existsSync(dir) || !statSync(dir).isDirectory()) st = "missing-dir";
-    else if (!existsSync(join(dir, "CLAUDE.md")) && !existsSync(join(dir, "AGENTS.md"))) st = "missing-marker";
+    else if (!hasRepoMarker(dir)) st = "missing-marker";
     else st = "ok";
     if (st !== "ok") bad++;
     process.stdout.write(`REPO=${slug}\tSTATUS=${st}\n`);
