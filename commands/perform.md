@@ -26,7 +26,30 @@ Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs"`.
 2. Mint an args path: `$CS perform --mint-args-file` → prints `<args-path>`.
 3. **Write tool:** `file_path` = `<args-path>`, `content` = the **filtered** argument string from
    step 1 (`$ARGUMENTS` minus the `--max-rounds <N>` pair), verbatim and unquoted.
-4. Init: `$CS perform init --args-file <args-path>`. On success it prints to stdout:
+   1. **Source default (no positional doc).** If the filtered argument string contains no `.md`
+      positional path, run `$CS perform find-latest-doc`. On rc 0 it prints `DOC=<abs path>` (the
+      newest `*-design.md` across the score art dirs); on rc 1 no doc exists. On a `DOC=<path>` line
+      → **AskUserQuestion** ("Use this design doc / Cancel"):
+      - *Use this design doc* — **Edit** (or re-Write) `<args-path>` to append the `<path>` as a
+        trailing positional so `init` receives it as the design doc, then continue to step 4.
+      - *Cancel* — stop.
+      On rc 1 (none found) → stop and tell the user to pass a `<design-doc-path>` (or run
+      `/consort:score` to generate one).
+4. **Audit the doc (before init).** Let `<doc>` be the design-doc path now in `<args-path>` (the
+   positional you wrote in step 3 / appended in step 3.1). Run `$CS perform audit <doc>` and branch
+   on its rc:
+   - **rc 2** — the doc is unreadable or usage was malformed. If a topic art dir already exists
+     (it does not at this point unless a prior run left one), `$CS perform archive <TOPIC>`. Either
+     way, surface the message and stop.
+   - **rc 1** — the doc is readable but the audit **FAILED** (it printed `ISSUE=<code>` lines to
+     stderr). Surface the issues, then **AskUserQuestion** ("Proceed anyway / Abort and edit doc"):
+     - *Proceed anyway* — append ` --force` to `<args-path>` (so `init` reads the args file with the
+       force flag and skips the audit gate), then run `init` as in the rc 0 path below.
+     - *Abort and edit doc* — tell the user to fix the design doc (or re-run `/consort:score` to
+       regenerate one) and stop.
+   - **rc 0** — audit PASSED. Proceed to `init` normally.
+
+   Init: `$CS perform init --args-file <args-path>`. On success it prints to stdout:
    ```
    ART=<abs path to the _perform art dir>
    TOPIC=<slug>
@@ -35,16 +58,39 @@ Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs"`.
    TARGET_CWD=<abs path the part runs in>
    ```
    Capture all five. Non-zero aborts:
-   - **rc 1** — audit FAILED (it printed `ISSUE=<code>` lines to stderr) OR the doc/topic/target was
-     unreadable/unresolvable. If `ISSUE=` lines were printed, surface them and tell the user to fix the
-     design doc (or re-run `/consort:score` to regenerate one). Stop.
+   - **rc 1** — the doc/topic/target was unreadable/unresolvable (the audit was already cleared
+     above). Surface the message and stop.
    - **rc 2** — usage error, or the topic is already in flight (run `/consort:coda <TOPIC>` to clear it
      first). Stop.
 5. **If `ROUTING=multi`:** materialize the DAG + the per-repo roster *before* the shared step 6:
    1. `$CS perform dag-parse <TOPIC>` — parses `## Execution DAG` → `$ART/dag-waves.txt`
       (`<wave>\t<step>\t<repo>\t<path|none>\t<desc>`) + `$ART/dag-edges.txt` (`<from>\t<to>`); prints
-      `WAVES=`/`STEPS=`. rc 1 = a cyclic or malformed DAG (the offending line / cycle was printed to
-      stderr) → surface it and stop (re-run `/consort:score` for a clean DAG, or fix the doc by hand).
+      `WAVES=`/`STEPS=`. On **rc 1** (no `dag-waves.txt`, the offending line / cycle printed to
+      stderr) run the **one-shot prose-DAG rescue** before giving up — the `## Execution DAG` section
+      is often narrative or box-art rather than parser-conforming `N. <slug> — <desc>` lines:
+      1. **Read** `$ART/design.md`'s `## Execution DAG` section. Extract the implicit ordering into
+         parser-conforming lines, one per repo, each `N. <slug> — <desc>` (a literal em-dash `—`
+         between slug and description; `N` is the 1-based order).
+      2. **Verify the repos.** `$CS perform verify-dag-repos <TOPIC>` (resolves each unique DAG slug
+         under the hub `$TARGET_CWD`; prints one `REPO=<slug>\tSTATUS=<ok|missing-dir|missing-marker>`
+         line per slug; rc 1 if any slug is bad, else 0).
+      3. **Confirm gate.** If **every** `STATUS=ok` **and** `CONSORT_PERFORM_FORCE_RESCUE` is unset
+         (default), auto-proceed silently. Otherwise (any bad status, or `CONSORT_PERFORM_FORCE_RESCUE=1`)
+         render the `REPO=…\tSTATUS=…` rows and **AskUserQuestion** ("Looks right — write & retry / Let
+         me edit / Abort"):
+         - *Looks right — write & retry* — continue to rescue sub-step 4 (write the lines).
+         - *Let me edit* — let the user hand-correct the extracted lines you present, then continue to
+           rescue sub-step 4.
+         - *Abort* — stop (re-run `/consort:score` for a clean DAG, or fix the doc by hand).
+      4. **Write the lines.** Use the **Edit** tool to insert a `### DAG Lines` subsection holding the
+         extracted `N. <slug> — <desc>` lines at the **top** of the `## Execution DAG` section in
+         `$ART/design.md`. Then write a one-line `$ART/dag-rescue.log` recording that the rescue ran
+         (e.g. `rescued <K> DAG lines for <TOPIC>`).
+      5. **Re-run once.** Re-run `$CS perform dag-parse <TOPIC>` then (on its success) the
+         `$CS perform multi-init <TOPIC> "$TARGET_CWD"` from step 2 below — **exactly once, no loop**.
+         If `dag-parse` still exits rc 1 (e.g. a genuine **cycle** — `verify-dag-repos` was all-`ok`
+         but the DAG is cyclic), surface the offending line / cycle and stop (re-run `/consort:score`
+         for a clean DAG, or fix the doc by hand).
    2. `$CS perform multi-init <TOPIC> "$TARGET_CWD"` — resolves each unique sub-repo (in DAG
       first-occurrence order) under the hub `$TARGET_CWD`, checks its `CLAUDE.md`/`AGENTS.md` marker,
       assigns one part (instrument) + its detected provider per repo, and writes `$ART/parts.txt`
@@ -61,9 +107,24 @@ Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs"`.
 > **skip to Stage 3a** (the materialization in Stage 0 step 5 already ran; pre-snapshot + branch
 > covered every part).
 
+> **Claude-confirm gate (reused before every spawn).** `init` (and, for multi, `multi-init`) records
+> each part's auto-detected provider (`PROVIDER=<codex|claude>` on stdout; also written to
+> `$ART/auto_provider.txt` for single-repo, and into col 3 of `parts.txt` for multi). **Before
+> spawning any part whose provider is `claude`** (this repo has a `.claude-plugin/plugin.json`),
+> **AskUserQuestion**:
+> - question: "This repo has .claude-plugin/plugin.json — Claude is the recommended part for plugin
+>   testing (it can load slash commands, run hooks, exercise the Claude Code surface natively). It will
+>   use claude tokens. Use claude or fall back to codex?"
+> - options: "Use claude (recommended for plugin testing)" / "Fall back to codex (cheaper)"
+>
+> On *Use claude* keep the provider as `claude`; on *Fall back to codex* set that one spawn's provider
+> to `codex`. Apply this gate at the Stage 1.1 single-repo spawn and at every Stage 3b per-part spawn.
+
 ## Stage 1.1 — spawn the part (single-repo)
 
-Spawn one part in the resolved target cwd:
+First apply the **Claude-confirm gate** (defined after Stage 0): if `PROVIDER=claude`, AskUserQuestion
+as specified there and, on *Fall back to codex*, set `PROVIDER=codex` for this spawn. Then spawn one
+part in the resolved target cwd:
 
 ```bash
 $CS spawn cody "$PROVIDER" "$TOPIC" --cwd "$(cat "$ART/target_cwd.txt")"
@@ -76,7 +137,14 @@ never came up).
 
 Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. Then per round:
 
-1. Dispatch: `$CS perform turn-send <TOPIC> <ROUND>`.
+1. Dispatch: `$CS perform turn-send <TOPIC> <ROUND>`. If it exits **non-zero with a "not idle"
+   message** (the part's `status.json` state is not `idle`, so the send is refused),
+   **AskUserQuestion** ("Wait 60s and retry / Force-retry / Abort"):
+   - *Wait 60s and retry* — `sleep 60`, then re-run `$CS perform turn-send <TOPIC> <ROUND>`.
+   - *Force-retry* — `$CS perform reset-status <TOPIC> cody` (atomically resets the part to `idle`),
+     then re-run `$CS perform turn-send <TOPIC> <ROUND>`.
+   - *Abort* — `$CS coda <TOPIC>` then `$CS perform archive <TOPIC>`; stop.
+   (The single-repo part is the `cody` instrument.) Any other non-zero rc → surface and stop.
 2. Wait in the background so your pane stays interactive:
    ```
    Bash(command='$CS perform turn-wait "$TOPIC" "$ROUND"', run_in_background: true,
@@ -185,6 +253,9 @@ If `N > 4`, dispatch the first 4 parts' panes and tell the user wider intra-wave
 supported (the DAG still serializes by wave; only the per-wave pane budget is capped). Load
 `preflight-panes.txt` into an `instrument → pane` map for Stage 3b.
 
+Initialize the wave-failure counter once here: `WAVE_RETRY=0` (consumed by the proceed-degraded
+ladder in Stage 3b step 3).
+
 **Sibling baseline.** Before dispatching any wave, snapshot every **undeclared** sibling git repo of
 the hub (`$TARGET_CWD`) so Stage 4 can detect rogue commits that land on their main branches during
 the run:
@@ -206,8 +277,11 @@ extra scrutiny in the later cross-verify phase; note them now.
 Walk the waves in ascending order — **never start wave W+1 until every part in wave W reports `done`**.
 For each wave, for each repo in it:
 
-1. **Spawn** the part on its allocated pane, rooted in its sub-repo cwd (issue the per-wave spawns as
-   parallel Bash calls in one message):
+1. **Spawn** the part on its allocated pane, rooted in its sub-repo cwd. First apply the
+   **Claude-confirm gate** (defined after Stage 0) for this part: if its `$PROVIDER` (col 3 of
+   `parts.txt`) is `claude`, AskUserQuestion as specified there and, on *Fall back to codex*, set this
+   part's `$PROVIDER=codex` before the spawn. Then (issue the per-wave spawns as parallel Bash calls
+   in one message):
    ```bash
    $CS spawn "$INSTRUMENT" "$PROVIDER" "$TOPIC" --cwd "$CWD" --target-pane "$PANE"
    ```
@@ -224,8 +298,18 @@ For each wave, for each repo in it:
    ```
    On the completion notifications, read each part's first `TS=` line from `$ART/wave-<instrument>.txt`.
    Every part `TS=ok` → advance to the next wave. Any `TS=failed`/`TS=timeout` → surface which
-   sub-repo(s) failed and **AskUserQuestion** ("Retry the wave / Hand-off (preserve panes) / Abort").
-   *Abort* → `$CS coda --pairs <TOPIC> <instrument…>` + `$CS perform archive <TOPIC>`, stop.
+   sub-repo(s) failed and apply the **proceed-degraded ladder** on the `WAVE_RETRY` counter (init 0 in
+   Stage 3a):
+   - **First failure (`WAVE_RETRY==0`)** — auto-retry the whole wave once: tear down this wave's panes
+     (`$CS coda --pairs <TOPIC> <instrument…>` for the wave's parts), re-run `preflight` /
+     `sibling-baseline` as needed to re-allocate panes, then re-dispatch the wave (spawn + send-unit +
+     barrier) from step 1. Set `WAVE_RETRY=1`.
+   - **Second failure (`WAVE_RETRY==1`)** — **AskUserQuestion** ("Proceed degraded with N=M (drop
+     failed part) / Abort all"), where `M` is the count of still-passing parts:
+     - *Proceed degraded with N=M (drop failed part)* — for **each** failed sub-repo run
+       `$CS perform drop-part <TOPIC> <instrument>` (prunes its `parts.txt` row; prints `N=<remaining>`),
+       then continue the run with the remaining parts.
+     - *Abort all* — `$CS coda --pairs <TOPIC> <instrument…>` + `$CS perform archive <TOPIC>`, stop.
 
 When the last wave's parts all report `TS=ok`, multi-repo execution is complete.
 

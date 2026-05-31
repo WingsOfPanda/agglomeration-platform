@@ -1,12 +1,12 @@
 // src/commands/perform.ts — single-repo command path for /consort:perform.
 // Byte-faithful port of the prior bash plugin's deploy verb set; WIRES the Phase-A core modules.
 // Rebrand: _deploy/->_perform/, feat/deploy-->feat/perform-, conductor sender->From: maestro.
-import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, statSync, readdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile, kvParse } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
-import { repoRoot } from "../core/paths.js";
+import { repoRoot, repoStateDir } from "../core/paths.js";
 import { auditDoc } from "../core/audit.js";
 import {
   parsePerformArgs, deriveTopicFromPath, resolveTarget, detectProvider,
@@ -20,10 +20,11 @@ import { haveCmd } from "../core/deps.js";
 import { performState, composeRound1Prompt, composeFixPrompt, composeDagUnitPrompt } from "../core/performTurn.js";
 import { pickInstruments } from "../core/instruments.js";
 import { extractQuestionPayload } from "../core/performQuestions.js";
-import { outboxOffset, outboxPath, outboxWaitSince, statusPath, type OutboxEvent } from "../core/ipc.js";
+import { outboxOffset, outboxPath, outboxWaitSince, statusPath, resolveModel, type OutboxEvent } from "../core/ipc.js";
 import { instrumentTimeoutMultiplier } from "../core/contracts.js";
 import { scaledTimeout, parseLatestOffset } from "../core/scoreTurn.js";
 import { parseDagLine, dagTopological, dagSectionBody, dagFanInRepos } from "../core/dag.js";
+// note: verify-dag-repos uses node.repo (the DagNode slug field) + an em-dash-separated DAG line.
 import {
   enumerateSiblings, captureSiblingBaseline, formatBaselineFile,
   parseBaselineFile, diffSiblingAgainstBaseline, revertAndReplay,
@@ -43,16 +44,56 @@ function detectRouting(docText: string): "single" | "multi" {
   return /^\*\*Target Sub-Project\(s\):\*\*/m.test(docText) && /^## Execution DAG[ \t]*$/m.test(docText) ? "multi" : "single";
 }
 function usage(): number {
-  log.error("usage: perform <init|pre-snapshot|branch|turn-send|turn-wait|scope-check|sibling-baseline|sibling-verify|sibling-rescue|cross-signal|summary|finish|finish-one|forensics|archive|dag-parse|wave-wait|multi-init|send-unit> ...");
+  log.error("usage: perform <init|audit|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|sibling-baseline|sibling-verify|sibling-rescue|cross-signal|summary|finish|finish-one|forensics|archive|dag-parse|wave-wait|multi-init|send-unit|drop-part|find-latest-doc|verify-dag-repos> ...");
   return 2;
+}
+
+// ---- find-latest-doc (deploy Step 0.4 no-arg source default) — newest */_score/design-doc/*-design.md by mtime ----
+async function findLatestDocRun(rest: string[]): Promise<number> {
+  let cwd: string | undefined;
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === "--cwd") { cwd = rest[i + 1]; i++; }
+    else if (rest[i].startsWith("--cwd=")) { cwd = rest[i].slice("--cwd=".length); }
+  }
+  const stateDir = repoStateDir(cwd ? { cwd } : undefined);
+  let best: { path: string; mt: number } | null = null;
+  if (existsSync(stateDir)) for (const topic of readdirSync(stateDir)) {
+    const dd = join(stateDir, topic, "_score", "design-doc");
+    if (!existsSync(dd)) continue;
+    for (const f of readdirSync(dd)) {
+      if (!f.endsWith("-design.md")) continue;
+      const p = join(dd, f); let mt = 0;
+      try { mt = statSync(p).mtimeMs; } catch { continue; }
+      if (!best || mt > best.mt) best = { path: p, mt };
+    }
+  }
+  if (!best) { log.error("perform find-latest-doc: no *-design.md found"); return 1; }
+  process.stdout.write(`DOC=${best.path}\n`);
+  return 0;
+}
+
+// ---- audit (deploy.md Step 0 "Proceed anyway" precheck, standalone) ----
+// rc 0 = PASS, 1 = FAIL (ISSUE= lines on stderr), 2 = unreadable/bad usage.
+async function auditRun(rest: string[]): Promise<number> {
+  const doc = rest[0];
+  if (!doc || rest.length !== 1) { log.error("usage: perform audit <doc>"); return 2; }
+  if (!existsSync(doc)) { log.error(`perform audit: doc unreadable: ${doc}`); return 2; }
+  let text: string;
+  try { text = readFileSync(doc, "utf8"); } catch { log.error(`perform audit: doc unreadable: ${doc}`); return 2; }
+  const ad = auditDoc(text);
+  if (ad.verdict === "FAIL") { for (const i of ad.issues) process.stderr.write(`ISSUE=${i}\n`); return 1; }
+  log.ok(`perform audit: PASS ${doc}`);
+  return 0;
 }
 
 export async function run(args: string[]): Promise<number> {
   const verb = args[0]; const rest = args.slice(1);
   switch (verb) {
     case "init":      return initRun(applyArgsFile(rest));
+    case "audit":     return auditRun(rest);
     case "turn-send": return turnSendRun(rest);
     case "turn-wait": return turnWaitRun(rest);
+    case "reset-status": return resetStatusRun(rest);
     case "pre-snapshot": return preSnapshotRun(rest);
     case "branch":       return branchRun(applyArgsFile(rest));
     case "scope-check":  return scopeCheckRun(rest);
@@ -69,6 +110,9 @@ export async function run(args: string[]): Promise<number> {
     case "wave-wait":    return waveWaitRun(rest);
     case "multi-init": return multiInitRun(rest);
     case "send-unit":  return sendUnitRun(rest);
+    case "drop-part":  return dropPartRun(rest);
+    case "find-latest-doc": return findLatestDocRun(rest);
+    case "verify-dag-repos": return verifyDagReposRun(rest);
     default:          return usage();
   }
 }
@@ -89,7 +133,11 @@ export async function initWith(tokens: string[], d: PerformInitDeps): Promise<nu
   if (!topic) { log.error("perform init: could not derive topic; pass --topic <slug>"); return 1; }
 
   const ad = auditDoc(text);
-  if (ad.verdict === "FAIL") { for (const i of ad.issues) process.stderr.write(`ISSUE=${i}\n`); log.error(`perform init: audit FAILED on ${designPath}`); return 1; }
+  if (ad.verdict === "FAIL") {
+    for (const i of ad.issues) process.stderr.write(`ISSUE=${i}\n`);
+    if (!parsed.force) { log.error(`perform init: audit FAILED on ${designPath}`); return 1; }
+    log.warn(`perform init: audit FAILED on ${designPath} but --force given; proceeding`);
+  }
 
   const art = performArtDir(topic);
   if (existsSync(art)) { log.error(`perform init: topic already in flight: ${art} (run /consort:coda or pick a different --topic)`); return 2; }
@@ -108,6 +156,7 @@ export async function initWith(tokens: string[], d: PerformInitDeps): Promise<nu
   atomicWrite(join(art, "topic.txt"), topic);                       // NO trailing newline
   atomicWrite(join(art, "target_cwd.txt"), targetCwd + "\n");
   atomicWrite(join(art, "provider.txt"), provider + "\n");
+  atomicWrite(join(art, "auto_provider.txt"), provider + "\n");   // deploy claude-confirm marker (the auto-detected provider)
   atomicWrite(join(art, "multi-repo.txt"), (routing === "multi" ? "multi" : "single") + "\n");
 
   log.ok(`perform init: topic=${topic} routing=${routing} provider=${provider}`);
@@ -178,6 +227,19 @@ export async function turnWaitWith(topic: string, round: number, d: PerformWaitD
   log.ok(`[turn-wait] cody round=${round} TS=${ts}`); return 0;
 }
 
+// ---- reset-status — force a not-idle part back to idle (deploy "Force-retry" recovery) ----
+// The not-idle gate in turnSendWith refuses when status.json state != idle. After a timed-out
+// turn the part is left non-idle; the directive calls this to force-reset so the retry can send.
+async function resetStatusRun(rest: string[]): Promise<number> {
+  const [topic, instrument] = rest;
+  if (!topic || !instrument || rest.length !== 2) { log.error("usage: perform reset-status <topic> <instrument>"); return 2; }
+  const model = resolveModel(instrument, topic);
+  if (model === null) { log.error(`perform reset-status: no part for instrument=${instrument} on topic=${topic}`); return 1; }
+  atomicWrite(statusPath(instrument, model, topic), `{"state":"idle","last_event":"force-reset"}\n`);
+  log.ok(`perform reset-status: ${instrument} state=idle`);
+  return 0;
+}
+
 // ---- key=value baseline reader (port of deploy_kv_file_field) + small helpers ----
 export function kvFileField(file: string, key: string): string {
   if (!existsSync(file)) return "";
@@ -203,7 +265,7 @@ export async function preSnapshotWith(topic: string, opts: { home?: string; cwd?
   let clean = 0, committed = 0, blocked = 0;
   for (const { slug, cwd } of iterTargets(topic, opts)) {
     if (!slug || !cwd) continue;
-    const snap = preSnapshot(runnerFor(cwd), topic);
+    const snap = preSnapshot(runnerFor(cwd), "perform", topic);
     if (snap.state === "not-git") { log.error(`perform pre-snapshot: not a git repository: ${cwd}`); return 2; }
     atomicWrite(join(art, "baselines", `${slug}.tsv`),
       `slug=${slug}\ncwd=${cwd}\nbranch=${snap.branch}\nbaseline_sha=${snap.baseSha}\nstate=${snap.state}\nsnapshot_ts=${isoUtc()}\n`);
@@ -669,4 +731,62 @@ export async function sendUnitWith(topic: string, repo: string, d: SendUnitDeps)
   if (rc !== 0) { log.error(`perform send-unit: send failed (rc=${rc}) for ${repo}`); return 1; }
   log.info(`[send-unit] ${instrument} -> ${repo} (step ${myStep}/${total}, upstream: ${upstreamCsv || "none"})`);
   return 0;
+}
+
+// ---- drop-part (deploy "proceed degraded") — rewrite parts.txt, removing one part's row ----
+// When a sub-repo persistently fails in a multi-repo run, the directive ships the rest: it drops
+// the failing part by instrument and reports the new N. The rewritten parts.txt stays byte-faithful
+// to the multiInitWith format (trailing newline; empty file when no rows remain) so iterTargets
+// reads it transparently.
+async function dropPartRun(rest: string[]): Promise<number> {
+  const [topic, instrument] = rest;
+  if (!topic || !instrument || rest.length !== 2) { log.error("usage: perform drop-part <topic> <instrument>"); return 2; }
+  const partsFile = join(performArtDir(topic), "parts.txt");
+  if (!existsSync(partsFile)) { log.error(`perform drop-part: parts.txt missing`); return 1; }
+  const kept: string[] = []; let dropped = false;
+  for (const line of readFileSync(partsFile, "utf8").split("\n")) {
+    if (line.length === 0) continue;
+    if (line.split("\t")[0] === instrument) { dropped = true; continue; }
+    kept.push(line);
+  }
+  if (!dropped) { log.error(`perform drop-part: no part for instrument=${instrument}`); return 1; }
+  atomicWrite(partsFile, kept.length ? kept.join("\n") + "\n" : "");
+  log.ok(`perform drop-part: dropped ${instrument}, ${kept.length} part(s) remain`);
+  process.stdout.write(`N=${kept.length}\n`);
+  return 0;
+}
+
+// ---- verify-dag-repos (deploy.md prose-DAG rescue precheck) — per-slug repo-layout check ----
+// Reads the topic's design.md, extracts the unique DAG repo slugs (dagSectionBody + parseDagLine),
+// then reports per-slug `ok | missing-dir | missing-marker` against <hub>/<slug>. A repo is ok iff
+// the dir exists AND has CLAUDE.md or AGENTS.md (same marker rule as multiInitWith). Hub defaults to
+// repoRoot() when --cwd is omitted. rc 1 if any slug is bad, else 0; rc 2 on bad usage.
+async function verifyDagReposRun(rest: string[]): Promise<number> {
+  let topic: string | undefined; let hub: string | undefined;
+  for (let i = 0; i < rest.length; i++) {
+    const t = rest[i];
+    if (t === "--cwd") { hub = rest[i + 1]; i++; }
+    else if (t.startsWith("--cwd=")) { hub = t.slice("--cwd=".length); }
+    else if (!topic) topic = t;
+  }
+  if (!topic) { log.error("usage: perform verify-dag-repos <topic> [--cwd <hub>]"); return 2; }
+  const doc = join(performArtDir(topic), "design.md");
+  if (!existsSync(doc)) { log.error(`perform verify-dag-repos: design.md missing under ${performArtDir(topic)}`); return 1; }
+  const hubDir = hub ?? repoRoot();
+  const slugs: string[] = [];
+  for (const line of dagSectionBody(readFileSync(doc, "utf8"))) {
+    const node = parseDagLine(line);
+    if (node && !slugs.includes(node.repo)) slugs.push(node.repo);
+  }
+  let bad = 0;
+  for (const slug of slugs) {
+    const dir = join(hubDir, slug);
+    let st: string;
+    if (!existsSync(dir) || !statSync(dir).isDirectory()) st = "missing-dir";
+    else if (!existsSync(join(dir, "CLAUDE.md")) && !existsSync(join(dir, "AGENTS.md"))) st = "missing-marker";
+    else st = "ok";
+    if (st !== "ok") bad++;
+    process.stdout.write(`REPO=${slug}\tSTATUS=${st}\n`);
+  }
+  return bad > 0 ? 1 : 0;
 }
