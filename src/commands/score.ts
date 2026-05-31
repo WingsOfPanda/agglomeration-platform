@@ -202,11 +202,11 @@ export async function spawnAllWith(topic: string, d: SpawnAllDeps): Promise<numb
   return rc;
 }
 
-export interface ResearchSendDeps {
+export interface SendDeps {
   offsetFor(instrument: string, model: string, topic: string): number;
   send(args: string[]): Promise<number>;
 }
-const liveResearchSendDeps: ResearchSendDeps = {
+const liveResearchSendDeps: SendDeps = {
   offsetFor: (i, m, t) => outboxOffset(outboxPath(i, m, t)),
   send: sendRun,
 };
@@ -217,7 +217,7 @@ async function researchSendRun(rest: string[]): Promise<number> {
   return researchSendWith(topic, instrument, provider, liveResearchSendDeps);
 }
 
-export async function researchSendWith(topic: string, instrument: string, provider: string, d: ResearchSendDeps): Promise<number> {
+export async function researchSendWith(topic: string, instrument: string, provider: string, d: SendDeps): Promise<number> {
   const art = scoreArtDir(topic);
   const stateFile = join(art, `research-${instrument}.txt`);
   if (existsSync(stateFile)) { log.error(`score research-send: ${stateFile} exists; rm to retry`); return 1; }
@@ -238,11 +238,11 @@ export async function researchSendWith(topic: string, instrument: string, provid
   return 0;
 }
 
-export interface ResearchWaitDeps {
+export interface WaitDeps {
   wait(instrument: string, model: string, topic: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null>;
   multiplier(provider: string): string;
 }
-const liveResearchWaitDeps: ResearchWaitDeps = {
+const liveResearchWaitDeps: WaitDeps = {
   wait: (i, m, t, off, ev, to) => outboxWaitSince(i, m, t, off, ev, to),
   multiplier: instrumentTimeoutMultiplier,
 };
@@ -253,7 +253,7 @@ async function researchWaitRun(rest: string[]): Promise<number> {
   return researchWaitWith(topic, instrument, provider, liveResearchWaitDeps);
 }
 
-export async function researchWaitWith(topic: string, instrument: string, provider: string, d: ResearchWaitDeps): Promise<number> {
+export async function researchWaitWith(topic: string, instrument: string, provider: string, d: WaitDeps): Promise<number> {
   const art = scoreArtDir(topic);
   const stateFile = join(art, `research-${instrument}.txt`);
   if (!existsSync(stateFile)) { log.error(`score research-wait: ${stateFile} missing (run score research-send first)`); return 1; }
@@ -319,7 +319,7 @@ async function verifySendRun(rest: string[]): Promise<number> {
   return verifySendWith(topic, instrument, provider, liveResearchSendDeps);
 }
 
-export async function verifySendWith(topic: string, instrument: string, provider: string, d: ResearchSendDeps): Promise<number> {
+export async function verifySendWith(topic: string, instrument: string, provider: string, d: SendDeps): Promise<number> {
   const art = scoreArtDir(topic);
   if (!existsSync(art)) { log.error(`score verify-send: ${art} not found`); return 1; }
   const stateFile = join(art, `verify-${instrument}.txt`);
@@ -361,7 +361,7 @@ async function verifyWaitRun(rest: string[]): Promise<number> {
   return verifyWaitWith(topic, instrument, provider, liveResearchWaitDeps);
 }
 
-export async function verifyWaitWith(topic: string, instrument: string, provider: string, d: ResearchWaitDeps): Promise<number> {
+export async function verifyWaitWith(topic: string, instrument: string, provider: string, d: WaitDeps): Promise<number> {
   const art = scoreArtDir(topic);
   const stateFile = join(art, `verify-${instrument}.txt`);
   if (!existsSync(stateFile)) { log.error(`score verify-wait: ${stateFile} missing (run score verify-send first)`); return 1; }
@@ -502,7 +502,7 @@ export async function checkDagRun(rest: string[]): Promise<number> {
 
 // ---- Phase F: drilldown (optional, parts still live) ----
 
-interface DrilldownDeps extends ResearchSendDeps, ResearchWaitDeps {}
+interface DrilldownDeps extends SendDeps, WaitDeps {}
 interface DrilldownTestHooks { writeProbe?: (outPath: string) => void; }
 // Default to the research turn timeout (the bash predecessor's findings_timeout_s, ~600s) — a real
 // drill turn (read the doc + write cited notes) routinely exceeds 90s; env-overridable. The wait
