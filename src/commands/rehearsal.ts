@@ -10,7 +10,7 @@ import { atomicWrite } from "../core/atomic.js";
 import { archiveTopic, isoUtc } from "../core/archive.js";
 import { deriveSlug } from "../core/solo.js";
 import { extractMetric, formatMetricBlock, formatSotaBlock, parseMetricMd } from "../core/rehearsalMetric.js";
-import { rehearsalArtDir, partsDir, partStateDir, experimentsDir, experimentDir } from "../core/rehearsal.js";
+import { rehearsalArtDir, partsDir, partStateDir, experimentsDir, experimentDir, seedLib } from "../core/rehearsal.js";
 import { computeScore, type ScoreFs, type ScoreComputation } from "../core/rehearsalScore.js";
 import { parseState, mergeState, reconcileFromOutbox, readHaltFlag } from "../core/rehearsalState.js";
 import { checkCompletion, checkTimeBudget } from "../core/rehearsalComplete.js";
@@ -44,6 +44,7 @@ export interface RehearsalInitDeps {
   haveCmd(name: string): boolean;
   instrumentBinary(name: string): string | undefined;
   now(): string;
+  configRoot(): string;
   probeHardware?(path: string): void;
   stdout?: (line: string) => void;
   opts?: PathOpts;
@@ -115,6 +116,7 @@ export async function initWith(args: string[], deps: RehearsalInitDeps): Promise
   if (p.seedFrom && !existsSync(p.seedFrom)) { log.error(`rehearsal init: --seed-from not found: ${p.seedFrom}`); return 1; }
 
   mkdirSync(art, { recursive: true });
+  seedLib(art, deps.configRoot());
   atomicWrite(join(art, "topic.txt"), p.topic);
   atomicWrite(join(art, "metric.txt"), extractMetric(p.topic) + "\n");
   if (p.seedFrom) atomicWrite(join(art, "seed-from.txt"), p.seedFrom + "\n");
@@ -137,6 +139,7 @@ export async function initWith(args: string[], deps: RehearsalInitDeps): Promise
 const liveInitDeps: RehearsalInitDeps = {
   haveCmd, instrumentBinary,
   now: () => isoUtc(),
+  configRoot: () => process.env.CLAUDE_PLUGIN_ROOT ?? process.cwd(),
 };
 
 interface VerbOpts { opts?: PathOpts }

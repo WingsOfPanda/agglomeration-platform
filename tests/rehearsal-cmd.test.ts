@@ -25,6 +25,7 @@ const okDeps = (over: Partial<RehearsalInitDeps> = {}): RehearsalInitDeps => ({
   instrumentBinary: (n) => (n === "codex" ? "codex" : undefined),
   now: () => "2026-05-30T00:00:00Z",
   probeHardware: () => {},
+  configRoot: () => process.cwd(),
   ...over,
 });
 
@@ -43,6 +44,14 @@ describe("rehearsal init", () => {
     expect(readFileSync(`${art}/metric.txt`, "utf8").trim()).toBe("accuracy");
     expect(out.join("\n")).toContain(`ART=${art}`);
     expect(out.join("\n")).toContain("TOPIC=maximize-accuracy-un");
+  });
+  it("seeds <art>/lib/ from config/rehearsal-lib-seed", async () => {
+    const h = home();
+    const rc = await initWith(["seed lib topic"], okDeps({ configRoot: () => process.cwd(), opts: { home: h.home, cwd: h.home } }));
+    expect(rc).toBe(0);
+    const art = rehearsalArtDir("seed-lib-topic", { home: h.home, cwd: h.home });
+    for (const f of ["arena.py", "__init__.py", "README.md"]) expect(existsSync(join(art, "lib", f))).toBe(true);
+    expect(readFileSync(join(art, "lib", "arena.py"), "utf8")).toContain("def arena_color_rotated");
   });
   it("gates on codex availability (rc 3)", async () => {
     const h = home();
