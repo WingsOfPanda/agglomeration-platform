@@ -1,3 +1,4 @@
+import { existsSync, mkdirSync, readdirSync, statSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { topicDir } from "./paths.js";
 
@@ -24,4 +25,21 @@ export function experimentsDir(artDir: string, instrument: string): string {
 /** <artDir>/parts/<instrument>/experiments/<exp-id> — one experiment branch (code/, result.json, …). */
 export function experimentDir(artDir: string, instrument: string, expId: string): string {
   return join(experimentsDir(artDir, instrument), expId);
+}
+
+/** Copy config/rehearsal-lib-seed/* into <art>/lib/ (skip-if-exists, never throws).
+ *  Behavioral port of the deep-research seed-lib helper. */
+export function seedLib(art: string, configRoot: string): void {
+  try {
+    const seedDir = join(configRoot, "config", "rehearsal-lib-seed");
+    if (!existsSync(seedDir)) return;
+    const dest = join(art, "lib");
+    mkdirSync(dest, { recursive: true });
+    for (const name of readdirSync(seedDir)) {
+      const src = join(seedDir, name);
+      if (!statSync(src).isFile()) continue;
+      const target = join(dest, name);
+      if (!existsSync(target)) copyFileSync(src, target);
+    }
+  } catch { /* best-effort; never fatal to init */ }
 }
