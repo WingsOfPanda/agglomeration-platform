@@ -17060,8 +17060,9 @@ async function run4(args) {
       const dir = (0, import_node_path14.join)(td, p.name);
       const meta = paneMetaReadForDir(dir);
       const pane = meta.paneId || "?";
+      const ob = outboxPath(meta.instrument, meta.model, t.name);
       let state = "[ORPHAN]";
-      if (pane !== "?" && await paneAlive(pane)) state = classifyStale(deriveState(lastOutboxEvent(outboxPath(meta.instrument, meta.model, t.name))), outboxPath(meta.instrument, meta.model, t.name));
+      if (pane !== "?" && await paneAlive(pane)) state = classifyStale(deriveState(lastOutboxEvent(ob)), ob);
       process.stdout.write(`${W(meta.instrument, 32)} ${W(meta.model, 8)} ${W(t.name, 12)} ${W(pane, 9)} ${state}
 `);
     }
@@ -18224,8 +18225,11 @@ function formatRosterFile(rows, isoStamp) {
   return `# generated ${isoStamp} by /consort:score
 ${body}${rows.length ? "\n" : ""}`;
 }
+function nonCommentLines(text) {
+  return text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#"));
+}
 function parseRosterFile(text) {
-  return text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#")).map((l) => {
+  return nonCommentLines(text).map((l) => {
     const [provider, instrument] = l.split("	");
     return { provider, instrument };
   }).filter((r) => r.provider && r.instrument);
@@ -18249,9 +18253,7 @@ function spawnTally(rcs) {
 }
 function parsePanesFile(text) {
   const m = /* @__PURE__ */ new Map();
-  for (const line of text.split("\n")) {
-    const t = line.trim();
-    if (!t || t.startsWith("#")) continue;
+  for (const t of nonCommentLines(text)) {
     const [instrument, pane] = t.split("	");
     if (instrument && pane) m.set(instrument, pane);
   }
@@ -18273,6 +18275,9 @@ function verifyScopeFiles(target, instruments) {
 function writeTargetsTsv(hits, isoStamp) {
   return `# generated ${isoStamp} by /consort:score
 ` + (hits.length ? hits.map((h2) => `${h2.slug}	${h2.marker}`).join("\n") + "\n" : "");
+}
+function parseRosterTargets(text) {
+  return nonCommentLines(text).map((l) => l.split("	")[0]).filter(Boolean);
 }
 function lastTag(text, tag) {
   const re = new RegExp(`^${tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}=(.*)$`, "gm");
@@ -18458,6 +18463,15 @@ var init_audit = __esm({
 });
 
 // src/core/multirepo.ts
+function resolveMarker(dir) {
+  const marker = (0, import_node_fs26.existsSync)((0, import_node_path21.join)(dir, "CLAUDE.md")) ? (0, import_node_path21.join)(dir, "CLAUDE.md") : (0, import_node_fs26.existsSync)((0, import_node_path21.join)(dir, "AGENTS.md")) ? (0, import_node_path21.join)(dir, "AGENTS.md") : null;
+  if (!marker) return null;
+  try {
+    return (0, import_node_path21.join)((0, import_node_fs26.realpathSync)(dir), marker.slice(dir.length + 1));
+  } catch {
+    return marker;
+  }
+}
 function validateTargets(cwd, slugs) {
   const ok = [];
   const errors = [];
@@ -18473,17 +18487,12 @@ function validateTargets(cwd, slugs) {
     }
     seen.add(slug);
     const dir = (0, import_node_path21.join)(cwd, slug);
-    const marker = (0, import_node_fs26.existsSync)((0, import_node_path21.join)(dir, "CLAUDE.md")) ? (0, import_node_path21.join)(dir, "CLAUDE.md") : (0, import_node_fs26.existsSync)((0, import_node_path21.join)(dir, "AGENTS.md")) ? (0, import_node_path21.join)(dir, "AGENTS.md") : null;
+    const marker = resolveMarker(dir);
     if (!marker) {
       errors.push(`target '${slug}' is not a sibling dir with CLAUDE.md/AGENTS.md under ${cwd}`);
       continue;
     }
-    let abs = marker;
-    try {
-      abs = (0, import_node_path21.join)((0, import_node_fs26.realpathSync)(dir), marker.slice(dir.length + 1));
-    } catch {
-    }
-    ok.push({ slug, marker: abs });
+    ok.push({ slug, marker });
   }
   return { ok, errors };
 }
@@ -18499,17 +18508,10 @@ function detectMultiRepo(cwd, corpus) {
   for (const slug of entries) {
     if (slug.startsWith(".")) continue;
     const dir = (0, import_node_path21.join)(cwd, slug);
-    let marker;
-    if ((0, import_node_fs26.existsSync)((0, import_node_path21.join)(dir, "CLAUDE.md"))) marker = (0, import_node_path21.join)(dir, "CLAUDE.md");
-    else if ((0, import_node_fs26.existsSync)((0, import_node_path21.join)(dir, "AGENTS.md"))) marker = (0, import_node_path21.join)(dir, "AGENTS.md");
-    else continue;
+    const marker = resolveMarker(dir);
+    if (!marker) continue;
     if (!corpusLower.includes(slug.toLowerCase())) continue;
-    let abs = marker;
-    try {
-      abs = (0, import_node_path21.join)((0, import_node_fs26.realpathSync)(dir), marker.slice(dir.length + 1));
-    } catch {
-    }
-    hits.push({ slug, marker: abs });
+    hits.push({ slug, marker });
   }
   return hits;
 }
@@ -19688,9 +19690,6 @@ async function checkDagRun(rest) {
   log.error("score check-dag: Execution DAG has malformed numbered lines (see above)");
   return 1;
 }
-function parseRosterTargets(text) {
-  return text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#")).map((l) => l.split("	")[0]).filter(Boolean);
-}
 async function drilldownRun(rest) {
   return drilldownWith(rest, { ...liveResearchSendDeps, ...liveResearchWaitDeps }, {});
 }
@@ -20720,6 +20719,9 @@ function isDir(p) {
     return false;
   }
 }
+function hasRepoMarker(dir) {
+  return (0, import_node_fs32.existsSync)((0, import_node_path28.join)(dir, "CLAUDE.md")) || (0, import_node_fs32.existsSync)((0, import_node_path28.join)(dir, "AGENTS.md"));
+}
 async function preSnapshotRun(rest) {
   if (rest.length !== 1) {
     log.error("usage: perform pre-snapshot <topic>");
@@ -21343,7 +21345,7 @@ async function multiInitWith(topic, hubCwd, d) {
       log.error(`perform multi-init: sub-repo '${repo}' not found at ${cwd}`);
       return 1;
     }
-    if (!(0, import_node_fs32.existsSync)((0, import_node_path28.join)(cwd, "CLAUDE.md")) && !(0, import_node_fs32.existsSync)((0, import_node_path28.join)(cwd, "AGENTS.md"))) {
+    if (!hasRepoMarker(cwd)) {
       log.error(`perform multi-init: sub-repo '${repo}' has no CLAUDE.md or AGENTS.md at ${cwd}`);
       return 1;
     }
@@ -21461,7 +21463,7 @@ async function verifyDagReposRun(rest) {
     const dir = (0, import_node_path28.join)(hubDir, slug);
     let st;
     if (!(0, import_node_fs32.existsSync)(dir) || !(0, import_node_fs32.statSync)(dir).isDirectory()) st = "missing-dir";
-    else if (!(0, import_node_fs32.existsSync)((0, import_node_path28.join)(dir, "CLAUDE.md")) && !(0, import_node_fs32.existsSync)((0, import_node_path28.join)(dir, "AGENTS.md"))) st = "missing-marker";
+    else if (!hasRepoMarker(dir)) st = "missing-marker";
     else st = "ok";
     if (st !== "ok") bad++;
     process.stdout.write(`REPO=${slug}	STATUS=${st}
@@ -23002,17 +23004,11 @@ function gatherPeers(art, self) {
     }
     let approach = "", metric = "", status = "", notes = "";
     if (latest) {
-      const resultPath = (0, import_node_path32.join)(expsDir, latest, "result.json");
-      if ((0, import_node_fs35.existsSync)(resultPath)) {
-        try {
-          const r = JSON.parse((0, import_node_fs35.readFileSync)(resultPath, "utf8"));
-          approach = r.approach_label != null ? String(r.approach_label) : "";
-          metric = r.metric_value != null ? String(r.metric_value) : "";
-          status = r.status != null ? String(r.status) : "";
-          notes = r.notes != null ? String(r.notes) : "";
-        } catch {
-        }
-      }
+      const r = readResultJson((0, import_node_path32.join)(expsDir, latest, "result.json"));
+      approach = resultStr(r, "approach_label");
+      metric = resultStr(r, "metric_value");
+      status = resultStr(r, "status");
+      notes = resultStr(r, "notes");
     }
     rows.push({ instrument: peer, phase, currentExp: latest, approach, metric, status, notes });
   }
@@ -23292,17 +23288,17 @@ function approachFromPrompt(promptPath) {
   return "";
 }
 function readResultCells(resultPath) {
-  if (!(0, import_node_fs35.existsSync)(resultPath)) return { approach: "", metric: "\u2014" };
-  try {
-    const r = JSON.parse((0, import_node_fs35.readFileSync)(resultPath, "utf8"));
-    const approach = r.approach_label != null ? String(r.approach_label) : "";
-    const m = r.metric_value != null ? String(r.metric_value) : "";
-    const s = r.status != null ? String(r.status) : "";
-    const metric = `${m} ${s}`.trim() || "\u2014";
-    return { approach, metric };
-  } catch {
-    return { approach: "", metric: "\u2014" };
-  }
+  const r = readResultJson(resultPath);
+  const approach = resultStr(r, "approach_label");
+  const metric = `${resultStr(r, "metric_value")} ${resultStr(r, "status")}`.trim() || "\u2014";
+  return { approach, metric };
+}
+function gatherCompletion(art) {
+  const sbPath = (0, import_node_path32.join)(art, "scoreboard.md");
+  const scoreboardMd = (0, import_node_fs35.existsSync)(sbPath) ? (0, import_node_fs35.readFileSync)(sbPath, "utf8") : null;
+  const metricPath = (0, import_node_path32.join)(art, "metric.md");
+  const completion = scoreboardMd !== null && (0, import_node_fs35.existsSync)(metricPath) ? checkCompletion(scoreboardMd, (0, import_node_fs35.readFileSync)(metricPath, "utf8")) : null;
+  return { scoreboardMd, completion };
 }
 function parseStatusBriefArgs(args) {
   let topic = "", latestInstrument, latestExp;
@@ -23364,10 +23360,7 @@ async function statusBriefWith(args, v = {}) {
       parts.push({ instrument, phase, currentOrLast, approach, metric });
     }
   }
-  const sbPath = (0, import_node_path32.join)(art, "scoreboard.md");
-  const scoreboardMd = (0, import_node_fs35.existsSync)(sbPath) ? (0, import_node_fs35.readFileSync)(sbPath, "utf8") : null;
-  const metricPath = (0, import_node_path32.join)(art, "metric.md");
-  const completion = scoreboardMd !== null && (0, import_node_fs35.existsSync)(metricPath) ? checkCompletion(scoreboardMd, (0, import_node_fs35.readFileSync)(metricPath, "utf8")) : null;
+  const { scoreboardMd, completion } = gatherCompletion(art);
   const latest = p.latestInstrument && p.latestExp ? { instrument: p.latestInstrument, exp: p.latestExp } : void 0;
   out(buildStatusBrief({ parts, scoreboardMd, completion, latest }));
   return 0;
@@ -23599,10 +23592,7 @@ async function finalizeWith(args, deps) {
       statusRows.push({ instrument, phase: "?", current: "", lastTs: "?", lastEvent: "?" });
     }
   }
-  const scoreboardPath = (0, import_node_path32.join)(art, "scoreboard.md");
-  const scoreboardMd = (0, import_node_fs35.existsSync)(scoreboardPath) ? (0, import_node_fs35.readFileSync)(scoreboardPath, "utf8") : null;
-  const metricPath = (0, import_node_path32.join)(art, "metric.md");
-  const completion = scoreboardMd !== null && (0, import_node_fs35.existsSync)(metricPath) ? checkCompletion(scoreboardMd, (0, import_node_fs35.readFileSync)(metricPath, "utf8")) : null;
+  const { scoreboardMd, completion } = gatherCompletion(art);
   const budgetPath = (0, import_node_path32.join)(art, "time-budget.txt");
   const startPath = (0, import_node_path32.join)(art, "session-start.txt");
   let hardCap = null;
@@ -23717,6 +23707,9 @@ function readResultJson(path6) {
     return {};
   }
 }
+function resultStr(r, k) {
+  return r[k] != null ? String(r[k]) : "";
+}
 async function handoffExtractWith(args, deps) {
   const art = args[0];
   if (!art || !(0, import_node_fs35.existsSync)(art) || !(0, import_node_fs35.statSync)(art).isDirectory()) {
@@ -23746,7 +23739,7 @@ async function handoffExtractWith(args, deps) {
   } else {
     const expRel = `parts/${winner.instrument}/experiments/${winner.expId}`;
     const result = readResultJson((0, import_node_path32.join)(art, expRel, "result.json"));
-    const approach = result.approach_label != null ? String(result.approach_label) : "";
+    const approach = resultStr(result, "approach_label");
     const notes = String(result.notes ?? "").replace(/\n/g, " ");
     let checkpoint;
     const ckptRaw = result.checkpoint_path != null ? String(result.checkpoint_path) : "";
@@ -23755,7 +23748,7 @@ async function handoffExtractWith(args, deps) {
     }
     const runners = runnerUps.map((r) => {
       const rr = readResultJson((0, import_node_path32.join)(art, `parts/${r.instrument}/experiments/${r.expId}`, "result.json"));
-      return { instrument: r.instrument, exp: r.expId, metric: r.metric, approach: rr.approach_label != null ? String(rr.approach_label) : "" };
+      return { instrument: r.instrument, exp: r.expId, metric: r.metric, approach: resultStr(rr, "approach_label") };
     });
     input = {
       topic,
@@ -25070,7 +25063,7 @@ async function loadHandlers() {
 }
 async function banner(label, color) {
   process.stdout.write(renderBannerHead(label, color) + "\n");
-  const c3 = /^colour(\d+)$/.test(color) ? `\x1B[38;5;${color.replace("colour", "")}m` : "";
+  const c3 = ansiFromColor(color);
   const r = "\x1B[0m";
   const fast = Boolean(process.env.CONSORT_BANNER_FAST);
   for (let i2 = 8; i2 >= 1; i2--) {

@@ -51,10 +51,15 @@ export function formatRosterFile(rows: RosterRow[], isoStamp: string): string {
   return `# generated ${isoStamp} by /consort:score\n${body}${rows.length ? "\n" : ""}`;
 }
 
+/** Split text into trimmed, non-blank, non-`#`-comment lines. */
+export function nonCommentLines(text: string): string[] {
+  return text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#"));
+}
+
 /** Parse roster.txt: skip #/blank lines; keep rows with both fields.
  *  Consumed by the ensemble path (Phase C reads roster.txt back to spawn the parts); not orphaned. */
 export function parseRosterFile(text: string): RosterRow[] {
-  return text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#"))
+  return nonCommentLines(text)
     .map((l) => { const [provider, instrument] = l.split("\t"); return { provider, instrument }; })
     .filter((r) => r.provider && r.instrument) as RosterRow[];
 }
@@ -90,9 +95,7 @@ export function spawnTally(rcs: number[]): 0 | 1 | 2 {
 /** Parse preflight-panes.txt (TSV `<instrument>\t<pane>`; skip #/blank) into a map. */
 export function parsePanesFile(text: string): Map<string, string> {
   const m = new Map<string, string>();
-  for (const line of text.split("\n")) {
-    const t = line.trim();
-    if (!t || t.startsWith("#")) continue;
+  for (const t of nonCommentLines(text)) {
     const [instrument, pane] = t.split("\t");
     if (instrument && pane) m.set(instrument, pane);
   }
@@ -120,6 +123,11 @@ export function verifyScopeFiles(target: string, instruments: string[]): string[
  *  consumer parseRosterTargets reads col 0 and tolerates the comment header. */
 export function writeTargetsTsv(hits: { slug: string; marker: string }[], isoStamp: string): string {
   return `# generated ${isoStamp} by /consort:score\n` + (hits.length ? hits.map((h) => `${h.slug}\t${h.marker}`).join("\n") + "\n" : "");
+}
+
+/** targets.txt may be a plain slug-per-line list (init) or a TSV (multi-repo detect, Phase E). */
+export function parseRosterTargets(text: string): string[] {
+  return nonCommentLines(text).map((l) => l.split("\t")[0]).filter(Boolean);
 }
 
 /** Last `^<tag>=<value>$` value in a KV state file's text; null if absent. */
