@@ -20,7 +20,7 @@ import { haveCmd } from "../core/deps.js";
 import { performState, composeRound1Prompt, composeFixPrompt, composeDagUnitPrompt } from "../core/performTurn.js";
 import { pickInstruments } from "../core/instruments.js";
 import { extractQuestionPayload } from "../core/performQuestions.js";
-import { outboxOffset, outboxPath, outboxWaitSince, statusPath, type OutboxEvent } from "../core/ipc.js";
+import { outboxOffset, outboxPath, outboxWaitSince, statusPath, resolveModel, type OutboxEvent } from "../core/ipc.js";
 import { instrumentTimeoutMultiplier } from "../core/contracts.js";
 import { scaledTimeout, parseLatestOffset } from "../core/scoreTurn.js";
 import { parseDagLine, dagTopological, dagSectionBody, dagFanInRepos } from "../core/dag.js";
@@ -43,7 +43,7 @@ function detectRouting(docText: string): "single" | "multi" {
   return /^\*\*Target Sub-Project\(s\):\*\*/m.test(docText) && /^## Execution DAG[ \t]*$/m.test(docText) ? "multi" : "single";
 }
 function usage(): number {
-  log.error("usage: perform <init|audit|pre-snapshot|branch|turn-send|turn-wait|scope-check|sibling-baseline|sibling-verify|sibling-rescue|cross-signal|summary|finish|finish-one|forensics|archive|dag-parse|wave-wait|multi-init|send-unit|find-latest-doc> ...");
+  log.error("usage: perform <init|audit|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|sibling-baseline|sibling-verify|sibling-rescue|cross-signal|summary|finish|finish-one|forensics|archive|dag-parse|wave-wait|multi-init|send-unit|find-latest-doc> ...");
   return 2;
 }
 
@@ -92,6 +92,7 @@ export async function run(args: string[]): Promise<number> {
     case "audit":     return auditRun(rest);
     case "turn-send": return turnSendRun(rest);
     case "turn-wait": return turnWaitRun(rest);
+    case "reset-status": return resetStatusRun(rest);
     case "pre-snapshot": return preSnapshotRun(rest);
     case "branch":       return branchRun(applyArgsFile(rest));
     case "scope-check":  return scopeCheckRun(rest);
@@ -221,6 +222,19 @@ export async function turnWaitWith(topic: string, round: number, d: PerformWaitD
   } else appendFileSync(stateFile, `TS=${ts}\n`);
   writeFileSync(join(art, `turn-cody-${round}.done`), "");
   log.ok(`[turn-wait] cody round=${round} TS=${ts}`); return 0;
+}
+
+// ---- reset-status — force a not-idle part back to idle (deploy "Force-retry" recovery) ----
+// The not-idle gate in turnSendWith refuses when status.json state != idle. After a timed-out
+// turn the part is left non-idle; the directive calls this to force-reset so the retry can send.
+async function resetStatusRun(rest: string[]): Promise<number> {
+  const [topic, instrument] = rest;
+  if (!topic || !instrument || rest.length !== 2) { log.error("usage: perform reset-status <topic> <instrument>"); return 2; }
+  const model = resolveModel(instrument, topic);
+  if (model === null) { log.error(`perform reset-status: no part for instrument=${instrument} on topic=${topic}`); return 1; }
+  atomicWrite(statusPath(instrument, model, topic), `{"state":"idle","last_event":"force-reset"}\n`);
+  log.ok(`perform reset-status: ${instrument} state=idle`);
+  return 0;
 }
 
 // ---- key=value baseline reader (port of deploy_kv_file_field) + small helpers ----
