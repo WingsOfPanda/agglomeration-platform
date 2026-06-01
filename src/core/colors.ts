@@ -47,17 +47,23 @@ const PALETTE: Record<string, Entry> = {
 
 const FALLBACK: Entry = { section: "tutti", primary: "white", secondary: "default" };
 function entry(instrument: string): Entry { return PALETTE[instrument.toLowerCase()] ?? FALLBACK; }
+function isOrchestral(instrument: string): boolean { return instrument.toLowerCase() in PALETTE; }
 
 export function sectionFor(instrument: string): Section { return entry(instrument).section; }
 export function colorFor(instrument: string): string { return entry(instrument).primary; }
 
 export function labelFor(instrument: string, model: string, topic: string): string {
-  return `${sectionFor(instrument)}-${instrument}:${model}:${topic}`;
+  const sec = sectionFor(instrument);
+  const head = isOrchestral(instrument) ? `${sec}-${instrument}` : sec;
+  return `${head}:${model}:${topic}`;
 }
 
 export function labelFmt(instrument: string, model: string, topic: string): string {
   const e = entry(instrument);
-  return `#[fg=${e.primary},bold]${e.section}-${instrument}#[default]:#[fg=${e.secondary},bold]${model}#[default]:${topic}`;
+  const head = isOrchestral(instrument)
+    ? `#[fg=${e.primary},bold]${e.section}-${instrument}#[default]`
+    : `#[fg=${e.primary},bold]${e.section}#[default]`;
+  return `${head}:#[fg=${e.secondary},bold]${model}#[default]:${topic}`;
 }
 
 export function ansiFromColor(color: string): string {

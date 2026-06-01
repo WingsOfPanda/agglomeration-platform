@@ -22,6 +22,15 @@ describe("colors", () => {
     const f = C.labelFmt("violin", "codex", "demo");
     expect(f).toBe("#[fg=colour110,bold]strings-violin#[default]:#[fg=colour187,bold]codex#[default]:demo");
   });
+  it("labelFor collapses the instrument segment for non-orchestral (fallback) names", () => {
+    expect(C.labelFor("tutti", "codex", "design-x")).toBe("tutti:codex:design-x");
+    expect(C.labelFor("cody", "codex", "design-x")).toBe("tutti:codex:design-x");
+  });
+  it("labelFmt collapses the instrument segment for non-orchestral names", () => {
+    expect(C.labelFmt("tutti", "codex", "demo")).toBe(
+      "#[fg=white,bold]tutti#[default]:#[fg=default,bold]codex#[default]:demo",
+    );
+  });
   it("ansiFromColor: colourNNN and bare number", () => {
     expect(C.ansiFromColor("colour110")).toBe("\x1b[38;5;110m");
     expect(C.ansiFromColor("42")).toBe("\x1b[38;5;42m");
