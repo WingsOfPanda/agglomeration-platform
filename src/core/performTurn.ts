@@ -29,26 +29,32 @@ const BRANCH_DISCIPLINE =
   '  {"event":"error","reason":"branch-discipline: needed new branch"}\n' +
   "  and let the conductor decide.\n";
 
-const BLOCKERS =
-  "BLOCKERS / QUESTIONS (read carefully):\n" +
-  "- If a referenced path, file, checkpoint, git ref, env var, or\n" +
-  "  command is NOT where the notes say it is, DO NOT search the\n" +
-  "  filesystem yourself, DO NOT invent a workaround. Halt and ask by\n" +
-  "  appending ONE question event to your outbox.jsonl, then stop:\n" +
-  '    {"event":"question","message":"<why you are asking>",' +
-  '"claim":{"kind":"<path|git|env|cmd|test>","value":"<the value to check>"},"ts":"<iso>"}\n' +
-  '  Omit the "claim" object for a judgment question (no ground-truth to check).\n' +
-  "- The Maestro verifies the claim and replies via your inbox.md, then re-engages you.\n" +
-  "- After reading any inbox.md reply, acknowledge by appending an ack event:\n" +
-  '    {"event":"ack","task_summary":"<what you read>","ts":"<iso>"}\n' +
-  "- The 'test' kind runs a diagnostic command under a 30s timeout — it\n" +
-  "  is NOT for running your test suite. Running 'bash tests/run.sh' is\n" +
-  "  your job. Banned values fail with rc=2.\n";
+function blockers(testCmd: string): string {
+  const suiteLine = testCmd
+    ? `  is NOT for running your test suite. Running '${testCmd}' is your job.\n  Banned values fail with rc=2.\n`
+    : "  is NOT for running your test suite. Running your repository's test suite is your job.\n  Banned values fail with rc=2.\n";
+  return (
+    "BLOCKERS / QUESTIONS (read carefully):\n" +
+    "- If a referenced path, file, checkpoint, git ref, env var, or\n" +
+    "  command is NOT where the notes say it is, DO NOT search the\n" +
+    "  filesystem yourself, DO NOT invent a workaround. Halt and ask by\n" +
+    "  appending ONE question event to your outbox.jsonl, then stop:\n" +
+    '    {"event":"question","message":"<why you are asking>",' +
+    '"claim":{"kind":"<path|git|env|cmd|test>","value":"<the value to check>"},"ts":"<iso>"}\n' +
+    '  Omit the "claim" object for a judgment question (no ground-truth to check).\n' +
+    "- The Maestro verifies the claim and replies via your inbox.md, then re-engages you.\n" +
+    "- After reading any inbox.md reply, acknowledge by appending an ack event:\n" +
+    '    {"event":"ack","task_summary":"<what you read>","ts":"<iso>"}\n' +
+    "- The 'test' kind runs a diagnostic command under a 30s timeout — it\n" +
+    suiteLine
+  );
+}
+export { blockers };
 
 /** Round-1 plan+implement+self-verify prompt body (port of deploy_build_turn_prompt_round1). MUST
  *  NOT include END_OF_INSTRUCTION or the done line. */
-export function composeRound1Prompt(args: { designPath: string; planPath: string; verifyPath: string; round?: number }): string {
-  const { designPath, planPath, verifyPath } = args;
+export function composeRound1Prompt(args: { designPath: string; planPath: string; verifyPath: string; round?: number; testCmd: string }): string {
+  const { designPath, planPath, verifyPath, testCmd } = args;
   const round = args.round ?? 1;
   const testLog = `${dirname(verifyPath)}/test-output-${round}.log`;
   return [
@@ -75,8 +81,10 @@ export function composeRound1Prompt(args: { designPath: string; planPath: string
     "",
     "PHASE 2: Implement",
     `  Use the superpowers:subagent-driven-development skill. Walk ${planPath}`,
-    "  task-by-task. Commit per task (Conventional Commits prefix). Run the",
-    "  full test suite (`bash tests/run.sh`) after each task and confirm green.",
+    "  task-by-task. Commit per task (Conventional Commits prefix). Run",
+    testCmd
+      ? `  the full test suite (\`${testCmd}\`) after each task and confirm green.`
+      : "  the repository's full test suite after each task and confirm green.",
     "",
     "PHASE 3: Self-verify",
     "  Use the superpowers:verification-before-completion skill. Run the full",
@@ -90,7 +98,7 @@ export function composeRound1Prompt(args: { designPath: string; planPath: string
     "  short summary.",
     "",
     BRANCH_DISCIPLINE,
-    BLOCKERS,
+    blockers(testCmd),
   ].join("\n");
 }
 
@@ -137,7 +145,7 @@ export function composeDagUnitPrompt(args: { slug: string; designPath: string; s
 
 /** Fix-round prompt body (round >= 2; port of deploy_build_turn_prompt_fix). `bundleText` is the
  *  on-disk fix bundle, embedded VERBATIM (the bash `cat`s it raw). Same fence-omission note. */
-export function composeFixPrompt(round: number, bundleText: string, verifyPath: string): string {
+export function composeFixPrompt(round: number, bundleText: string, verifyPath: string, testCmd: string): string {
   const testLog = `${dirname(verifyPath)}/test-output-${round}.log`;
   return [
     `You are entering ROUND ${round} of /consort:perform (fix loop).`,
@@ -180,6 +188,6 @@ export function composeFixPrompt(round: number, bundleText: string, verifyPath: 
     "  The report MUST start with `VERDICT: PASS|PARTIAL|FAIL`.",
     "",
     BRANCH_DISCIPLINE,
-    BLOCKERS,
+    blockers(testCmd),
   ].join("\n");
 }
