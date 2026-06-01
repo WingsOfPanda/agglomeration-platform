@@ -60,6 +60,7 @@ describe("perform turn-send", () => {
       planPath: join(art, "plan.md"),
       verifyPath: join(art, "verify-report-1.md"),
       round: 1,
+      testCmd: "",
     }));
     expect(captured).toEqual(["--from", "maestro", "cody", TOPIC, "@" + promptFile]);
   });

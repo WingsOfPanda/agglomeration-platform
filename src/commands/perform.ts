@@ -30,6 +30,7 @@ import {
   parseBaselineFile, diffSiblingAgainstBaseline, revertAndReplay,
 } from "../core/performSibling.js";
 import { run as sendRun } from "./send.js";
+import { detectTestCommand } from "../core/solo.js";
 
 const PART = "cody";
 const PERFORM_TURN_TIMEOUT = (): number => Number(process.env.CONSORT_PERFORM_TURN_TIMEOUT_S) || 14400;
@@ -175,6 +176,8 @@ export async function turnSendWith(topic: string, round: number, d: PerformSendD
   const art = performArtDir(topic);
   if (!existsSync(art)) { log.error(`perform turn-send: ${art} not found — run perform init first`); return 1; }
   const model = partModel(art);
+  const targetCwd = existsSync(join(art, "target_cwd.txt")) ? readFileSync(join(art, "target_cwd.txt"), "utf8").trim() : "";
+  const testCmd = targetCwd ? detectTestCommand(targetCwd) : "";
   const stateFile = join(art, `turn-cody-${round}.txt`);
   if (existsSync(stateFile)) { log.error(`perform turn-send: ${stateFile} already exists; rm to retry`); return 1; }
   const outbox = outboxPath(PART, model, topic);
@@ -182,8 +185,8 @@ export async function turnSendWith(topic: string, round: number, d: PerformSendD
   const sp = statusPath(PART, model, topic);
   if (existsSync(sp)) { const m = readFileSync(sp, "utf8").match(/"state":"([^"]*)"/); if (m && m[1] && m[1] !== "idle") { log.error(`perform turn-send: part not idle (state=${m[1]}); previous turn still in flight`); return 1; } }
   const promptFile = join(art, `cody_turn_prompt_${round}.md`);
-  if (round === 1) atomicWrite(promptFile, composeRound1Prompt({ designPath: join(art, "design.md"), planPath: join(art, "plan.md"), verifyPath: join(art, "verify-report-1.md"), round }));
-  else { const bundle = join(art, `fix-prompt-${round}.md`); if (!existsSync(bundle)) { log.error(`perform turn-send: fix-prompt-${round}.md not found at ${bundle}; the directive must write it first`); return 1; } atomicWrite(promptFile, composeFixPrompt(round, readFileSync(bundle, "utf8"), join(art, `verify-report-${round}.md`))); }
+  if (round === 1) atomicWrite(promptFile, composeRound1Prompt({ designPath: join(art, "design.md"), planPath: join(art, "plan.md"), verifyPath: join(art, "verify-report-1.md"), round, testCmd }));
+  else { const bundle = join(art, `fix-prompt-${round}.md`); if (!existsSync(bundle)) { log.error(`perform turn-send: fix-prompt-${round}.md not found at ${bundle}; the directive must write it first`); return 1; } atomicWrite(promptFile, composeFixPrompt(round, readFileSync(bundle, "utf8"), join(art, `verify-report-${round}.md`), testCmd)); }
   const offset = d.offsetFor(PART, model, topic);             // BEFORE send (deploy_send_dispatch order)
   atomicWrite(stateFile, `OFFSET=${offset}\n`);
   const rc = await d.send(["--from", "maestro", PART, topic, `@${promptFile}`]);
