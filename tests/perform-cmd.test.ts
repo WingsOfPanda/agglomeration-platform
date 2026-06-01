@@ -227,7 +227,7 @@ describe("perform archive (real archiveTopic under CONSORT_HOME)", () => {
   it("moves _perform under the archive root, rc 0", async () => {
     const art = seedArt(); // <topicDir>/_perform
     // seed a sibling part dir with a status.json so finalizeArchived has something to touch.
-    const partDir = join(performTopicDir(TOPIC), "cody-codex");
+    const partDir = join(performTopicDir(TOPIC), "tutti-codex");
     mkdirSync(partDir, { recursive: true });
     writeFileSync(join(partDir, "status.json"), '{"state":"done"}');
     writeFileSync(join(art, "topic.txt"), TOPIC);
