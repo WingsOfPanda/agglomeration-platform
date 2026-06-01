@@ -9,7 +9,7 @@ import {
   deriveSlug, parseScoreArgs, scoreArtDir, scoreDraftDir,
   formatRosterFile, scoreDocPath, parseMultiRepoMode, parseRosterFile,
   spawnRosterArg, spawnResultsTsv, spawnTally, parsePanesFile, verifyScopeFiles, lastTag, writeTargetsTsv,
-  parseRosterTargets, resolveDrilldownPath, cascadeTargets,
+  parseRosterTargets, resolveDrilldownPath, cascadeTargets, exportDocTo,
   type RosterRow, type SpawnResult, type ResetPhase,
 } from "../core/score.js";
 import { detectMultiRepo, validateTargets, type RepoHit } from "../core/multirepo.js";
@@ -32,7 +32,7 @@ import { run as sendRun } from "./send.js";
 import { run as spawnRun } from "./spawn.js";
 import { run as preflightRun } from "./preflight.js";
 
-function usage(): number { log.error("usage: score <init|assemble|spawn-all|research-send|research-wait|diff|verify-send|verify-wait|adjudicate|synthesize|walk-state|detect-multi-repo|emit-dag|check-dag|drilldown|offset-reset|forensics|archive> ..."); return 2; }
+function usage(): number { log.error("usage: score <init|assemble|spawn-all|research-send|research-wait|diff|verify-send|verify-wait|adjudicate|synthesize|walk-state|detect-multi-repo|emit-dag|check-dag|drilldown|offset-reset|export-doc|forensics|archive> ..."); return 2; }
 
 export async function run(args: string[]): Promise<number> {
   const verb = args[0];
@@ -56,6 +56,7 @@ export async function run(args: string[]): Promise<number> {
     case "offset-reset": return offsetResetRun(rest);
     case "forensics": return forensicsRun(rest);
     case "archive": return archiveRun(rest);
+    case "export-doc": return exportDocRun(rest);
     default: return usage();
   }
 }
@@ -154,6 +155,19 @@ async function assembleRun(rest: string[]): Promise<number> {
   }
   log.ok(`score assemble: audit PASSED`);
   process.stdout.write(out + "\n");
+  return 0;
+}
+
+function exportDocRun(rest: string[]): number {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: score export-doc <topic>"); return 2; }
+  const dest = exportDocTo(topic, repoRoot());
+  if (dest === null) {
+    log.error(`score export-doc: no assembled *-${topic}-design.md found (run score assemble first)`);
+    return 1;
+  }
+  log.ok(`score export-doc: exported to ${dest}`);
+  process.stdout.write(`EXPORTED=${dest}\n`);
   return 0;
 }
 
