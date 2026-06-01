@@ -16644,6 +16644,9 @@ function paneBorderArgs() {
     ]
   ];
 }
+function windowBorderStatusArgs(target) {
+  return ["set-option", "-w", "-t", target, "pane-border-status", "top"];
+}
 function wrapLaunch(launch, hasBashrc = (0, import_node_fs15.existsSync)((0, import_node_path13.join)((0, import_node_os5.homedir)(), ".bashrc"))) {
   return hasBashrc ? `bash -ic 'exec ${launch}'` : launch;
 }
@@ -16655,11 +16658,22 @@ async function tmux(args) {
   return stdout.trim();
 }
 async function ensurePaneBorders() {
+  let ok = true;
   for (const a2 of paneBorderArgs()) {
     try {
       await tmux(a2);
     } catch {
+      ok = false;
     }
+  }
+  return ok;
+}
+async function ensureWindowBorderStatus(target) {
+  try {
+    await tmux(windowBorderStatusArgs(target));
+    return true;
+  } catch {
+    return false;
   }
 }
 async function paneAlive(pane) {
@@ -16753,6 +16767,7 @@ async function preflightLayout(topic, roster, opts) {
       flag = "-v";
     }
     await selectLayoutMainVertical(conductor);
+    await ensureWindowBorderStatus(conductor);
     opts.writePanes(out.map((o2) => `${o2.instrument}	${o2.pane}`).join("\n") + "\n");
     return out;
   } catch (e) {
@@ -17066,7 +17081,7 @@ async function run(args) {
     log.error("tmux >= 3.0 required");
     return 1;
   }
-  await ensurePaneBorders();
+  if (!await ensurePaneBorders()) log.warn("could not set pane-border globals; part labels may not render");
   if (instrument === "random") {
     const pick = pickRandomInstrument(topic);
     if (!pick) {
@@ -17132,6 +17147,7 @@ async function run(args) {
       (0, import_node_fs17.mkdirSync)(topicDir(topic), { recursive: true });
       (0, import_node_fs17.writeFileSync)(lastFile, pane + "\n");
     }
+    if (!await ensureWindowBorderStatus(pane)) log.warn(`could not force pane-border-status on the spawn window; '${labelFor(instrument, model, topic)}' label may not render`);
     paneMetaWrite(instrument, model, topic, pane);
     log.ok(`spawned ${labelFor(instrument, model, topic)} in pane ${pane} (mode=${useMode})`);
     const boot = instrumentBootstrapSleep(model);
@@ -19987,6 +20003,9 @@ function deriveTopicFromPath(p) {
   else if (base.endsWith(".md")) base = base.slice(0, -".md".length);
   return base;
 }
+function assertPerformTopic(topic) {
+  return /^[a-z0-9][a-z0-9-]{0,31}$/.test(topic);
+}
 function parsePerformArgs(tokens) {
   let branchMode = "branch";
   let branchName;
@@ -20190,8 +20209,25 @@ function performState(ev, verifyText) {
   if (ev.event === "done") return verifyText !== null && verifyText.length > 0 ? "ok" : "failed";
   return "failed";
 }
+function blockers(testCmd) {
+  const suiteLine = testCmd ? `  is NOT for running your test suite. Running '${testCmd}' is your job.
+  Banned values fail with rc=2.
+` : "  is NOT for running your test suite. Running your repository's test suite is your job.\n  Banned values fail with rc=2.\n";
+  return `BLOCKERS / QUESTIONS (read carefully):
+- If a referenced path, file, checkpoint, git ref, env var, or
+  command is NOT where the notes say it is, DO NOT search the
+  filesystem yourself, DO NOT invent a workaround. Halt and ask by
+  appending ONE question event to your outbox.jsonl, then stop:
+    {"event":"question","message":"<why you are asking>","claim":{"kind":"<path|git|env|cmd|test>","value":"<the value to check>"},"ts":"<iso>"}
+  Omit the "claim" object for a judgment question (no ground-truth to check).
+- The Maestro verifies the claim and replies via your inbox.md, then re-engages you.
+- After reading any inbox.md reply, acknowledge by appending an ack event:
+    {"event":"ack","task_summary":"<what you read>","ts":"<iso>"}
+- The 'test' kind runs a diagnostic command under a 30s timeout \u2014 it
+` + suiteLine;
+}
 function composeRound1Prompt2(args) {
-  const { designPath, planPath, verifyPath } = args;
+  const { designPath, planPath, verifyPath, testCmd } = args;
   const round = args.round ?? 1;
   const testLog = `${(0, import_node_path26.dirname)(verifyPath)}/test-output-${round}.log`;
   return [
@@ -20218,8 +20254,8 @@ function composeRound1Prompt2(args) {
     "",
     "PHASE 2: Implement",
     `  Use the superpowers:subagent-driven-development skill. Walk ${planPath}`,
-    "  task-by-task. Commit per task (Conventional Commits prefix). Run the",
-    "  full test suite (`bash tests/run.sh`) after each task and confirm green.",
+    "  task-by-task. Commit per task (Conventional Commits prefix). Run",
+    testCmd ? `  the full test suite (\`${testCmd}\`) after each task and confirm green.` : "  the repository's full test suite after each task and confirm green.",
     "",
     "PHASE 3: Self-verify",
     "  Use the superpowers:verification-before-completion skill. Run the full",
@@ -20233,7 +20269,7 @@ function composeRound1Prompt2(args) {
     "  short summary.",
     "",
     BRANCH_DISCIPLINE2,
-    BLOCKERS2
+    blockers(testCmd)
   ].join("\n");
 }
 function composeDagUnitPrompt(args) {
@@ -20271,7 +20307,7 @@ function composeDagUnitPrompt(args) {
     "  and let the conductor decide."
   ].join("\n");
 }
-function composeFixPrompt2(round, bundleText, verifyPath) {
+function composeFixPrompt2(round, bundleText, verifyPath, testCmd) {
   const testLog = `${(0, import_node_path26.dirname)(verifyPath)}/test-output-${round}.log`;
   return [
     `You are entering ROUND ${round} of /consort:perform (fix loop).`,
@@ -20314,10 +20350,10 @@ function composeFixPrompt2(round, bundleText, verifyPath) {
     "  The report MUST start with `VERDICT: PASS|PARTIAL|FAIL`.",
     "",
     BRANCH_DISCIPLINE2,
-    BLOCKERS2
+    blockers(testCmd)
   ].join("\n");
 }
-var import_node_path26, BRANCH_DISCIPLINE2, BLOCKERS2;
+var import_node_path26, BRANCH_DISCIPLINE2;
 var init_performTurn = __esm({
   "src/core/performTurn.ts"() {
     "use strict";
@@ -20331,20 +20367,6 @@ var init_performTurn = __esm({
 - If your work genuinely needs a fresh branch, abort with
   {"event":"error","reason":"branch-discipline: needed new branch"}
   and let the conductor decide.
-`;
-    BLOCKERS2 = `BLOCKERS / QUESTIONS (read carefully):
-- If a referenced path, file, checkpoint, git ref, env var, or
-  command is NOT where the notes say it is, DO NOT search the
-  filesystem yourself, DO NOT invent a workaround. Halt and ask by
-  appending ONE question event to your outbox.jsonl, then stop:
-    {"event":"question","message":"<why you are asking>","claim":{"kind":"<path|git|env|cmd|test>","value":"<the value to check>"},"ts":"<iso>"}
-  Omit the "claim" object for a judgment question (no ground-truth to check).
-- The Maestro verifies the claim and replies via your inbox.md, then re-engages you.
-- After reading any inbox.md reply, acknowledge by appending an ack event:
-    {"event":"ack","task_summary":"<what you read>","ts":"<iso>"}
-- The 'test' kind runs a diagnostic command under a 30s timeout \u2014 it
-  is NOT for running your test suite. Running 'bash tests/run.sh' is
-  your job. Banned values fail with rc=2.
 `;
   }
 });
@@ -20660,6 +20682,10 @@ async function initWith3(tokens, d) {
     log.error("perform init: could not derive topic; pass --topic <slug>");
     return 1;
   }
+  if (!assertPerformTopic(topic)) {
+    log.error(`perform init: invalid topic slug '${topic}' (must match ^[a-z0-9][a-z0-9-]{0,31}$, <= 32 chars; pass a shorter --topic)`);
+    return 2;
+  }
   const ad = auditDoc(text);
   if (ad.verdict === "FAIL") {
     for (const i2 of ad.issues) process.stderr.write(`ISSUE=${i2}
@@ -20722,6 +20748,8 @@ async function turnSendWith2(topic, round, d) {
     return 1;
   }
   const model = partModel(art);
+  const targetCwd = (0, import_node_fs32.existsSync)((0, import_node_path28.join)(art, "target_cwd.txt")) ? (0, import_node_fs32.readFileSync)((0, import_node_path28.join)(art, "target_cwd.txt"), "utf8").trim() : "";
+  const testCmd = targetCwd ? detectTestCommand(targetCwd) : "";
   const stateFile = (0, import_node_path28.join)(art, `turn-cody-${round}.txt`);
   if ((0, import_node_fs32.existsSync)(stateFile)) {
     log.error(`perform turn-send: ${stateFile} already exists; rm to retry`);
@@ -20741,14 +20769,14 @@ async function turnSendWith2(topic, round, d) {
     }
   }
   const promptFile = (0, import_node_path28.join)(art, `cody_turn_prompt_${round}.md`);
-  if (round === 1) atomicWrite(promptFile, composeRound1Prompt2({ designPath: (0, import_node_path28.join)(art, "design.md"), planPath: (0, import_node_path28.join)(art, "plan.md"), verifyPath: (0, import_node_path28.join)(art, "verify-report-1.md"), round }));
+  if (round === 1) atomicWrite(promptFile, composeRound1Prompt2({ designPath: (0, import_node_path28.join)(art, "design.md"), planPath: (0, import_node_path28.join)(art, "plan.md"), verifyPath: (0, import_node_path28.join)(art, "verify-report-1.md"), round, testCmd }));
   else {
     const bundle = (0, import_node_path28.join)(art, `fix-prompt-${round}.md`);
     if (!(0, import_node_fs32.existsSync)(bundle)) {
       log.error(`perform turn-send: fix-prompt-${round}.md not found at ${bundle}; the directive must write it first`);
       return 1;
     }
-    atomicWrite(promptFile, composeFixPrompt2(round, (0, import_node_fs32.readFileSync)(bundle, "utf8"), (0, import_node_path28.join)(art, `verify-report-${round}.md`)));
+    atomicWrite(promptFile, composeFixPrompt2(round, (0, import_node_fs32.readFileSync)(bundle, "utf8"), (0, import_node_path28.join)(art, `verify-report-${round}.md`), testCmd));
   }
   const offset = d.offsetFor(PART, model, topic);
   atomicWrite(stateFile, `OFFSET=${offset}
@@ -21389,7 +21417,7 @@ async function waveWaitRun(rest) {
     log.error("usage: perform wave-wait <topic> <instrument> <provider>");
     return 2;
   }
-  if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(topic) || !/^[a-z0-9_-]+$/.test(instrument) || !/^[a-z0-9_-]+$/.test(provider)) {
+  if (!assertPerformTopic(topic) || !/^[a-z0-9_-]+$/.test(instrument) || !/^[a-z0-9_-]+$/.test(provider)) {
     log.error("perform wave-wait: bad topic/instrument/provider");
     return 2;
   }
@@ -21628,6 +21656,7 @@ var init_perform2 = __esm({
     init_dag();
     init_performSibling();
     init_send2();
+    init_solo();
     PART = "cody";
     PERFORM_TURN_TIMEOUT = () => Number(process.env.CONSORT_PERFORM_TURN_TIMEOUT_S) || 14400;
     liveInitDeps3 = { repoRoot };
