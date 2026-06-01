@@ -1,16 +1,27 @@
 ---
 description: Implement a deploy-schema design doc — audit + route, spawn one part to plan/implement/self-verify, Maestro cross-verifies and runs a bounded fix-loop, then per-target finish + teardown (single-repo)
 argument-hint: [--no-branch] [--branch <n>] [--topic <slug>] [--max-rounds N] [<design-doc-path>]
-allowed-tools: Bash, Write, Read, Edit, AskUserQuestion, Skill, mcp__codegraph
+allowed-tools: Bash, Write, Read, Edit, AskUserQuestion, Skill, TodoWrite, mcp__codegraph
 ---
 
 # /consort:perform
 
 Run a part-implements / Maestro-verifies pipeline on `$ARGUMENTS` — the consumer of the
-deploy-schema design doc that `/consort:score` produces. The `cody` part stays attached for the
+deploy-schema design doc that `/consort:score` produces. The `tutti` part stays attached for the
 whole run; `tmux select-pane` to watch.
 
 Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs"`.
+
+## Progress tracking
+
+Maintain a **TodoWrite** list so the user can see where the run is. Seed it right after Stage 0
+`init` succeeds, mark each item `in_progress` when you enter that stage and `completed` when you
+leave it, and use **one rolling todo** for the dynamic phases (fix-rounds, DAG waves) rather than one
+todo per round/wave.
+
+- `ROUTING=single` → seed: `spawn part`, `build+verify loop`, `scope+finish`, `teardown+archive`.
+- `ROUTING=multi` → seed: `preflight`, `wave dispatch (rolling)`, `cross-repo verify`, `fix loop`,
+  `sibling+scope+finish`, `teardown+archive`.
 
 > **Scope (this build):** single-repo **and multi-repo DAG execution, end to end**. A multi-repo doc
 > (a `**Target Sub-Project(s):**` header plus a `## Execution DAG` section) routes through Stages
@@ -127,7 +138,7 @@ as specified there and, on *Fall back to codex*, set `PROVIDER=codex` for this s
 part in the resolved target cwd:
 
 ```bash
-$CS spawn cody "$PROVIDER" "$TOPIC" --cwd "$(cat "$ART/target_cwd.txt")"
+$CS spawn tutti "$PROVIDER" "$TOPIC" --cwd "$(cat "$ART/target_cwd.txt")"
 ```
 
 On spawn failure (non-zero): `$CS perform archive <TOPIC>` and stop (nothing to tear down — the part
@@ -141,21 +152,21 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
    message** (the part's `status.json` state is not `idle`, so the send is refused),
    **AskUserQuestion** ("Wait 60s and retry / Force-retry / Abort"):
    - *Wait 60s and retry* — `sleep 60`, then re-run `$CS perform turn-send <TOPIC> <ROUND>`.
-   - *Force-retry* — `$CS perform reset-status <TOPIC> cody` (atomically resets the part to `idle`),
+   - *Force-retry* — `$CS perform reset-status <TOPIC> tutti` (atomically resets the part to `idle`),
      then re-run `$CS perform turn-send <TOPIC> <ROUND>`.
    - *Abort* — `$CS coda <TOPIC>` then `$CS perform archive <TOPIC>`; stop.
-   (The single-repo part is the `cody` instrument.) Any other non-zero rc → surface and stop.
+   (The single-repo part is the `tutti` instrument.) Any other non-zero rc → surface and stop.
 2. Wait in the background so your pane stays interactive:
    ```
    Bash(command='$CS perform turn-wait "$TOPIC" "$ROUND"', run_in_background: true,
-        description="maestro await cody round=$ROUND")
+        description="maestro await tutti round=$ROUND")
    ```
    The default turn budget is 4 hours (`CONSORT_PERFORM_TURN_TIMEOUT_S=14400`); override the env var
    for unusually large or small tasks.
-3. On completion, read `TS=` from `$ART/turn-cody-<ROUND>.txt` (the **last** `TS=` line). Branch:
+3. On completion, read `TS=` from `$ART/turn-tutti-<ROUND>.txt` (the **last** `TS=` line). Branch:
    - **`TS=ok`** → Stage 2.
    - **`TS=failed` / `TS=timeout`** → auto-retry **once**: if `RETRY==0`, set `RETRY=1`,
-     `rm -f $ART/turn-cody-<ROUND>.txt $ART/turn-cody-<ROUND>.done $ART/cody_turn_prompt_<ROUND>.md`,
+     `rm -f $ART/turn-tutti-<ROUND>.txt $ART/turn-tutti-<ROUND>.done $ART/tutti_turn_prompt_<ROUND>.md`,
      and loop back to step 1 (same round). If `RETRY==1` (a second failure), **AskUserQuestion**
      ("Hand-off (preserve the pane + write RESUME.md) / Abort (teardown + archive) / Try-again"):
      - *Hand-off* — write `$ART/RESUME.md` (topic dir, branch, last verdict, manual-takeover steps);
@@ -163,14 +174,14 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
      - *Abort* — `$CS coda <TOPIC>` then `$CS perform archive <TOPIC>`; stop.
      - *Try-again* — `RETRY=0`; loop back to step 1.
    - **`TS=question`** → the part halted with a question. Read the payload file
-     `$ART/question-cody-<ROUND>.txt` (KV: `TEXT=` percent-encoded, `CLAIM_KIND=`, `CLAIM_VALUE=`,
+     `$ART/question-tutti-<ROUND>.txt` (KV: `TEXT=` percent-encoded, `CLAIM_KIND=`, `CLAIM_VALUE=`,
      `ROUTE=verify|escalate`). Decode `TEXT` with the same scheme `score` uses (`%0A`→newline, etc.).
      - **`ROUTE=verify`** — verify the claim against ground truth: run the matching check for
        `CLAIM_KIND` in `TARGET_CWD` (`path`→exists+readable, `git`→`git -C "$TARGET_CWD" rev-parse
        --verify <value>`, `env`→is the var set, `cmd`→`command -v <value>`, `test`→`timeout 30 bash -c
        <value>`). Compose the reply: `From: maestro` then `Verdict: FOUND|NOT FOUND|UNVERIFIABLE` +
        the claim kind/value + the evidence + `Resume implementation.`. Write it to a temp file and
-       deliver: `$CS send --from maestro cody "$TOPIC" @<reply-file>`.
+       deliver: `$CS send --from maestro tutti "$TOPIC" @<reply-file>`.
      - **`ROUTE=escalate`** (or an unverifiable claim) — **AskUserQuestion** with the decoded `TEXT`
        as the question; write the user's answer to a temp file and deliver it the same way.
      - **Re-arm** the wait on the **same** round: re-run the background `turn-wait <TOPIC> <ROUND>`
