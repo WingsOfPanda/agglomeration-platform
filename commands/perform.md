@@ -405,8 +405,10 @@ Read `$ART/multi-verify-bugs.txt` (`<repo>\t<bug>` rows). `MAX_FIX_ROUNDS=3` per
    ```bash
    $CS send "<instrument>" "<TOPIC>" "@$ART/<instrument>_fix_round_<n>.md"
    ```
-3. **Barrier** — one background `wave-wait` per dispatched part. Initialize a per-part dispatch
-   counter for this fix round (`DISPATCH=0`) and pass it:
+3. **Barrier** — one background `wave-wait` per dispatched part. For this fix-round send, **increment
+   the part's existing per-part `DISPATCH`** (the monotonic counter carried from Stage 3b — do **not**
+   reset it to `0`, which would reuse the wave-stage's `wave-<instrument>-<DISPATCH>.txt` and inherit a
+   stale `OBJECTIONS=`/offset) and pass it:
    ```
    Bash(command='$CS perform wave-wait "<TOPIC>" "<instrument>" "<provider>" "$DISPATCH"', run_in_background: true,
         description="maestro await <instrument> fix-round <n> dispatch <DISPATCH>")
