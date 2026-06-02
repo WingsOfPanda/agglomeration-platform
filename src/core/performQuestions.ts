@@ -24,7 +24,7 @@ export function percentDecode(s: string): string {
 }
 
 export type ClaimKind = "path" | "git" | "env" | "cmd" | "test" | "";
-export type ClaimRoute = "verify" | "escalate";
+export type ClaimRoute = "verify" | "escalate" | "objection";
 
 export interface QuestionPayload { text: string; claimKind: ClaimKind; claimValue: string; route: ClaimRoute; }
 
@@ -47,7 +47,8 @@ export function parseQuestionPayload(body: string): QuestionPayload {
   const rawKind = first("CLAIM_KIND") ?? "";
   const claimKind: ClaimKind = KNOWN_KINDS.has(rawKind as ClaimKind) ? (rawKind as ClaimKind) : "";
   const claimValue = first("CLAIM_VALUE") ?? "";
-  const route: ClaimRoute = (first("ROUTE") ?? "escalate") === "verify" ? "verify" : "escalate";
+  const rawRoute = first("ROUTE") ?? "escalate";
+  const route: ClaimRoute = rawRoute === "verify" ? "verify" : rawRoute === "objection" ? "objection" : "escalate";
   return { text, claimKind, claimValue, route };
 }
 
@@ -167,11 +168,14 @@ export function validateQuestionLine(ev: OutboxEvent): boolean {
  *  decodes it. Returns null when there is no usable message. */
 export function extractQuestionPayload(ev: OutboxEvent, askedAt: number): string | null {
   if (!validateQuestionLine(ev)) return null;
-  const message = ev.message as string;
-  const encoded = message.split("\n").join("%0A");
+  let message = ev.message as string;
   const claim = ev.claim as { kind?: string; value?: string } | undefined;
+  // Claim-wins precedence: a claim is always `verify`; the OBJECTION: marker is consulted ONLY on
+  // the no-claim side, widening the prior two-way discriminant on its else branch only.
+  const route: ClaimRoute = claim ? "verify" : /^OBJECTION:/.test(message) ? "objection" : "escalate";
+  if (route === "objection") message = message.replace(/^OBJECTION: ?/, ""); // strip one marker + at most one space
+  const encoded = message.split("\n").join("%0A");
   const kind = claim && typeof claim.kind === "string" ? claim.kind : "";
   const value = claim && typeof claim.value === "string" ? claim.value : "";
-  const route = claim ? "verify" : "escalate";
   return `TEXT=${encoded}\nCLAIM_KIND=${kind}\nCLAIM_VALUE=${value}\nROUTE=${route}\nASKED_AT=${askedAt}\n`;
 }

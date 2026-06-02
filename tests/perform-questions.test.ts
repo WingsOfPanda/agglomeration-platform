@@ -182,6 +182,50 @@ describe("extractQuestionPayload", () => {
   });
 });
 
+describe("objection route (OBJECTION: marker on the no-claim side)", () => {
+  const dec = (msg: string) =>
+    parseQuestionPayload(extractQuestionPayload({ event: "question", message: msg }, 0)!).text;
+
+  it("parseQuestionPayload reads ROUTE=objection", () => {
+    expect(parseQuestionPayload("TEXT=x\nCLAIM_KIND=\nCLAIM_VALUE=\nROUTE=objection\n").route).toBe("objection");
+  });
+  it("parseQuestionPayload: unknown ROUTE still defaults to escalate after the widening", () => {
+    expect(parseQuestionPayload("TEXT=x\nROUTE=bogus\n").route).toBe("escalate");
+  });
+  it("extract: no claim + OBJECTION: message → objection route, marker + one space stripped", () => {
+    expect(extractQuestionPayload({ event: "question", message: "OBJECTION: the slice is wrong" }, 5))
+      .toBe("TEXT=the slice is wrong\nCLAIM_KIND=\nCLAIM_VALUE=\nROUTE=objection\nASKED_AT=5\n");
+  });
+  it("extract: claim wins even when the message starts with OBJECTION:", () => {
+    expect(extractQuestionPayload({ event: "question", message: "OBJECTION: x", claim: { kind: "path", value: "/x" } }, 5))
+      .toBe("TEXT=OBJECTION: x\nCLAIM_KIND=path\nCLAIM_VALUE=/x\nROUTE=verify\nASKED_AT=5\n");
+  });
+  it("marker is anchored + case-sensitive; near-misses route to escalate", () => {
+    expect(extractQuestionPayload({ event: "question", message: " OBJECTION: x" }, 5)).toContain("ROUTE=escalate\n");
+    expect(extractQuestionPayload({ event: "question", message: "I think OBJECTION: x" }, 5)).toContain("ROUTE=escalate\n");
+    expect(extractQuestionPayload({ event: "question", message: "objection: x" }, 5)).toContain("ROUTE=escalate\n");
+  });
+  it("strip is exact: one marker + at most one following space, via round-tripped decoded text", () => {
+    expect(dec("OBJECTION: hi")).toBe("hi");
+    expect(dec("OBJECTION:hi")).toBe("hi");
+    expect(dec("OBJECTION:  hi")).toBe(" hi");                 // only one space stripped, one survives
+    expect(dec("OBJECTION: a OBJECTION: b")).toBe("a OBJECTION: b"); // only the leading marker stripped
+  });
+  it("empty prose after the marker → objection route with empty TEXT", () => {
+    const p1 = extractQuestionPayload({ event: "question", message: "OBJECTION:" }, 0)!;
+    expect(p1).toContain("ROUTE=objection\n");
+    expect(parseQuestionPayload(p1).text).toBe("");
+    const p2 = extractQuestionPayload({ event: "question", message: "OBJECTION: " }, 0)!;
+    expect(parseQuestionPayload(p2).text).toBe("");
+  });
+  it("round-trip extract→parse preserves objection route + stripped multiline text", () => {
+    const payload = extractQuestionPayload({ event: "question", message: "OBJECTION: nope\nsecond line" }, 0)!;
+    const p = parseQuestionPayload(payload);
+    expect(p.route).toBe("objection");
+    expect(p.text).toBe("nope\nsecond line");
+  });
+});
+
 describe("round-trip: parse then verify then reply", () => {
   it("env claim payload -> FOUND reply", () => {
     process.env.PQ_RT = "yes";
