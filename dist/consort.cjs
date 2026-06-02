@@ -221,6 +221,9 @@ var init_paths = __esm({
 function entry(instrument) {
   return PALETTE[instrument.toLowerCase()] ?? FALLBACK;
 }
+function isOrchestral(instrument) {
+  return instrument.toLowerCase() in PALETTE;
+}
 function sectionFor(instrument) {
   return entry(instrument).section;
 }
@@ -228,11 +231,14 @@ function colorFor(instrument) {
   return entry(instrument).primary;
 }
 function labelFor(instrument, model, topic) {
-  return `${sectionFor(instrument)}-${instrument}:${model}:${topic}`;
+  const sec = sectionFor(instrument);
+  const head = isOrchestral(instrument) ? `${sec}-${instrument}` : sec;
+  return `${head}:${model}:${topic}`;
 }
 function labelFmt(instrument, model, topic) {
   const e = entry(instrument);
-  return `#[fg=${e.primary},bold]${e.section}-${instrument}#[default]:#[fg=${e.secondary},bold]${model}#[default]:${topic}`;
+  const head = isOrchestral(instrument) ? `#[fg=${e.primary},bold]${e.section}-${instrument}#[default]` : `#[fg=${e.primary},bold]${e.section}#[default]`;
+  return `${head}:#[fg=${e.secondary},bold]${model}#[default]:${topic}`;
 }
 function ansiFromColor(color) {
   const m = /^colour([0-9]+)$/.exec(color);
@@ -875,12 +881,27 @@ function resolveDrilldownPath(scratchDir, section, instrument, subproject) {
   }
   return (0, import_node_path5.join)(scratchDir, `${cand}.md`);
 }
+function scoreExportDocPath(repoRoot2, basename6) {
+  return (0, import_node_path5.join)(repoRoot2, "docs", "superpowers", "specs", basename6);
+}
+function exportDocTo(topic, destRoot, opts) {
+  const ddir = (0, import_node_path5.join)(scoreArtDir(topic, opts), "design-doc");
+  if (!(0, import_node_fs7.existsSync)(ddir)) return null;
+  const hits = (0, import_node_fs7.readdirSync)(ddir).filter((f) => f.endsWith(`-${topic}-design.md`)).sort();
+  if (hits.length === 0) return null;
+  const basename6 = hits[hits.length - 1];
+  const dest = scoreExportDocPath(destRoot, basename6);
+  (0, import_node_fs7.mkdirSync)((0, import_node_path5.join)(destRoot, "docs", "superpowers", "specs"), { recursive: true });
+  atomicWrite(dest, (0, import_node_fs7.readFileSync)((0, import_node_path5.join)(ddir, basename6), "utf8"));
+  return dest;
+}
 var import_node_path5, import_node_fs7;
 var init_score = __esm({
   "src/core/score.ts"() {
     "use strict";
     import_node_path5 = require("node:path");
     import_node_fs7 = require("node:fs");
+    init_atomic();
     init_paths();
     init_args();
     init_solo();
@@ -19277,7 +19298,7 @@ __export(score_exports, {
   walkStateRun: () => walkStateRun
 });
 function usage2() {
-  log.error("usage: score <init|assemble|spawn-all|research-send|research-wait|diff|verify-send|verify-wait|adjudicate|synthesize|walk-state|detect-multi-repo|emit-dag|check-dag|drilldown|offset-reset|forensics|archive> ...");
+  log.error("usage: score <init|assemble|spawn-all|research-send|research-wait|diff|verify-send|verify-wait|adjudicate|synthesize|walk-state|detect-multi-repo|emit-dag|check-dag|drilldown|offset-reset|export-doc|forensics|archive> ...");
   return 2;
 }
 async function run10(args) {
@@ -19320,6 +19341,8 @@ async function run10(args) {
       return forensicsRun2(rest);
     case "archive":
       return archiveRun(rest);
+    case "export-doc":
+      return exportDocRun(rest);
     default:
       return usage2();
   }
@@ -19426,6 +19449,22 @@ async function assembleRun(rest) {
   }
   log.ok(`score assemble: audit PASSED`);
   process.stdout.write(out + "\n");
+  return 0;
+}
+function exportDocRun(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("usage: score export-doc <topic>");
+    return 2;
+  }
+  const dest = exportDocTo(topic, repoRoot());
+  if (dest === null) {
+    log.error(`score export-doc: no assembled *-${topic}-design.md found (run score assemble first)`);
+    return 1;
+  }
+  log.ok(`score export-doc: exported to ${dest}`);
+  process.stdout.write(`EXPORTED=${dest}
+`);
   return 0;
 }
 async function spawnAllRun(rest) {
@@ -20750,14 +20789,14 @@ async function turnSendWith2(topic, round, d) {
   const model = partModel(art);
   const targetCwd = (0, import_node_fs32.existsSync)((0, import_node_path28.join)(art, "target_cwd.txt")) ? (0, import_node_fs32.readFileSync)((0, import_node_path28.join)(art, "target_cwd.txt"), "utf8").trim() : "";
   const testCmd = targetCwd ? detectTestCommand(targetCwd) : "";
-  const stateFile = (0, import_node_path28.join)(art, `turn-cody-${round}.txt`);
+  const stateFile = (0, import_node_path28.join)(art, `turn-${PART}-${round}.txt`);
   if ((0, import_node_fs32.existsSync)(stateFile)) {
     log.error(`perform turn-send: ${stateFile} already exists; rm to retry`);
     return 1;
   }
   const outbox = outboxPath(PART, model, topic);
   if (!(0, import_node_fs32.existsSync)(outbox)) {
-    log.error(`perform turn-send: outbox not found at ${outbox} \u2014 was cody spawned?`);
+    log.error(`perform turn-send: outbox not found at ${outbox} \u2014 was ${PART} spawned?`);
     return 1;
   }
   const sp = statusPath(PART, model, topic);
@@ -20768,7 +20807,7 @@ async function turnSendWith2(topic, round, d) {
       return 1;
     }
   }
-  const promptFile = (0, import_node_path28.join)(art, `cody_turn_prompt_${round}.md`);
+  const promptFile = (0, import_node_path28.join)(art, `${PART}_turn_prompt_${round}.md`);
   if (round === 1) atomicWrite(promptFile, composeRound1Prompt2({ designPath: (0, import_node_path28.join)(art, "design.md"), planPath: (0, import_node_path28.join)(art, "plan.md"), verifyPath: (0, import_node_path28.join)(art, "verify-report-1.md"), round, testCmd }));
   else {
     const bundle = (0, import_node_path28.join)(art, `fix-prompt-${round}.md`);
@@ -20786,7 +20825,7 @@ async function turnSendWith2(topic, round, d) {
     log.error(`perform turn-send: send failed (rc=${rc}); ${stateFile} kept (rm to retry)`);
     return 1;
   }
-  log.info(`[turn-send] cody round=${round} offset=${offset}`);
+  log.info(`[turn-send] ${PART} round=${round} offset=${offset}`);
   return 0;
 }
 async function turnWaitRun2(rest) {
@@ -20804,7 +20843,7 @@ async function turnWaitRun2(rest) {
 async function turnWaitWith2(topic, round, d) {
   const art = performArtDir(topic);
   const model = partModel(art);
-  const stateFile = (0, import_node_path28.join)(art, `turn-cody-${round}.txt`);
+  const stateFile = (0, import_node_path28.join)(art, `turn-${PART}-${round}.txt`);
   if (!(0, import_node_fs32.existsSync)(stateFile)) {
     log.error(`perform turn-wait: ${stateFile} missing \u2014 run perform turn-send first`);
     return 1;
@@ -20815,7 +20854,7 @@ async function turnWaitWith2(topic, round, d) {
     return 1;
   }
   const timeout = scaledTimeout(PERFORM_TURN_TIMEOUT(), d.multiplier(model));
-  log.info(`[turn-wait] cody round=${round} offset=${offset} timeout=${timeout}s`);
+  log.info(`[turn-wait] ${PART} round=${round} offset=${offset} timeout=${timeout}s`);
   const ev = await d.wait(PART, model, topic, offset, ["done", "error", "question"], timeout);
   const verifyPath = (0, import_node_path28.join)(art, `verify-report-${round}.md`);
   const verifyText = (0, import_node_fs32.existsSync)(verifyPath) ? (0, import_node_fs32.readFileSync)(verifyPath, "utf8") : null;
@@ -20823,7 +20862,7 @@ async function turnWaitWith2(topic, round, d) {
   if (ts === "question" && ev) {
     const payload = extractQuestionPayload(ev, d.now());
     if (payload !== null) {
-      atomicWrite((0, import_node_path28.join)(art, `question-cody-${round}.txt`), payload);
+      atomicWrite((0, import_node_path28.join)(art, `question-${PART}-${round}.txt`), payload);
       const bumped = outboxOffset(outboxPath(PART, model, topic));
       (0, import_node_fs32.appendFileSync)(stateFile, `OFFSET=${bumped}
 TS=question
@@ -20835,8 +20874,8 @@ TS=question
     }
   } else (0, import_node_fs32.appendFileSync)(stateFile, `TS=${ts}
 `);
-  (0, import_node_fs32.writeFileSync)((0, import_node_path28.join)(art, `turn-cody-${round}.done`), "");
-  log.ok(`[turn-wait] cody round=${round} TS=${ts}`);
+  (0, import_node_fs32.writeFileSync)((0, import_node_path28.join)(art, `turn-${PART}-${round}.done`), "");
+  log.ok(`[turn-wait] ${PART} round=${round} TS=${ts}`);
   return 0;
 }
 async function resetStatusRun(rest) {
@@ -21657,7 +21696,7 @@ var init_perform2 = __esm({
     init_performSibling();
     init_send2();
     init_solo();
-    PART = "cody";
+    PART = "tutti";
     PERFORM_TURN_TIMEOUT = () => Number(process.env.CONSORT_PERFORM_TURN_TIMEOUT_S) || 14400;
     liveInitDeps3 = { repoRoot };
     liveSendDeps = { offsetFor: (i2, m, t) => outboxOffset(outboxPath(i2, m, t)), send: run2 };

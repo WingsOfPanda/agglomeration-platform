@@ -1,9 +1,9 @@
 // tests/score-core.test.ts
 import { describe, it, expect } from "vitest";
 import { join } from "node:path";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync as rf } from "node:fs";
 import { tmpdir } from "node:os";
-import { scoreArtDir, scoreDraftDir, parseScoreArgs, scoreDocPath, formatRosterFile, parseRosterFile, parseMultiRepoMode, verifyScopeFiles, lastTag, writeTargetsTsv, resolveDrilldownPath } from "../src/core/score.js";
+import { scoreArtDir, scoreDraftDir, parseScoreArgs, scoreDocPath, formatRosterFile, parseRosterFile, parseMultiRepoMode, verifyScopeFiles, lastTag, writeTargetsTsv, resolveDrilldownPath, scoreExportDocPath, exportDocTo } from "../src/core/score.js";
 
 describe("score paths", () => {
   it("scoreArtDir / scoreDraftDir hang off the topic dir under _score", () => {
@@ -104,5 +104,34 @@ describe("drilldown paths", () => {
     writeFileSync(p2, "x");
     const p3 = resolveDrilldownPath(sc, "the section", "viola"); expect(p3.endsWith("drilldown-the-section-viola-3.md")).toBe(true);
     expect(resolveDrilldownPath(sc, "arch", "cello", "api").endsWith("drilldown-arch-api-cello.md")).toBe(true);
+  });
+});
+
+describe("score export-doc", () => {
+  it("scoreExportDocPath composes <root>/docs/superpowers/specs/<basename>", () => {
+    expect(scoreExportDocPath("/repo", "2026-06-01-x-design.md")).toBe(
+      join("/repo", "docs", "superpowers", "specs", "2026-06-01-x-design.md"),
+    );
+  });
+
+  it("exportDocTo copies the assembled doc into the specs dir and returns the dest", () => {
+    const home = mkdtempSync(join(tmpdir(), "cs-home-"));
+    const root = mkdtempSync(join(tmpdir(), "cs-root-"));
+    process.env.CONSORT_HOME = home;
+    const ddir = join(scoreArtDir("export-topic"), "design-doc");
+    mkdirSync(ddir, { recursive: true });
+    writeFileSync(join(ddir, "2026-06-01-export-topic-design.md"), "# DOC\nbody\n");
+
+    const dest = exportDocTo("export-topic", root);
+    expect(dest).toBe(join(root, "docs", "superpowers", "specs", "2026-06-01-export-topic-design.md"));
+    expect(existsSync(dest!)).toBe(true);
+    expect(rf(dest!, "utf8")).toBe("# DOC\nbody\n");
+  });
+
+  it("exportDocTo returns null when no assembled doc exists", () => {
+    const home = mkdtempSync(join(tmpdir(), "cs-home-"));
+    const root = mkdtempSync(join(tmpdir(), "cs-root-"));
+    process.env.CONSORT_HOME = home;
+    expect(exportDocTo("missing-topic", root)).toBeNull();
   });
 });
