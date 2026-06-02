@@ -1,6 +1,7 @@
 // src/core/score.ts
 import { join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, mkdirSync, readFileSync } from "node:fs";
+import { atomicWrite } from "./atomic.js";
 import { topicDir } from "./paths.js";
 import { kvParse } from "../args.js";
 import type { DocMode } from "./scoreDoc.js";
@@ -167,4 +168,24 @@ export function resolveDrilldownPath(scratchDir: string, section: string, instru
     if (++n > 100) throw new Error("resolveDrilldownPath: too many same-section drilldown collisions");
   }
   return join(scratchDir, `${cand}.md`);
+}
+
+/** Canonical export location for a finished design doc: <repoRoot>/docs/superpowers/specs/<basename>. */
+export function scoreExportDocPath(repoRoot: string, basename: string): string {
+  return join(repoRoot, "docs", "superpowers", "specs", basename);
+}
+
+/** Copy the single assembled `*-<topic>-design.md` out of `_score/design-doc/` into
+ *  `<destRoot>/docs/superpowers/specs/`. Returns the dest path, or null if no assembled doc exists
+ *  (assemble must have run first). Overwrites on re-run (latest assembled doc wins). */
+export function exportDocTo(topic: string, destRoot: string, opts?: { home?: string; cwd?: string }): string | null {
+  const ddir = join(scoreArtDir(topic, opts), "design-doc");
+  if (!existsSync(ddir)) return null;
+  const hits = readdirSync(ddir).filter((f) => f.endsWith(`-${topic}-design.md`)).sort();
+  if (hits.length === 0) return null;
+  const basename = hits[hits.length - 1];
+  const dest = scoreExportDocPath(destRoot, basename);
+  mkdirSync(join(destRoot, "docs", "superpowers", "specs"), { recursive: true });
+  atomicWrite(dest, readFileSync(join(ddir, basename), "utf8"));
+  return dest;
 }
