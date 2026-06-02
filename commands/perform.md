@@ -182,7 +182,8 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
      - *Try-again* — `RETRY=0`; loop back to step 1.
    - **`TS=question`** → the part halted with a question. Read the payload file
      `$ART/question-tutti-<ROUND>.txt` (KV: `TEXT=` percent-encoded, `CLAIM_KIND=`, `CLAIM_VALUE=`,
-     `ROUTE=verify|escalate`). Decode `TEXT` with the same scheme `score` uses (`%0A`→newline, etc.).
+     `ROUTE=verify|escalate|objection`). Decode `TEXT` with the same scheme `score` uses
+     (`%0A`→newline, etc.).
      - **`ROUTE=verify`** — verify the claim against ground truth: run the matching check for
        `CLAIM_KIND` in `TARGET_CWD` (`path`→exists+readable, `git`→`git -C "$TARGET_CWD" rev-parse
        --verify <value>`, `env`→is the var set, `cmd`→`command -v <value>`, `test`→`timeout 30 bash -c
@@ -191,6 +192,20 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
        deliver: `$CS send --from maestro tutti "$TOPIC" @<reply-file>`.
      - **`ROUTE=escalate`** (or an unverifiable claim) — **AskUserQuestion** with the decoded `TEXT`
        as the question; write the user's answer to a temp file and deliver it the same way.
+     - **`ROUTE=objection`** — the part believes the plan is wrong. Read the latest `OBJECTIONS=`
+       line from `$ART/turn-tutti-<ROUND>.txt`.
+       - If `OBJECTIONS >= 3` (the cap of 2 is exceeded): **force-escalate** — handle exactly like
+         `ROUTE=escalate` above (AskUserQuestion with the decoded `TEXT`; deliver the answer). Do
+         NOT offer Revise/Override again.
+       - Otherwise render the decoded `TEXT` (if it is empty, render "the part objects to the plan
+         (no detail given)") and **AskUserQuestion** ("Revise the plan / Override (proceed as
+         planned) / Abort"):
+         - *Revise* — **Edit** `$ART/design.md` and/or `$ART/plan.md` to address the objection, then
+           write a reply to a temp file (`From: maestro`, then "Plan updated — re-read the plan and
+           continue.") and deliver it: `$CS send --from maestro tutti "$TOPIC" @<reply-file>`.
+         - *Override* — write a reply (`From: maestro`, then "Proceeding as planned: <your reason>.
+           Resume implementation.") and deliver it the same way.
+         - *Abort* — `$CS coda <TOPIC>` then `$CS perform archive <TOPIC>`; stop.
      - **Re-arm** the wait on the **same** round: re-run the background `turn-wait <TOPIC> <ROUND>`
        (the prior question-wait appended a fresh `OFFSET=`, so it resumes past the question). The next
        event you see should be the part's `ack`, then its next terminal event.
@@ -285,6 +300,11 @@ $CS perform sibling-baseline <TOPIC> "$TARGET_CWD"
 This writes `$ART/sibling-baseline.txt` (`<slug>\t<sha>\t<branch>` per qualifying sibling; empty if
 the hub has none — declared sub-repos from `parts.txt` are excluded).
 
+Any `TS=question` a part emits during preflight or an early wave is routed through the Stage 3b
+question handler (read the payload, handle by route with the cap, re-arm with the SAME `<DISPATCH>`
+(it stays constant across question re-arms) + the bumped offset) — no `wave-wait` callsite is deaf to
+a question.
+
 ## Stage 3b — DAG wave dispatch (ROUTING=multi only)
 
 Build the lookup tables once — for each `parts.txt` row `<instrument>\t<cwd>\t<provider>`, the repo is
@@ -309,15 +329,35 @@ For each wave, for each repo in it:
    ```bash
    $CS perform send-unit "$TOPIC" "$REPO"
    ```
-3. **Barrier** — fire one background `wave-wait` per part in the wave (parallel), then wait for all:
+3. **Barrier** — fire one background `wave-wait` per part in the wave (parallel), then wait for all.
+   Initialize a per-part dispatch counter when the part is first dispatched in this wave (`DISPATCH=0`)
+   and pass it. Increment `DISPATCH` only when you dispatch the part a NEW unit of work — its initial
+   wave dispatch is `DISPATCH=0`, each wave-retry re-spawn is `+1`, and (Stage 3d) each fix-round send
+   is `+1`. Do NOT increment it on a question re-arm: a re-arm keeps the same dispatch so the part's
+   objection cap and read offset accumulate (latest-line-wins) in the same `wave-<instrument>-<DISPATCH>.txt`.
    ```
-   Bash(command='$CS perform wave-wait "$TOPIC" "$INSTRUMENT" "$PROVIDER"', run_in_background: true,
-        description="maestro await <INSTRUMENT> wave <W>")
+   Bash(command='$CS perform wave-wait "$TOPIC" "$INSTRUMENT" "$PROVIDER" "$DISPATCH"', run_in_background: true,
+        description="maestro await <INSTRUMENT> wave <W> dispatch <DISPATCH>")
    ```
-   On the completion notifications, read each part's first `TS=` line from `$ART/wave-<instrument>.txt`.
-   Every part `TS=ok` → advance to the next wave. Any `TS=failed`/`TS=timeout` → surface which
-   sub-repo(s) failed and apply the **proceed-degraded ladder** on the `WAVE_RETRY` counter (init 0 in
-   Stage 3a):
+   On each wave-completion notification, read every part's first `TS=` line from
+   `$ART/wave-<instrument>.txt` and partition into { ok, failed|timeout, question }:
+   - For each **`TS=question`** part:
+     1. Read `$ART/question-<instrument>-<DISPATCH>.txt` (KV: `TEXT=`/`CLAIM_KIND=`/`CLAIM_VALUE=`/`ROUTE=`).
+     2. Handle by `ROUTE`, exactly as single-repo Stage 1 step 3 (verify → mechanical reply; escalate →
+        AskUserQuestion; objection → read `OBJECTIONS=` from `$ART/wave-<instrument>-<DISPATCH>.txt`,
+        cap-of-2 then Revise/Override/Abort). Deliver the reply via `$CS send`.
+     3. Read the bumped offset (`OFFSET=`) from `$ART/wave-<instrument>-<DISPATCH>.txt` and re-fire in
+        the background with the **SAME `<DISPATCH>`** (a question re-arm does NOT increment it — keeping
+        the same dispatch lets the part's objection cap and read offset accumulate in the same
+        `wave-<instrument>-<DISPATCH>.txt`): `$CS perform wave-wait "$TOPIC" "<instrument>" "<provider>" "$DISPATCH" "<bumped-offset>"`.
+     4. Keep this part **out** of the completion set — it is still in flight.
+   - The wave is **complete only when every part is terminal** (`ok` | `failed` | `timeout`). Parts that
+     are already `TS=ok` wait at the barrier until the questioning part terminates.
+   - Evaluate the `WAVE_RETRY` proceed-degraded ladder **only after** all parts reach a terminal `TS=`.
+
+   When all parts are terminal: every part `TS=ok` → advance to the next wave. Any
+   `TS=failed`/`TS=timeout` → surface which sub-repo(s) failed and apply the **proceed-degraded ladder**
+   on the `WAVE_RETRY` counter (init 0 in Stage 3a):
    - **First failure (`WAVE_RETRY==0`)** — auto-retry the whole wave once: tear down this wave's panes
      (`$CS coda --pairs <TOPIC> <instrument…>` for the wave's parts), re-run `preflight` /
      `sibling-baseline` as needed to re-allocate panes, then re-dispatch the wave (spawn + send-unit +
@@ -365,13 +405,25 @@ Read `$ART/multi-verify-bugs.txt` (`<repo>\t<bug>` rows). `MAX_FIX_ROUNDS=3` per
    ```bash
    $CS send "<instrument>" "<TOPIC>" "@$ART/<instrument>_fix_round_<n>.md"
    ```
-3. **Barrier** — one background `wave-wait` per dispatched part:
+3. **Barrier** — one background `wave-wait` per dispatched part. For this fix-round send, **increment
+   the part's existing per-part `DISPATCH`** (the monotonic counter carried from Stage 3b — do **not**
+   reset it to `0`, which would reuse the wave-stage's `wave-<instrument>-<DISPATCH>.txt` and inherit a
+   stale `OBJECTIONS=`/offset) and pass it:
    ```
-   Bash(command='$CS perform wave-wait "<TOPIC>" "<instrument>" "<provider>"', run_in_background: true,
-        description="maestro await <instrument> fix-round <n>")
+   Bash(command='$CS perform wave-wait "<TOPIC>" "<instrument>" "<provider>" "$DISPATCH"', run_in_background: true,
+        description="maestro await <instrument> fix-round <n> dispatch <DISPATCH>")
    ```
-   On completion read `$ART/wave-<instrument>.txt`. `TS=ok` → re-run Stage 3c verification for THIS
-   sub-repo; still buggy and `n < MAX_FIX_ROUNDS` → bump `n` and re-loop step 1.
+   On the fix-round completion, read `$ART/wave-<instrument>.txt`. A **`TS=question`** is handled like
+   Stage 3b's question branch (route dispatch + cap + same-dispatch re-arm): read
+   `$ART/question-<instrument>-<DISPATCH>.txt`, handle by route (verify → mechanical reply; escalate →
+   AskUserQuestion; objection → read `OBJECTIONS=` from `$ART/wave-<instrument>-<DISPATCH>.txt`,
+   cap-of-2 then Revise/Override/Abort), then re-arm with the **SAME `<DISPATCH>`** (the question re-arm
+   does NOT increment it — only the fix-round send itself increments it; keeping the same dispatch lets
+   the objection cap and read offset accumulate in the same `wave-<instrument>-<DISPATCH>.txt`) + the
+   bumped offset (`$CS perform wave-wait "<TOPIC>" "<instrument>" "<provider>" "$DISPATCH" "<bumped-offset>"`),
+   keeping the part **out** of the completion set until it is terminal. Only a terminal `TS=ok`
+   re-runs Stage 3c verification for THIS sub-repo (still buggy and `n < MAX_FIX_ROUNDS` → bump `n`
+   and re-loop step 1); `TS=failed`/`timeout` continues the existing round ladder.
 4. **Exhaustion** (`n >= MAX_FIX_ROUNDS`, still buggy) — **AskUserQuestion**: "Give up on this
    sub-repo" (record `<REPO>` as FAILED, continue the others) / "Continue more rounds" (bump `n`) /
    "Escalate" (pick another instrument, fresh `$CS spawn <instrument> <provider> <TOPIC> --cwd
