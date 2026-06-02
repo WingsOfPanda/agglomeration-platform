@@ -210,3 +210,39 @@ export function captureSpawnFailure(opts: {
     return path;
   } catch { return ""; }
 }
+
+/** Record a Maestro suspicion straight to the playback feed
+ *  (globalRoot()/forensics/<date>/<time>-<command>-flag-<topic>.md, source=maestro_flag), reusing
+ *  renderArtForensics so /consort:playback consumes it unchanged. Teardown-independent (lands even on
+ *  abort/handoff). Best-effort: returns the written path, or "" on empty note / any error. Never throws. */
+export function recordMaestroFlag(opts: { command: string; topic: string; note: string; now?: Date }): string {
+  try {
+    const note = opts.note.trim();
+    if (!note) return "";
+    const finding: Finding = { source: "maestro_flag", key: note, context: `from=maestro command=${opts.command}` };
+    const now = opts.now ?? new Date();
+    const iso = now.toISOString();
+    const date = iso.slice(0, 10);
+    const time = iso.slice(11, 19).replace(/:/g, "-");
+    let hash = "unknown"; try { hash = repoHash(); } catch { /* keep unknown */ }
+    const dir = join(globalRoot(), "forensics", date);
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, `${time}-${opts.command}-flag-${opts.topic}.md`);
+    const md = renderArtForensics(
+      { command: opts.command, topicSlug: opts.topic, repoHash: hash, artDir: "(maestro-flag)", invokedAt: iso.replace(/\.\d{3}Z$/, "Z") },
+      [finding],
+    );
+    atomicWrite(path, md);
+    return path;
+  } catch { return ""; }
+}
+
+/** Shared `<command> flag <topic> <note>` verb: usage-guard, record, report. rc 2 on missing
+ *  topic/empty note, else rc 0 (best-effort; mirrors runForensics). Feeds /consort:playback. */
+export function runFlag(command: string, topic: string | undefined, note: string): number {
+  if (!topic || !note.trim()) { log.error(`usage: ${command} flag <topic> <observation>`); return 2; }
+  const path = recordMaestroFlag({ command, topic, note });
+  if (path) { log.ok(`${command} flag: recorded ${path}`); process.stdout.write(path + "\n"); }
+  else log.info(`${command} flag: nothing recorded`);
+  return 0;
+}
