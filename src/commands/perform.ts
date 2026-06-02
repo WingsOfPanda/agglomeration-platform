@@ -19,7 +19,7 @@ import { runForensics, runFlag } from "../core/forensics.js";
 import { haveCmd } from "../core/deps.js";
 import { performState, composeRound1Prompt, composeFixPrompt, composeDagUnitPrompt } from "../core/performTurn.js";
 import { pickInstruments } from "../core/instruments.js";
-import { extractQuestionPayload } from "../core/performQuestions.js";
+import { extractQuestionPayload, parseQuestionPayload } from "../core/performQuestions.js";
 import { outboxOffset, outboxPath, outboxWaitSince, statusPath, resolveModel, type OutboxEvent } from "../core/ipc.js";
 import { instrumentTimeoutMultiplier } from "../core/contracts.js";
 import { scaledTimeout, parseLatestOffset } from "../core/scoreTurn.js";
@@ -39,6 +39,14 @@ const PERFORM_TURN_TIMEOUT = (): number => Number(process.env.CONSORT_PERFORM_TU
 function partModel(art: string): string {
   const p = join(art, "provider.txt");
   return existsSync(p) ? (readFileSync(p, "utf8").trim() || "codex") : "codex";
+}
+/** The LAST `OBJECTIONS=<n>` count persisted in a per-dispatch state file (0 if absent). The
+ *  objection cap reads + increments this on every re-arm so the count survives the background-task
+ *  re-entry that drives the re-armed wait. Latest-line-wins, mirroring parseLatestOffset. */
+function latestObjections(stateFile: string): number {
+  if (!existsSync(stateFile)) return 0;
+  const ms = [...readFileSync(stateFile, "utf8").matchAll(/^OBJECTIONS=(\d+)\s*$/gm)];
+  return ms.length ? Number(ms[ms.length - 1][1]) : 0;
 }
 /** Multi-repo iff the PLURAL Target header + an Execution DAG are both present (deploy-init.sh:87). */
 function detectRouting(docText: string): "single" | "multi" {
@@ -223,7 +231,9 @@ export async function turnWaitWith(topic: string, round: number, d: PerformWaitD
     if (payload !== null) {
       atomicWrite(join(art, `question-${PART}-${round}.txt`), payload);
       const bumped = outboxOffset(outboxPath(PART, model, topic));
-      appendFileSync(stateFile, `OFFSET=${bumped}\nTS=question\n`);
+      const objLine = parseQuestionPayload(payload).route === "objection"
+        ? `OBJECTIONS=${latestObjections(stateFile) + 1}\n` : "";
+      appendFileSync(stateFile, `OFFSET=${bumped}\nTS=question\n${objLine}`);
     } else { ts = "failed"; appendFileSync(stateFile, "TS=failed\n"); log.warn("[turn-wait] malformed question (no message); downgraded to failed"); }
   } else appendFileSync(stateFile, `TS=${ts}\n`);
   writeFileSync(join(art, `turn-${PART}-${round}.done`), "");
