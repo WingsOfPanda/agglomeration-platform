@@ -301,8 +301,9 @@ This writes `$ART/sibling-baseline.txt` (`<slug>\t<sha>\t<branch>` per qualifyin
 the hub has none — declared sub-repos from `parts.txt` are excluded).
 
 Any `TS=question` a part emits during preflight or an early wave is routed through the Stage 3b
-question handler (read the payload, handle by route with the cap, re-arm with an incremented
-`<DISPATCH>` + the bumped offset) — no `wave-wait` callsite is deaf to a question.
+question handler (read the payload, handle by route with the cap, re-arm with the SAME `<DISPATCH>`
+(it stays constant across question re-arms) + the bumped offset) — no `wave-wait` callsite is deaf to
+a question.
 
 ## Stage 3b — DAG wave dispatch (ROUTING=multi only)
 
@@ -330,7 +331,10 @@ For each wave, for each repo in it:
    ```
 3. **Barrier** — fire one background `wave-wait` per part in the wave (parallel), then wait for all.
    Initialize a per-part dispatch counter when the part is first dispatched in this wave (`DISPATCH=0`)
-   and pass it:
+   and pass it. Increment `DISPATCH` only when you dispatch the part a NEW unit of work — its initial
+   wave dispatch is `DISPATCH=0`, each wave-retry re-spawn is `+1`, and (Stage 3d) each fix-round send
+   is `+1`. Do NOT increment it on a question re-arm: a re-arm keeps the same dispatch so the part's
+   objection cap and read offset accumulate (latest-line-wins) in the same `wave-<instrument>-<DISPATCH>.txt`.
    ```
    Bash(command='$CS perform wave-wait "$TOPIC" "$INSTRUMENT" "$PROVIDER" "$DISPATCH"', run_in_background: true,
         description="maestro await <INSTRUMENT> wave <W> dispatch <DISPATCH>")
@@ -342,9 +346,10 @@ For each wave, for each repo in it:
      2. Handle by `ROUTE`, exactly as single-repo Stage 1 step 3 (verify → mechanical reply; escalate →
         AskUserQuestion; objection → read `OBJECTIONS=` from `$ART/wave-<instrument>-<DISPATCH>.txt`,
         cap-of-2 then Revise/Override/Abort). Deliver the reply via `$CS send`.
-     3. Read the bumped offset (`OFFSET=`) from `$ART/wave-<instrument>-<DISPATCH>.txt`, increment the
-        part's dispatch token (`DISPATCH=$((DISPATCH+1))`), and re-fire in the background:
-        `$CS perform wave-wait "$TOPIC" "<instrument>" "<provider>" "$DISPATCH" "<bumped-offset>"`.
+     3. Read the bumped offset (`OFFSET=`) from `$ART/wave-<instrument>-<DISPATCH>.txt` and re-fire in
+        the background with the **SAME `<DISPATCH>`** (a question re-arm does NOT increment it — keeping
+        the same dispatch lets the part's objection cap and read offset accumulate in the same
+        `wave-<instrument>-<DISPATCH>.txt`): `$CS perform wave-wait "$TOPIC" "<instrument>" "<provider>" "$DISPATCH" "<bumped-offset>"`.
      4. Keep this part **out** of the completion set — it is still in flight.
    - The wave is **complete only when every part is terminal** (`ok` | `failed` | `timeout`). Parts that
      are already `TS=ok` wait at the barrier until the questioning part terminates.
@@ -407,11 +412,13 @@ Read `$ART/multi-verify-bugs.txt` (`<repo>\t<bug>` rows). `MAX_FIX_ROUNDS=3` per
         description="maestro await <instrument> fix-round <n> dispatch <DISPATCH>")
    ```
    On the fix-round completion, read `$ART/wave-<instrument>.txt`. A **`TS=question`** is handled like
-   Stage 3b's question branch (route dispatch + cap + per-dispatch re-arm): read
+   Stage 3b's question branch (route dispatch + cap + same-dispatch re-arm): read
    `$ART/question-<instrument>-<DISPATCH>.txt`, handle by route (verify → mechanical reply; escalate →
    AskUserQuestion; objection → read `OBJECTIONS=` from `$ART/wave-<instrument>-<DISPATCH>.txt`,
-   cap-of-2 then Revise/Override/Abort), then re-arm with an incremented `<DISPATCH>` + the bumped
-   offset (`$CS perform wave-wait "<TOPIC>" "<instrument>" "<provider>" "$DISPATCH" "<bumped-offset>"`),
+   cap-of-2 then Revise/Override/Abort), then re-arm with the **SAME `<DISPATCH>`** (the question re-arm
+   does NOT increment it — only the fix-round send itself increments it; keeping the same dispatch lets
+   the objection cap and read offset accumulate in the same `wave-<instrument>-<DISPATCH>.txt`) + the
+   bumped offset (`$CS perform wave-wait "<TOPIC>" "<instrument>" "<provider>" "$DISPATCH" "<bumped-offset>"`),
    keeping the part **out** of the completion set until it is terminal. Only a terminal `TS=ok`
    re-runs Stage 3c verification for THIS sub-repo (still buggy and `n < MAX_FIX_ROUNDS` → bump `n`
    and re-loop step 1); `TS=failed`/`timeout` continues the existing round ladder.

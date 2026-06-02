@@ -684,8 +684,10 @@ and partition into { ok, failed|timeout, question }:
   2. Handle by `ROUTE`, exactly as single-repo Stage 1 step 3 (verify → mechanical reply; escalate →
      AskUserQuestion; objection → read `OBJECTIONS=` from `$ART/wave-<instrument>-<DISPATCH>.txt`,
      cap-of-2 then Revise/Override/Abort). Deliver the reply via `$CS send`.
-  3. Read the bumped offset (`OFFSET=`) from `$ART/wave-<instrument>-<DISPATCH>.txt`, increment the
-     part's dispatch token (`DISPATCH=$((DISPATCH+1))`), and re-fire in the background:
+  3. Read the bumped offset (`OFFSET=`) from `$ART/wave-<instrument>-<DISPATCH>.txt` and re-fire in
+     the background with the **SAME `<DISPATCH>`** (a question re-arm does NOT increment it — keeping
+     the same dispatch lets the bumped offset and the `OBJECTIONS=` cap accumulate in the same
+     `wave-<instrument>-<DISPATCH>.txt`):
      `$CS perform wave-wait "$TOPIC" "<instrument>" "<provider>" "$DISPATCH" "<bumped-offset>"`.
   4. Keep this part **out** of the completion set — it is still in flight.
 - The wave is **complete only when every part is terminal** (`ok` | `failed` | `timeout`). Parts that
@@ -695,7 +697,7 @@ and partition into { ok, failed|timeout, question }:
 
 - [ ] **Step 4: Multi-repo — make Stage 3a and Stage 3d non-deaf to `TS=question`**
 
-In Stage 3a, add one sentence so any `TS=question` from a preflight/early wave routes through the Stage 3b handler. In Stage 3d (the fix-loop barrier), add the **same** `TS=question` branch as Step 3 (read payload, handle by route with the cap, re-arm with an incremented `<DISPATCH>` + the bumped offset, keep the part out of the completion set until terminal) so a fix-round objection does not hang the loop:
+In Stage 3a, add one sentence so any `TS=question` from a preflight/early wave routes through the Stage 3b handler. In Stage 3d (the fix-loop barrier), add the **same** `TS=question` branch as Step 3 (read payload, handle by route with the cap, re-arm with the **SAME `<DISPATCH>`** + the bumped offset — only the fix-round send itself increments `<DISPATCH>`, never the question re-arm — keep the part out of the completion set until terminal) so a fix-round objection does not hang the loop:
 
 ```markdown
 On the fix-round completion, read `$ART/wave-<instrument>.txt`. A **`TS=question`** is handled like
@@ -707,7 +709,7 @@ re-runs Stage 3c verification, and `TS=failed`/`timeout` continues the existing 
 
 Verify by reading the edited `commands/perform.md`:
 - [ ] Stage 1 step 3 has all three routes (verify/escalate/objection); objection has the cap check and Revise/Override/Abort.
-- [ ] Stage 3b passes `<DISPATCH>` to `wave-wait` and re-arms with `<DISPATCH+1>` + the bumped offset.
+- [ ] Stage 3b passes `<DISPATCH>` to `wave-wait` and re-arms a question with the SAME `<DISPATCH>` + the bumped offset (dispatch increments only on a new work-unit).
 - [ ] Stage 3b declares the wave complete only when all parts are terminal; `WAVE_RETRY` is evaluated after.
 - [ ] Stage 3a and Stage 3d both route `TS=question` through the handler.
 - [ ] No banned tokens introduced (`clone-wars`/`cw_`/`master-yoda`/`MISSION ACCOMPLISHED`/`@cw_`).

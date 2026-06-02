@@ -175,6 +175,18 @@ describe("perform wave-wait (rc 0 always; TS= carries the outcome; .done sentine
     expect(readFileSync(join(art, `wave-${INSTR}-0.txt`), "utf8")).not.toContain("OBJECTIONS=");
   });
 
+  it("objection cap accumulates across SAME-dispatch re-arms (latest-line-wins)", async () => {
+    const art = performArtDir(TOPIC);
+    const ob = outboxPath(INSTR, PROVIDER, TOPIC);
+    mkdirSync(dirname(ob), { recursive: true });
+    writeFileSync(ob, '{"event":"question","message":"OBJECTION: still bad"}\n');
+    // a prior objection already recorded for THIS dispatch
+    writeFileSync(join(art, `wave-${INSTR}-0.txt`), "OFFSET=5\nTS=question\nOBJECTIONS=1\n");
+    const { d } = waitDeps({ event: "question", message: "OBJECTION: still bad" });
+    await waveWaitWith(TOPIC, INSTR, PROVIDER, 0, d);
+    expect(readFileSync(join(art, `wave-${INSTR}-0.txt`), "utf8")).toContain("OBJECTIONS=2\n");
+  });
+
   it("malformed question (no message) → downgraded TS=failed + EVENT=question-malformed, no payload/dispatch file", async () => {
     const art = performArtDir(TOPIC);
     const { d } = waitDeps({ event: "question" }); // no message → extractQuestionPayload returns null

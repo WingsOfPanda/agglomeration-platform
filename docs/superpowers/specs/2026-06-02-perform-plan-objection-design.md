@@ -177,6 +177,10 @@ tell a fresh question from a stale one. Therefore:
 - Name the question payload file `question-<instrument>-<dispatch>.txt` (the wave analogue of
   single-repo's `question-<PART>-<round>.txt`). The `<dispatch>` token is what makes this name
   fillable on the wave side — it is the wave's substitute for single-repo's native `<round>`.
+  Like `<round>`, `<dispatch>` increments per **new unit of work** — the initial wave dispatch, a
+  `WAVE_RETRY` re-spawn, and each Stage 3d fix-round send — and **stays constant across a question
+  re-arm** (a re-arm reuses the same `<dispatch>` so the bumped `OFFSET=` and the `OBJECTIONS=` cap
+  accumulate, latest-line-wins, in the same `wave-<instrument>-<dispatch>.txt`).
 - Persist the bumped offset in a **separate, append-only** state file
   `wave-<instrument>-<dispatch>.txt`, written with `appendFileSync` and read via `parseLatestOffset`
   — mirroring single-repo's `turn-<PART>-<round>.txt`. **Do NOT** record `OFFSET=` inside
@@ -218,9 +222,9 @@ on each wave-completion notification, for every part read the first TS= of wave-
     parse question-<instrument>-<dispatch>.txt
     route = verify ? (mechanical reply) : objection ? (Revise/Override/Abort) : escalate
     handle the route (reply via send, or AskUserQuestion), respecting the per-dispatch cap (D2)
-    bump dispatch -> dispatch'  (increment the part's dispatch token)
-    re-fire in background:
-      $CS perform wave-wait <TOPIC> <instrument> <provider> <dispatch'> <bumped-offset>
+    re-fire in background with the SAME dispatch (a question re-arm does NOT increment it,
+      so the part's bumped OFFSET= and OBJECTIONS= cap accumulate in the same per-dispatch file):
+      $CS perform wave-wait <TOPIC> <instrument> <provider> <dispatch> <bumped-offset>
     keep this part OUT of the completion set (it is still in flight)
   the wave is COMPLETE only when EVERY part is terminal (ok | failed | timeout)
   the WAVE_RETRY ladder is evaluated ONLY after all parts reach terminal
@@ -296,7 +300,7 @@ Nothing frozen is renamed or added:
 | `src/commands/perform.ts:653-667` (`waveWaitWith`) | add `dispatch` (and optional `since`) params; read the start offset from `wave-<instrument>-<dispatch>.txt` via `parseLatestOffset` (default 0; `since` overrides); wait `["done","error","question"]`; on `question`, write `question-<instrument>-<dispatch>.txt`, append `OFFSET=outboxOffset(outboxPath(instrument,provider,topic))` + `TS=question` + `OBJECTIONS=<n>` to `wave-<instrument>-<dispatch>.txt`, and set the first `TS=` in `wave-<instrument>.txt` to `question`. **Do not** add `OFFSET=` to `wave-<instrument>.txt` (preserve its pinned ok/error/timeout layout). |
 | `commands/perform.md` Stage 1 step 3 | add the `route==="objection"` branch: render → AskUserQuestion(Revise/Override/Abort) → Maestro-authored reply via `send`; cap from `OBJECTIONS=`; tolerate empty objection text |
 | `commands/perform.md` Stage 3a | confirm any `TS=question` routes through the question handler |
-| `commands/perform.md` Stage 3b (312-332) | add the `TS=question` branch + barrier-reconciliation control flow (partition ok/failed/question; per-part re-arm with bumped offset + incremented dispatch; wave complete only when all terminal; `WAVE_RETRY` evaluated only after all terminal) |
+| `commands/perform.md` Stage 3b (312-332) | add the `TS=question` branch + barrier-reconciliation control flow (partition ok/failed/question; per-part re-arm with bumped offset + the SAME dispatch, so the offset and cap accumulate; wave complete only when all terminal; `WAVE_RETRY` evaluated only after all terminal) |
 | `commands/perform.md` Stage 3d (368-374) | add the same `TS=question` branch (verify/escalate/objection, per-dispatch re-arm, cap) so the fix-loop is not deaf to questions |
 
 ## Testing strategy
@@ -377,7 +381,9 @@ third force-escalates.
 - **Wave re-arm offset round-trip (the easy fatal gap).** The wave path has no native offset/round
   state and `wave-<instrument>.txt` is atomically overwritten, so the bumped offset **must** live in
   a separate append-only `wave-<instrument>-<dispatch>.txt` (read via `parseLatestOffset`) and the
-  re-arm **must** pass the bumped offset + incremented `<dispatch>`. If the implementer instead
+  re-arm **must** pass the bumped offset with the **same** `<dispatch>` (a question re-arm does not
+  increment the dispatch — keeping it constant is what lets the offset and the `OBJECTIONS=` cap
+  accumulate in the one per-dispatch file). If the implementer instead
   records `OFFSET=` in `wave-<instrument>.txt`, the next overwrite destroys it and the re-arm reads
   offset 0, re-finding the same `question` and spinning to the 14400s timeout. The bumped-offset
   value test (seeded fixture) and the re-arm test are the guards.
