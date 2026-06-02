@@ -183,6 +183,35 @@ describe("perform turn-wait (rc 0 always; TS= carries the outcome)", () => {
     expect(existsSync(join(art, "question-tutti-1.txt"))).toBe(false);
   });
 
+  it("objection question (no claim, OBJECTION: message) → ROUTE=objection payload + OBJECTIONS=1", async () => {
+    const art = seedWait();
+    writeFileSync(outboxPath("tutti", "codex", TOPIC), '{"event":"question","message":"OBJECTION: bad plan"}\n');
+    await turnWaitWith(TOPIC, 1, waitDeps({ wait: async () => ({ event: "question", message: "OBJECTION: bad plan" }) }));
+    const stateText = readFileSync(join(art, "turn-tutti-1.txt"), "utf8");
+    expect(stateText).toContain("TS=question\n");
+    expect(stateText).toContain("OBJECTIONS=1\n");
+    const payload = readFileSync(join(art, "question-tutti-1.txt"), "utf8");
+    expect(payload).toContain("ROUTE=objection\n");
+    expect(payload).toContain("TEXT=bad plan\n");
+  });
+
+  it("objection cap increments across re-arms (persisted, latest-line-wins)", async () => {
+    const art = seedWait();
+    writeFileSync(join(art, "turn-tutti-1.txt"), "OFFSET=10\nOBJECTIONS=1\n"); // a prior objection this round
+    writeFileSync(outboxPath("tutti", "codex", TOPIC), '{"event":"question","message":"OBJECTION: still bad"}\n');
+    await turnWaitWith(TOPIC, 1, waitDeps({ wait: async () => ({ event: "question", message: "OBJECTION: still bad" }) }));
+    expect(readFileSync(join(art, "turn-tutti-1.txt"), "utf8")).toContain("OBJECTIONS=2\n");
+  });
+
+  it("escalate question (no claim, no marker) → TS=question but NO OBJECTIONS line", async () => {
+    const art = seedWait();
+    writeFileSync(outboxPath("tutti", "codex", TOPIC), '{"event":"question","message":"which fallback?"}\n');
+    await turnWaitWith(TOPIC, 1, waitDeps({ wait: async () => ({ event: "question", message: "which fallback?" }) }));
+    const stateText = readFileSync(join(art, "turn-tutti-1.txt"), "utf8");
+    expect(stateText).toContain("TS=question\n");
+    expect(stateText).not.toContain("OBJECTIONS=");
+  });
+
   it("CONSORT_PERFORM_TURN_TIMEOUT_S=5 → wait dep receives scaledTimeout(5,'1')===5", async () => {
     seedWait();
     process.env.CONSORT_PERFORM_TURN_TIMEOUT_S = "5";

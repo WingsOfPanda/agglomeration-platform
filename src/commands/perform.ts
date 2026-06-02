@@ -19,7 +19,7 @@ import { runForensics, runFlag } from "../core/forensics.js";
 import { haveCmd } from "../core/deps.js";
 import { performState, composeRound1Prompt, composeFixPrompt, composeDagUnitPrompt } from "../core/performTurn.js";
 import { pickInstruments } from "../core/instruments.js";
-import { extractQuestionPayload } from "../core/performQuestions.js";
+import { extractQuestionPayload, parseQuestionPayload } from "../core/performQuestions.js";
 import { outboxOffset, outboxPath, outboxWaitSince, statusPath, resolveModel, type OutboxEvent } from "../core/ipc.js";
 import { instrumentTimeoutMultiplier } from "../core/contracts.js";
 import { scaledTimeout, parseLatestOffset } from "../core/scoreTurn.js";
@@ -39,6 +39,14 @@ const PERFORM_TURN_TIMEOUT = (): number => Number(process.env.CONSORT_PERFORM_TU
 function partModel(art: string): string {
   const p = join(art, "provider.txt");
   return existsSync(p) ? (readFileSync(p, "utf8").trim() || "codex") : "codex";
+}
+/** The LAST `OBJECTIONS=<n>` count persisted in a per-dispatch state file (0 if absent). The
+ *  objection cap reads + increments this on every re-arm so the count survives the background-task
+ *  re-entry that drives the re-armed wait. Latest-line-wins, mirroring parseLatestOffset. */
+function latestObjections(stateFile: string): number {
+  if (!existsSync(stateFile)) return 0;
+  const ms = [...readFileSync(stateFile, "utf8").matchAll(/^OBJECTIONS=(\d+)\s*$/gm)];
+  return ms.length ? Number(ms[ms.length - 1][1]) : 0;
 }
 /** Multi-repo iff the PLURAL Target header + an Execution DAG are both present (deploy-init.sh:87). */
 function detectRouting(docText: string): "single" | "multi" {
@@ -223,7 +231,9 @@ export async function turnWaitWith(topic: string, round: number, d: PerformWaitD
     if (payload !== null) {
       atomicWrite(join(art, `question-${PART}-${round}.txt`), payload);
       const bumped = outboxOffset(outboxPath(PART, model, topic));
-      appendFileSync(stateFile, `OFFSET=${bumped}\nTS=question\n`);
+      const objLine = parseQuestionPayload(payload).route === "objection"
+        ? `OBJECTIONS=${latestObjections(stateFile) + 1}\n` : "";
+      appendFileSync(stateFile, `OFFSET=${bumped}\nTS=question\n${objLine}`);
     } else { ts = "failed"; appendFileSync(stateFile, "TS=failed\n"); log.warn("[turn-wait] malformed question (no message); downgraded to failed"); }
   } else appendFileSync(stateFile, `TS=${ts}\n`);
   writeFileSync(join(art, `turn-${PART}-${round}.done`), "");
@@ -645,21 +655,40 @@ export async function dagParseWith(topic: string, d: DagParseDeps): Promise<numb
 const PERFORM_WAVE_TIMEOUT = (): number =>
   Number(process.env.CONSORT_PERFORM_WAVE_TIMEOUT_OVERRIDE) || Number(process.env.CONSORT_PERFORM_TURN_TIMEOUT_S) || 14400;
 async function waveWaitRun(rest: string[]): Promise<number> {
-  const [topic, instrument, provider] = rest;
-  if (!topic || !instrument || !provider) { log.error("usage: perform wave-wait <topic> <instrument> <provider>"); return 2; }
+  const [topic, instrument, provider, dispatchStr, sinceStr] = rest;
+  if (!topic || !instrument || !provider || !dispatchStr) { log.error("usage: perform wave-wait <topic> <instrument> <provider> <dispatch> [<since>]"); return 2; }
   if (!assertPerformTopic(topic) || !/^[a-z0-9_-]+$/.test(instrument) || !/^[a-z0-9_-]+$/.test(provider)) { log.error("perform wave-wait: bad topic/instrument/provider"); return 2; }
-  return waveWaitWith(topic, instrument, provider, liveWaitDeps);
+  if (!/^[0-9]+$/.test(dispatchStr)) { log.error("perform wave-wait: dispatch must be a non-negative integer"); return 2; }
+  if (sinceStr !== undefined && !/^[0-9]+$/.test(sinceStr)) { log.error("perform wave-wait: since must be a non-negative integer"); return 2; }
+  return waveWaitWith(topic, instrument, provider, Number(dispatchStr), liveWaitDeps, sinceStr !== undefined ? Number(sinceStr) : undefined);
 }
-export async function waveWaitWith(topic: string, instrument: string, provider: string, d: PerformWaitDeps): Promise<number> {
+export async function waveWaitWith(topic: string, instrument: string, provider: string, dispatch: number, d: PerformWaitDeps, since?: number): Promise<number> {
   const art = performArtDir(topic);
   if (!existsSync(art)) { log.error(`perform wave-wait: _perform art-dir missing for ${topic}`); return 1; }
+  const dispatchFile = join(art, `wave-${instrument}-${dispatch}.txt`);
+  // Start offset: an explicit <since> (a re-arm past a handled question) wins; else the latest
+  // OFFSET= persisted for this dispatch; else 0 (first wait of the dispatch).
+  const startOffset = since ?? (existsSync(dispatchFile) ? (parseLatestOffset(readFileSync(dispatchFile, "utf8")) ?? 0) : 0);
   const timeout = scaledTimeout(PERFORM_WAVE_TIMEOUT(), d.multiplier(provider));
-  log.info(`[wave-wait] ${instrument} timeout=${timeout}s`);
-  const ev = await d.wait(instrument, provider, topic, 0, ["done", "error"], timeout);
+  log.info(`[wave-wait] ${instrument} dispatch=${dispatch} offset=${startOffset} timeout=${timeout}s`);
+  const ev = await d.wait(instrument, provider, topic, startOffset, ["done", "error", "question"], timeout);
   let ts: string; const extra: string[] = [];
   if (ev === null) { ts = "timeout"; extra.push(`TIMEOUT_S=${timeout}`); log.warn(`[wave-wait] ${instrument} TS=timeout`); }
   else if (ev.event === "done") { ts = "ok"; extra.push("EVENT=done"); log.ok(`[wave-wait] ${instrument} TS=ok`); }
   else if (ev.event === "error") { ts = "failed"; extra.push("EVENT=error", `REASON=${typeof ev.reason === "string" ? ev.reason : ""}`); log.error(`[wave-wait] ${instrument} TS=failed`); }
+  else if (ev.event === "question") {
+    const payload = extractQuestionPayload(ev, d.now());
+    if (payload !== null) {
+      ts = "question";
+      atomicWrite(join(art, `question-${instrument}-${dispatch}.txt`), payload);
+      const bumped = outboxOffset(outboxPath(instrument, provider, topic)); // wave-path identity
+      const objLine = parseQuestionPayload(payload).route === "objection"
+        ? `OBJECTIONS=${latestObjections(dispatchFile) + 1}\n` : "";
+      appendFileSync(dispatchFile, `OFFSET=${bumped}\nTS=question\n${objLine}`);
+      extra.push("EVENT=question");
+      log.ok(`[wave-wait] ${instrument} TS=question`);
+    } else { ts = "failed"; extra.push("EVENT=question-malformed"); log.warn(`[wave-wait] ${instrument} malformed question; TS=failed`); }
+  }
   else { ts = "failed"; extra.push("EVENT=unknown"); log.error(`[wave-wait] ${instrument} TS=failed (unknown event)`); }
   atomicWrite(join(art, `wave-${instrument}.txt`), `TS=${ts}\nINSTRUMENT=${instrument}\nPROVIDER=${provider}\nTOPIC=${topic}\n` + extra.map((l) => l + "\n").join(""));
   writeFileSync(join(art, `wave-${instrument}.done`), "");
