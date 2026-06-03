@@ -26,6 +26,7 @@ import {
 import { runForensics, runFlag } from "../core/forensics.js";
 import { parseScoreboard, buildHandoffKv, type HandoffInput } from "../core/rehearsalHandoff.js";
 import { buildConsensus } from "../core/rehearsalConsensus.js";
+import { parseVerifyBlock, planVerify, checkVerify, recomputedFromOutput, verificationRow, VERIFICATION_TSV_HEADER, type VerifyManifest, type VerificationRow } from "../core/rehearsalVerify.js";
 import { instrumentBinary, consultTimeout } from "../core/contracts.js";
 import { inboxWrite, inboxPath, outboxPath, paneMetaRead, resolveModel } from "../core/ipc.js";
 import { paneSend, killNow } from "../core/tmux.js";
@@ -41,7 +42,7 @@ import { run as codaRun } from "./coda.js";
 type PathOpts = { home?: string; cwd?: string };
 
 function usage(): number {
-  log.error("usage: rehearsal <init|metric|sota|spawn-all|drop-part|experiment-send|score|monitor|status-brief|finalize|refine|handoff-extract|teardown|fresh-part|forensics|abort|consensus> ...");
+  log.error("usage: rehearsal <init|metric|sota|spawn-all|drop-part|verify-plan|verify-check|experiment-send|score|monitor|status-brief|finalize|refine|handoff-extract|teardown|fresh-part|forensics|abort|consensus> ...");
   return 2;
 }
 
@@ -268,6 +269,85 @@ export async function dropPartWith(rest: string[], deps: DropPartDeps, opts?: Pa
   }
   log.ok(`rehearsal drop-part: dropped ${instrument}, ${kept.length} part(s) remain`);
   process.stdout.write(`N=${kept.length}\n`);
+  return 0;
+}
+
+// ---- A1: verify-plan — plan the harness re-execution + persist terminal verdicts ----
+export interface VerifyPlanDeps {
+  readResult(art: string, instrument: string, expId: string): Record<string, unknown> | null;
+  readManifest(art: string, instrument: string, expId: string): VerifyManifest | null;
+  readInput(art: string, instrument: string, expId: string, rel: string): string | null;
+  writeRow(art: string, instrument: string, expId: string, row: VerificationRow): void;
+  now(): string;
+  stdout?: (l: string) => void;
+  opts?: PathOpts;
+}
+
+export async function verifyPlanWith(args: string[], deps: VerifyPlanDeps): Promise<number> {
+  const authorize = args.includes("--authorize-rerun");
+  const pos = args.filter((a) => !a.startsWith("--"));
+  if (pos.length !== 3) { log.error("rehearsal verify-plan: usage: <topic> <instrument> <exp-id> [--authorize-rerun]"); return 2; }
+  const [topic, instrument, expId] = pos;
+  const art = rehearsalArtDir(topic, deps.opts);
+  const result = deps.readResult(art, instrument, expId);
+  if (result === null) { log.error(`rehearsal verify-plan: result.json missing for ${instrument}/${expId}`); return 1; }
+  const block = parseVerifyBlock(result);
+  const manifest = deps.readManifest(art, instrument, expId);
+  const plan = planVerify({ block, manifest, authorizeRerun: authorize, readInput: (rel) => deps.readInput(art, instrument, expId, rel) });
+  const out = deps.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
+  if (!plan.run) {
+    deps.writeRow(art, instrument, expId, { expId, instrument, verdict: plan.verdict, reason: plan.reason, recomputed: "", ts: deps.now() });
+    out(`VERDICT=${plan.verdict} reason=${plan.reason}`);
+    return 0;
+  }
+  out(`RUN_CWD=${experimentDir(art, instrument, expId)}`);
+  out(`RUN_CMD=${plan.command}`);
+  out(`METRIC_FROM=${plan.metricFrom}`);
+  return 0;
+}
+
+// ---- A1: verify-check — adjudicate the harness re-execution into a verdict ----
+export interface VerifyCheckDeps {
+  readResult(art: string, instrument: string, expId: string): Record<string, unknown> | null;
+  readMetricMd(art: string): string | null;
+  readStdout(path: string): string | null;
+  readJson(path: string): string | null;
+  writeRow(art: string, instrument: string, expId: string, row: VerificationRow): void;
+  now(): string;
+  stdout?: (l: string) => void;
+  opts?: PathOpts;
+}
+
+export async function verifyCheckWith(args: string[], deps: VerifyCheckDeps): Promise<number> {
+  const runFailed = args.includes("--run-failed");
+  let stdoutFile: string | undefined;
+  const pos: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--stdout-file") { stdoutFile = args[++i]; }
+    else if (args[i] === "--run-failed") { /* flag */ }
+    else if (!args[i].startsWith("--")) pos.push(args[i]);
+  }
+  if (pos.length !== 3) { log.error("rehearsal verify-check: usage: <topic> <instrument> <exp-id> (--stdout-file <path> | --run-failed)"); return 2; }
+  if (!runFailed && stdoutFile === undefined) { log.error("rehearsal verify-check: need --stdout-file <path> or --run-failed"); return 2; }
+  const [topic, instrument, expId] = pos;
+  const art = rehearsalArtDir(topic, deps.opts);
+  const result = deps.readResult(art, instrument, expId);
+  if (result === null) { log.error(`rehearsal verify-check: result.json missing for ${instrument}/${expId}`); return 1; }
+  const reported = typeof result.metric_value === "number" ? result.metric_value : null;
+  const block = parseVerifyBlock(result);
+  const metricFrom = block?.metric_from ?? "marker";
+  const md = deps.readMetricMd(art);
+  const epsilon = (md ? parseMetricMd(md).verifyEpsilon : undefined) ?? 0.01;
+
+  let recomputed: number | null = null;
+  if (!runFailed) {
+    const stdout = stdoutFile ? deps.readStdout(stdoutFile) : null;
+    recomputed = stdout === null ? null : recomputedFromOutput(stdout, metricFrom, (p) => deps.readJson(join(experimentDir(art, instrument, expId), p)));
+  }
+  const { verdict, reason } = checkVerify({ recomputed, runFailed, reported, epsilon });
+  deps.writeRow(art, instrument, expId, { expId, instrument, verdict, reason, recomputed: recomputed === null ? "" : String(recomputed), ts: deps.now() });
+  const out = deps.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
+  out(`VERDICT=${verdict} reason=${reason}`);
   return 0;
 }
 
@@ -1489,6 +1569,29 @@ export async function consensusWith(args: string[], deps: RehearsalConsensusDeps
 
 const liveConsensusDeps: RehearsalConsensusDeps = { now: () => isoUtc() };
 
+function appendVerificationRow(art: string, instrument: string, expId: string, row: VerificationRow): void {
+  const tsv = join(art, "verification.tsv");
+  const prior = existsSync(tsv) ? readFileSync(tsv, "utf8") : VERIFICATION_TSV_HEADER;
+  atomicWrite(tsv, prior + verificationRow(row));
+  atomicWrite(join(experimentDir(art, instrument, expId), "verification.txt"),
+    `${row.verdict} reason=${row.reason} recomputed=${row.recomputed} at ${row.ts}\n`);
+}
+const liveVerifyPlanDeps: VerifyPlanDeps = {
+  readResult: (art, i, e) => { const p = join(experimentDir(art, i, e), "result.json"); if (!existsSync(p)) return null; try { return JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>; } catch { return null; } },
+  readManifest: (art, i, e) => { const p = join(experimentDir(art, i, e), "verify-manifest.json"); if (!existsSync(p)) return null; try { return JSON.parse(readFileSync(p, "utf8")) as VerifyManifest; } catch { return null; } },
+  readInput: (art, i, e, rel) => { const p = join(experimentDir(art, i, e), rel); return existsSync(p) ? readFileSync(p, "utf8") : null; },
+  writeRow: appendVerificationRow,
+  now: () => isoUtc(),
+};
+const liveVerifyCheckDeps: VerifyCheckDeps = {
+  readResult: liveVerifyPlanDeps.readResult,
+  readMetricMd: (art) => { const p = join(art, "metric.md"); return existsSync(p) ? readFileSync(p, "utf8") : null; },
+  readStdout: (p) => (existsSync(p) ? readFileSync(p, "utf8") : null),
+  readJson: (p) => (existsSync(p) ? readFileSync(p, "utf8") : null),
+  writeRow: appendVerificationRow,
+  now: () => isoUtc(),
+};
+
 export async function run(args: string[]): Promise<number> {
   const [verb, ...rest] = args;
   switch (verb) {
@@ -1497,6 +1600,8 @@ export async function run(args: string[]): Promise<number> {
     case "sota": return sotaWith(rest);
     case "spawn-all": return spawnAllWith(rest, liveSpawnAllDeps);
     case "drop-part": return dropPartWith(rest, liveDropPartDeps);
+    case "verify-plan": return verifyPlanWith(rest, liveVerifyPlanDeps);
+    case "verify-check": return verifyCheckWith(rest, liveVerifyCheckDeps);
     case "experiment-send": return experimentSendWith(applyArgsFile(rest), liveExperimentSendDeps);
     case "score": return scoreWith(rest, liveScoreDeps);
     case "monitor": return monitorRun(rest);

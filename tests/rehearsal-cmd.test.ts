@@ -776,3 +776,52 @@ describe("rehearsal status-brief", () => {
     expect(rc).toBe(2);
   });
 });
+
+import { createHash } from "node:crypto";
+import { verifyPlanWith, type VerifyPlanDeps } from "../src/commands/rehearsal.js";
+
+describe("rehearsal verify-plan", () => {
+  const baseResult = { metric_value: 0.9, verify: { kind: "rescore", command: "python s.py", inputs: ["./p.json"], metric_from: "marker" } };
+  const manifestFor = (preds: string) => ({ command: "python s.py", hashes: { "./p.json": createHash("sha256").update(preds).digest("hex") } });
+
+  function deps(over: Partial<VerifyPlanDeps>): { d: VerifyPlanDeps; rows: any[]; out: string[] } {
+    const rows: any[] = []; const out: string[] = [];
+    const d: VerifyPlanDeps = {
+      readResult: () => baseResult,
+      readManifest: () => manifestFor("PREDS"),
+      readInput: () => "PREDS",
+      writeRow: (_a, _i, _e, r) => { rows.push(r); },
+      now: () => "T",
+      stdout: (l) => out.push(l),
+      ...over,
+    };
+    return { d, rows, out };
+  }
+
+  it("clean -> emits RUN_CMD, persists nothing", async () => {
+    const { d, rows, out } = deps({});
+    expect(await verifyPlanWith(["topic", "viola", "exp-001"], d)).toBe(0);
+    expect(out.some((l) => l.startsWith("RUN_CMD=python s.py"))).toBe(true);
+    expect(out.some((l) => l.startsWith("METRIC_FROM=marker"))).toBe(true);
+    expect(rows).toHaveLength(0);
+  });
+  it("provenance change -> persists mismatch, no RUN_CMD", async () => {
+    const { d, rows, out } = deps({ readInput: () => "TAMPERED" });
+    await verifyPlanWith(["topic", "viola", "exp-001"], d);
+    expect(rows[0]).toMatchObject({ verdict: "mismatch", reason: "provenance:./p.json" });
+    expect(out.some((l) => l.startsWith("RUN_CMD"))).toBe(false);
+  });
+  it("rerun without --authorize-rerun -> pending", async () => {
+    const { d, rows } = deps({ readResult: () => ({ metric_value: 1, verify: { kind: "rerun", command: "c" } }) });
+    await verifyPlanWith(["topic", "viola", "exp-001"], d);
+    expect(rows[0]).toMatchObject({ verdict: "pending", reason: "rerun-deferred" });
+  });
+  it("missing result -> rc 1", async () => {
+    const { d } = deps({ readResult: () => null });
+    expect(await verifyPlanWith(["topic", "viola", "exp-001"], d)).toBe(1);
+  });
+  it("bad arity -> rc 2", async () => {
+    const { d } = deps({});
+    expect(await verifyPlanWith(["topic", "viola"], d)).toBe(2);
+  });
+});
