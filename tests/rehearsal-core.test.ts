@@ -111,6 +111,14 @@ describe("parseMetricMd round-trips formatMetricBlock", () => {
     expect(parseMetricMd("**Primary metric:** acc\n**verify_epsilon:** 0.005\n").verifyEpsilon).toBe(0.005);
     expect(parseMetricMd("**Primary metric:** acc\n").verifyEpsilon).toBeUndefined();
   });
+  it("parses ceiling + min_runtime_s; undefined when absent", () => {
+    const t = parseMetricMd("**Primary metric:** acc\n**ceiling:** 0.98\n**min_runtime_s:** 5\n");
+    expect(t.ceiling).toBe(0.98);
+    expect(t.minRuntimeS).toBe(5);
+    const u = parseMetricMd("**Primary metric:** acc\n");
+    expect(u.ceiling).toBeUndefined();
+    expect(u.minRuntimeS).toBeUndefined();
+  });
 });
 
 describe("formatSotaBlock", () => {
