@@ -703,6 +703,35 @@ describe("rehearsalScore", () => {
     expect(okLines[0]).toContain("| 1 | exp-001 | cello |"); // 0.10 lowest = best
     expect(okLines[1]).toContain("| 2 | exp-001 | viola |"); // 0.40
   });
+
+  it("computeScore snapshots verify-manifest.json once for a verify-bearing result", () => {
+    const files: Record<string, string> = {
+      "/a/metric.md": "**Primary metric:** accuracy\n",
+      "/a/parts/viola/state.txt": "current_exp_id=exp-001\n",
+      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+        branch_id:"b",approach_label:"x",metric_name:"accuracy",metric_value:0.9,status:"ok",
+        runtime_s:1,log_paths:[],checkpoint_path:null,notes:"",
+        verify:{ kind:"rescore", command:"python s.py", inputs:["./preds.json"], metric_from:"marker" } }),
+      "/a/parts/viola/experiments/exp-001/preds.json": "PREDS",
+    };
+    const c = computeScore("/a", fakeFs(files), () => "T");
+    const man = c.manifests.find((m) => m.path === "/a/parts/viola/experiments/exp-001/verify-manifest.json");
+    expect(man).toBeDefined();
+    expect(JSON.parse(man!.body)).toMatchObject({ command: "python s.py" });
+    expect(JSON.parse(man!.body).hashes["./preds.json"]).toMatch(/^[0-9a-f]{64}$/);
+  });
+  it("computeScore writes no manifest when one already exists (idempotent)", () => {
+    const files: Record<string, string> = {
+      "/a/metric.md": "**Primary metric:** accuracy\n",
+      "/a/parts/viola/state.txt": "current_exp_id=exp-001\n",
+      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+        branch_id:"b",approach_label:"x",metric_name:"accuracy",metric_value:0.9,status:"ok",
+        runtime_s:1,log_paths:[],checkpoint_path:null,notes:"",
+        verify:{ kind:"rescore", command:"c", inputs:[], metric_from:"marker" } }),
+      "/a/parts/viola/experiments/exp-001/verify-manifest.json": "{\"command\":\"c\",\"hashes\":{}}\n",
+    };
+    expect(computeScore("/a", fakeFs(files), () => "T").manifests).toHaveLength(0);
+  });
 });
 
 function fakeFs(files: Record<string, string>): ScoreFs {

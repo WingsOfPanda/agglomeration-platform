@@ -536,6 +536,7 @@ export async function scoreWith(args: string[], deps: RehearsalScoreDeps): Promi
   for (const s of c.sidecars) deps.writeAtomic(s.path, s.body);
   for (const p of c.staleSidecars) deps.removeFile(p);
   for (const pc of c.phaseClears) deps.writeAtomic(pc.statePath, pc.merged);
+  for (const m of c.manifests) deps.writeAtomic(m.path, m.body);
   for (const w of c.warnings) log.warn(w);
   return 0;
 }
