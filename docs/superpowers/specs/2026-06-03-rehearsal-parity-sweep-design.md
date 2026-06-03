@@ -126,10 +126,12 @@ All prose-only; no code change. Rebrand every restored line (trooper→part, Mas
   production data / shared state; use a scratch worktree if uncertain) and a **`#### Security note`**
   under Phase 1.5 (web + part-side net is honor-system; hard-block at OS/firewall/network-namespace
   level; no opt-out flag). Add a one-line risk note to the rehearsal design spec so it reads as intent.
-- **B2. Observability (low).** Add `TodoWrite` to the `allowed-tools` frontmatter and restore a
-  **`## Task list`** phase checklist (one row per phase 0–7, mirroring `commands/prelude.md`) with
-  `Set task N → in_progress/completed` markers at the existing phase boundaries, plus an optional
-  per-dispatch sub-row (`<instrument> exp-NNN on <approach-label>`) in the inline loop's Step 5. Restore
+- **B2. Observability (low).** Restore a **`## Task list`** phase checklist (one row per phase 0–7)
+  using `TaskCreate`, mirroring `commands/prelude.md` — which drives its task list with the built-in
+  `TaskCreate`/`TaskUpdate` tools and relies on them being available rather than a frontmatter
+  `allowed-tools` entry; rehearsal follows the same convention. Update statuses at the existing phase
+  boundaries, plus an optional per-dispatch sub-row (`<instrument> exp-NNN on <approach-label>`) in the
+  inline loop's Step 5. Restore
   the **`## Intervention patterns`** section (panes stay attached; the Maestro regains control between
   every sub-step; send a clarifying prompt via `$CS send` on a hang / garbage `result.json` / cost
   overrun without `cost_blown`).
