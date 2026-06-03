@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { validateResult, buildScoreboard, type ScoreRow } from "./rehearsalResult.js";
 import { mergeState, parseState } from "./rehearsalState.js";
 import { parseMetricMd } from "./rehearsalMetric.js";
+import { parseVerifyBlock, buildManifest } from "./rehearsalVerify.js";
 import { partsDir, partStateDir, experimentsDir, experimentDir } from "./rehearsal.js";
 
 export interface ScoreFs {
@@ -34,6 +35,7 @@ export interface ScoreComputation {
   staleSidecars: string[];
   phaseClears: { statePath: string; merged: string }[];
   warnings: string[];
+  manifests: { path: string; body: string }[];
 }
 
 function str(v: unknown): string {
@@ -51,6 +53,7 @@ export function computeScore(art: string, fs: ScoreFs, now: () => string): Score
   const sidecars: { path: string; body: string }[] = [];
   const staleSidecars: string[] = [];
   const warnings: string[] = [];
+  const manifests: { path: string; body: string }[] = [];
 
   // Walk like the bash `parts/*/experiments/*/` glob under nullglob: listDir
   // returns [] for a non-existent dir, so no explicit dir-existence gate.
@@ -79,6 +82,14 @@ export function computeScore(art: string, fs: ScoreFs, now: () => string): Score
         runtime: str(o.runtime_s), approach: str(o.approach_label), metricName: str(o.metric_name) });
       tsvRows.push({ expId, instrument, approach: str(o.approach_label), metric: str(o.metric_value),
         status: str(o.status), runtime: str(o.runtime_s), metricName: str(o.metric_name) });
+      const vblock = parseVerifyBlock(o);
+      if (vblock && vblock.kind !== "none" && vblock.command) {
+        const manifestPath = join(branchDir, "verify-manifest.json");
+        if (!fs.exists(manifestPath)) {
+          const manifest = buildManifest(vblock, (rel) => fs.read(join(branchDir, rel)));
+          if (manifest) manifests.push({ path: manifestPath, body: JSON.stringify(manifest) + "\n" });
+        }
+      }
     }
   }
 
@@ -95,5 +106,5 @@ export function computeScore(art: string, fs: ScoreFs, now: () => string): Score
   }
 
   return { scoreboardMd: buildScoreboard(rows, parsed?.direction), resultsTsv: buildResultsTsv(tsvRows),
-    sidecars, staleSidecars, phaseClears, warnings };
+    sidecars, staleSidecars, phaseClears, warnings, manifests };
 }

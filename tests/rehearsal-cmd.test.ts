@@ -776,3 +776,104 @@ describe("rehearsal status-brief", () => {
     expect(rc).toBe(2);
   });
 });
+
+import { createHash } from "node:crypto";
+import { verifyPlanWith, type VerifyPlanDeps } from "../src/commands/rehearsal.js";
+
+describe("rehearsal verify-plan", () => {
+  const baseResult = { metric_value: 0.9, verify: { kind: "rescore", command: "python s.py", inputs: ["./p.json"], metric_from: "marker" } };
+  const manifestFor = (preds: string) => ({ command: "python s.py", hashes: { "./p.json": createHash("sha256").update(preds).digest("hex") } });
+
+  function deps(over: Partial<VerifyPlanDeps>): { d: VerifyPlanDeps; rows: any[]; out: string[] } {
+    const rows: any[] = []; const out: string[] = [];
+    const d: VerifyPlanDeps = {
+      readResult: () => baseResult,
+      readManifest: () => manifestFor("PREDS"),
+      readInput: () => "PREDS",
+      writeRow: (_a, _i, _e, r) => { rows.push(r); },
+      now: () => "T",
+      stdout: (l) => out.push(l),
+      ...over,
+    };
+    return { d, rows, out };
+  }
+
+  it("clean -> emits RUN_CMD, persists nothing", async () => {
+    const { d, rows, out } = deps({});
+    expect(await verifyPlanWith(["topic", "viola", "exp-001"], d)).toBe(0);
+    expect(out.some((l) => l.startsWith("RUN_CMD=python s.py"))).toBe(true);
+    expect(out.some((l) => l.startsWith("METRIC_FROM=marker"))).toBe(true);
+    expect(rows).toHaveLength(0);
+  });
+  it("provenance change -> persists mismatch, no RUN_CMD", async () => {
+    const { d, rows, out } = deps({ readInput: () => "TAMPERED" });
+    await verifyPlanWith(["topic", "viola", "exp-001"], d);
+    expect(rows[0]).toMatchObject({ verdict: "mismatch", reason: "provenance:./p.json" });
+    expect(out.some((l) => l.startsWith("RUN_CMD"))).toBe(false);
+  });
+  it("rerun without --authorize-rerun -> pending", async () => {
+    const { d, rows } = deps({ readResult: () => ({ metric_value: 1, verify: { kind: "rerun", command: "c" } }) });
+    await verifyPlanWith(["topic", "viola", "exp-001"], d);
+    expect(rows[0]).toMatchObject({ verdict: "pending", reason: "rerun-deferred" });
+  });
+  it("missing result -> rc 1", async () => {
+    const { d } = deps({ readResult: () => null });
+    expect(await verifyPlanWith(["topic", "viola", "exp-001"], d)).toBe(1);
+  });
+  it("bad arity -> rc 2", async () => {
+    const { d } = deps({});
+    expect(await verifyPlanWith(["topic", "viola"], d)).toBe(2);
+  });
+});
+
+import { verifyCheckWith, type VerifyCheckDeps } from "../src/commands/rehearsal.js";
+
+describe("rehearsal verify-check", () => {
+  function deps(over: Partial<VerifyCheckDeps>): { d: VerifyCheckDeps; rows: any[]; out: string[] } {
+    const rows: any[] = []; const out: string[] = [];
+    const d: VerifyCheckDeps = {
+      readResult: () => ({ metric_value: 0.9, verify: { kind: "rescore", command: "c", metric_from: "marker" } }),
+      readMetricMd: () => "**Primary metric:** accuracy\n",
+      readStdout: () => "VERIFY_METRIC=0.901\n",
+      readJson: () => null,
+      writeRow: (_a, _i, _e, r) => rows.push(r),
+      now: () => "T",
+      stdout: (l) => out.push(l),
+      ...over,
+    };
+    return { d, rows, out };
+  }
+  it("recomputed within epsilon -> verified", async () => {
+    const { d, rows } = deps({});
+    expect(await verifyCheckWith(["topic", "viola", "exp-001", "--stdout-file", "/x"], d)).toBe(0);
+    expect(rows[0]).toMatchObject({ verdict: "verified" });
+  });
+  it("beyond epsilon -> mismatch", async () => {
+    const { d, rows } = deps({ readStdout: () => "VERIFY_METRIC=0.5\n" });
+    await verifyCheckWith(["topic", "viola", "exp-001", "--stdout-file", "/x"], d);
+    expect(rows[0].verdict).toBe("mismatch");
+  });
+  it("--run-failed -> mismatch rerun-failed", async () => {
+    const { d, rows } = deps({});
+    await verifyCheckWith(["topic", "viola", "exp-001", "--run-failed"], d);
+    expect(rows[0]).toMatchObject({ verdict: "mismatch", reason: "rerun-failed" });
+  });
+  it("honors metric.md verify_epsilon", async () => {
+    const { d, rows } = deps({ readMetricMd: () => "**Primary metric:** accuracy\n**verify_epsilon:** 0.2\n", readStdout: () => "VERIFY_METRIC=0.75\n" });
+    await verifyCheckWith(["topic", "viola", "exp-001", "--stdout-file", "/x"], d);
+    expect(rows[0].verdict).toBe("verified");
+  });
+  it("missing --stdout-file and no --run-failed -> rc 2", async () => {
+    const { d } = deps({});
+    expect(await verifyCheckWith(["topic", "viola", "exp-001"], d)).toBe(2);
+  });
+});
+
+describe("experiment template verify contract", () => {
+  it("instructs the part to emit a verify block + VERIFY_METRIC marker", () => {
+    const tpl = readFileSync("config/prompt-templates/rehearsal/experiment.md", "utf8");
+    expect(tpl).toContain("\"verify\"");
+    expect(tpl).toContain("VERIFY_METRIC=");
+    expect(tpl).toContain("rescore");
+  });
+});
