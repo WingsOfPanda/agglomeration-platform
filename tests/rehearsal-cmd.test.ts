@@ -7,6 +7,8 @@ import { metricWith, sotaWith } from "../src/commands/rehearsal.js";
 import { spawnAllWith, type SpawnAllDeps } from "../src/commands/rehearsal.js";
 import { dropPartWith, type DropPartDeps } from "../src/commands/rehearsal.js";
 import { experimentSendWith, type ExperimentSendDeps } from "../src/commands/rehearsal.js";
+import { experimentTimeoutDefault } from "../src/commands/rehearsal.js";
+import { consultTimeout } from "../src/core/contracts.js";
 import { scoreWith, liveScoreDeps } from "../src/commands/rehearsal.js";
 import { monitorRun } from "../src/commands/rehearsal.js";
 import { statusBriefWith } from "../src/commands/rehearsal.js";
@@ -188,13 +190,13 @@ describe("rehearsal spawn-all", () => {
     const rc = await spawnAllWith(["s2", "2"], deps({ spawn: async (a) => (a[0] === "inst2" ? 1 : 0) }), { home: h.home, cwd: h.home });
     expect(rc).toBe(1);
   });
-  it("rc 2 when fewer than 2 instruments can be picked", async () => {
+  it("rc 3 when fewer than 2 instruments can be picked", async () => {
     const h = home();
     await initWith(["--slug", "s3", "spawn topic 3"], okDeps({ opts: { home: h.home, cwd: h.home } }));
     const rc = await spawnAllWith(["s3", "2"], deps({ pickInstruments: () => ["only1"] }), { home: h.home, cwd: h.home });
-    expect(rc).toBe(2);
+    expect(rc).toBe(3);
   });
-  it("rc 2 when preflight omits a pane for some part (orphan guard)", async () => {
+  it("rc 3 when preflight omits a pane for some part (orphan guard)", async () => {
     const h = home();
     await initWith(["--slug", "s4", "spawn topic 4"], okDeps({ opts: { home: h.home, cwd: h.home } }));
     const d = deps({
@@ -206,7 +208,7 @@ describe("rehearsal spawn-all", () => {
         return 0;
       },
     });
-    expect(await spawnAllWith(["s4", "2"], d, { home: h.home, cwd: h.home })).toBe(2);
+    expect(await spawnAllWith(["s4", "2"], d, { home: h.home, cwd: h.home })).toBe(3);
   });
 });
 
@@ -254,6 +256,22 @@ describe("rehearsal drop-part", () => {
     const killed: string[] = [];
     await dropPartWith([TOPIC, "keeli"], { killPane: (p) => killed.push(p) }, opts(h));
     expect(killed).toEqual(["%6"]);
+  });
+});
+
+describe("rehearsal experiment timeout env override", () => {
+  const KEY = "CONSORT_REHEARSAL_EXPERIMENT_TIMEOUT_OVERRIDE";
+  const orig = process.env[KEY];
+  afterEach(() => { if (orig === undefined) delete process.env[KEY]; else process.env[KEY] = orig; });
+  it("honors a positive-integer override", () => {
+    process.env[KEY] = "900";
+    expect(experimentTimeoutDefault()).toBe(900);
+  });
+  it("falls through to the contracts default on a non-positive / non-integer value", () => {
+    process.env[KEY] = "0";
+    expect(experimentTimeoutDefault()).toBe(consultTimeout("experiment"));
+    process.env[KEY] = "abc";
+    expect(experimentTimeoutDefault()).toBe(consultTimeout("experiment"));
   });
 });
 
