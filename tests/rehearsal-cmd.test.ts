@@ -825,3 +825,46 @@ describe("rehearsal verify-plan", () => {
     expect(await verifyPlanWith(["topic", "viola"], d)).toBe(2);
   });
 });
+
+import { verifyCheckWith, type VerifyCheckDeps } from "../src/commands/rehearsal.js";
+
+describe("rehearsal verify-check", () => {
+  function deps(over: Partial<VerifyCheckDeps>): { d: VerifyCheckDeps; rows: any[]; out: string[] } {
+    const rows: any[] = []; const out: string[] = [];
+    const d: VerifyCheckDeps = {
+      readResult: () => ({ metric_value: 0.9, verify: { kind: "rescore", command: "c", metric_from: "marker" } }),
+      readMetricMd: () => "**Primary metric:** accuracy\n",
+      readStdout: () => "VERIFY_METRIC=0.901\n",
+      readJson: () => null,
+      writeRow: (_a, _i, _e, r) => rows.push(r),
+      now: () => "T",
+      stdout: (l) => out.push(l),
+      ...over,
+    };
+    return { d, rows, out };
+  }
+  it("recomputed within epsilon -> verified", async () => {
+    const { d, rows } = deps({});
+    expect(await verifyCheckWith(["topic", "viola", "exp-001", "--stdout-file", "/x"], d)).toBe(0);
+    expect(rows[0]).toMatchObject({ verdict: "verified" });
+  });
+  it("beyond epsilon -> mismatch", async () => {
+    const { d, rows } = deps({ readStdout: () => "VERIFY_METRIC=0.5\n" });
+    await verifyCheckWith(["topic", "viola", "exp-001", "--stdout-file", "/x"], d);
+    expect(rows[0].verdict).toBe("mismatch");
+  });
+  it("--run-failed -> mismatch rerun-failed", async () => {
+    const { d, rows } = deps({});
+    await verifyCheckWith(["topic", "viola", "exp-001", "--run-failed"], d);
+    expect(rows[0]).toMatchObject({ verdict: "mismatch", reason: "rerun-failed" });
+  });
+  it("honors metric.md verify_epsilon", async () => {
+    const { d, rows } = deps({ readMetricMd: () => "**Primary metric:** accuracy\n**verify_epsilon:** 0.2\n", readStdout: () => "VERIFY_METRIC=0.75\n" });
+    await verifyCheckWith(["topic", "viola", "exp-001", "--stdout-file", "/x"], d);
+    expect(rows[0].verdict).toBe("verified");
+  });
+  it("missing --stdout-file and no --run-failed -> rc 2", async () => {
+    const { d } = deps({});
+    expect(await verifyCheckWith(["topic", "viola", "exp-001"], d)).toBe(2);
+  });
+});
