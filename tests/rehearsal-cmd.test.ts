@@ -5,7 +5,10 @@ import { freshHome } from "./helpers/tmpHome.js";
 import { initWith, type RehearsalInitDeps } from "../src/commands/rehearsal.js";
 import { metricWith, sotaWith } from "../src/commands/rehearsal.js";
 import { spawnAllWith, type SpawnAllDeps } from "../src/commands/rehearsal.js";
+import { dropPartWith, type DropPartDeps } from "../src/commands/rehearsal.js";
 import { experimentSendWith, type ExperimentSendDeps } from "../src/commands/rehearsal.js";
+import { experimentTimeoutDefault } from "../src/commands/rehearsal.js";
+import { consultTimeout } from "../src/core/contracts.js";
 import { scoreWith, liveScoreDeps } from "../src/commands/rehearsal.js";
 import { monitorRun } from "../src/commands/rehearsal.js";
 import { statusBriefWith } from "../src/commands/rehearsal.js";
@@ -187,13 +190,13 @@ describe("rehearsal spawn-all", () => {
     const rc = await spawnAllWith(["s2", "2"], deps({ spawn: async (a) => (a[0] === "inst2" ? 1 : 0) }), { home: h.home, cwd: h.home });
     expect(rc).toBe(1);
   });
-  it("rc 2 when fewer than 2 instruments can be picked", async () => {
+  it("rc 3 when fewer than 2 instruments can be picked", async () => {
     const h = home();
     await initWith(["--slug", "s3", "spawn topic 3"], okDeps({ opts: { home: h.home, cwd: h.home } }));
     const rc = await spawnAllWith(["s3", "2"], deps({ pickInstruments: () => ["only1"] }), { home: h.home, cwd: h.home });
-    expect(rc).toBe(2);
+    expect(rc).toBe(3);
   });
-  it("rc 2 when preflight omits a pane for some part (orphan guard)", async () => {
+  it("rc 3 when preflight omits a pane for some part (orphan guard)", async () => {
     const h = home();
     await initWith(["--slug", "s4", "spawn topic 4"], okDeps({ opts: { home: h.home, cwd: h.home } }));
     const d = deps({
@@ -205,7 +208,70 @@ describe("rehearsal spawn-all", () => {
         return 0;
       },
     });
-    expect(await spawnAllWith(["s4", "2"], d, { home: h.home, cwd: h.home })).toBe(2);
+    expect(await spawnAllWith(["s4", "2"], d, { home: h.home, cwd: h.home })).toBe(3);
+  });
+});
+
+describe("rehearsal drop-part", () => {
+  const TOPIC = "dp-topic";
+  const opts = (h: { home: string }) => ({ home: h.home, cwd: process.cwd() });
+  const noKill: DropPartDeps = { killPane: () => {} };
+  it("prunes the named instrument from parts.txt and reports remaining N", async () => {
+    const h = home();
+    const art = rehearsalArtDir(TOPIC, opts(h));
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "parts.txt"), "rex\nkeeli\ncolt\n");
+    expect(await dropPartWith([TOPIC, "keeli"], noKill, opts(h))).toBe(0);
+    expect(readFileSync(join(art, "parts.txt"), "utf8")).toBe("rex\ncolt\n");
+  });
+  it("writes an empty parts.txt when the last instrument is dropped", async () => {
+    const h = home();
+    const art = rehearsalArtDir(TOPIC, opts(h));
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "parts.txt"), "rex\n");
+    expect(await dropPartWith([TOPIC, "rex"], noKill, opts(h))).toBe(0);
+    expect(readFileSync(join(art, "parts.txt"), "utf8")).toBe("");
+  });
+  it("rc 1 when parts.txt is missing", async () => {
+    const h = home();
+    expect(await dropPartWith([TOPIC, "rex"], noKill, opts(h))).toBe(1);
+  });
+  it("rc 1 when the instrument is not present", async () => {
+    const h = home();
+    const art = rehearsalArtDir(TOPIC, opts(h));
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "parts.txt"), "rex\n");
+    expect(await dropPartWith([TOPIC, "ghost"], noKill, opts(h))).toBe(1);
+  });
+  it("rc 2 on bad usage", async () => {
+    const h = home();
+    expect(await dropPartWith([TOPIC], noKill, opts(h))).toBe(2);
+  });
+  it("best-effort kills the dropped instrument's preflight pane", async () => {
+    const h = home();
+    const art = rehearsalArtDir(TOPIC, opts(h));
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "parts.txt"), "rex\nkeeli\n");
+    writeFileSync(join(art, "preflight-panes.txt"), "rex\t%5\nkeeli\t%6\n");
+    const killed: string[] = [];
+    await dropPartWith([TOPIC, "keeli"], { killPane: (p) => killed.push(p) }, opts(h));
+    expect(killed).toEqual(["%6"]);
+  });
+});
+
+describe("rehearsal experiment timeout env override", () => {
+  const KEY = "CONSORT_REHEARSAL_EXPERIMENT_TIMEOUT_OVERRIDE";
+  const orig = process.env[KEY];
+  afterEach(() => { if (orig === undefined) delete process.env[KEY]; else process.env[KEY] = orig; });
+  it("honors a positive-integer override", () => {
+    process.env[KEY] = "900";
+    expect(experimentTimeoutDefault()).toBe(900);
+  });
+  it("falls through to the contracts default on a non-positive / non-integer value", () => {
+    process.env[KEY] = "0";
+    expect(experimentTimeoutDefault()).toBe(consultTimeout("experiment"));
+    process.env[KEY] = "abc";
+    expect(experimentTimeoutDefault()).toBe(consultTimeout("experiment"));
   });
 });
 
@@ -267,6 +333,10 @@ describe("rehearsal experiment-send", () => {
     const inbox = readFileSync(inboxPath(INST, MODEL, TOPIC), "utf8");
     expect(inbox).toContain("a plain baseline");
     expect(inbox).toContain("END_OF_INSTRUCTION");
+    // A1: the experiment template owns the SOLE done contract — no generic wrapper.
+    expect(inbox).not.toContain("<one-line summary>");
+    expect((inbox.match(/"event":"done"/g) ?? []).length).toBe(1);
+    expect(inbox).toContain("experiment exp-001 metric=<value> status=<status>");
     // state transition
     const st = readFileSync(join(sd, "state.txt"), "utf8");
     expect(st).toContain("phase=working");
@@ -274,6 +344,16 @@ describe("rehearsal experiment-send", () => {
     expect(st).toContain("exp_counter=1");
     expect(st).toContain("last_event=dispatched");
     void art; void o;
+  });
+
+  it("inbox carries exactly one done contract — the template's specific one, not the generic wrapper", async () => {
+    const h = home();
+    scaffold(h);
+    await experimentSendWith([TOPIC, INST, "exp-001", "baseline", "a plain baseline"], deps(h));
+    const inbox = readFileSync(inboxPath(INST, MODEL, TOPIC), "utf8");
+    expect(inbox).toContain("END_OF_INSTRUCTION");
+    expect(inbox).not.toContain("<one-line summary>");
+    expect((inbox.match(/"event":"done"/g) ?? []).length).toBe(1);
   });
 
   it("phase=working -> rc 1 (state untouched)", async () => {
