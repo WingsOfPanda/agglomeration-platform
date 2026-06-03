@@ -144,6 +144,25 @@ In ONE turn, do all of the following:
      field directly instead of parsing free-text from notes.
    - Write via tmp + rename for atomicity:
        printf '%s' '<json>' > result.json.tmp && mv result.json.tmp result.json
+   - Also emit a "verify" block so the Maestro can independently re-derive your
+     metric (it re-runs your scoring step outside your pane):
+
+       "verify": {
+         "kind": "rescore" | "rerun" | "none",
+         "command": "<shell cmd that recomputes metric_value WITHOUT retraining>",
+         "inputs": ["./predictions.json"],
+         "metric_from": "marker"
+       }
+
+     - kind="rescore": command re-scores a saved artifact (cheap). PREFER this.
+     - kind="rerun": command re-runs the whole experiment (only for metrics with
+       no separable artifact; costly — the Maestro runs it selectively).
+     - kind="none": you cannot provide a re-derivation (verdict = unavailable).
+     - The command MUST be deterministic (seed/pin) and print its result as the
+       LAST stdout line `VERIFY_METRIC=<number>` (metric_from="marker"), OR write
+       a JSON file `{"metric_value": <n>}` and set metric_from to its path.
+     - "inputs" lists every file the command reads; the Maestro hashes them now
+       and re-checks before re-running (tamper detection).
 
 5. **THIS IS THE TERMINAL STEP.** Immediately after `result.json` is on
    disk (via tmp+rename), emit ONE outbox event and STOP. Do not explore,

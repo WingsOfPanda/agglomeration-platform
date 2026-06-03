@@ -868,3 +868,12 @@ describe("rehearsal verify-check", () => {
     expect(await verifyCheckWith(["topic", "viola", "exp-001"], d)).toBe(2);
   });
 });
+
+describe("experiment template verify contract", () => {
+  it("instructs the part to emit a verify block + VERIFY_METRIC marker", () => {
+    const tpl = readFileSync("config/prompt-templates/rehearsal/experiment.md", "utf8");
+    expect(tpl).toContain("\"verify\"");
+    expect(tpl).toContain("VERIFY_METRIC=");
+    expect(tpl).toContain("rescore");
+  });
+});
