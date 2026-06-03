@@ -41,7 +41,7 @@ import { run as codaRun } from "./coda.js";
 type PathOpts = { home?: string; cwd?: string };
 
 function usage(): number {
-  log.error("usage: rehearsal <init|metric|sota|spawn-all|experiment-send|score|monitor|status-brief|finalize|refine|handoff-extract|teardown|fresh-part|forensics|abort|consensus> ...");
+  log.error("usage: rehearsal <init|metric|sota|spawn-all|drop-part|experiment-send|score|monitor|status-brief|finalize|refine|handoff-extract|teardown|fresh-part|forensics|abort|consensus> ...");
   return 2;
 }
 
@@ -199,23 +199,28 @@ const liveSpawnAllDeps: SpawnAllDeps = { preflight: preflightRun, spawn: spawnRu
 
 /** Pick N distinct codex parts for <topic>, preflight + batch-spawn them (port of score spawn-all,
  *  fixed to the codex provider). Writes parts.txt (one instrument per line) + spawn-results.tsv;
- *  returns spawnTally (all ok 0 / partial 1 / none ok 2; setup failures also 2). */
+ *  returns spawnTally (all ok 0 / partial 1 / none ok 2; preflight/setup failures 3). */
 export async function spawnAllWith(args: string[], deps: SpawnAllDeps, opts?: PathOpts): Promise<number> {
   const topic = args.find((a) => !a.startsWith("--") && !/^\d+$/.test(a)) ?? "";
   const n = parseInt(args.find((a) => /^\d+$/.test(a)) ?? "2", 10);
   if (!topic) { log.error("rehearsal spawn-all: topic required"); return 2; }
   const art = rehearsalArtDir(topic, opts);
 
+  // Clear any stale spawn-results.tsv from a prior attempt so a preflight-class failure cannot leave
+  // last attempt's rows behind for the Phase-3 degraded prompt to misread.
+  const staleResults = join(art, "spawn-results.tsv");
+  if (existsSync(staleResults)) rmSync(staleResults);
+
   const instruments = deps.pickInstruments(topic, n);
-  if (instruments.length < 2) { log.error(`rehearsal spawn-all: need >= 2 codex parts; picked ${instruments.length}`); return 2; }
+  if (instruments.length < 2) { log.error(`rehearsal spawn-all: need >= 2 codex parts; picked ${instruments.length}`); return 3; }
   const rows = instruments.map((instrument) => ({ instrument, provider: "codex" }));
   atomicWrite(join(art, "parts.txt"), instruments.join("\n") + "\n");
 
   const prc = await deps.preflight([topic, String(rows.length), "--roster", spawnRosterArg(rows), "--art-dir", art]);
-  if (prc !== 0) { log.error(`rehearsal spawn-all: preflight failed (rc ${prc})`); return 2; }
+  if (prc !== 0) { log.error(`rehearsal spawn-all: preflight failed (rc ${prc})`); return 3; }
   const panes = parsePanesFile(readFileSync(join(art, "preflight-panes.txt"), "utf8"));
   const orphans = rows.filter((r) => !panes.has(r.instrument));
-  if (orphans.length) { log.error(`rehearsal spawn-all: parts missing a preflight pane: ${orphans.map((r) => r.instrument).join(", ")}`); return 2; }
+  if (orphans.length) { log.error(`rehearsal spawn-all: parts missing a preflight pane: ${orphans.map((r) => r.instrument).join(", ")}`); return 3; }
 
   const cwd = deps.repoRoot();
   const results: SpawnResult[] = await Promise.all(rows.map(async (r) => ({
@@ -229,6 +234,41 @@ export async function spawnAllWith(args: string[], deps: SpawnAllDeps, opts?: Pa
   if (rc === 0) log.ok(`rehearsal spawn-all: ${nOk}/${rows.length} codex parts ready`);
   else log.warn(`rehearsal spawn-all: ${nOk}/${rows.length} codex parts ready (rc=${rc})`);
   return rc;
+}
+
+export interface DropPartDeps { killPane(paneId: string): void; }
+const liveDropPartDeps: DropPartDeps = { killPane: (p) => killNow(p) };
+
+// ---- drop-part (Phase-3 degraded proceed) — prune parts.txt + kill the dropped part's preflight pane ----
+// On a partial spawn the directive ships the rest: it drops a failed instrument by name so Phase 4's
+// per-part loop (which iterates parts.txt verbatim) no longer seeds state + a Monitor for a dead pane.
+// Mirrors perform's dropPartRun; rehearsal's parts.txt is 1-col (one instrument per line). Best-effort
+// kills the dropped instrument's preflight pane so it does not linger until final teardown.
+export async function dropPartWith(rest: string[], deps: DropPartDeps, opts?: PathOpts): Promise<number> {
+  const [topic, instrument] = rest;
+  if (!topic || !instrument || rest.length !== 2) { log.error("usage: rehearsal drop-part <topic> <instrument>"); return 2; }
+  const art = rehearsalArtDir(topic, opts);
+  const partsFile = join(art, "parts.txt");
+  if (!existsSync(partsFile)) { log.error(`rehearsal drop-part: parts.txt missing`); return 1; }
+  const kept: string[] = []; let dropped = false;
+  for (const line of readFileSync(partsFile, "utf8").split("\n")) {
+    if (line.length === 0) continue;
+    if (line === instrument) { dropped = true; continue; }
+    kept.push(line);
+  }
+  if (!dropped) { log.error(`rehearsal drop-part: no part for instrument=${instrument}`); return 1; }
+  atomicWrite(partsFile, kept.length ? kept.join("\n") + "\n" : "");
+  // Best-effort: kill the dropped instrument's preflight pane (never fatal).
+  const panesFile = join(art, "preflight-panes.txt");
+  if (existsSync(panesFile)) {
+    try {
+      const pane = parsePanesFile(readFileSync(panesFile, "utf8")).get(instrument);
+      if (pane) deps.killPane(pane);
+    } catch (e) { log.warn(`rehearsal drop-part: preflight pane kill failed (${(e as Error).message})`); }
+  }
+  log.ok(`rehearsal drop-part: dropped ${instrument}, ${kept.length} part(s) remain`);
+  process.stdout.write(`N=${kept.length}\n`);
+  return 0;
 }
 
 // ---- Phase C: experiment-send — dispatch ONE experiment to a persistent codex part ----
@@ -411,7 +451,7 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
 
   // Persist prompt.md, write the inbox (canonical fence), transition state.
   atomicWrite(join(branchDir, "prompt.md"), prompt);
-  inboxWrite(instrument, model, topic, prompt, { from: "maestro" });
+  inboxWrite(instrument, model, topic, prompt, { from: "maestro", noDoneInstruction: true });
   atomicWrite(stateTxt, buildDispatchState(readFileSync(stateTxt, "utf8"), expId, deps.now()));
 
   // Best-effort pane nudge (NON-FATAL; inbox + state already committed).
@@ -427,11 +467,18 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   return 0;
 }
 
+/** Per-experiment wall-clock default: env override > contracts.yaml/1800. (The --timeout flag wins at
+ *  the call site via `p.timeout ?? deps.consultTimeout()`, so the full chain is flag > env > default.) */
+export function experimentTimeoutDefault(): number {
+  const env = process.env.CONSORT_REHEARSAL_EXPERIMENT_TIMEOUT_OVERRIDE;
+  return env && /^[1-9][0-9]*$/.test(env) ? Number(env) : consultTimeout("experiment");
+}
+
 const liveExperimentSendDeps: ExperimentSendDeps = {
   now: () => isoUtc(),
   probeHardware: liveProbeHardware,
   paneSend,
-  consultTimeout: () => consultTimeout("experiment"),
+  consultTimeout: () => experimentTimeoutDefault(),
   runSmokeTest: (script, cwd, timeoutSec) => {
     try { execFileSync(script, [], { cwd, timeout: timeoutSec * 1000, encoding: "utf8" }); return { ok: true, stderr: "" }; }
     catch (e) { const err = e as { stderr?: string; message?: string }; return { ok: false, stderr: err.stderr ?? err.message ?? "" }; }
@@ -1448,6 +1495,7 @@ export async function run(args: string[]): Promise<number> {
     case "metric": return metricWith(rest);
     case "sota": return sotaWith(rest);
     case "spawn-all": return spawnAllWith(rest, liveSpawnAllDeps);
+    case "drop-part": return dropPartWith(rest, liveDropPartDeps);
     case "experiment-send": return experimentSendWith(applyArgsFile(rest), liveExperimentSendDeps);
     case "score": return scoreWith(rest, liveScoreDeps);
     case "monitor": return monitorRun(rest);
