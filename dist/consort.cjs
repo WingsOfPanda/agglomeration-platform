@@ -24889,6 +24889,7 @@ __export(prelude_exports, {
   forensicsRun: () => forensicsRun5,
   handoffExtractRun: () => handoffExtractRun,
   initWith: () => initWith5,
+  preludeWaitGateRun: () => preludeWaitGateRun,
   researchSendWith: () => researchSendWith2,
   researchWaitWith: () => researchWaitWith2,
   run: () => run14,
@@ -24898,7 +24899,7 @@ __export(prelude_exports, {
   teardownWith: () => teardownWith2
 });
 function usage5() {
-  log.error("usage: prelude <init|classify|spawn-all|research-send|research-wait|synth-preliminary|confidence|adversary-send|adversary-wait|synth-final|forensics|teardown|handoff-extract> ...");
+  log.error("usage: prelude <init|classify|spawn-all|research-send|research-wait|wait-gate|synth-preliminary|confidence|adversary-send|adversary-wait|synth-final|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 async function run14(args) {
@@ -24915,6 +24916,8 @@ async function run14(args) {
       return researchSendRun2(rest);
     case "research-wait":
       return researchWaitRun2(rest);
+    case "wait-gate":
+      return preludeWaitGateRun(rest);
     case "synth-preliminary":
       return synthPreliminaryRun(rest);
     case "confidence":
@@ -25269,6 +25272,41 @@ AS=question
   (0, import_node_fs37.writeFileSync)((0, import_node_path35.join)(art, `adversary-${instrument}.done`), "");
   log.ok(`prelude adversary-wait: ${instrument} AS=${as}`);
   return 0;
+}
+async function preludeWaitGateRun(rest) {
+  const [topic, phase] = rest;
+  if (!topic || !phase) {
+    log.error("usage: prelude wait-gate <topic> <research|adversary>");
+    return 2;
+  }
+  if (phase !== "research" && phase !== "adversary") {
+    log.error(`prelude wait-gate: phase must be research|adversary (got ${phase})`);
+    return 2;
+  }
+  const art = preludeArtDir(topic);
+  const rosterPath = (0, import_node_path35.join)(art, "roster.txt");
+  if (!(0, import_node_fs37.existsSync)(rosterPath)) {
+    log.error(`prelude wait-gate: roster.txt missing at ${art}`);
+    return 2;
+  }
+  const rows = parseRosterFile((0, import_node_fs37.readFileSync)(rosterPath, "utf8"));
+  if (rows.length === 0) {
+    log.error("prelude wait-gate: roster.txt has no parts");
+    return 2;
+  }
+  const key = phase === "research" ? "FS" : "AS";
+  const parts = rows.map((r) => {
+    const stateFile = (0, import_node_path35.join)(art, `${phase}-${r.instrument}.txt`);
+    return {
+      instrument: r.instrument,
+      doneExists: (0, import_node_fs37.existsSync)((0, import_node_path35.join)(art, `${phase}-${r.instrument}.done`)),
+      stateText: (0, import_node_fs37.existsSync)(stateFile) ? (0, import_node_fs37.readFileSync)(stateFile, "utf8") : null
+    };
+  });
+  const states = gateState(parts, key);
+  for (const s of states) process.stdout.write(`${s.instrument}	${s.status}
+`);
+  return states.every((s) => s.status === "terminal") ? 0 : 1;
 }
 async function synthFinalRun(rest) {
   const topic = rest[0];
