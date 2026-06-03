@@ -63,6 +63,8 @@ export interface MetricThresholds {
   primaryMetric: string;
   /** maximize|minimize from metric.md `**Direction:**`; undefined when absent (treated as maximize). */
   direction?: "maximize" | "minimize";
+  /** optional metric.md `**verify_epsilon:**` for A1 verify-by-re-execution; default 0.01 in callers. */
+  verifyEpsilon?: number;
   minOp?: string; minVal?: string;
   tgtOp?: string; tgtVal?: string;
   kRequired: number; plateauWindow: number; plateauThreshold: number;
@@ -76,6 +78,7 @@ export function parseMetricMd(text: string): MetricThresholds {
   let minOp: string | undefined, minVal: string | undefined;
   let tgtOp: string | undefined, tgtVal: string | undefined;
   let kRequired = 1, plateauWindow = 5, plateauThreshold = 0.01;
+  let verifyEpsilon: number | undefined;
   const opVal = (s: string): [string, string] => {
     const parts = s.trim().split(/\s+/);
     return [parts[0] ?? "", parts.slice(1).join(" ")];
@@ -89,8 +92,9 @@ export function parseMetricMd(text: string): MetricThresholds {
     else if ((m = line.match(/^\*\*K_corroboration:\*\*\s+(.*)$/))) { kRequired = parseInt(m[1].trim(), 10) || 1; }
     else if ((m = line.match(/^\*\*plateau_window:\*\*\s+(.*)$/))) { plateauWindow = parseInt(m[1].trim(), 10) || 5; }
     else if ((m = line.match(/^\*\*plateau_threshold:\*\*\s+(.*)$/))) { plateauThreshold = parseFloat(m[1].trim()) || 0.01; }
+    else if ((m = line.match(/^\*\*verify_epsilon:\*\*\s+(.*)$/))) { const n = parseFloat(m[1].trim()); if (!Number.isNaN(n)) verifyEpsilon = n; }
   }
-  return { primaryMetric, direction, minOp, minVal, tgtOp, tgtVal, kRequired, plateauWindow, plateauThreshold };
+  return { primaryMetric, direction, minOp, minVal, tgtOp, tgtVal, kRequired, plateauWindow, plateauThreshold, verifyEpsilon };
 }
 
 export interface SotaInput {

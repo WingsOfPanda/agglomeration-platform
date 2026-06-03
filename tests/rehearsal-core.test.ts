@@ -107,6 +107,10 @@ describe("parseMetricMd round-trips formatMetricBlock", () => {
     expect(parseMetricMd("**Primary metric:** accuracy\n**Direction:** maximize\n").direction).toBe("maximize");
     expect(parseMetricMd("**Primary metric:** f1\n").direction).toBeUndefined();
   });
+  it("parses verify_epsilon; undefined when absent", () => {
+    expect(parseMetricMd("**Primary metric:** acc\n**verify_epsilon:** 0.005\n").verifyEpsilon).toBe(0.005);
+    expect(parseMetricMd("**Primary metric:** acc\n").verifyEpsilon).toBeUndefined();
+  });
 });
 
 describe("formatSotaBlock", () => {
