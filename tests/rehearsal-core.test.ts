@@ -107,6 +107,10 @@ describe("parseMetricMd round-trips formatMetricBlock", () => {
     expect(parseMetricMd("**Primary metric:** accuracy\n**Direction:** maximize\n").direction).toBe("maximize");
     expect(parseMetricMd("**Primary metric:** f1\n").direction).toBeUndefined();
   });
+  it("parses verify_epsilon; undefined when absent", () => {
+    expect(parseMetricMd("**Primary metric:** acc\n**verify_epsilon:** 0.005\n").verifyEpsilon).toBe(0.005);
+    expect(parseMetricMd("**Primary metric:** acc\n").verifyEpsilon).toBeUndefined();
+  });
 });
 
 describe("formatSotaBlock", () => {
@@ -699,6 +703,35 @@ describe("rehearsalScore", () => {
     expect(okLines[0]).toContain("| 1 | exp-001 | cello |"); // 0.10 lowest = best
     expect(okLines[1]).toContain("| 2 | exp-001 | viola |"); // 0.40
   });
+
+  it("computeScore snapshots verify-manifest.json once for a verify-bearing result", () => {
+    const files: Record<string, string> = {
+      "/a/metric.md": "**Primary metric:** accuracy\n",
+      "/a/parts/viola/state.txt": "current_exp_id=exp-001\n",
+      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+        branch_id:"b",approach_label:"x",metric_name:"accuracy",metric_value:0.9,status:"ok",
+        runtime_s:1,log_paths:[],checkpoint_path:null,notes:"",
+        verify:{ kind:"rescore", command:"python s.py", inputs:["./preds.json"], metric_from:"marker" } }),
+      "/a/parts/viola/experiments/exp-001/preds.json": "PREDS",
+    };
+    const c = computeScore("/a", fakeFs(files), () => "T");
+    const man = c.manifests.find((m) => m.path === "/a/parts/viola/experiments/exp-001/verify-manifest.json");
+    expect(man).toBeDefined();
+    expect(JSON.parse(man!.body)).toMatchObject({ command: "python s.py" });
+    expect(JSON.parse(man!.body).hashes["./preds.json"]).toMatch(/^[0-9a-f]{64}$/);
+  });
+  it("computeScore writes no manifest when one already exists (idempotent)", () => {
+    const files: Record<string, string> = {
+      "/a/metric.md": "**Primary metric:** accuracy\n",
+      "/a/parts/viola/state.txt": "current_exp_id=exp-001\n",
+      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+        branch_id:"b",approach_label:"x",metric_name:"accuracy",metric_value:0.9,status:"ok",
+        runtime_s:1,log_paths:[],checkpoint_path:null,notes:"",
+        verify:{ kind:"rescore", command:"c", inputs:[], metric_from:"marker" } }),
+      "/a/parts/viola/experiments/exp-001/verify-manifest.json": "{\"command\":\"c\",\"hashes\":{}}\n",
+    };
+    expect(computeScore("/a", fakeFs(files), () => "T").manifests).toHaveLength(0);
+  });
 });
 
 function fakeFs(files: Record<string, string>): ScoreFs {
@@ -912,5 +945,28 @@ describe("rehearsalBrief", () => {
     const out = buildStatusBrief({ parts: [part()], scoreboardMd: null, completion: SIG });
     expect(out.endsWith("\n")).toBe(true);
     expect(out.endsWith("\n\n")).toBe(false);
+  });
+});
+
+describe("buildStatusBrief verify annotation", () => {
+  const sb = [
+    "<!-- scoreboard schema_version=2 -->", "# Scoreboard", "",
+    "| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |",
+    "|---|---|---|---|---|---|---|---|",
+    "| 1 | exp-002 | viola | 0.9600 | ok | 1.00s | b | accuracy |",
+    "| 2 | exp-001 | oboe | 0.9000 | ok | 1.00s | a | accuracy |",
+  ].join("\n") + "\n";
+  it("annotates each top row with its verdict from the verification map", () => {
+    const out = buildStatusBrief({
+      parts: [], scoreboardMd: sb, completion: null,
+      verdicts: { "viola/exp-002": "verified", "oboe/exp-001": "mismatch" },
+    });
+    expect(out).toMatch(/exp-002 — 0\.9600 — accuracy \[verified\]/);
+    expect(out).toMatch(/exp-001 — 0\.9000 — accuracy \[mismatch!\]/);
+  });
+  it("omits the annotation when no verdicts map is given (back-compat)", () => {
+    const out = buildStatusBrief({ parts: [], scoreboardMd: sb, completion: null });
+    expect(out).toContain("exp-002 — 0.9600 — accuracy");
+    expect(out).not.toContain("[");
   });
 });
