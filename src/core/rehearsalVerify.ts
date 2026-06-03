@@ -68,3 +68,42 @@ export const VERIFICATION_TSV_HEADER = "exp_id\tinstrument\tverdict\treason\trec
 export function verificationRow(r: VerificationRow): string {
   return `${r.expId}\t${r.instrument}\t${r.verdict}\t${r.reason}\t${r.recomputed}\t${r.ts}\n`;
 }
+
+export interface VerifyManifest { command: string; hashes: Record<string, string>; }
+
+/** Snapshot command + sha256(inputs utf8) at score-time. null when kind=none / no command. */
+export function buildManifest(block: VerifyBlock, readInput: (rel: string) => string | null): VerifyManifest | null {
+  if (block.kind === "none" || !block.command) return null;
+  const hashes: Record<string, string> = {};
+  for (const rel of block.inputs ?? []) {
+    const c = readInput(rel);
+    if (c !== null) hashes[rel] = hashContent(c);
+  }
+  return { command: block.command, hashes };
+}
+
+export type VerifyPlan =
+  | { run: false; verdict: Verdict; reason: string }
+  | { run: true; command: string; metricFrom: string };
+
+export interface PlanInput {
+  block: VerifyBlock | undefined;
+  manifest: VerifyManifest | null;
+  authorizeRerun: boolean;
+  readInput: (rel: string) => string | null;
+}
+
+export function planVerify(p: PlanInput): VerifyPlan {
+  const b = p.block;
+  if (!b || b.kind === "none" || !b.command) {
+    return { run: false, verdict: "unavailable", reason: b ? "part-declined" : "no-contract" };
+  }
+  if (b.kind === "rerun" && !p.authorizeRerun) return { run: false, verdict: "pending", reason: "rerun-deferred" };
+  if (p.manifest === null) return { run: false, verdict: "unavailable", reason: "no-manifest" };
+  for (const rel of b.inputs ?? []) {
+    const c = p.readInput(rel);
+    if (c === null) return { run: false, verdict: "unavailable", reason: `missing-input:${rel}` };
+    if (hashContent(c) !== p.manifest.hashes[rel]) return { run: false, verdict: "mismatch", reason: `provenance:${rel}` };
+  }
+  return { run: true, command: b.command, metricFrom: b.metric_from ?? "marker" };
+}
