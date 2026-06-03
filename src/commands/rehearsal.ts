@@ -199,23 +199,28 @@ const liveSpawnAllDeps: SpawnAllDeps = { preflight: preflightRun, spawn: spawnRu
 
 /** Pick N distinct codex parts for <topic>, preflight + batch-spawn them (port of score spawn-all,
  *  fixed to the codex provider). Writes parts.txt (one instrument per line) + spawn-results.tsv;
- *  returns spawnTally (all ok 0 / partial 1 / none ok 2; setup failures also 2). */
+ *  returns spawnTally (all ok 0 / partial 1 / none ok 2; preflight/setup failures 3). */
 export async function spawnAllWith(args: string[], deps: SpawnAllDeps, opts?: PathOpts): Promise<number> {
   const topic = args.find((a) => !a.startsWith("--") && !/^\d+$/.test(a)) ?? "";
   const n = parseInt(args.find((a) => /^\d+$/.test(a)) ?? "2", 10);
   if (!topic) { log.error("rehearsal spawn-all: topic required"); return 2; }
   const art = rehearsalArtDir(topic, opts);
 
+  // Clear any stale spawn-results.tsv from a prior attempt so a preflight-class failure cannot leave
+  // last attempt's rows behind for the Phase-3 degraded prompt to misread.
+  const staleResults = join(art, "spawn-results.tsv");
+  if (existsSync(staleResults)) rmSync(staleResults);
+
   const instruments = deps.pickInstruments(topic, n);
-  if (instruments.length < 2) { log.error(`rehearsal spawn-all: need >= 2 codex parts; picked ${instruments.length}`); return 2; }
+  if (instruments.length < 2) { log.error(`rehearsal spawn-all: need >= 2 codex parts; picked ${instruments.length}`); return 3; }
   const rows = instruments.map((instrument) => ({ instrument, provider: "codex" }));
   atomicWrite(join(art, "parts.txt"), instruments.join("\n") + "\n");
 
   const prc = await deps.preflight([topic, String(rows.length), "--roster", spawnRosterArg(rows), "--art-dir", art]);
-  if (prc !== 0) { log.error(`rehearsal spawn-all: preflight failed (rc ${prc})`); return 2; }
+  if (prc !== 0) { log.error(`rehearsal spawn-all: preflight failed (rc ${prc})`); return 3; }
   const panes = parsePanesFile(readFileSync(join(art, "preflight-panes.txt"), "utf8"));
   const orphans = rows.filter((r) => !panes.has(r.instrument));
-  if (orphans.length) { log.error(`rehearsal spawn-all: parts missing a preflight pane: ${orphans.map((r) => r.instrument).join(", ")}`); return 2; }
+  if (orphans.length) { log.error(`rehearsal spawn-all: parts missing a preflight pane: ${orphans.map((r) => r.instrument).join(", ")}`); return 3; }
 
   const cwd = deps.repoRoot();
   const results: SpawnResult[] = await Promise.all(rows.map(async (r) => ({
@@ -462,11 +467,18 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   return 0;
 }
 
+/** Per-experiment wall-clock default: env override > contracts.yaml/1800. (The --timeout flag wins at
+ *  the call site via `p.timeout ?? deps.consultTimeout()`, so the full chain is flag > env > default.) */
+export function experimentTimeoutDefault(): number {
+  const env = process.env.CONSORT_REHEARSAL_EXPERIMENT_TIMEOUT_OVERRIDE;
+  return env && /^[1-9][0-9]*$/.test(env) ? Number(env) : consultTimeout("experiment");
+}
+
 const liveExperimentSendDeps: ExperimentSendDeps = {
   now: () => isoUtc(),
   probeHardware: liveProbeHardware,
   paneSend,
-  consultTimeout: () => consultTimeout("experiment"),
+  consultTimeout: () => experimentTimeoutDefault(),
   runSmokeTest: (script, cwd, timeoutSec) => {
     try { execFileSync(script, [], { cwd, timeout: timeoutSec * 1000, encoding: "utf8" }); return { ok: true, stderr: "" }; }
     catch (e) { const err = e as { stderr?: string; message?: string }; return { ok: false, stderr: err.stderr ?? err.message ?? "" }; }
