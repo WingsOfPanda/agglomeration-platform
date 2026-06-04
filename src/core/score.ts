@@ -4,6 +4,7 @@ import { existsSync, readdirSync, mkdirSync, readFileSync } from "node:fs";
 import { atomicWrite } from "./atomic.js";
 import { topicDir } from "./paths.js";
 import { kvParse } from "../args.js";
+import { splitNonCommentLines } from "./text.js";
 import type { DocMode } from "./scoreDoc.js";
 export { deriveSlug } from "./solo.js"; // identical to consult's slug rule; reused, not duplicated
 
@@ -54,7 +55,7 @@ export function formatRosterFile(rows: RosterRow[], isoStamp: string): string {
 
 /** Split text into trimmed, non-blank, non-`#`-comment lines. */
 export function nonCommentLines(text: string): string[] {
-  return text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#"));
+  return splitNonCommentLines(text);
 }
 
 /** Parse roster.txt: skip #/blank lines; keep rows with both fields.

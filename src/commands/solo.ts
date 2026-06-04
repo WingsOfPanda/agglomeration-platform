@@ -143,7 +143,7 @@ export async function turnSendWith(topic: string, round: number, d: TurnSendDeps
 
   let prompt: string;
   if (round === 1) {
-    const brief = existsSync(join(art, "task-brief.md")) ? readFileSync(join(art, "task-brief.md"), "utf8") : "";
+    const brief = readIfExists(join(art, "task-brief.md"));
     const branch = readField(join(exec, "branch.txt")) || `feat/solo-${topic}`;
     prompt = composeRound1Prompt(brief, branch);
   } else {
@@ -232,7 +232,7 @@ export async function finishWith(topic: string, r: Runner, hasGh: boolean): Prom
     log.ok(`solo finish: branch-only — kept ${branch}, restored ${startBranch}`);
     return 0;
   }
-  const brief = existsSync(join(soloArtDir(topic), "task-brief.md")) ? readFileSync(join(soloArtDir(topic), "task-brief.md"), "utf8") : "";
+  const brief = readIfExists(join(soloArtDir(topic), "task-brief.md"));
   const verify = readField(join(exec, "verify-result.txt"));
   const res = finishBranch(r, {
     branch, startBranch, hasGh,
