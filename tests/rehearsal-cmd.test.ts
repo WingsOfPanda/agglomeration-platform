@@ -412,6 +412,28 @@ describe("rehearsal experiment-send", () => {
     expect(await experimentSendWith([TOPIC, INST, "exp-001", "x", "y"], deps(h))).toBe(1);
   });
 
+  it("--parent with a valid same-lane parent writes lineage.txt and returns 0 (B2)", async () => {
+    const h = home();
+    const { art } = scaffold(h);
+    mkdirSync(experimentDir(art, INST, "exp-001"), { recursive: true });
+    const rc = await experimentSendWith(["--parent", "exp-001", TOPIC, INST, "exp-002", "typed-routing", "tweak lr only"], deps(h));
+    expect(rc).toBe(0);
+    const lp = join(experimentDir(art, INST, "exp-002"), "lineage.txt");
+    expect(existsSync(lp)).toBe(true);
+    expect(readFileSync(lp, "utf8")).toContain("parent_id=exp-001");
+  });
+  it("--parent to a non-existent exp returns rc 1 (B2)", async () => {
+    const h = home();
+    scaffold(h);
+    expect(await experimentSendWith(["--parent", "exp-099", TOPIC, INST, "exp-002", "x", "y"], deps(h))).toBe(1);
+  });
+  it("no --parent writes no lineage.txt (Draft) and returns 0 (B2)", async () => {
+    const h = home();
+    const { art } = scaffold(h);
+    expect(await experimentSendWith([TOPIC, INST, "exp-001", "single-pass", "baseline"], deps(h))).toBe(0);
+    expect(existsSync(join(experimentDir(art, INST, "exp-001"), "lineage.txt"))).toBe(false);
+  });
+
   it("missing art dir -> rc 1", async () => {
     const h = home();
     // no scaffold at all
@@ -590,7 +612,7 @@ describe("rehearsal score", () => {
     const writes: { path: string; content: string }[] = [];
     const comp: ScoreComputation = {
       scoreboardMd: "", resultsTsv: "", sidecars: [], staleSidecars: [], phaseClears: [],
-      warnings: [], manifests: [], sanityRows: [],
+      warnings: [], manifests: [], sanityRows: [], lineageRows: [],
       coverageRows: [{ family: "single-pass", count: 2, best: "0.96", ts: "T" }],
     };
     const deps: RehearsalScoreDeps = {
@@ -605,6 +627,30 @@ describe("rehearsal score", () => {
     const cov = writes.find((w) => w.path === join(art, "coverage.tsv"));
     expect(cov).toBeDefined();
     expect(cov!.content).toBe("family\tcount\tbest\tts\nsingle-pass\t2\t0.96\tT\n");
+  });
+
+  it("writes lineage.tsv from computeScore's lineageRows (B2)", async () => {
+    const h = home();
+    const art = rehearsalArtDir("topic", { home: h.home });
+    mkdirSync(partsDir(art), { recursive: true });   // scoreWith requires parts/ to exist
+    const writes: { path: string; content: string }[] = [];
+    const comp: ScoreComputation = {
+      scoreboardMd: "", resultsTsv: "", sidecars: [], staleSidecars: [], phaseClears: [],
+      warnings: [], manifests: [], sanityRows: [], coverageRows: [],
+      lineageRows: [{ expId: "exp-003", instrument: "oboe", parentId: "exp-002", knobsChanged: "2", verdict: "improve-multi", ts: "T" }],
+    };
+    const deps: RehearsalScoreDeps = {
+      computeScore: () => comp,
+      fs: { exists: () => false, read: () => null, listDir: () => [] },
+      writeAtomic: (path, content) => { writes.push({ path, content }); },
+      removeFile: () => {},
+      now: () => "T",
+      opts: { home: h.home },
+    };
+    expect(await scoreWith(["topic"], deps)).toBe(0);
+    const lin = writes.find((w) => w.path === join(art, "lineage.tsv"));
+    expect(lin).toBeDefined();
+    expect(lin!.content).toBe("exp_id\tinstrument\tparent_id\tknobs_changed\tverdict\tts\nexp-003\toboe\texp-002\t2\timprove-multi\tT\n");
   });
 });
 

@@ -1,9 +1,11 @@
 # Rehearsal research-validity upgrade — roadmap
 
 **Status (updated 2026-06-04):** the **validity track (Q1) is SHIPPED** — C0 → A1 → A3 → A2, versions
-0.1.12–0.1.15. Remaining: the **idea-generation track (Q2)** — **B1 → B2** — with the heavy tail
-(**A4 / B3 / C1**) deferred and reconsidered after B2. Each phase is its own
-`brainstorm -> spec -> plan -> ship` cycle with its own `docs/superpowers/specs/` design doc.
+0.1.12–0.1.15. The standalone **K-streak direction bug** (A4 tail) shipped in **0.1.16 (PR #38)**.
+The **idea-generation track (Q2)**: **B1 (coverage & diversity) SHIPPED in 0.1.17 (PR #39)**;
+**B2 (operators & ideation quality) is NEXT** (spec `2026-06-04-rehearsal-b2-operators-design.md`),
+with the heavy tail (**A4 multi-seed / B3 / C1**) deferred and reconsidered after B2. Each phase is its
+own `brainstorm -> spec -> plan -> ship` cycle with its own `docs/superpowers/specs/` design doc.
 
 ## Why this exists
 
@@ -85,7 +87,13 @@ bounded re-dispatch (cap `metric.md max_debug_attempts`, default 2) + Lane-D cou
 
 ## REMAINING — idea-generation track (Q2)
 
-### B1 · Coverage & diversity guard  (NEXT; cheap, high value; deps: none)
+### B1 · Coverage & diversity guard — SHIPPED 0.1.17 (PR #39)
+Spec: `2026-06-04-rehearsal-b1-coverage-diversity-design.md`. Approach-aware plateau
+(`globalFlat AND familiesActive>=min_families AND familiesImproving==0`, strictly additive — kills the
+single-family gameable stop) + a per-family `coverage.tsv` tally surfaced as a `**Coverage:**` line,
+counting only FEASIBLE ok (B1×A2: excludes A2-infeasible). New `rehearsalCoverage` core
+(`normalizeFamily` shared by tally + plateau); parse-only `min_families` knob (default 2). Original
+goal below, satisfied:
 *Goal:* make "did we explore enough angles?" mechanical so the loop can't converge prematurely on one
 approach family.
 - **Mechanical (score-pass + tsv arc):** a **`coverage.tsv`** computed in `computeScore` from each
@@ -100,7 +108,12 @@ approach family.
 - *Closes:* "no mechanical coverage/diversity guard", "premature convergence unguarded",
   "plateau narrow/gameable". *Mechanism:* Si et al. diversity collapse; MAP-Elites / Quality-Diversity.
 
-### B2 · Operators & ideation quality  (the proven direction bottleneck; deps: B1)
+### B2 · Operators & ideation quality  (NEXT; the proven direction bottleneck; deps: B1 [done])
+Spec: `2026-06-04-rehearsal-b2-operators-design.md` (approved). Directive-heavy: typed **Draft/Improve**
+operators (resolves the B1×B2 tension — Draft = new family, Improve = single-change on a parent),
+diverse Draft (discovery lenses + Verbalized Sampling + avoid-set), single-change Improve contract,
+SOTA re-grounding into selection, run-all + post-hoc metric (no pre-run pairwise). One light advisory
+mechanical piece: `--parent` flag + `lineage.tsv` (audit-knob diff), surfacing only `improve-multi`.
 *Goal:* improve per-round idea quality — AIRA: "operators, not search, are the bottleneck."
 - **Mechanical (small):** **one-measurable-change vs a named `parent_id`** — `experiment-send`
   validates an idea changes exactly one variable vs its parent, so a metric delta is attributable.
@@ -118,9 +131,10 @@ approach family.
 Multi-seed + a paired-bootstrap/ASO statistical gate; **K-corroboration re-runs the SAME config**
 (today `rehearsalComplete.ts:45-92` counts distinct at-target experiments, so a lucky seed satisfies
 completion); sub-threshold deltas → "inconclusive". *Open question:* is k× compute worth it for the
-user's tasks? **STANDALONE BUG (shippable independently, C0-style):** the K-streak in `checkCompletion`
-(`rehearsalComplete.ts:73`, `improving = mv > best`) is direction-naive → wrong for `minimize`. Can be
-fixed now without the multi-seed machinery. *Deps: A1.*
+user's tasks? **STANDALONE BUG — FIXED in 0.1.16 (PR #38):** the K-streak in `checkCompletion`
+(`improving = mv > best`) was direction-naive (wrong for `minimize`); now `direction`-aware
+(seed `+Infinity`/`mv<best` for minimize). The remaining A4 work (multi-seed + paired-bootstrap/ASO
+gate) stays deferred. *Deps: A1.*
 
 ### B3 · Search, budget & steering  (lowest leverage; likely CUT)
 Greedy-best-first + epsilon-revisit; ASHA cheap-fidelity rungs; periodic stage-gate re-rooting;
@@ -137,12 +151,12 @@ genuinely defends an open-ended metric against a deliberately-gaming part. *Deps
 ## Dependency graph (remaining)
 
 ```
-[C0,A1,A3,A2 done]      B1 ──► B2 ──► C1
-                                └────► (A4 / B3 deferred; A4 K-streak bug standalone)
+[C0,A1,A3,A2 done] [K-streak fixed 0.1.16] [B1 done 0.1.17]      B2 ──► C1
+                                                                  └────► (A4 / B3 deferred)
 ```
 
-Recommended next: persist this refresh (done), fix the **K-streak bug** (quick standalone), then
-**B1 → B2**, and decide A4/B3/C1's fate after B2 (B3 likely cut; C1 is the high-value tail item).
+Recommended next: ship **B2** (operators & ideation quality — spec approved), then decide A4/B3/C1's
+fate (B3 likely cut; C1 is the high-value tail item and consumes the lineage edge B2 records).
 
 ## Source base
 
