@@ -241,6 +241,25 @@ describe("buildScoreboard", () => {
   it("treats omitted direction the same as explicit 'maximize' (descending, backward-compatible)", () => {
     expect(buildScoreboard(rows)).toBe(buildScoreboard(rows, "maximize"));
   });
+  it("routes an ok+infeasible row to the xN group below the ranked rows", () => {
+    const rows2: ScoreRow[] = [
+      { expId: "exp-001", instrument: "oboe",  metric: "0.90", status: "ok", runtime: "10", approach: "a", metricName: "accuracy" },
+      { expId: "exp-002", instrument: "viola", metric: "0.99", status: "ok", runtime: "20", approach: "b", metricName: "accuracy", infeasibleReason: "mismatch" },
+    ];
+    const lines = buildScoreboard(rows2).split("\n").filter((l) => /^\| /.test(l) && !/Rank|---/.test(l));
+    expect(lines[0]).toContain("| 1 | exp-001 | oboe |");
+    expect(lines[1]).toContain("| x2 | exp-002 | viola |");
+    expect(lines[1]).toContain("infeasible:mismatch");
+  });
+  it("checkCompletion ignores an infeasible row (no checkCompletion change)", () => {
+    const sb = buildScoreboard([
+      row("exp-001", "oboe", "0.90"),
+      { expId: "exp-002", instrument: "oboe", metric: "0.99", status: "ok", runtime: "1", approach: "a", metricName: "accuracy", infeasibleReason: "under-run" },
+    ]);
+    const c = checkCompletion(sb, metricMd);
+    expect(c.targetMet).toBe(false); // infeasible 0.99 excluded -> target >= 0.95 not met
+    expect(c.floorMet).toBe(true);   // ranked 0.90 meets min_acceptable >= 0.90
+  });
 });
 
 describe("normalizeResult", () => {
