@@ -342,11 +342,12 @@ describe("checkCompletion", () => {
     ]);
     expect(checkCompletion(sb, metricMd).kSoFar).toBe(1);
   });
-  it("flags plateau when the last window of ok metrics is tight", () => {
+  it("flags plateau when the window is tight across >= min_families families", () => {
     const sb = buildScoreboard([
-      row("exp-001", "oboe", "0.951"), row("exp-002", "oboe", "0.952"), row("exp-003", "oboe", "0.953"),
+      frow("exp-001", "oboe", "0.951", "single-pass"),
+      frow("exp-002", "oboe", "0.952", "single-pass"),
+      frow("exp-003", "viola", "0.953", "typed-routing"),
     ]);
-    // 3 ok rows, spread 0.002 < 0.01 -> plateau.
     expect(checkCompletion(sb, metricMd).plateau).toBe(true);
   });
   it("no plateau when fewer than plateau_window ok rows", () => {
@@ -377,6 +378,59 @@ describe("checkCompletion", () => {
     ], "minimize");
     // chains: [0.06] (0.08 worse breaks) then [0.05] -> longest = 1.
     expect(checkCompletion(sb, minMetricMd).kSoFar).toBe(1);
+  });
+
+  // B1: approach-aware plateau. Helper that sets the approach family on a ScoreRow.
+  function frow(expId: string, instrument: string, metric: string, approach: string): ScoreRow {
+    return { expId, instrument, metric, status: "ok", runtime: "1", approach, metricName: "accuracy" };
+  }
+  const covMetric = formatMetricBlock({
+    primary_metric: "accuracy", direction: "maximize",
+    min_acceptable: ">= 0.90", target: ">= 0.95",
+    K_corroboration: "2", plateau_window: "3", plateau_threshold: "0.01",
+  });
+
+  it("does NOT plateau when a single family fills a flat window (the B1 bug fix)", () => {
+    const sb = buildScoreboard([
+      frow("exp-001", "oboe", "0.951", "single-pass"),
+      frow("exp-002", "oboe", "0.952", "single-pass"),
+      frow("exp-003", "oboe", "0.953", "single-pass"),
+    ]);
+    const c = checkCompletion(sb, covMetric);
+    expect(c.plateau).toBe(false);
+    expect(c.familiesActive).toBe(1);
+    expect(c.minFamilies).toBe(2);
+  });
+  it("plateaus when two families are both stalled and the global window is flat", () => {
+    const sb = buildScoreboard([
+      frow("exp-001", "oboe", "0.951", "single-pass"),
+      frow("exp-002", "oboe", "0.952", "single-pass"),
+      frow("exp-003", "viola", "0.953", "typed-routing"),
+      frow("exp-004", "viola", "0.952", "typed-routing"),
+    ]);
+    const c = checkCompletion(sb, covMetric);
+    expect(c.familiesActive).toBe(2);
+    expect(c.familiesImproving).toBe(0);
+    expect(c.plateau).toBe(true);
+  });
+  it("does NOT plateau when one family is still improving", () => {
+    const sb = buildScoreboard([
+      frow("exp-001", "oboe", "0.952", "single-pass"),
+      frow("exp-002", "oboe", "0.952", "single-pass"),
+      frow("exp-003", "viola", "0.951", "typed-routing"),
+      frow("exp-004", "viola", "0.970", "typed-routing"),
+    ]);
+    const c = checkCompletion(sb, covMetric);
+    expect(c.familiesImproving).toBe(1);
+    expect(c.plateau).toBe(false);
+  });
+  it("does NOT plateau when the global window is not flat (additive guard)", () => {
+    const sb = buildScoreboard([
+      frow("exp-001", "oboe", "0.951", "single-pass"),
+      frow("exp-002", "oboe", "0.952", "single-pass"),
+      frow("exp-003", "viola", "0.99", "typed-routing"),
+    ]);
+    expect(checkCompletion(sb, covMetric).plateau).toBe(false);
   });
 });
 
