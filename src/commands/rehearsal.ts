@@ -964,8 +964,19 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
     }
   }
 
+  const itsv = join(art, "inspection.tsv");
+  let inspections: Record<string, string> | undefined;
+  if (existsSync(itsv)) {
+    inspections = {};
+    for (const line of readFileSync(itsv, "utf8").split("\n")) {
+      if (!line || line.startsWith("exp_id\t")) continue;
+      const cells = line.split("\t");           // exp_id, instrument, verdict, ...
+      if (cells[0] && cells[1] && cells[2]) inspections[`${cells[1]}/${cells[0]}`] = cells[2];
+    }
+  }
+
   const latest = p.latestInstrument && p.latestExp ? { instrument: p.latestInstrument, exp: p.latestExp } : undefined;
-  out(buildStatusBrief({ parts, scoreboardMd, completion, latest, verdicts, suspects, coverage, multiChange }));
+  out(buildStatusBrief({ parts, scoreboardMd, completion, latest, verdicts, suspects, coverage, multiChange, inspections }));
   return 0;
 }
 
