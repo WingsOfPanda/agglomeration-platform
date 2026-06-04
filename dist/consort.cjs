@@ -670,6 +670,16 @@ var init_ipc = __esm({
   }
 });
 
+// src/core/text.ts
+function splitNonCommentLines(text) {
+  return text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#"));
+}
+var init_text = __esm({
+  "src/core/text.ts"() {
+    "use strict";
+  }
+});
+
 // src/core/solo.ts
 function soloArtDir(topic) {
   return (0, import_node_path4.join)(topicDir(topic), "_solo");
@@ -832,7 +842,7 @@ function formatRosterFile(rows, isoStamp) {
 ${body}${rows.length ? "\n" : ""}`;
 }
 function nonCommentLines(text) {
-  return text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#"));
+  return splitNonCommentLines(text);
 }
 function parseRosterFile(text) {
   return nonCommentLines(text).map((l) => {
@@ -933,6 +943,7 @@ var init_score = __esm({
     init_atomic();
     init_paths();
     init_args();
+    init_text();
     init_solo();
   }
 });
@@ -17675,7 +17686,7 @@ var init_coda = __esm({
 
 // src/core/providers.ts
 function parseProviderList(text) {
-  return text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#"));
+  return splitNonCommentLines(text);
 }
 function readProviderList(path6) {
   if (!(0, import_node_fs21.existsSync)(path6)) return [];
@@ -17706,6 +17717,7 @@ var init_providers = __esm({
   "src/core/providers.ts"() {
     "use strict";
     import_node_fs21 = require("node:fs");
+    init_text();
   }
 });
 
@@ -18618,7 +18630,7 @@ async function turnSendWith(topic, round, d) {
   }
   let prompt;
   if (round === 1) {
-    const brief = (0, import_node_fs25.existsSync)((0, import_node_path20.join)(art, "task-brief.md")) ? (0, import_node_fs25.readFileSync)((0, import_node_path20.join)(art, "task-brief.md"), "utf8") : "";
+    const brief = readIfExists((0, import_node_path20.join)(art, "task-brief.md"));
     const branch = readField((0, import_node_path20.join)(exec, "branch.txt")) || `feat/solo-${topic}`;
     prompt = composeRound1Prompt(brief, branch);
   } else {
@@ -18717,7 +18729,7 @@ async function finishWith(topic, r, hasGh) {
     log.ok(`solo finish: branch-only \u2014 kept ${branch}, restored ${startBranch}`);
     return 0;
   }
-  const brief = (0, import_node_fs25.existsSync)((0, import_node_path20.join)(soloArtDir(topic), "task-brief.md")) ? (0, import_node_fs25.readFileSync)((0, import_node_path20.join)(soloArtDir(topic), "task-brief.md"), "utf8") : "";
+  const brief = readIfExists((0, import_node_path20.join)(soloArtDir(topic), "task-brief.md"));
   const verify = readField((0, import_node_path20.join)(exec, "verify-result.txt"));
   const res = finishBranch(r, {
     branch,
@@ -24353,6 +24365,15 @@ function parseStatusBriefArgs(args) {
   }
   return { topic, latestInstrument, latestExp };
 }
+function readTsvRows(path6, headerToken) {
+  if (!(0, import_node_fs35.existsSync)(path6)) return void 0;
+  const rows = [];
+  for (const line of (0, import_node_fs35.readFileSync)(path6, "utf8").split("\n")) {
+    if (!line || line.startsWith(headerToken)) continue;
+    rows.push(line.split("	"));
+  }
+  return rows;
+}
 async function statusBriefWith(args, v = {}) {
   const out = v.stdout ?? ((l) => {
     process.stdout.write(l + "\n");
@@ -24366,7 +24387,7 @@ async function statusBriefWith(args, v = {}) {
   const parts = [];
   const partsFile = (0, import_node_path32.join)(art, "parts.txt");
   if ((0, import_node_fs35.existsSync)(partsFile)) {
-    const instruments = (0, import_node_fs35.readFileSync)(partsFile, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+    const instruments = splitNonCommentLines((0, import_node_fs35.readFileSync)(partsFile, "utf8"));
     for (const instrument of instruments) {
       let phase = "?", currentOrLast = "\u2014";
       const stateTxt = (0, import_node_path32.join)(partStateDir(art, instrument), "state.txt");
@@ -24404,55 +24425,35 @@ async function statusBriefWith(args, v = {}) {
     }
   }
   const { scoreboardMd, completion } = gatherCompletion(art);
-  const vtsv = (0, import_node_path32.join)(art, "verification.tsv");
+  const vrows = readTsvRows((0, import_node_path32.join)(art, "verification.tsv"), "exp_id	");
   let verdicts;
-  if ((0, import_node_fs35.existsSync)(vtsv)) {
+  if (vrows) {
     verdicts = {};
-    for (const line of (0, import_node_fs35.readFileSync)(vtsv, "utf8").split("\n")) {
-      if (!line || line.startsWith("exp_id	")) continue;
-      const c3 = line.split("	");
-      if (c3[0] && c3[1] && c3[2]) verdicts[`${c3[1]}/${c3[0]}`] = c3[2];
-    }
+    for (const c3 of vrows) if (c3[0] && c3[1] && c3[2]) verdicts[`${c3[1]}/${c3[0]}`] = c3[2];
   }
-  const stsv = (0, import_node_path32.join)(art, "sanity.tsv");
+  const srows = readTsvRows((0, import_node_path32.join)(art, "sanity.tsv"), "exp_id	");
   let suspects;
-  if ((0, import_node_fs35.existsSync)(stsv)) {
+  if (srows) {
     suspects = {};
-    for (const line of (0, import_node_fs35.readFileSync)(stsv, "utf8").split("\n")) {
-      if (!line || line.startsWith("exp_id	")) continue;
-      const c3 = line.split("	");
-      if (c3[0] && c3[1] && c3[2]) (suspects[`${c3[1]}/${c3[0]}`] ??= []).push(c3[2]);
-    }
+    for (const c3 of srows) if (c3[0] && c3[1] && c3[2]) (suspects[`${c3[1]}/${c3[0]}`] ??= []).push(c3[2]);
   }
-  const ctsv = (0, import_node_path32.join)(art, "coverage.tsv");
+  const crows = readTsvRows((0, import_node_path32.join)(art, "coverage.tsv"), "family	");
   let coverage;
-  if ((0, import_node_fs35.existsSync)(ctsv)) {
+  if (crows) {
     coverage = [];
-    for (const line of (0, import_node_fs35.readFileSync)(ctsv, "utf8").split("\n")) {
-      if (!line || line.startsWith("family	")) continue;
-      const cells = line.split("	");
-      if (cells[0]) coverage.push({ family: cells[0], count: parseInt(cells[1] ?? "0", 10) || 0, best: cells[2] ?? "", ts: cells[3] ?? "" });
-    }
+    for (const cells of crows) if (cells[0]) coverage.push({ family: cells[0], count: parseInt(cells[1] ?? "0", 10) || 0, best: cells[2] ?? "", ts: cells[3] ?? "" });
   }
-  const ltsv = (0, import_node_path32.join)(art, "lineage.tsv");
+  const lrows = readTsvRows((0, import_node_path32.join)(art, "lineage.tsv"), "exp_id	");
   let multiChange;
-  if ((0, import_node_fs35.existsSync)(ltsv)) {
+  if (lrows) {
     multiChange = {};
-    for (const line of (0, import_node_fs35.readFileSync)(ltsv, "utf8").split("\n")) {
-      if (!line || line.startsWith("exp_id	")) continue;
-      const cells = line.split("	");
-      if (cells[0] && cells[1] && cells[4] === "improve-multi") multiChange[`${cells[1]}/${cells[0]}`] = true;
-    }
+    for (const cells of lrows) if (cells[0] && cells[1] && cells[4] === "improve-multi") multiChange[`${cells[1]}/${cells[0]}`] = true;
   }
-  const itsv = (0, import_node_path32.join)(art, "inspection.tsv");
+  const irows = readTsvRows((0, import_node_path32.join)(art, "inspection.tsv"), "exp_id	");
   let inspections;
-  if ((0, import_node_fs35.existsSync)(itsv)) {
+  if (irows) {
     inspections = {};
-    for (const line of (0, import_node_fs35.readFileSync)(itsv, "utf8").split("\n")) {
-      if (!line || line.startsWith("exp_id	")) continue;
-      const cells = line.split("	");
-      if (cells[0] && cells[1] && cells[2]) inspections[`${cells[1]}/${cells[0]}`] = cells[2];
-    }
+    for (const cells of irows) if (cells[0] && cells[1] && cells[2]) inspections[`${cells[1]}/${cells[0]}`] = cells[2];
   }
   const latest = p.latestInstrument && p.latestExp ? { instrument: p.latestInstrument, exp: p.latestExp } : void 0;
   out(buildStatusBrief({ parts, scoreboardMd, completion, latest, verdicts, suspects, coverage, multiChange, inspections }));
@@ -24682,39 +24683,24 @@ async function finalizeWith(args, deps) {
   const warningsPath = (0, import_node_path32.join)(art, "warnings.txt");
   computeSizeWarnings(art, instruments, (deps.sizeWarnGb ?? 2) * GIB);
   computeAuditWarnings(art, instruments, warningsPath);
-  const sanityTsv = (0, import_node_path32.join)(art, "sanity.tsv");
-  if ((0, import_node_fs35.existsSync)(sanityTsv)) {
-    const extra = [];
-    for (const line of (0, import_node_fs35.readFileSync)(sanityTsv, "utf8").split("\n")) {
-      if (!line || line.startsWith("exp_id	")) continue;
-      const c3 = line.split("	");
-      if (c3[2] === "audit-knob-drift") continue;
-      if (c3[0] && c3[1] && c3[2]) extra.push(`sanity	${c3[1]}/${c3[0]}	${c3[2]}	${c3[3] ?? ""}`);
-    }
-    if (extra.length) (0, import_node_fs35.appendFileSync)(warningsPath, extra.join("\n") + "\n");
+  const sanityExtra = [];
+  for (const c3 of readTsvRows((0, import_node_path32.join)(art, "sanity.tsv"), "exp_id	") ?? []) {
+    if (c3[2] === "audit-knob-drift") continue;
+    if (c3[0] && c3[1] && c3[2]) sanityExtra.push(`sanity	${c3[1]}/${c3[0]}	${c3[2]}	${c3[3] ?? ""}`);
   }
-  const lineageTsv = (0, import_node_path32.join)(art, "lineage.tsv");
-  if ((0, import_node_fs35.existsSync)(lineageTsv)) {
-    const extra = [];
-    for (const line of (0, import_node_fs35.readFileSync)(lineageTsv, "utf8").split("\n")) {
-      if (!line || line.startsWith("exp_id	")) continue;
-      const c3 = line.split("	");
-      if (c3[4] !== "improve-multi") continue;
-      if (c3[0] && c3[1]) extra.push(`lineage	${c3[1]}/${c3[0]}	improve-multi	parent=${c3[2] ?? ""} knobs_changed=${c3[3] ?? ""}`);
-    }
-    if (extra.length) (0, import_node_fs35.appendFileSync)(warningsPath, extra.join("\n") + "\n");
+  if (sanityExtra.length) (0, import_node_fs35.appendFileSync)(warningsPath, sanityExtra.join("\n") + "\n");
+  const lineageExtra = [];
+  for (const c3 of readTsvRows((0, import_node_path32.join)(art, "lineage.tsv"), "exp_id	") ?? []) {
+    if (c3[4] !== "improve-multi") continue;
+    if (c3[0] && c3[1]) lineageExtra.push(`lineage	${c3[1]}/${c3[0]}	improve-multi	parent=${c3[2] ?? ""} knobs_changed=${c3[3] ?? ""}`);
   }
-  const inspectionTsv = (0, import_node_path32.join)(art, "inspection.tsv");
-  if ((0, import_node_fs35.existsSync)(inspectionTsv)) {
-    const extra = [];
-    for (const line of (0, import_node_fs35.readFileSync)(inspectionTsv, "utf8").split("\n")) {
-      if (!line || line.startsWith("exp_id	")) continue;
-      const c3 = line.split("	");
-      if (c3[2] !== "not-reproduced") continue;
-      if (c3[0] && c3[1]) extra.push(`reimpl	${c3[1]}/${c3[0]}	not-reproduced	${c3[3] ?? ""}`);
-    }
-    if (extra.length) (0, import_node_fs35.appendFileSync)(warningsPath, extra.join("\n") + "\n");
+  if (lineageExtra.length) (0, import_node_fs35.appendFileSync)(warningsPath, lineageExtra.join("\n") + "\n");
+  const reimplExtra = [];
+  for (const c3 of readTsvRows((0, import_node_path32.join)(art, "inspection.tsv"), "exp_id	") ?? []) {
+    if (c3[2] !== "not-reproduced") continue;
+    if (c3[0] && c3[1]) reimplExtra.push(`reimpl	${c3[1]}/${c3[0]}	not-reproduced	${c3[3] ?? ""}`);
   }
+  if (reimplExtra.length) (0, import_node_fs35.appendFileSync)(warningsPath, reimplExtra.join("\n") + "\n");
   const statusRows = [];
   for (const instrument of instruments) {
     const stateTxt = (0, import_node_path32.join)(partStateDir(art, instrument), "state.txt");
@@ -25234,6 +25220,7 @@ var init_rehearsal2 = __esm({
     init_log();
     init_args();
     init_atomic();
+    init_text();
     init_archive();
     init_solo();
     init_rehearsalMetric();
