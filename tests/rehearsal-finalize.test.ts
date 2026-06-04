@@ -240,6 +240,10 @@ describe("rehearsal finalize", () => {
     expect(w).toContain("lineage");
     expect(w).toContain("improve-multi");
     expect(w).toContain("oboe/exp-003");
+    // ...and it must reach the rendered ## Warnings section of session-summary.md (not just warnings.txt).
+    const ss = readFileSync(join(art, "session-summary.md"), "utf8");
+    expect(ss).toContain("## Warnings");
+    expect(ss).toContain("lineage: oboe/exp-003 improve-multi");
   });
 
   it("failed part is preserved (not coerced) when no terminal event reconciles it", async () => {

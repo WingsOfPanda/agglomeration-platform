@@ -1251,6 +1251,19 @@ describe("rehearsalBrief", () => {
     const out = buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG });
     expect(out).not.toContain("[multi-change]");
   });
+  it("tags only the improve-multi row, not a non-multi sibling (B2 surfacing discipline)", () => {
+    const sb =
+      "| Rank | Exp | Instrument | Metric | Status | Runtime | Approach | Metric name |\n" +
+      "|---|---|---|---|---|---|---|---|\n" +
+      "| 1 | exp-003 | oboe | 0.95 | ok | 5 | single-pass | accuracy |\n" +
+      "| 2 | exp-002 | viola | 0.93 | ok | 5 | typed-routing | accuracy |\n";
+    // only exp-003 is improve-multi; exp-002 (improve-single/unverified) is NOT in the map.
+    const out = buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG, multiChange: { "oboe/exp-003": true } });
+    const l3 = out.split("\n").find((l) => l.includes("oboe/exp-003")) ?? "";
+    const l2 = out.split("\n").find((l) => l.includes("viola/exp-002")) ?? "";
+    expect(l3).toContain("[multi-change]");
+    expect(l2).not.toContain("[multi-change]");
+  });
 });
 
 describe("buildStatusBrief verify annotation", () => {

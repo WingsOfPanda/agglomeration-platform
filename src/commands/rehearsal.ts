@@ -1207,6 +1207,8 @@ export async function finalizeWith(args: string[], deps: RehearsalFinalizeDeps):
       warnings.push(`- audit_warn: ${f[1]} ${f[2]} (${f[3]})`);
     } else if (f[0] === "sanity") {
       warnings.push(`- sanity: ${f[1]} ${f[2]} (${f[3]})`);
+    } else if (f[0] === "lineage") {
+      warnings.push(`- lineage: ${f[1]} ${f[2]} (${f[3]})`);
     }
   }
 
