@@ -22819,25 +22819,27 @@ function checkCompletion(scoreboardMd, metricMd) {
     if (cmp(r.metric, t.minOp, t.minVal)) floorMet = true;
     if (cmp(r.metric, t.tgtOp, t.tgtVal)) targetMet = true;
   }
+  const minimize = t.direction === "minimize";
+  const SEED = minimize ? Infinity : -Infinity;
   const tuples = [...allRows].sort((a2, b) => (a2.instrument < b.instrument ? -1 : a2.instrument > b.instrument ? 1 : 0) || (a2.exp < b.exp ? -1 : a2.exp > b.exp ? 1 : 0));
-  let kSoFar = 0, chain = 0, best = -Infinity, prevInst = "";
+  let kSoFar = 0, chain = 0, best = SEED, prevInst = "";
   for (const r of tuples) {
     if (r.instrument !== prevInst) {
       if (chain > kSoFar) kSoFar = chain;
       chain = 0;
-      best = -Infinity;
+      best = SEED;
       prevInst = r.instrument;
     }
     const mv = parseFloat(r.metric);
     const atTarget = cmp(r.metric, t.tgtOp, t.tgtVal);
-    const improving = best === -Infinity || mv > best;
+    const improving = best === SEED || (minimize ? mv < best : mv > best);
     if (r.status === "ok" && NUM.test(r.metric) && atTarget && improving) {
       chain += 1;
       best = mv;
     } else {
       if (chain > kSoFar) kSoFar = chain;
       chain = 0;
-      best = -Infinity;
+      best = SEED;
     }
   }
   if (chain > kSoFar) kSoFar = chain;
