@@ -83,6 +83,9 @@ export function renderScoreboardRow(
 export interface ScoreRow {
   expId: string; instrument: string; metric: string;
   status: string; runtime: string; approach: string; metricName: string;
+  /** A2: trigger reason (mismatch / under-run / log-contradiction / audit-knob-drift) when infeasible;
+   *  set => the row is routed to the non-ranked `xN` group instead of the ranked leader set. */
+  infeasibleReason?: string;
 }
 
 function expNum(expId: string): number {
@@ -90,21 +93,23 @@ function expNum(expId: string): number {
   return Number.isNaN(n) ? Number.POSITIVE_INFINITY : n;
 }
 
-/** Build the full scoreboard.md. OK rows sorted best-metric-first (metric-desc for a
- *  maximize objective, metric-asc for minimize) / runtime-asc / exp-id; fail+partial grouped
- *  below sorted by exp-id; rank counter continuous; partial -> ~ rank. `direction` comes from
- *  metric.md (undefined => maximize, keeping the pre-fix descending sort byte-identical).
- *  NB: deep-research.sh always sorted `-k1,1rn` (descending) regardless of direction; making the
- *  sort direction-aware is a deliberate consort divergence (rehearsal research-validity roadmap C0)
- *  so the Maestro/handoff/teardown read the true leader for minimize objectives. */
+/** Build the full scoreboard.md. OK rows sorted best-metric-first (metric-desc for a maximize
+ *  objective, metric-asc for minimize) / runtime-asc / exp-id; fail+partial grouped below sorted by
+ *  exp-id; rank counter continuous; partial -> ~ rank. `direction` from metric.md (undefined =>
+ *  maximize, byte-identical to the pre-fix descending sort; a deliberate consort divergence — roadmap C0).
+ *  A2: ok rows whose `infeasibleReason` is set are routed to a separate `x<rank>` group between the
+ *  ranked rows and the fail group (visible but out of the integer-ranked leader set, so
+ *  checkCompletion/status-brief — which match only integer ranks — exclude them automatically). */
 export function buildScoreboard(rows: ScoreRow[], direction?: "maximize" | "minimize"): string {
-  const ok = rows.filter((r) => r.status === "ok");
+  const ranked = rows.filter((r) => r.status === "ok" && !r.infeasibleReason);
+  const infeasible = rows.filter((r) => r.status === "ok" && r.infeasibleReason);
   const fail = rows.filter((r) => r.status !== "ok");
   const minimize = direction === "minimize";
-  ok.sort((a, b) =>
+  ranked.sort((a, b) =>
     (minimize ? parseFloat(a.metric) - parseFloat(b.metric) : parseFloat(b.metric) - parseFloat(a.metric)) ||
     (parseFloat(a.runtime) - parseFloat(b.runtime)) ||
     (expNum(a.expId) - expNum(b.expId)));
+  infeasible.sort((a, b) => expNum(a.expId) - expNum(b.expId));
   fail.sort((a, b) => expNum(a.expId) - expNum(b.expId));
 
   const lines: string[] = [
@@ -115,8 +120,12 @@ export function buildScoreboard(rows: ScoreRow[], direction?: "maximize" | "mini
     "|---|---|---|---|---|---|---|---|",
   ];
   let rank = 1;
-  for (const r of ok) {
+  for (const r of ranked) {
     lines.push(`| ${rank} | ${r.expId} | ${r.instrument} | ${renderScoreboardRow(r.metric, r.runtime, r.metricName, r.status, r.approach)} |`);
+    rank++;
+  }
+  for (const r of infeasible) {
+    lines.push(`| x${rank} | ${r.expId} | ${r.instrument} | ${renderScoreboardRow(r.metric, r.runtime, r.metricName, `infeasible:${r.infeasibleReason}`, r.approach)} |`);
     rank++;
   }
   for (const r of fail) {
