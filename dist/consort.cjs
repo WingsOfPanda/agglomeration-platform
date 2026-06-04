@@ -22779,7 +22779,7 @@ function computeScore(art, fs, now) {
   }
   const coverageTs = now();
   const coverageRows = tallyCoverage(
-    rows.filter((r) => r.status === "ok"),
+    rows.filter((r) => r.status === "ok" && !r.infeasibleReason),
     parsed?.direction
   ).map((r) => ({ ...r, ts: coverageTs }));
   const phaseClears = [];

@@ -939,6 +939,37 @@ describe("rehearsalScore", () => {
       { family: "typed-routing", count: 1, best: "0.94", ts: "2026-06-04T10:00:00Z" },
     ]);
   });
+
+  it("excludes A2-infeasible (mismatch) experiments from the coverage tally (B1 x A2)", () => {
+    const files: Record<string, string> = {
+      "/a/metric.md": "**Primary metric:** accuracy\n**Direction:** maximize\n",
+      // typed-routing/exp-002 has a verify mismatch -> classifyInfeasible -> infeasibleReason set.
+      "/a/verification.tsv": "exp_id\tinstrument\tverdict\treason\trecomputed\tts\nexp-002\tviola\tmismatch\tx\t\tT\n",
+      "/a/parts/oboe/experiments/exp-001/result.json": JSON.stringify({
+        branch_id:"b",approach_label:"single-pass",metric_name:"accuracy",metric_value:0.96,status:"ok",
+        runtime_s:5,log_paths:[],checkpoint_path:null,notes:"" }),
+      "/a/parts/viola/experiments/exp-002/result.json": JSON.stringify({
+        branch_id:"b",approach_label:"typed-routing",metric_name:"accuracy",metric_value:0.99,status:"ok",
+        runtime_s:5,log_paths:[],checkpoint_path:null,notes:"" }),
+    };
+    const c = computeScore("/a", fakeFs(files), () => "T");
+    // typed-routing was infeasible (mismatch) -> excluded; only the feasible single-pass family counts.
+    expect(c.coverageRows).toEqual([{ family: "single-pass", count: 1, best: "0.96", ts: "T" }]);
+  });
+
+  it("re-walks fresh each pass -> coverage counts do not accumulate across score passes (B1)", () => {
+    const files: Record<string, string> = {
+      "/a/metric.md": "**Primary metric:** accuracy\n**Direction:** maximize\n",
+      "/a/parts/oboe/experiments/exp-001/result.json": JSON.stringify({
+        branch_id:"b",approach_label:"single-pass",metric_name:"accuracy",metric_value:0.90,status:"ok",
+        runtime_s:5,log_paths:[],checkpoint_path:null,notes:"" }),
+    };
+    const fs = fakeFs(files);
+    const first = computeScore("/a", fs, () => "T").coverageRows;
+    const second = computeScore("/a", fs, () => "T").coverageRows;
+    expect(second).toEqual(first);                                  // identical, not doubled
+    expect(second).toEqual([{ family: "single-pass", count: 1, best: "0.9", ts: "T" }]);
+  });
 });
 
 function fakeFs(files: Record<string, string>): ScoreFs {

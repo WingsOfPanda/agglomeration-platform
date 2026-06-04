@@ -90,8 +90,11 @@ hybrid	1	0.902	2026-06-04T10:00:00Z
 ```
 
 - `COVERAGE_TSV_HEADER = "family\tcount\tbest\tts\n"`.
-- `count` = number of **ok** experiments in that family (matches the leaderboard, which skips invalid
-  results via the `continue` in `computeScore`; coverage counts diversity-of-**successes**).
+- `count` = number of **feasible ok** experiments in that family — `status==ok` AND not A2-infeasible
+  (`!infeasibleReason`). Invalid results are already skipped via the `continue` in `computeScore`;
+  excluding A2-infeasible too keeps the tally consistent with the plateau's `familiesActive` (which
+  drops `x<rank>` infeasible rows via the integer-rank parse) and honors the diversity-of-**successes**
+  intent — a family whose every run was botched is not validly explored and must not inflate coverage.
 - `best` = the direction-aware best metric string in that family (informational; rendered in the
   brief).
 - `ts` = the score-pass timestamp (`deps.now()`), same value on every row of one snapshot.

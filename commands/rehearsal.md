@@ -219,7 +219,7 @@ brief entirely when `RAN_SCORE=0` (only heartbeat/question/stale/stuck fired —
    `x<rank>` rows are INFEASIBLE (ran but invalid -- excluded from leader/completion/Lane-D);
    `~<rank>`/`<rank>` rows are partial/fail.
 
-   Coverage (B1): the `**Coverage:** N families [fam x count, ...]; min_families=M (met|short by K)`
+   Coverage (B1): the `**Coverage:** N families [fam×count, ...]; min_families=M (met|short by K)`
    line shows how many distinct approach families have landed ok results. `(short by K)` means
    exploration is still narrow (fewer than `min_families` families) -- a signal to open a new family
    on the next dispatch rather than tune the current leader.
