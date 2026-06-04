@@ -1244,6 +1244,20 @@ export async function finalizeWith(args: string[], deps: RehearsalFinalizeDeps):
     if (extra.length) appendFileSync(warningsPath, extra.join("\n") + "\n");
   }
 
+  // C1: fold a not-reproduced inspection into warnings.txt (advisory in the summary; the row is
+  // already demoted to x<rank> by computeScore).
+  const inspectionTsv = join(art, "inspection.tsv");
+  if (existsSync(inspectionTsv)) {
+    const extra: string[] = [];
+    for (const line of readFileSync(inspectionTsv, "utf8").split("\n")) {
+      if (!line || line.startsWith("exp_id\t")) continue;
+      const c = line.split("\t");                 // exp_id, instrument, verdict, reason, reimpl_metric, ts
+      if (c[2] !== "not-reproduced") continue;
+      if (c[0] && c[1]) extra.push(`reimpl\t${c[1]}/${c[0]}\tnot-reproduced\t${c[3] ?? ""}`);
+    }
+    if (extra.length) appendFileSync(warningsPath, extra.join("\n") + "\n");
+  }
+
   // 9. render session-summary.md (FULL re-render; wholesale atomic replace).
   const statusRows: StatusRow[] = [];
   for (const instrument of instruments) {
@@ -1308,6 +1322,8 @@ export async function finalizeWith(args: string[], deps: RehearsalFinalizeDeps):
       warnings.push(`- sanity: ${f[1]} ${f[2]} (${f[3]})`);
     } else if (f[0] === "lineage") {
       warnings.push(`- lineage: ${f[1]} ${f[2]} (${f[3]})`);
+    } else if (f[0] === "reimpl") {
+      warnings.push(`- reimpl: ${f[1]} ${f[2]} (${f[3]})`);
     }
   }
 

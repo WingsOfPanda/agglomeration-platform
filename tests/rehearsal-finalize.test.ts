@@ -246,6 +246,22 @@ describe("rehearsal finalize", () => {
     expect(ss).toContain("lineage: oboe/exp-003 improve-multi");
   });
 
+  it("folds a not-reproduced inspection into warnings.txt AND ## Warnings (C1)", async () => {
+    const h = home();
+    const { art } = scaffoldArt(h, ["oboe"]);
+    scaffoldPart(h, art, "oboe", "phase=idle\n", "");
+    writeFileSync(join(art, "inspection.tsv"),
+      "exp_id\tinstrument\tverdict\treason\treimpl_metric\tts\n" +
+      "exp-003\toboe\tnot-reproduced\tvalue:0.5vs0.9\t0.5\tT\n");
+    expect(await finalizeWith([TOPIC], deps(h))).toBe(0);
+    const w = readFileSync(join(art, "warnings.txt"), "utf8");
+    expect(w).toContain("reimpl");
+    expect(w).toContain("not-reproduced");
+    const ss = readFileSync(join(art, "session-summary.md"), "utf8");
+    expect(ss).toContain("## Warnings");
+    expect(ss).toContain("reimpl: oboe/exp-003 not-reproduced");
+  });
+
   it("failed part is preserved (not coerced) when no terminal event reconciles it", async () => {
     const h = home();
     const { art } = scaffoldArt(h, ["timpani"]);
