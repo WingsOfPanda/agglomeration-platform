@@ -14,7 +14,7 @@ import { rehearsalArtDir, partsDir, partStateDir, experimentsDir, experimentDir,
 import { computeScore, type ScoreFs, type ScoreComputation } from "../core/rehearsalScore.js";
 import { sanityRow, SANITY_TSV_HEADER } from "../core/rehearsalSanity.js";
 import { coverageRow, COVERAGE_TSV_HEADER, type CoverageRow } from "../core/rehearsalCoverage.js";
-import { lineageRow, LINEAGE_TSV_HEADER, type LineageRow } from "../core/rehearsalLineage.js";
+import { lineageRow, LINEAGE_TSV_HEADER } from "../core/rehearsalLineage.js";
 import { parseState, mergeState, reconcileFromOutbox, readHaltFlag } from "../core/rehearsalState.js";
 import { checkCompletion, checkTimeBudget } from "../core/rehearsalComplete.js";
 import { normalizeResult, type ResultJson } from "../core/rehearsalResult.js";
