@@ -44,7 +44,7 @@ function loadArgsFileVerbatim(path: string, valueFlags: Set<string>): string[] {
   for (;;) {
     while (i < raw.length && isWs(raw[i])) i++;            // skip whitespace before the next token
     if (i >= raw.length) break;
-    if (!(raw[i] === "-" && raw[i + 1] === "-")) break;     // first non-"--" token: body starts here
+    if (!(raw[i] === "-" && raw[i + 1] === "-")) break;     // first token not starting with "--": body starts here (all consecutive leading "--" tokens are peeled — see header)
     let j = i;
     while (j < raw.length && !isWs(raw[j])) j++;            // read the flag token
     const flag = raw.slice(i, j);
