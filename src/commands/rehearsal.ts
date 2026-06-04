@@ -7,6 +7,7 @@ import { join, relative, resolve } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile, kvParse } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
+import { readIfExistsOrNull } from "../core/fsread.js";
 import { splitNonCommentLines } from "../core/text.js";
 import { archiveTopic, isoUtc } from "../core/archive.js";
 import { deriveSlug } from "../core/solo.js";
@@ -603,13 +604,13 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
 
   const probe = deps.probeHardware();
   const baselinePath = join(art, "hardware.txt");
-  const baseline = existsSync(baselinePath) ? readFileSync(baselinePath, "utf8") : null;
+  const baseline = readIfExistsOrNull(baselinePath);
   const hardwareBlock = assembleHardwareBlock(probe, hardwareDiffAlert(baseline, probe));
 
   const topicTextPath = join(art, "topic.txt");
   const topicText = existsSync(topicTextPath) ? readFileSync(topicTextPath, "utf8") : "";
   const sotaPath = join(art, "sota.md");
-  const sotaBlock = buildSotaBlock(existsSync(sotaPath) ? readFileSync(sotaPath, "utf8") : null);
+  const sotaBlock = buildSotaBlock(readIfExistsOrNull(sotaPath));
   const peersBlock = formatPeersBlock(gatherPeers(art, instrument));
   const timeBudgetS = String(p.timeout ?? deps.consultTimeout());
 
@@ -728,7 +729,7 @@ export const liveScoreDeps: RehearsalScoreDeps = {
   computeScore,
   fs: {
     exists: existsSync,
-    read: (p) => (existsSync(p) ? readFileSync(p, "utf8") : null),
+    read: readIfExistsOrNull,
     listDir: (p) => { try { return readdirSync(p).sort(); } catch { return []; } },  // ENOENT-safe, per ScoreFs contract
   },
   writeAtomic: atomicWrite,
@@ -779,8 +780,8 @@ export async function monitorRun(args: string[], opts?: { home?: string; cwd?: s
   const initBuf = existsSync(outbox) ? readFileSync(outbox) : Buffer.alloc(0);
   let state = initScanState(
     initBuf.length, initBuf.toString("utf8"),
-    existsSync(cursorFile) ? readFileSync(cursorFile, "utf8") : null,
-    existsSync(rescanFile) ? readFileSync(rescanFile, "utf8") : null,
+    readIfExistsOrNull(cursorFile),
+    readIfExistsOrNull(rescanFile),
   );
   persist(state);
 
@@ -841,7 +842,7 @@ function readResultCells(resultPath: string): { approach: string; metric: string
 /** scoreboard.md text + completion signals (BOTH scoreboard.md and metric.md must exist, else nulls). */
 function gatherCompletion(art: string): { scoreboardMd: string | null; completion: ReturnType<typeof checkCompletion> | null } {
   const sbPath = join(art, "scoreboard.md");
-  const scoreboardMd = existsSync(sbPath) ? readFileSync(sbPath, "utf8") : null;
+  const scoreboardMd = readIfExistsOrNull(sbPath);
   const metricPath = join(art, "metric.md");
   const completion = scoreboardMd !== null && existsSync(metricPath)
     ? checkCompletion(scoreboardMd, readFileSync(metricPath, "utf8"))
@@ -1306,7 +1307,7 @@ export async function finalizeWith(args: string[], deps: RehearsalFinalizeDeps):
   }
 
   const haltPath = join(art, "halt.flag");
-  const halt = readHaltFlag(existsSync(haltPath) ? readFileSync(haltPath, "utf8") : null);
+  const halt = readHaltFlag(readIfExistsOrNull(haltPath));
 
   const startedIso = existsSync(startPath) ? readFileSync(startPath, "utf8").trim() : "(unknown)";
   const budget = existsSync(budgetPath) ? readFileSync(budgetPath, "utf8").trim() : "none";
@@ -1760,15 +1761,15 @@ function appendVerificationRow(art: string, instrument: string, expId: string, r
 const liveVerifyPlanDeps: VerifyPlanDeps = {
   readResult: (art, i, e) => { const p = join(experimentDir(art, i, e), "result.json"); if (!existsSync(p)) return null; try { return JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>; } catch { return null; } },
   readManifest: (art, i, e) => { const p = join(experimentDir(art, i, e), "verify-manifest.json"); if (!existsSync(p)) return null; try { return JSON.parse(readFileSync(p, "utf8")) as VerifyManifest; } catch { return null; } },
-  readInput: (art, i, e, rel) => { const p = join(experimentDir(art, i, e), rel); return existsSync(p) ? readFileSync(p, "utf8") : null; },
+  readInput: (art, i, e, rel) => { const p = join(experimentDir(art, i, e), rel); return readIfExistsOrNull(p); },
   writeRow: appendVerificationRow,
   now: () => isoUtc(),
 };
 const liveVerifyCheckDeps: VerifyCheckDeps = {
   readResult: liveVerifyPlanDeps.readResult,
-  readMetricMd: (art) => { const p = join(art, "metric.md"); return existsSync(p) ? readFileSync(p, "utf8") : null; },
-  readStdout: (p) => (existsSync(p) ? readFileSync(p, "utf8") : null),
-  readJson: (p) => (existsSync(p) ? readFileSync(p, "utf8") : null),
+  readMetricMd: (art) => readIfExistsOrNull(join(art, "metric.md")),
+  readStdout: readIfExistsOrNull,
+  readJson: readIfExistsOrNull,
   writeRow: appendVerificationRow,
   now: () => isoUtc(),
 };
@@ -1782,7 +1783,7 @@ function appendInspectionRow(art: string, instrument: string, expId: string, row
 }
 const liveInspectPlanDeps: InspectPlanDeps = {
   readResult: liveVerifyPlanDeps.readResult,
-  readMetricMd: (art) => { const p = join(art, "metric.md"); return existsSync(p) ? readFileSync(p, "utf8") : null; },
+  readMetricMd: (art) => readIfExistsOrNull(join(art, "metric.md")),
   inspectionCount: (art) => { const p = join(art, "inspection.tsv"); if (!existsSync(p)) return 0; return readFileSync(p, "utf8").split("\n").filter((l) => l && !l.startsWith("exp_id\t")).length; },
   partProvider: (_art, i, topic) => resolveModel(i, topic),
   writeRow: appendInspectionRow,
@@ -1790,9 +1791,9 @@ const liveInspectPlanDeps: InspectPlanDeps = {
 };
 const liveInspectCheckDeps: InspectCheckDeps = {
   readResult: liveVerifyPlanDeps.readResult,
-  readMetricMd: (art) => { const p = join(art, "metric.md"); return existsSync(p) ? readFileSync(p, "utf8") : null; },
-  readStdout: (p) => (existsSync(p) ? readFileSync(p, "utf8") : null),
-  readJson: (p) => (existsSync(p) ? readFileSync(p, "utf8") : null),
+  readMetricMd: (art) => readIfExistsOrNull(join(art, "metric.md")),
+  readStdout: readIfExistsOrNull,
+  readJson: readIfExistsOrNull,
   writeRow: appendInspectionRow,
   now: () => isoUtc(),
 };

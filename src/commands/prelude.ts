@@ -27,7 +27,7 @@ import { composePreludeResearchPrompt, composeAdversaryPrompt, litGuidance } fro
 import { run as sendRun } from "./send.js";
 import { run as spawnRun } from "./spawn.js";
 import { run as preflightRun } from "./preflight.js";
-import { readIfExists as readIf } from "../core/fsread.js";
+import { readIfExists as readIf, readIfExistsOrNull } from "../core/fsread.js";
 
 function usage(): number {
   log.error("usage: prelude <init|classify|spawn-all|research-send|research-wait|wait-gate|synth-preliminary|" +
@@ -366,7 +366,7 @@ export async function preludeWaitGateRun(rest: string[]): Promise<number> {
     return {
       instrument: r.instrument,
       doneExists: existsSync(join(art, `${phase}-${r.instrument}.done`)),
-      stateText: existsSync(stateFile) ? readFileSync(stateFile, "utf8") : null,
+      stateText: readIfExistsOrNull(stateFile),
     };
   });
   const states = gateState(parts, key);
