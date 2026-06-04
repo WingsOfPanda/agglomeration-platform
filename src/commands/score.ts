@@ -26,7 +26,7 @@ import { diffFindings, type DiffPart } from "../core/scoreDiff.js";
 import { emitSoftDag, checkDagSection, dagMalformedLines, type SoftDagRow } from "../core/dag.js";
 import { adjudicate, type AdjudicateInput } from "../core/scoreAdjudicate.js";
 import { classifyTopic, skillHintAppend } from "../core/scoreSkill.js";
-import { readIfExists as readIf } from "../core/fsread.js";
+import { readIfExists as readIf, readIfExistsOrNull } from "../core/fsread.js";
 import { walkSectionState, auditIssueToSection } from "../core/scoreWalk.js";
 import { run as sendRun } from "./send.js";
 import { run as spawnRun } from "./spawn.js";
@@ -483,7 +483,7 @@ export async function waitGateRun(rest: string[]): Promise<number> {
     return {
       instrument: r.instrument,
       doneExists: existsSync(join(art, `${phase}-${r.instrument}.done`)),
-      stateText: existsSync(stateFile) ? readFileSync(stateFile, "utf8") : null,
+      stateText: readIfExistsOrNull(stateFile),
     };
   });
   const states = gateState(parts, key);
@@ -581,7 +581,7 @@ export async function drilldownWith(rest: string[], d: DrilldownDeps, hooks: Dri
     if (rc !== 0) return "missing" as const;
     hooks.writeProbe?.(j.outPath);                                // test-only: simulate the part's write
     const ev = await d.wait(j.inst, j.model, topic, offset, ["done", "error"], timeout(j.model));
-    const fileText = existsSync(j.outPath) ? readFileSync(j.outPath, "utf8") : null;
+    const fileText = readIfExistsOrNull(j.outPath);
     return drilldownState(ev, fileText);
   }));
 
