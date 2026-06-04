@@ -22629,6 +22629,37 @@ var init_rehearsalCoverage = __esm({
   }
 });
 
+// src/core/rehearsalLineage.ts
+function lineageRow(r) {
+  return `${r.expId}	${r.instrument}	${r.parentId}	${r.knobsChanged}	${r.verdict}	${r.ts}
+`;
+}
+function diffAuditKnobs(parentAudit, childAudit) {
+  if (!parentAudit || !childAudit) return null;
+  const keys = /* @__PURE__ */ new Set([...Object.keys(parentAudit), ...Object.keys(childAudit)]);
+  let n2 = 0;
+  for (const k of keys) {
+    const pa = parentAudit[k], ca = childAudit[k];
+    const p = parseFloat(String(pa)), c3 = parseFloat(String(ca));
+    const differ = !Number.isNaN(p) && !Number.isNaN(c3) ? p !== c3 : String(pa) !== String(ca);
+    if (differ) n2 += 1;
+  }
+  return n2;
+}
+function classifyLineage(parentId, knobsChanged) {
+  if (!parentId) return "draft";
+  if (knobsChanged === null || knobsChanged === 0) return "improve-unverified";
+  if (knobsChanged === 1) return "improve-single";
+  return "improve-multi";
+}
+var LINEAGE_TSV_HEADER;
+var init_rehearsalLineage = __esm({
+  "src/core/rehearsalLineage.ts"() {
+    "use strict";
+    LINEAGE_TSV_HEADER = "exp_id	instrument	parent_id	knobs_changed	verdict	ts\n";
+  }
+});
+
 // src/core/rehearsalInfeasible.ts
 function classifyInfeasible(verdict, flags) {
   if (verdict === "mismatch") return "mismatch";
@@ -22700,6 +22731,7 @@ function computeScore(art, fs, now) {
   const warnings = [];
   const manifests = [];
   const sanityRows = [];
+  const lineageRows = [];
   const parts = fs.listDir(partsDir(art));
   for (const instrument of parts) {
     const exps = fs.listDir(experimentsDir(art, instrument));
@@ -22775,6 +22807,29 @@ function computeScore(art, fs, now) {
       for (const f of flags) sanityRows.push({ expId, instrument, flag: f.flag, detail: f.detail, ts: now() });
       const infReason = classifyInfeasible(verdicts[`${instrument}/${expId}`], flags.map((f) => f.flag));
       if (infReason) scoreRow.infeasibleReason = infReason;
+      const lineageTxt = fs.read((0, import_node_path31.join)(branchDir, "lineage.txt"));
+      const parentId = lineageTxt ? parseState(lineageTxt).parent_id ?? "" : "";
+      let knobs = null;
+      if (parentId) {
+        const parentAuditRaw = fs.read((0, import_node_path31.join)(experimentDir(art, instrument, parentId), "audit.json"));
+        let parentAudit = null;
+        if (parentAuditRaw) {
+          try {
+            parentAudit = JSON.parse(parentAuditRaw);
+          } catch {
+            parentAudit = null;
+          }
+        }
+        knobs = diffAuditKnobs(parentAudit, auditObj);
+      }
+      lineageRows.push({
+        expId,
+        instrument,
+        parentId,
+        knobsChanged: knobs === null ? "" : String(knobs),
+        verdict: classifyLineage(parentId || void 0, knobs),
+        ts: now()
+      });
     }
   }
   const coverageTs = now();
@@ -22806,7 +22861,8 @@ function computeScore(art, fs, now) {
     warnings,
     manifests,
     sanityRows,
-    coverageRows
+    coverageRows,
+    lineageRows
   };
 }
 var import_node_path31, TSV_HEADER;
@@ -22820,6 +22876,7 @@ var init_rehearsalScore = __esm({
     init_rehearsalVerify();
     init_rehearsalSanity();
     init_rehearsalCoverage();
+    init_rehearsalLineage();
     init_rehearsalInfeasible();
     init_rehearsalFinalize();
     init_rehearsal();
@@ -23063,7 +23120,8 @@ function buildStatusBrief(input) {
         const tag = v ? ` [${v === "mismatch" ? "mismatch!" : v}]` : "";
         const s = input.suspects?.[`${r.instrument}/${r.exp}`];
         const stag = s && s.length ? ` [suspect: ${s.join(",")}]` : "";
-        sb.push(`${r.rank}. ${r.instrument}/${r.exp} \u2014 ${r.metric} \u2014 ${r.metricName}${tag}${stag}`);
+        const mc = input.multiChange?.[`${r.instrument}/${r.exp}`] ? " [multi-change]" : "";
+        sb.push(`${r.rank}. ${r.instrument}/${r.exp} \u2014 ${r.metric} \u2014 ${r.metricName}${tag}${stag}${mc}`);
       }
     }
   }
@@ -23755,7 +23813,7 @@ async function verifyCheckWith(args, deps) {
   return 0;
 }
 function parseExperimentSendArgs(args) {
-  let inputs, contextFile, smokeTest, timeout;
+  let inputs, contextFile, smokeTest, timeout, parentId;
   let i2 = 0;
   for (; i2 < args.length; i2++) {
     const a2 = args[i2];
@@ -23776,6 +23834,10 @@ function parseExperimentSendArgs(args) {
       const r = kvParse(a2, args[i2 + 1]);
       timeout = r.value;
       i2 += r.shift - 1;
+    } else if (a2 === "--parent" || a2.startsWith("--parent=")) {
+      const r = kvParse(a2, args[i2 + 1]);
+      parentId = r.value;
+      i2 += r.shift - 1;
     } else {
       return { topic: "", instrument: "", expId: "", approachLabel: "", approachBrief: "", badArgs: true };
     }
@@ -23783,7 +23845,7 @@ function parseExperimentSendArgs(args) {
   const pos = args.slice(i2);
   if (pos.length !== 5) return { topic: "", instrument: "", expId: "", approachLabel: "", approachBrief: "", badArgs: true };
   const [topic, instrument, expId, approachLabel, approachBrief] = pos;
-  return { topic, instrument, expId, approachLabel, approachBrief, inputs, contextFile, smokeTest, timeout };
+  return { topic, instrument, expId, approachLabel, approachBrief, inputs, contextFile, smokeTest, timeout, parentId };
 }
 function gatherPeers(art, self) {
   const partsFile = (0, import_node_path32.join)(art, "parts.txt");
@@ -23826,7 +23888,7 @@ async function experimentSendWith(args, deps) {
   const opts = deps.opts;
   const p = parseExperimentSendArgs(args);
   if (p.badArgs) {
-    log.error("rehearsal experiment-send: usage: [--inputs csv] [--context-file path] [--smoke-test script] [--timeout N] <topic> <instrument> <exp-id> <approach-label> <approach-brief>");
+    log.error("rehearsal experiment-send: usage: [--inputs csv] [--context-file path] [--smoke-test script] [--timeout N] [--parent exp-id] <topic> <instrument> <exp-id> <approach-label> <approach-brief>");
     return 2;
   }
   const { topic, instrument, expId, approachLabel, approachBrief } = p;
@@ -23894,6 +23956,16 @@ async function experimentSendWith(args, deps) {
   if (phase !== "idle") {
     log.error(`rehearsal experiment-send: part ${instrument} not idle (phase=${phase}); wait or finalize first`);
     return 1;
+  }
+  if (p.parentId !== void 0) {
+    if (!EXP_ID_RE.test(p.parentId)) {
+      log.error(`rehearsal experiment-send: --parent must match exp-[0-9]+; got '${p.parentId}'`);
+      return 2;
+    }
+    if (!(0, import_node_fs35.existsSync)(experimentDir(art, instrument, p.parentId))) {
+      log.error(`rehearsal experiment-send: --parent ${p.parentId} has no experiment dir under ${instrument}`);
+      return 1;
+    }
   }
   const branchDir = experimentDir(art, instrument, expId);
   (0, import_node_fs35.mkdirSync)((0, import_node_path32.join)(branchDir, "code"), { recursive: true });
@@ -23964,6 +24036,8 @@ async function experimentSendWith(args, deps) {
     return 1;
   }
   atomicWrite((0, import_node_path32.join)(branchDir, "prompt.md"), prompt);
+  if (p.parentId !== void 0) atomicWrite((0, import_node_path32.join)(branchDir, "lineage.txt"), `parent_id=${p.parentId}
+`);
   inboxWrite(instrument, model, topic, prompt, { from: "maestro", noDoneInstruction: true });
   atomicWrite(stateTxt, buildDispatchState((0, import_node_fs35.readFileSync)(stateTxt, "utf8"), expId, deps.now()));
   if (!deps.dryRun) {
@@ -24022,6 +24096,7 @@ async function scoreWith(args, deps) {
   for (const m of c3.manifests) deps.writeAtomic(m.path, m.body);
   deps.writeAtomic((0, import_node_path32.join)(art, "sanity.tsv"), SANITY_TSV_HEADER + c3.sanityRows.map(sanityRow).join(""));
   deps.writeAtomic((0, import_node_path32.join)(art, "coverage.tsv"), COVERAGE_TSV_HEADER + c3.coverageRows.map(coverageRow).join(""));
+  deps.writeAtomic((0, import_node_path32.join)(art, "lineage.tsv"), LINEAGE_TSV_HEADER + c3.lineageRows.map(lineageRow).join(""));
   for (const w of c3.warnings) log.warn(w);
   return 0;
 }
@@ -24203,8 +24278,18 @@ async function statusBriefWith(args, v = {}) {
       if (cells[0]) coverage.push({ family: cells[0], count: parseInt(cells[1] ?? "0", 10) || 0, best: cells[2] ?? "", ts: cells[3] ?? "" });
     }
   }
+  const ltsv = (0, import_node_path32.join)(art, "lineage.tsv");
+  let multiChange;
+  if ((0, import_node_fs35.existsSync)(ltsv)) {
+    multiChange = {};
+    for (const line of (0, import_node_fs35.readFileSync)(ltsv, "utf8").split("\n")) {
+      if (!line || line.startsWith("exp_id	")) continue;
+      const cells = line.split("	");
+      if (cells[0] && cells[1] && cells[4] === "improve-multi") multiChange[`${cells[1]}/${cells[0]}`] = true;
+    }
+  }
   const latest = p.latestInstrument && p.latestExp ? { instrument: p.latestInstrument, exp: p.latestExp } : void 0;
-  out(buildStatusBrief({ parts, scoreboardMd, completion, latest, verdicts, suspects, coverage }));
+  out(buildStatusBrief({ parts, scoreboardMd, completion, latest, verdicts, suspects, coverage, multiChange }));
   return 0;
 }
 function readOr(path6, fallback = "") {
@@ -24439,6 +24524,17 @@ async function finalizeWith(args, deps) {
       const c3 = line.split("	");
       if (c3[2] === "audit-knob-drift") continue;
       if (c3[0] && c3[1] && c3[2]) extra.push(`sanity	${c3[1]}/${c3[0]}	${c3[2]}	${c3[3] ?? ""}`);
+    }
+    if (extra.length) (0, import_node_fs35.appendFileSync)(warningsPath, extra.join("\n") + "\n");
+  }
+  const lineageTsv = (0, import_node_path32.join)(art, "lineage.tsv");
+  if ((0, import_node_fs35.existsSync)(lineageTsv)) {
+    const extra = [];
+    for (const line of (0, import_node_fs35.readFileSync)(lineageTsv, "utf8").split("\n")) {
+      if (!line || line.startsWith("exp_id	")) continue;
+      const c3 = line.split("	");
+      if (c3[4] !== "improve-multi") continue;
+      if (c3[0] && c3[1]) extra.push(`lineage	${c3[1]}/${c3[0]}	improve-multi	parent=${c3[2] ?? ""} knobs_changed=${c3[3] ?? ""}`);
     }
     if (extra.length) (0, import_node_fs35.appendFileSync)(warningsPath, extra.join("\n") + "\n");
   }
@@ -24950,6 +25046,7 @@ var init_rehearsal2 = __esm({
     init_rehearsalScore();
     init_rehearsalSanity();
     init_rehearsalCoverage();
+    init_rehearsalLineage();
     init_rehearsalState();
     init_rehearsalComplete();
     init_rehearsalResult();
