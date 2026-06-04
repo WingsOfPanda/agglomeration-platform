@@ -118,9 +118,13 @@ export function computeScore(art: string, fs: ScoreFs, now: () => string): Score
     }
   }
 
+  // Coverage counts only FEASIBLE successes: status ok AND not A2-infeasible. This keeps the
+  // Coverage: tally consistent with the plateau's familiesActive (which excludes x<rank> infeasible
+  // rows via the integer-rank parse) and honors the "diversity-of-successes" intent -- a family
+  // whose every run was botched is not validly explored and must not inflate the coverage signal.
   const coverageTs = now();
   const coverageRows: CoverageRow[] = tallyCoverage(
-    rows.filter((r) => r.status === "ok"),
+    rows.filter((r) => r.status === "ok" && !r.infeasibleReason),
     parsed?.direction,
   ).map((r) => ({ ...r, ts: coverageTs }));
 
