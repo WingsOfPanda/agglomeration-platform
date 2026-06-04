@@ -7,6 +7,8 @@ import { join, relative, resolve } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile, kvParse } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
+import { readIfExistsOrNull } from "../core/fsread.js";
+import { splitNonCommentLines } from "../core/text.js";
 import { archiveTopic, isoUtc } from "../core/archive.js";
 import { deriveSlug } from "../core/solo.js";
 import { extractMetric, formatMetricBlock, formatSotaBlock, parseMetricMd } from "../core/rehearsalMetric.js";
@@ -77,13 +79,14 @@ function parseInitArgs(args: string[]): InitArgs {
     if (a.startsWith("--")) {
       const eq = a.indexOf("=");
       const flag = eq > 0 ? a.slice(0, eq) : a;
-      const inline = eq > 0 ? a.slice(eq + 1) : undefined;
-      const val = (): string | undefined => inline ?? args[++i];
-      if (flag === "--seed-from") seedFrom = val();
-      else if (flag === "--time-budget") timeBudget = val();
-      else if (flag === "--metric") metric = val();
-      else if (flag === "--slug") slug = val();
-      else { badFlag = a; }
+      if (flag === "--seed-from" || flag === "--time-budget" || flag === "--metric" || flag === "--slug") {
+        const r = kvParse(a, args[i + 1]);   // pass the FULL token `a`; kvParse reads an inline `=value`
+        i += r.shift - 1;
+        if (flag === "--seed-from") seedFrom = r.value;
+        else if (flag === "--time-budget") timeBudget = r.value;
+        else if (flag === "--metric") metric = r.value;
+        else slug = r.value;
+      } else { badFlag = a; }
     } else { topic = args.slice(i).join(" "); break; }
   }
   return { topic, seedFrom, timeBudget, metric, slug, badFlag };
@@ -602,13 +605,13 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
 
   const probe = deps.probeHardware();
   const baselinePath = join(art, "hardware.txt");
-  const baseline = existsSync(baselinePath) ? readFileSync(baselinePath, "utf8") : null;
+  const baseline = readIfExistsOrNull(baselinePath);
   const hardwareBlock = assembleHardwareBlock(probe, hardwareDiffAlert(baseline, probe));
 
   const topicTextPath = join(art, "topic.txt");
   const topicText = existsSync(topicTextPath) ? readFileSync(topicTextPath, "utf8") : "";
   const sotaPath = join(art, "sota.md");
-  const sotaBlock = buildSotaBlock(existsSync(sotaPath) ? readFileSync(sotaPath, "utf8") : null);
+  const sotaBlock = buildSotaBlock(readIfExistsOrNull(sotaPath));
   const peersBlock = formatPeersBlock(gatherPeers(art, instrument));
   const timeBudgetS = String(p.timeout ?? deps.consultTimeout());
 
@@ -727,7 +730,7 @@ export const liveScoreDeps: RehearsalScoreDeps = {
   computeScore,
   fs: {
     exists: existsSync,
-    read: (p) => (existsSync(p) ? readFileSync(p, "utf8") : null),
+    read: readIfExistsOrNull,
     listDir: (p) => { try { return readdirSync(p).sort(); } catch { return []; } },  // ENOENT-safe, per ScoreFs contract
   },
   writeAtomic: atomicWrite,
@@ -778,8 +781,8 @@ export async function monitorRun(args: string[], opts?: { home?: string; cwd?: s
   const initBuf = existsSync(outbox) ? readFileSync(outbox) : Buffer.alloc(0);
   let state = initScanState(
     initBuf.length, initBuf.toString("utf8"),
-    existsSync(cursorFile) ? readFileSync(cursorFile, "utf8") : null,
-    existsSync(rescanFile) ? readFileSync(rescanFile, "utf8") : null,
+    readIfExistsOrNull(cursorFile),
+    readIfExistsOrNull(rescanFile),
   );
   persist(state);
 
@@ -840,7 +843,7 @@ function readResultCells(resultPath: string): { approach: string; metric: string
 /** scoreboard.md text + completion signals (BOTH scoreboard.md and metric.md must exist, else nulls). */
 function gatherCompletion(art: string): { scoreboardMd: string | null; completion: ReturnType<typeof checkCompletion> | null } {
   const sbPath = join(art, "scoreboard.md");
-  const scoreboardMd = existsSync(sbPath) ? readFileSync(sbPath, "utf8") : null;
+  const scoreboardMd = readIfExistsOrNull(sbPath);
   const metricPath = join(art, "metric.md");
   const completion = scoreboardMd !== null && existsSync(metricPath)
     ? checkCompletion(scoreboardMd, readFileSync(metricPath, "utf8"))
@@ -860,6 +863,19 @@ function parseStatusBriefArgs(args: string[]): { topic: string; latestInstrument
   return { topic, latestInstrument, latestExp };
 }
 
+/** Read a `.tsv` sidecar's data rows (each tab-split into cells), skipping blank lines and the
+ *  header row (`<headerToken>...`). Returns undefined when the file is absent, so callers can tell
+ *  "no file" apart from "file present but no data rows". */
+function readTsvRows(path: string, headerToken: string): string[][] | undefined {
+  if (!existsSync(path)) return undefined;
+  const rows: string[][] = [];
+  for (const line of readFileSync(path, "utf8").split("\n")) {
+    if (!line || line.startsWith(headerToken)) continue;
+    rows.push(line.split("\t"));
+  }
+  return rows;
+}
+
 export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (line: string) => void } = {}): Promise<number> {
   const out = v.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
   const p = parseStatusBriefArgs(args);
@@ -875,8 +891,7 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
   const parts: PartBrief[] = [];
   const partsFile = join(art, "parts.txt");
   if (existsSync(partsFile)) {
-    const instruments = readFileSync(partsFile, "utf8")
-      .split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+    const instruments = splitNonCommentLines(readFileSync(partsFile, "utf8"));
     for (const instrument of instruments) {
       let phase = "?", currentOrLast = "—";
       const stateTxt = join(partStateDir(art, instrument), "state.txt");
@@ -920,59 +935,39 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
 
   const { scoreboardMd, completion } = gatherCompletion(art);
 
-  const vtsv = join(art, "verification.tsv");
+  const vrows = readTsvRows(join(art, "verification.tsv"), "exp_id\t");   // exp_id, instrument, verdict, ...
   let verdicts: Record<string, string> | undefined;
-  if (existsSync(vtsv)) {
+  if (vrows) {
     verdicts = {};
-    for (const line of readFileSync(vtsv, "utf8").split("\n")) {
-      if (!line || line.startsWith("exp_id\t")) continue;
-      const c = line.split("\t");           // exp_id, instrument, verdict, ...
-      if (c[0] && c[1] && c[2]) verdicts[`${c[1]}/${c[0]}`] = c[2];   // last write wins (latest verdict)
-    }
+    for (const c of vrows) if (c[0] && c[1] && c[2]) verdicts[`${c[1]}/${c[0]}`] = c[2];   // last write wins (latest verdict)
   }
 
-  const stsv = join(art, "sanity.tsv");
+  const srows = readTsvRows(join(art, "sanity.tsv"), "exp_id\t");          // exp_id, instrument, flag, ...
   let suspects: Record<string, string[]> | undefined;
-  if (existsSync(stsv)) {
+  if (srows) {
     suspects = {};
-    for (const line of readFileSync(stsv, "utf8").split("\n")) {
-      if (!line || line.startsWith("exp_id\t")) continue;
-      const c = line.split("\t");           // exp_id, instrument, flag, ...
-      if (c[0] && c[1] && c[2]) (suspects[`${c[1]}/${c[0]}`] ??= []).push(c[2]);
-    }
+    for (const c of srows) if (c[0] && c[1] && c[2]) (suspects[`${c[1]}/${c[0]}`] ??= []).push(c[2]);
   }
 
-  const ctsv = join(art, "coverage.tsv");
+  const crows = readTsvRows(join(art, "coverage.tsv"), "family\t");        // family, count, best, ts
   let coverage: CoverageRow[] | undefined;
-  if (existsSync(ctsv)) {
+  if (crows) {
     coverage = [];
-    for (const line of readFileSync(ctsv, "utf8").split("\n")) {
-      if (!line || line.startsWith("family\t")) continue;
-      const cells = line.split("\t");           // family, count, best, ts
-      if (cells[0]) coverage.push({ family: cells[0], count: parseInt(cells[1] ?? "0", 10) || 0, best: cells[2] ?? "", ts: cells[3] ?? "" });
-    }
+    for (const cells of crows) if (cells[0]) coverage.push({ family: cells[0], count: parseInt(cells[1] ?? "0", 10) || 0, best: cells[2] ?? "", ts: cells[3] ?? "" });
   }
 
-  const ltsv = join(art, "lineage.tsv");
+  const lrows = readTsvRows(join(art, "lineage.tsv"), "exp_id\t");         // exp_id, instrument, parent_id, knobs_changed, verdict, ts
   let multiChange: Record<string, boolean> | undefined;
-  if (existsSync(ltsv)) {
+  if (lrows) {
     multiChange = {};
-    for (const line of readFileSync(ltsv, "utf8").split("\n")) {
-      if (!line || line.startsWith("exp_id\t")) continue;
-      const cells = line.split("\t");            // exp_id, instrument, parent_id, knobs_changed, verdict, ts
-      if (cells[0] && cells[1] && cells[4] === "improve-multi") multiChange[`${cells[1]}/${cells[0]}`] = true;
-    }
+    for (const cells of lrows) if (cells[0] && cells[1] && cells[4] === "improve-multi") multiChange[`${cells[1]}/${cells[0]}`] = true;
   }
 
-  const itsv = join(art, "inspection.tsv");
+  const irows = readTsvRows(join(art, "inspection.tsv"), "exp_id\t");      // exp_id, instrument, verdict, ...
   let inspections: Record<string, string> | undefined;
-  if (existsSync(itsv)) {
+  if (irows) {
     inspections = {};
-    for (const line of readFileSync(itsv, "utf8").split("\n")) {
-      if (!line || line.startsWith("exp_id\t")) continue;
-      const cells = line.split("\t");           // exp_id, instrument, verdict, ...
-      if (cells[0] && cells[1] && cells[2]) inspections[`${cells[1]}/${cells[0]}`] = cells[2];
-    }
+    for (const cells of irows) if (cells[0] && cells[1] && cells[2]) inspections[`${cells[1]}/${cells[0]}`] = cells[2];
   }
 
   const latest = p.latestInstrument && p.latestExp ? { instrument: p.latestInstrument, exp: p.latestExp } : undefined;
@@ -1219,44 +1214,29 @@ export async function finalizeWith(args: string[], deps: RehearsalFinalizeDeps):
   computeAuditWarnings(art, instruments, warningsPath);
 
   // A3: fold non-audit sanity flags into warnings.txt (audit-knob-drift already covered by audit_warn).
-  const sanityTsv = join(art, "sanity.tsv");
-  if (existsSync(sanityTsv)) {
-    const extra: string[] = [];
-    for (const line of readFileSync(sanityTsv, "utf8").split("\n")) {
-      if (!line || line.startsWith("exp_id\t")) continue;
-      const c = line.split("\t");                 // exp_id, instrument, flag, detail, ts
-      if (c[2] === "audit-knob-drift") continue;   // dedupe vs finalize audit_warn
-      if (c[0] && c[1] && c[2]) extra.push(`sanity\t${c[1]}/${c[0]}\t${c[2]}\t${c[3] ?? ""}`);
-    }
-    if (extra.length) appendFileSync(warningsPath, extra.join("\n") + "\n");
+  const sanityExtra: string[] = [];
+  for (const c of readTsvRows(join(art, "sanity.tsv"), "exp_id\t") ?? []) {   // exp_id, instrument, flag, detail, ts
+    if (c[2] === "audit-knob-drift") continue;   // dedupe vs finalize audit_warn
+    if (c[0] && c[1] && c[2]) sanityExtra.push(`sanity\t${c[1]}/${c[0]}\t${c[2]}\t${c[3] ?? ""}`);
   }
+  if (sanityExtra.length) appendFileSync(warningsPath, sanityExtra.join("\n") + "\n");
 
   // B2: fold improve-multi lineage rows into warnings.txt (advisory: delta not cleanly attributable).
-  const lineageTsv = join(art, "lineage.tsv");
-  if (existsSync(lineageTsv)) {
-    const extra: string[] = [];
-    for (const line of readFileSync(lineageTsv, "utf8").split("\n")) {
-      if (!line || line.startsWith("exp_id\t")) continue;
-      const c = line.split("\t");                 // exp_id, instrument, parent_id, knobs_changed, verdict, ts
-      if (c[4] !== "improve-multi") continue;
-      if (c[0] && c[1]) extra.push(`lineage\t${c[1]}/${c[0]}\timprove-multi\tparent=${c[2] ?? ""} knobs_changed=${c[3] ?? ""}`);
-    }
-    if (extra.length) appendFileSync(warningsPath, extra.join("\n") + "\n");
+  const lineageExtra: string[] = [];
+  for (const c of readTsvRows(join(art, "lineage.tsv"), "exp_id\t") ?? []) {   // exp_id, instrument, parent_id, knobs_changed, verdict, ts
+    if (c[4] !== "improve-multi") continue;
+    if (c[0] && c[1]) lineageExtra.push(`lineage\t${c[1]}/${c[0]}\timprove-multi\tparent=${c[2] ?? ""} knobs_changed=${c[3] ?? ""}`);
   }
+  if (lineageExtra.length) appendFileSync(warningsPath, lineageExtra.join("\n") + "\n");
 
   // C1: fold a not-reproduced inspection into warnings.txt (advisory in the summary; the row is
   // already demoted to x<rank> by computeScore).
-  const inspectionTsv = join(art, "inspection.tsv");
-  if (existsSync(inspectionTsv)) {
-    const extra: string[] = [];
-    for (const line of readFileSync(inspectionTsv, "utf8").split("\n")) {
-      if (!line || line.startsWith("exp_id\t")) continue;
-      const c = line.split("\t");                 // exp_id, instrument, verdict, reason, reimpl_metric, ts
-      if (c[2] !== "not-reproduced") continue;
-      if (c[0] && c[1]) extra.push(`reimpl\t${c[1]}/${c[0]}\tnot-reproduced\t${c[3] ?? ""}`);
-    }
-    if (extra.length) appendFileSync(warningsPath, extra.join("\n") + "\n");
+  const reimplExtra: string[] = [];
+  for (const c of readTsvRows(join(art, "inspection.tsv"), "exp_id\t") ?? []) {   // exp_id, instrument, verdict, reason, reimpl_metric, ts
+    if (c[2] !== "not-reproduced") continue;
+    if (c[0] && c[1]) reimplExtra.push(`reimpl\t${c[1]}/${c[0]}\tnot-reproduced\t${c[3] ?? ""}`);
   }
+  if (reimplExtra.length) appendFileSync(warningsPath, reimplExtra.join("\n") + "\n");
 
   // 9. render session-summary.md (FULL re-render; wholesale atomic replace).
   const statusRows: StatusRow[] = [];
@@ -1328,7 +1308,7 @@ export async function finalizeWith(args: string[], deps: RehearsalFinalizeDeps):
   }
 
   const haltPath = join(art, "halt.flag");
-  const halt = readHaltFlag(existsSync(haltPath) ? readFileSync(haltPath, "utf8") : null);
+  const halt = readHaltFlag(readIfExistsOrNull(haltPath));
 
   const startedIso = existsSync(startPath) ? readFileSync(startPath, "utf8").trim() : "(unknown)";
   const budget = existsSync(budgetPath) ? readFileSync(budgetPath, "utf8").trim() : "none";
@@ -1782,15 +1762,15 @@ function appendVerificationRow(art: string, instrument: string, expId: string, r
 const liveVerifyPlanDeps: VerifyPlanDeps = {
   readResult: (art, i, e) => { const p = join(experimentDir(art, i, e), "result.json"); if (!existsSync(p)) return null; try { return JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>; } catch { return null; } },
   readManifest: (art, i, e) => { const p = join(experimentDir(art, i, e), "verify-manifest.json"); if (!existsSync(p)) return null; try { return JSON.parse(readFileSync(p, "utf8")) as VerifyManifest; } catch { return null; } },
-  readInput: (art, i, e, rel) => { const p = join(experimentDir(art, i, e), rel); return existsSync(p) ? readFileSync(p, "utf8") : null; },
+  readInput: (art, i, e, rel) => { const p = join(experimentDir(art, i, e), rel); return readIfExistsOrNull(p); },
   writeRow: appendVerificationRow,
   now: () => isoUtc(),
 };
 const liveVerifyCheckDeps: VerifyCheckDeps = {
   readResult: liveVerifyPlanDeps.readResult,
-  readMetricMd: (art) => { const p = join(art, "metric.md"); return existsSync(p) ? readFileSync(p, "utf8") : null; },
-  readStdout: (p) => (existsSync(p) ? readFileSync(p, "utf8") : null),
-  readJson: (p) => (existsSync(p) ? readFileSync(p, "utf8") : null),
+  readMetricMd: (art) => readIfExistsOrNull(join(art, "metric.md")),
+  readStdout: readIfExistsOrNull,
+  readJson: readIfExistsOrNull,
   writeRow: appendVerificationRow,
   now: () => isoUtc(),
 };
@@ -1804,7 +1784,7 @@ function appendInspectionRow(art: string, instrument: string, expId: string, row
 }
 const liveInspectPlanDeps: InspectPlanDeps = {
   readResult: liveVerifyPlanDeps.readResult,
-  readMetricMd: (art) => { const p = join(art, "metric.md"); return existsSync(p) ? readFileSync(p, "utf8") : null; },
+  readMetricMd: (art) => readIfExistsOrNull(join(art, "metric.md")),
   inspectionCount: (art) => { const p = join(art, "inspection.tsv"); if (!existsSync(p)) return 0; return readFileSync(p, "utf8").split("\n").filter((l) => l && !l.startsWith("exp_id\t")).length; },
   partProvider: (_art, i, topic) => resolveModel(i, topic),
   writeRow: appendInspectionRow,
@@ -1812,9 +1792,9 @@ const liveInspectPlanDeps: InspectPlanDeps = {
 };
 const liveInspectCheckDeps: InspectCheckDeps = {
   readResult: liveVerifyPlanDeps.readResult,
-  readMetricMd: (art) => { const p = join(art, "metric.md"); return existsSync(p) ? readFileSync(p, "utf8") : null; },
-  readStdout: (p) => (existsSync(p) ? readFileSync(p, "utf8") : null),
-  readJson: (p) => (existsSync(p) ? readFileSync(p, "utf8") : null),
+  readMetricMd: (art) => readIfExistsOrNull(join(art, "metric.md")),
+  readStdout: readIfExistsOrNull,
+  readJson: readIfExistsOrNull,
   writeRow: appendInspectionRow,
   now: () => isoUtc(),
 };

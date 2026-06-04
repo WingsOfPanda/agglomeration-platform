@@ -2,8 +2,7 @@
 import { applyArgsFile } from "./args.js";
 import { runArgsFile } from "./core/paths.js";
 import { renderBannerHead, ansiFromColor } from "./core/colors.js";
-
-type Handler = (args: string[]) => Promise<number>;
+import { dispatch, type Handler } from "./core/dispatch.js";
 
 async function loadHandlers(): Promise<Record<string, Handler>> {
   const [spawn, send, collect, roster, coda, soundcheck, preflight, hook, solo, score, perform, playback, rehearsal, prelude] = await Promise.all([
@@ -52,7 +51,7 @@ async function main(): Promise<number> {
   const handlers = await loadHandlers();
   const fn = handlers[sub];
   if (!fn) { process.stderr.write(`consort: unknown subcommand '${sub}'\n`); return 2; }
-  return fn(resolved);
+  return dispatch(fn, resolved);
 }
 
 main().then((code) => process.exit(code)).catch((e) => { process.stderr.write(`${e?.stack ?? e}\n`); process.exit(1); });

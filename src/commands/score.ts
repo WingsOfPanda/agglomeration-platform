@@ -26,7 +26,7 @@ import { diffFindings, type DiffPart } from "../core/scoreDiff.js";
 import { emitSoftDag, checkDagSection, dagMalformedLines, type SoftDagRow } from "../core/dag.js";
 import { adjudicate, type AdjudicateInput } from "../core/scoreAdjudicate.js";
 import { classifyTopic, skillHintAppend } from "../core/scoreSkill.js";
-import { readIfExists as readIf } from "../core/fsread.js";
+import { readIfExists as readIf, readIfExistsOrNull } from "../core/fsread.js";
 import { walkSectionState, auditIssueToSection } from "../core/scoreWalk.js";
 import { run as sendRun } from "./send.js";
 import { run as spawnRun } from "./spawn.js";
@@ -483,7 +483,7 @@ export async function waitGateRun(rest: string[]): Promise<number> {
     return {
       instrument: r.instrument,
       doneExists: existsSync(join(art, `${phase}-${r.instrument}.done`)),
-      stateText: existsSync(stateFile) ? readFileSync(stateFile, "utf8") : null,
+      stateText: readIfExistsOrNull(stateFile),
     };
   });
   const states = gateState(parts, key);
@@ -557,10 +557,8 @@ export async function drilldownWith(rest: string[], d: DrilldownDeps, hooks: Dri
   const n = rest.length;
   if (![7, 8, 9, 10].includes(n)) { log.error("usage: score drilldown <topic> <section> <dd-dir> <focus> <design-doc> <i1> <m1> [<i2> <m2>] [<subproject>]"); return 2; }
   const [topic, section, ddDir, focus, designDoc, i1, m1] = rest;
-  let i2 = "", m2 = "", subproject = "";
-  if (n === 8) subproject = rest[7];
-  else if (n === 9) { i2 = rest[7]; m2 = rest[8]; }
-  else if (n === 10) { i2 = rest[7]; m2 = rest[8]; subproject = rest[9]; }
+  const subproject = (n === 8 || n === 10) ? rest[n - 1] : "";
+  const [i2, m2] = n >= 9 ? [rest[7], rest[8]] : ["", ""];
   if (!existsSync(ddDir)) { log.error(`score drilldown: dd-dir not found: ${ddDir}`); return 2; }
   if (!existsSync(designDoc)) { log.error(`score drilldown: design-doc not found: ${designDoc}`); return 2; }
 
@@ -581,7 +579,7 @@ export async function drilldownWith(rest: string[], d: DrilldownDeps, hooks: Dri
     if (rc !== 0) return "missing" as const;
     hooks.writeProbe?.(j.outPath);                                // test-only: simulate the part's write
     const ev = await d.wait(j.inst, j.model, topic, offset, ["done", "error"], timeout(j.model));
-    const fileText = existsSync(j.outPath) ? readFileSync(j.outPath, "utf8") : null;
+    const fileText = readIfExistsOrNull(j.outPath);
     return drilldownState(ev, fileText);
   }));
 
