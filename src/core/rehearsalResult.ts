@@ -25,6 +25,10 @@ export interface ResultJson {
     trained_steps?: number;
     seed?: number;
   };
+  /** C1 run-card: how to obtain the same data + split for an independent re-run. Optional. */
+  data_spec?: { source?: string; split_seed?: number; split_hash?: string; target_column?: string; feature_columns?: string[] };
+  /** C1 run-card: a precise metric computation so a re-derived number is comparable. Optional. */
+  metric_formula?: string;
 }
 
 const REQUIRED_FIELDS = [
