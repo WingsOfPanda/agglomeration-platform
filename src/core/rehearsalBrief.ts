@@ -27,6 +27,8 @@ export interface StatusBriefInput {
   suspects?: Record<string, string[]>;
   /** per-family coverage rows joined from coverage.tsv; omit for back-compat (no Coverage line). */
   coverage?: CoverageRow[];
+  /** instrument/exp -> improve-multi (B2), joined from lineage.tsv; omit for back-compat (no tag). */
+  multiChange?: Record<string, boolean>;
 }
 
 interface SbTop { rank: string; exp: string; instrument: string; metric: string; metricName: string; }
@@ -84,7 +86,8 @@ export function buildStatusBrief(input: StatusBriefInput): string {
         const tag = v ? ` [${v === "mismatch" ? "mismatch!" : v}]` : "";
         const s = input.suspects?.[`${r.instrument}/${r.exp}`];
         const stag = s && s.length ? ` [suspect: ${s.join(",")}]` : "";
-        sb.push(`${r.rank}. ${r.instrument}/${r.exp} — ${r.metric} — ${r.metricName}${tag}${stag}`);
+        const mc = input.multiChange?.[`${r.instrument}/${r.exp}`] ? " [multi-change]" : "";
+        sb.push(`${r.rank}. ${r.instrument}/${r.exp} — ${r.metric} — ${r.metricName}${tag}${stag}${mc}`);
       }
     }
   }

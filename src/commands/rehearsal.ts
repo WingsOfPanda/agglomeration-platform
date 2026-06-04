@@ -14,6 +14,7 @@ import { rehearsalArtDir, partsDir, partStateDir, experimentsDir, experimentDir,
 import { computeScore, type ScoreFs, type ScoreComputation } from "../core/rehearsalScore.js";
 import { sanityRow, SANITY_TSV_HEADER } from "../core/rehearsalSanity.js";
 import { coverageRow, COVERAGE_TSV_HEADER, type CoverageRow } from "../core/rehearsalCoverage.js";
+import { lineageRow, LINEAGE_TSV_HEADER, type LineageRow } from "../core/rehearsalLineage.js";
 import { parseState, mergeState, reconcileFromOutbox, readHaltFlag } from "../core/rehearsalState.js";
 import { checkCompletion, checkTimeBudget } from "../core/rehearsalComplete.js";
 import { normalizeResult, type ResultJson } from "../core/rehearsalResult.js";
@@ -440,7 +441,7 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   const out = deps.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
   const opts = deps.opts;
   const p = parseExperimentSendArgs(args);
-  if (p.badArgs) { log.error("rehearsal experiment-send: usage: [--inputs csv] [--context-file path] [--smoke-test script] [--timeout N] <topic> <instrument> <exp-id> <approach-label> <approach-brief>"); return 2; }
+  if (p.badArgs) { log.error("rehearsal experiment-send: usage: [--inputs csv] [--context-file path] [--smoke-test script] [--timeout N] [--parent exp-id] <topic> <instrument> <exp-id> <approach-label> <approach-brief>"); return 2; }
   const { topic, instrument, expId, approachLabel, approachBrief } = p;
 
   if (!EXP_ID_RE.test(expId)) { log.error(`rehearsal experiment-send: exp-id must match exp-[0-9]+; got '${expId}'`); return 2; }
@@ -629,6 +630,7 @@ export async function scoreWith(args: string[], deps: RehearsalScoreDeps): Promi
   for (const m of c.manifests) deps.writeAtomic(m.path, m.body);
   deps.writeAtomic(join(art, "sanity.tsv"), SANITY_TSV_HEADER + c.sanityRows.map(sanityRow).join(""));
   deps.writeAtomic(join(art, "coverage.tsv"), COVERAGE_TSV_HEADER + c.coverageRows.map(coverageRow).join(""));
+  deps.writeAtomic(join(art, "lineage.tsv"), LINEAGE_TSV_HEADER + c.lineageRows.map(lineageRow).join(""));
   for (const w of c.warnings) log.warn(w);
   return 0;
 }
@@ -863,8 +865,19 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
     }
   }
 
+  const ltsv = join(art, "lineage.tsv");
+  let multiChange: Record<string, boolean> | undefined;
+  if (existsSync(ltsv)) {
+    multiChange = {};
+    for (const line of readFileSync(ltsv, "utf8").split("\n")) {
+      if (!line || line.startsWith("exp_id\t")) continue;
+      const cells = line.split("\t");            // exp_id, instrument, parent_id, knobs_changed, verdict, ts
+      if (cells[0] && cells[1] && cells[4] === "improve-multi") multiChange[`${cells[1]}/${cells[0]}`] = true;
+    }
+  }
+
   const latest = p.latestInstrument && p.latestExp ? { instrument: p.latestInstrument, exp: p.latestExp } : undefined;
-  out(buildStatusBrief({ parts, scoreboardMd, completion, latest, verdicts, suspects, coverage }));
+  out(buildStatusBrief({ parts, scoreboardMd, completion, latest, verdicts, suspects, coverage, multiChange }));
   return 0;
 }
 

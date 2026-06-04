@@ -1233,6 +1233,24 @@ describe("rehearsalBrief", () => {
     const out = buildStatusBrief({ parts: [], scoreboardMd: null, completion: null });
     expect(out).not.toContain("**Coverage:**");
   });
+
+  it("tags an improve-multi top-3 leader with [multi-change] (B2)", () => {
+    const sb =
+      "| Rank | Exp | Instrument | Metric | Status | Runtime | Approach | Metric name |\n" +
+      "|---|---|---|---|---|---|---|---|\n" +
+      "| 1 | exp-003 | oboe | 0.95 | ok | 5 | single-pass | accuracy |\n";
+    const out = buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG, multiChange: { "oboe/exp-003": true } });
+    expect(out).toContain("1. oboe/exp-003");
+    expect(out).toContain("[multi-change]");
+  });
+  it("does not tag when no multi-change data (back-compat)", () => {
+    const sb =
+      "| Rank | Exp | Instrument | Metric | Status | Runtime | Approach | Metric name |\n" +
+      "|---|---|---|---|---|---|---|---|\n" +
+      "| 1 | exp-003 | oboe | 0.95 | ok | 5 | single-pass | accuracy |\n";
+    const out = buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG });
+    expect(out).not.toContain("[multi-change]");
+  });
 });
 
 describe("buildStatusBrief verify annotation", () => {
