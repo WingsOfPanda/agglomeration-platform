@@ -30,6 +30,7 @@ import { runForensics, runFlag } from "../core/forensics.js";
 import { parseScoreboard, buildHandoffKv, type HandoffInput } from "../core/rehearsalHandoff.js";
 import { buildConsensus } from "../core/rehearsalConsensus.js";
 import { parseVerifyBlock, planVerify, checkVerify, recomputedFromOutput, verificationRow, VERIFICATION_TSV_HEADER, type VerifyManifest, type VerificationRow } from "../core/rehearsalVerify.js";
+import { classifyInspect, inspectionRow, INSPECTION_TSV_HEADER, type InspectVerdict, type InspectionRow } from "../core/rehearsalInspect.js";
 import { instrumentBinary, consultTimeout } from "../core/contracts.js";
 import { inboxWrite, inboxPath, outboxPath, paneMetaRead, resolveModel } from "../core/ipc.js";
 import { paneSend, killNow } from "../core/tmux.js";
@@ -349,6 +350,93 @@ export async function verifyCheckWith(args: string[], deps: VerifyCheckDeps): Pr
   }
   const { verdict, reason } = checkVerify({ recomputed, runFailed, reported, epsilon });
   deps.writeRow(art, instrument, expId, { expId, instrument, verdict, reason, recomputed: recomputed === null ? "" : String(recomputed), ts: deps.now() });
+  const out = deps.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
+  out(`VERDICT=${verdict} reason=${reason}`);
+  return 0;
+}
+
+// ---- C1: inspect-plan — adjudicate eligibility + emit the run-card for an independent re-implementation ----
+export interface InspectPlanDeps {
+  readResult(art: string, instrument: string, expId: string): Record<string, unknown> | null;
+  readMetricMd(art: string): string | null;
+  inspectionCount(art: string): number;
+  partProvider(art: string, instrument: string, topic: string): string | null;
+  writeRow(art: string, instrument: string, expId: string, row: InspectionRow): void;
+  now(): string;
+  stdout?: (l: string) => void;
+  opts?: PathOpts;
+}
+
+export async function inspectPlanWith(args: string[], deps: InspectPlanDeps): Promise<number> {
+  const authorize = args.includes("--authorize-inspect");
+  const pos = args.filter((a) => !a.startsWith("--"));
+  if (pos.length !== 3) { log.error("rehearsal inspect-plan: usage: <topic> <instrument> <exp-id> [--authorize-inspect]"); return 2; }
+  const [topic, instrument, expId] = pos;
+  const art = rehearsalArtDir(topic, deps.opts);
+  const result = deps.readResult(art, instrument, expId);
+  if (result === null) { log.error(`rehearsal inspect-plan: result.json missing for ${instrument}/${expId}`); return 1; }
+  const out = deps.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
+  const term = (verdict: InspectVerdict, reason: string): number => {
+    deps.writeRow(art, instrument, expId, { expId, instrument, verdict, reason, reimplMetric: "", ts: deps.now() });
+    out(`VERDICT=${verdict} reason=${reason}`); return 0;
+  };
+  if (!authorize) return term("inconclusive", "inspect-deferred");
+  const md = deps.readMetricMd(art);
+  const budget = (md ? parseMetricMd(md).c1Budget : undefined) ?? 2;
+  if (deps.inspectionCount(art) >= budget) return term("inconclusive", "budget-exhausted");
+  if (result.data_spec === undefined || result.data_spec === null || typeof result.metric_formula !== "string" || result.metric_formula === "") {
+    return term("inconclusive", "run-card-insufficient");
+  }
+  if ((deps.partProvider(art, instrument, topic) ?? "") === "claude") return term("inconclusive", "same-family");
+  out(`INSPECT_CWD=${join(experimentDir(art, instrument, expId), "c1")}`);
+  out(`REPORTED_METRIC=${typeof result.metric_value === "number" ? result.metric_value : ""}`);
+  out(`METRIC_NAME=${String(result.metric_name ?? "")}`);
+  out(`METRIC_FORMULA=${String(result.metric_formula ?? "")}`);
+  out(`DATA_SPEC=${JSON.stringify(result.data_spec)}`);
+  out(`APPROACH=${String(result.approach_label ?? "")}`);
+  out(`INTEGRITY=${JSON.stringify(result.integrity ?? {})}`);
+  return 0;
+}
+
+// ---- C1: inspect-check — adjudicate the independent re-implementation into a three-way verdict ----
+export interface InspectCheckDeps {
+  readResult(art: string, instrument: string, expId: string): Record<string, unknown> | null;
+  readMetricMd(art: string): string | null;
+  readStdout(path: string): string | null;
+  readJson(path: string): string | null;
+  writeRow(art: string, instrument: string, expId: string, row: InspectionRow): void;
+  now(): string;
+  stdout?: (l: string) => void;
+  opts?: PathOpts;
+}
+
+export async function inspectCheckWith(args: string[], deps: InspectCheckDeps): Promise<number> {
+  const runFailed = args.includes("--run-failed");
+  const integrityRefuted = args.includes("--integrity-refuted");
+  let stdoutFile: string | undefined;
+  const pos: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--stdout-file") { stdoutFile = args[++i]; }
+    else if (args[i] === "--run-failed" || args[i] === "--integrity-refuted") { /* flags */ }
+    else if (!args[i].startsWith("--")) pos.push(args[i]);
+  }
+  if (pos.length !== 3) { log.error("rehearsal inspect-check: usage: <topic> <instrument> <exp-id> (--stdout-file <path> | --run-failed) [--integrity-refuted]"); return 2; }
+  if (!runFailed && !integrityRefuted && stdoutFile === undefined) { log.error("rehearsal inspect-check: need --stdout-file <path> or --run-failed or --integrity-refuted"); return 2; }
+  const [topic, instrument, expId] = pos;
+  const art = rehearsalArtDir(topic, deps.opts);
+  const result = deps.readResult(art, instrument, expId);
+  if (result === null) { log.error(`rehearsal inspect-check: result.json missing for ${instrument}/${expId}`); return 1; }
+  const reported = typeof result.metric_value === "number" ? result.metric_value : null;
+  const md = deps.readMetricMd(art);
+  const t = md ? parseMetricMd(md) : null;
+  const epsilon = t?.c1Epsilon ?? (2 * (t?.verifyEpsilon ?? 0.01));
+  let reimplMetric: number | null = null;
+  if (!runFailed && !integrityRefuted) {
+    const stdout = stdoutFile ? deps.readStdout(stdoutFile) : null;
+    reimplMetric = stdout === null ? null : recomputedFromOutput(stdout, "marker", (p) => deps.readJson(join(experimentDir(art, instrument, expId), p)));
+  }
+  const { verdict, reason } = classifyInspect({ reimplMetric, runFailed, reported, epsilon, integrityRefuted });
+  deps.writeRow(art, instrument, expId, { expId, instrument, verdict, reason, reimplMetric: reimplMetric === null ? "" : String(reimplMetric), ts: deps.now() });
   const out = deps.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
   out(`VERDICT=${verdict} reason=${reason}`);
   return 0;
@@ -876,8 +964,19 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
     }
   }
 
+  const itsv = join(art, "inspection.tsv");
+  let inspections: Record<string, string> | undefined;
+  if (existsSync(itsv)) {
+    inspections = {};
+    for (const line of readFileSync(itsv, "utf8").split("\n")) {
+      if (!line || line.startsWith("exp_id\t")) continue;
+      const cells = line.split("\t");           // exp_id, instrument, verdict, ...
+      if (cells[0] && cells[1] && cells[2]) inspections[`${cells[1]}/${cells[0]}`] = cells[2];
+    }
+  }
+
   const latest = p.latestInstrument && p.latestExp ? { instrument: p.latestInstrument, exp: p.latestExp } : undefined;
-  out(buildStatusBrief({ parts, scoreboardMd, completion, latest, verdicts, suspects, coverage, multiChange }));
+  out(buildStatusBrief({ parts, scoreboardMd, completion, latest, verdicts, suspects, coverage, multiChange, inspections }));
   return 0;
 }
 
@@ -1145,6 +1244,20 @@ export async function finalizeWith(args: string[], deps: RehearsalFinalizeDeps):
     if (extra.length) appendFileSync(warningsPath, extra.join("\n") + "\n");
   }
 
+  // C1: fold a not-reproduced inspection into warnings.txt (advisory in the summary; the row is
+  // already demoted to x<rank> by computeScore).
+  const inspectionTsv = join(art, "inspection.tsv");
+  if (existsSync(inspectionTsv)) {
+    const extra: string[] = [];
+    for (const line of readFileSync(inspectionTsv, "utf8").split("\n")) {
+      if (!line || line.startsWith("exp_id\t")) continue;
+      const c = line.split("\t");                 // exp_id, instrument, verdict, reason, reimpl_metric, ts
+      if (c[2] !== "not-reproduced") continue;
+      if (c[0] && c[1]) extra.push(`reimpl\t${c[1]}/${c[0]}\tnot-reproduced\t${c[3] ?? ""}`);
+    }
+    if (extra.length) appendFileSync(warningsPath, extra.join("\n") + "\n");
+  }
+
   // 9. render session-summary.md (FULL re-render; wholesale atomic replace).
   const statusRows: StatusRow[] = [];
   for (const instrument of instruments) {
@@ -1209,6 +1322,8 @@ export async function finalizeWith(args: string[], deps: RehearsalFinalizeDeps):
       warnings.push(`- sanity: ${f[1]} ${f[2]} (${f[3]})`);
     } else if (f[0] === "lineage") {
       warnings.push(`- lineage: ${f[1]} ${f[2]} (${f[3]})`);
+    } else if (f[0] === "reimpl") {
+      warnings.push(`- reimpl: ${f[1]} ${f[2]} (${f[3]})`);
     }
   }
 
@@ -1680,6 +1795,30 @@ const liveVerifyCheckDeps: VerifyCheckDeps = {
   now: () => isoUtc(),
 };
 
+function appendInspectionRow(art: string, instrument: string, expId: string, row: InspectionRow): void {
+  const tsv = join(art, "inspection.tsv");
+  const prior = existsSync(tsv) ? readFileSync(tsv, "utf8") : INSPECTION_TSV_HEADER;
+  atomicWrite(tsv, prior + inspectionRow(row));
+  atomicWrite(join(experimentDir(art, instrument, expId), "inspection.txt"),
+    `${row.verdict} reason=${row.reason} reimpl_metric=${row.reimplMetric} at ${row.ts}\n`);
+}
+const liveInspectPlanDeps: InspectPlanDeps = {
+  readResult: liveVerifyPlanDeps.readResult,
+  readMetricMd: (art) => { const p = join(art, "metric.md"); return existsSync(p) ? readFileSync(p, "utf8") : null; },
+  inspectionCount: (art) => { const p = join(art, "inspection.tsv"); if (!existsSync(p)) return 0; return readFileSync(p, "utf8").split("\n").filter((l) => l && !l.startsWith("exp_id\t")).length; },
+  partProvider: (_art, i, topic) => resolveModel(i, topic),
+  writeRow: appendInspectionRow,
+  now: () => isoUtc(),
+};
+const liveInspectCheckDeps: InspectCheckDeps = {
+  readResult: liveVerifyPlanDeps.readResult,
+  readMetricMd: (art) => { const p = join(art, "metric.md"); return existsSync(p) ? readFileSync(p, "utf8") : null; },
+  readStdout: (p) => (existsSync(p) ? readFileSync(p, "utf8") : null),
+  readJson: (p) => (existsSync(p) ? readFileSync(p, "utf8") : null),
+  writeRow: appendInspectionRow,
+  now: () => isoUtc(),
+};
+
 export async function run(args: string[]): Promise<number> {
   const [verb, ...rest] = args;
   switch (verb) {
@@ -1690,6 +1829,8 @@ export async function run(args: string[]): Promise<number> {
     case "drop-part": return dropPartWith(rest, liveDropPartDeps);
     case "verify-plan": return verifyPlanWith(rest, liveVerifyPlanDeps);
     case "verify-check": return verifyCheckWith(rest, liveVerifyCheckDeps);
+    case "inspect-plan": return inspectPlanWith(rest, liveInspectPlanDeps);
+    case "inspect-check": return inspectCheckWith(rest, liveInspectCheckDeps);
     case "experiment-send": return experimentSendWith(applyArgsFile(rest), liveExperimentSendDeps);
     case "score": return scoreWith(rest, liveScoreDeps);
     case "monitor": return monitorRun(rest);

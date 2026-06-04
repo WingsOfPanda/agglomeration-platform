@@ -186,6 +186,14 @@ In ONE turn, do all of the following:
      - For a task where a key is genuinely N/A (e.g. a generative run with no
        labels), still set it (e.g. "target_not_in_features": true) and explain in
        "notes". Be honest — these are cross-checked by a later verification pass.
+   - **Run-card for inspection (write this if you expect to be a leader).** Also emit
+     a "data_spec" — enough for an independent implementer to obtain the SAME data +
+     split: `{ "source": "<dataset id / url / builtin name>", "split_seed": <int>,
+     "split_hash": "<hash of the test-split indices>", "target_column": "<name>",
+     "feature_columns": ["..."] }` — and a "metric_formula" — a precise computation
+     string (e.g. "macro-F1, positive class = 1"). A cross-family inspector re-runs your
+     experiment from these ALONE (not your code) and re-derives the metric; write them so
+     an independent implementer could reproduce your result.
 
 5. **THIS IS THE TERMINAL STEP.** Immediately after `result.json` is on
    disk (via tmp+rename), emit ONE outbox event and STOP. Do not explore,

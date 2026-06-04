@@ -73,6 +73,10 @@ export interface MetricThresholds {
   maxDebugAttempts?: number;
   /** optional metric.md `**min_families:**` for B1 coverage floor; parsed with default 2 (>= 1). */
   minFamilies: number;
+  /** optional metric.md `**c1_epsilon:**` for C1 round-trip tolerance; caller defaults to 2x verify_epsilon (0.02). */
+  c1Epsilon?: number;
+  /** optional metric.md `**c1_budget:**` max C1 inspections per session; caller defaults to 2. */
+  c1Budget?: number;
   minOp?: string; minVal?: string;
   tgtOp?: string; tgtVal?: string;
   kRequired: number; plateauWindow: number; plateauThreshold: number;
@@ -90,6 +94,7 @@ export function parseMetricMd(text: string): MetricThresholds {
   let ceiling: number | undefined; let minRuntimeS: number | undefined;
   let maxDebugAttempts: number | undefined;
   let minFamilies = 2;
+  let c1Epsilon: number | undefined; let c1Budget: number | undefined;
   const opVal = (s: string): [string, string] => {
     const parts = s.trim().split(/\s+/);
     return [parts[0] ?? "", parts.slice(1).join(" ")];
@@ -108,8 +113,10 @@ export function parseMetricMd(text: string): MetricThresholds {
     else if ((m = line.match(/^\*\*min_runtime_s:\*\*\s+(.*)$/))) { const n = parseFloat(m[1].trim()); if (!Number.isNaN(n)) minRuntimeS = n; }
     else if ((m = line.match(/^\*\*max_debug_attempts:\*\*\s+(.*)$/))) { const n = parseInt(m[1].trim(), 10); if (!Number.isNaN(n)) maxDebugAttempts = n; }
     else if ((m = line.match(/^\*\*min_families:\*\*\s+(.*)$/))) { const n = parseInt(m[1].trim(), 10); if (!Number.isNaN(n)) minFamilies = Math.max(1, n); }
+    else if ((m = line.match(/^\*\*c1_epsilon:\*\*\s+(.*)$/))) { const n = parseFloat(m[1].trim()); if (!Number.isNaN(n)) c1Epsilon = n; }
+    else if ((m = line.match(/^\*\*c1_budget:\*\*\s+(.*)$/))) { const n = parseInt(m[1].trim(), 10); if (!Number.isNaN(n)) c1Budget = n; }
   }
-  return { primaryMetric, direction, minOp, minVal, tgtOp, tgtVal, kRequired, plateauWindow, plateauThreshold, verifyEpsilon, ceiling, minRuntimeS, maxDebugAttempts, minFamilies };
+  return { primaryMetric, direction, minOp, minVal, tgtOp, tgtVal, kRequired, plateauWindow, plateauThreshold, verifyEpsilon, ceiling, minRuntimeS, maxDebugAttempts, minFamilies, c1Epsilon, c1Budget };
 }
 
 export interface SotaInput {

@@ -961,6 +961,98 @@ describe("rehearsal verify-check", () => {
   });
 });
 
+import { inspectPlanWith, inspectCheckWith, type InspectPlanDeps, type InspectCheckDeps } from "../src/commands/rehearsal.js";
+type InspectionRowT = import("../src/core/rehearsalInspect.js").InspectionRow;
+
+describe("rehearsal inspect-plan (C1)", () => {
+  const mkPlan = (over: Partial<InspectPlanDeps> = {}, result: Record<string, unknown> | null = { metric_value: 0.9, metric_name: "accuracy", approach_label: "x", data_spec: { source: "ds" }, metric_formula: "macro-F1" }) => {
+    const lines: string[] = []; const rows: InspectionRowT[] = [];
+    const deps: InspectPlanDeps = {
+      readResult: () => result,
+      readMetricMd: () => "**Primary metric:** accuracy\n",
+      inspectionCount: () => 0,
+      partProvider: () => "codex",
+      writeRow: (_a, _i, _e, row) => { rows.push(row); },
+      now: () => "T",
+      stdout: (l) => lines.push(l),
+      ...over,
+    };
+    return { deps, lines, rows };
+  };
+  it("without --authorize-inspect -> inconclusive inspect-deferred", async () => {
+    const { deps, rows, lines } = mkPlan();
+    expect(await inspectPlanWith(["t", "oboe", "exp-001"], deps)).toBe(0);
+    expect(rows[0].verdict).toBe("inconclusive");
+    expect(rows[0].reason).toBe("inspect-deferred");
+    expect(lines.join("\n")).toContain("VERDICT=inconclusive reason=inspect-deferred");
+  });
+  it("authorized but no data_spec -> run-card-insufficient", async () => {
+    const { deps, rows } = mkPlan({}, { metric_value: 0.9, metric_name: "accuracy", approach_label: "x", metric_formula: "f" });
+    expect(await inspectPlanWith(["t", "oboe", "exp-001", "--authorize-inspect"], deps)).toBe(0);
+    expect(rows[0].reason).toBe("run-card-insufficient");
+  });
+  it("authorized + budget hit -> budget-exhausted", async () => {
+    const { deps, rows } = mkPlan({ inspectionCount: () => 5, readMetricMd: () => "**c1_budget:** 2\n**Primary metric:** accuracy\n" });
+    expect(await inspectPlanWith(["t", "oboe", "exp-001", "--authorize-inspect"], deps)).toBe(0);
+    expect(rows[0].reason).toBe("budget-exhausted");
+  });
+  it("authorized + claude part -> same-family", async () => {
+    const { deps, rows } = mkPlan({ partProvider: () => "claude" });
+    expect(await inspectPlanWith(["t", "oboe", "exp-001", "--authorize-inspect"], deps)).toBe(0);
+    expect(rows[0].reason).toBe("same-family");
+  });
+  it("authorized + sufficient -> prints INSPECT_CWD + run-card", async () => {
+    const { deps, lines } = mkPlan();
+    expect(await inspectPlanWith(["t", "oboe", "exp-001", "--authorize-inspect"], deps)).toBe(0);
+    const out = lines.join("\n");
+    expect(out).toContain("INSPECT_CWD=");
+    expect(out).toContain("METRIC_FORMULA=macro-F1");
+    expect(out).toContain("DATA_SPEC=");
+  });
+  it("missing result.json -> rc 1", async () => {
+    const { deps } = mkPlan({}, null);
+    expect(await inspectPlanWith(["t", "oboe", "exp-001", "--authorize-inspect"], deps)).toBe(1);
+  });
+});
+
+describe("rehearsal inspect-check (C1)", () => {
+  const mkCheck = (over: Partial<InspectCheckDeps> = {}, result: Record<string, unknown> | null = { metric_value: 0.9, metric_name: "accuracy" }) => {
+    const lines: string[] = []; const rows: InspectionRowT[] = [];
+    const deps: InspectCheckDeps = {
+      readResult: () => result,
+      readMetricMd: () => "**Primary metric:** accuracy\n**c1_epsilon:** 0.02\n",
+      readStdout: () => "VERIFY_METRIC=0.91\n",
+      readJson: () => null,
+      writeRow: (_a, _i, _e, row) => { rows.push(row); },
+      now: () => "T",
+      stdout: (l) => lines.push(l),
+      ...over,
+    };
+    return { deps, lines, rows };
+  };
+  it("--stdout-file within c1_epsilon -> reproduced", async () => {
+    const { deps, rows } = mkCheck();
+    expect(await inspectCheckWith(["t", "oboe", "exp-001", "--stdout-file", "/x"], deps)).toBe(0);
+    expect(rows[0].verdict).toBe("reproduced");
+  });
+  it("--stdout-file beyond c1_epsilon -> not-reproduced", async () => {
+    const { deps, rows } = mkCheck({ readStdout: () => "VERIFY_METRIC=0.5\n" });
+    expect(await inspectCheckWith(["t", "oboe", "exp-001", "--stdout-file", "/x"], deps)).toBe(0);
+    expect(rows[0].verdict).toBe("not-reproduced");
+  });
+  it("--run-failed -> inconclusive", async () => {
+    const { deps, rows } = mkCheck();
+    expect(await inspectCheckWith(["t", "oboe", "exp-001", "--run-failed"], deps)).toBe(0);
+    expect(rows[0].verdict).toBe("inconclusive");
+  });
+  it("--integrity-refuted -> not-reproduced", async () => {
+    const { deps, rows } = mkCheck();
+    expect(await inspectCheckWith(["t", "oboe", "exp-001", "--integrity-refuted"], deps)).toBe(0);
+    expect(rows[0].verdict).toBe("not-reproduced");
+    expect(rows[0].reason).toBe("integrity-refuted");
+  });
+});
+
 describe("experiment template verify contract", () => {
   it("instructs the part to emit a verify block + VERIFY_METRIC marker", () => {
     const tpl = readFileSync("config/prompt-templates/rehearsal/experiment.md", "utf8");

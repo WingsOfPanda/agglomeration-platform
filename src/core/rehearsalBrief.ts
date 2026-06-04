@@ -29,6 +29,8 @@ export interface StatusBriefInput {
   coverage?: CoverageRow[];
   /** instrument/exp -> improve-multi (B2), joined from lineage.tsv; omit for back-compat (no tag). */
   multiChange?: Record<string, boolean>;
+  /** instrument/exp -> C1 verdict (reproduced|not-reproduced|inconclusive), joined from inspection.tsv. */
+  inspections?: Record<string, string>;
 }
 
 interface SbTop { rank: string; exp: string; instrument: string; metric: string; metricName: string; }
@@ -87,7 +89,9 @@ export function buildStatusBrief(input: StatusBriefInput): string {
         const s = input.suspects?.[`${r.instrument}/${r.exp}`];
         const stag = s && s.length ? ` [suspect: ${s.join(",")}]` : "";
         const mc = input.multiChange?.[`${r.instrument}/${r.exp}`] ? " [multi-change]" : "";
-        sb.push(`${r.rank}. ${r.instrument}/${r.exp} — ${r.metric} — ${r.metricName}${tag}${stag}${mc}`);
+        const iv = input.inspections?.[`${r.instrument}/${r.exp}`];
+        const itag = iv === "reproduced" ? " [reimpl-ok]" : iv === "not-reproduced" ? " [reimpl-mismatch!]" : iv === "inconclusive" ? " [reimpl-inconclusive]" : "";
+        sb.push(`${r.rank}. ${r.instrument}/${r.exp} — ${r.metric} — ${r.metricName}${tag}${stag}${mc}${itag}`);
       }
     }
   }

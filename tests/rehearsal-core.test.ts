@@ -920,6 +920,31 @@ describe("rehearsalScore", () => {
     expect(c.scoreboardMd).toMatch(/\| 1 \| exp-001 \| viola \|/);
     expect(c.scoreboardMd).not.toMatch(/infeasible/);
   });
+  it("routes a C1 not-reproduced result to the infeasible group (C1)", () => {
+    const files: Record<string, string> = {
+      "/a/metric.md": "**Primary metric:** accuracy\n**Direction:** maximize\n",
+      "/a/inspection.tsv": "exp_id\tinstrument\tverdict\treason\treimpl_metric\tts\nexp-001\toboe\tnot-reproduced\tvalue\t0.5\tT\n",
+      "/a/parts/oboe/experiments/exp-001/result.json": JSON.stringify({
+        branch_id:"b",approach_label:"x",metric_name:"accuracy",metric_value:0.99,status:"ok",
+        runtime_s:5,log_paths:[],checkpoint_path:null,notes:"" }),
+    };
+    const c = computeScore("/a", fakeFs(files), () => "T");
+    expect(c.scoreboardMd).toContain("x1");               // routed to the x<rank> infeasible group
+    expect(c.scoreboardMd).toContain("reimpl-mismatch");  // the infeasible reason (match the actual cell format you read)
+  });
+  it("an inconclusive C1 verdict does NOT demote — the row stays integer-ranked (C1)", () => {
+    const files: Record<string, string> = {
+      "/a/metric.md": "**Primary metric:** accuracy\n**Direction:** maximize\n",
+      "/a/inspection.tsv": "exp_id\tinstrument\tverdict\treason\treimpl_metric\tts\nexp-001\toboe\tinconclusive\treimpl-failed\t\tT\n",
+      "/a/parts/oboe/experiments/exp-001/result.json": JSON.stringify({
+        branch_id:"b",approach_label:"x",metric_name:"accuracy",metric_value:0.99,status:"ok",
+        runtime_s:5,log_paths:[],checkpoint_path:null,notes:"" }),
+    };
+    const c = computeScore("/a", fakeFs(files), () => "T");
+    expect(c.scoreboardMd).toContain("| 1 | exp-001 | oboe |");  // stays the integer-rank leader
+    expect(c.scoreboardMd).not.toContain("x1");
+    expect(c.scoreboardMd).not.toContain("reimpl");
+  });
   it("emits per-family coverageRows over ok experiments (B1)", () => {
     const files: Record<string, string> = {
       "/a/metric.md": "**Primary metric:** accuracy\n**Direction:** maximize\n",
@@ -1264,6 +1289,16 @@ describe("rehearsalBrief", () => {
     expect(l3).toContain("[multi-change]");
     expect(l2).not.toContain("[multi-change]");
   });
+  it("tags top-3 rows with [reimpl-*] from inspections (C1)", () => {
+    const sb =
+      "| Rank | Exp | Instrument | Metric | Status | Runtime | Approach | Metric name |\n" +
+      "|---|---|---|---|---|---|---|---|\n" +
+      "| 1 | exp-003 | oboe | 0.95 | ok | 5 | x | accuracy |\n";
+    expect(buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG, inspections: { "oboe/exp-003": "reproduced" } })).toContain("[reimpl-ok]");
+    expect(buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG, inspections: { "oboe/exp-003": "not-reproduced" } })).toContain("[reimpl-mismatch!]");
+    expect(buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG, inspections: { "oboe/exp-003": "inconclusive" } })).toContain("[reimpl-inconclusive]");
+    expect(buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG })).not.toContain("[reimpl");
+  });
 });
 
 describe("buildStatusBrief verify annotation", () => {
@@ -1327,5 +1362,23 @@ describe("metric.md min_families (B1)", () => {
   it("is parse-only: formatMetricBlock does NOT emit a min_families line", () => {
     const md = formatMetricBlockB1({ primary_metric: "accuracy", direction: "maximize" });
     expect(md).not.toContain("min_families");
+  });
+});
+
+describe("metric.md c1 knobs (C1)", () => {
+  it("defaults: c1Epsilon/c1Budget undefined when absent", () => {
+    const t = parseMetricMd("**Primary metric:** accuracy\n");
+    expect(t.c1Epsilon).toBeUndefined();
+    expect(t.c1Budget).toBeUndefined();
+  });
+  it("parses explicit values", () => {
+    const t = parseMetricMd("**c1_epsilon:** 0.05\n**c1_budget:** 3\n");
+    expect(t.c1Epsilon).toBe(0.05);
+    expect(t.c1Budget).toBe(3);
+  });
+  it("parse-only: formatMetricBlock emits neither", () => {
+    const md = formatMetricBlock({ primary_metric: "accuracy", direction: "maximize" });
+    expect(md).not.toContain("c1_epsilon");
+    expect(md).not.toContain("c1_budget");
   });
 });
