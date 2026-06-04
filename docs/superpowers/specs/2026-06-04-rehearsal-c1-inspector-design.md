@@ -129,7 +129,8 @@ render appends a tag after the A1/A3/B2 tags: `[reimpl-ok]` (reproduced) / `[rei
   `verify_epsilon` (independent re-implementations legitimately vary more than a deterministic re-run):
   default `2 × (verify_epsilon ?? 0.01)` in the caller, i.e. **0.02** absent any config.
 - **`c1_budget`** — hard per-session cap on C1 inspections (default **2**). When the cap is hit,
-  `inspect-plan` returns a terminal `pending reason=budget-exhausted` row (visible — no silent skip).
+  `inspect-plan` returns a terminal `inconclusive reason=budget-exhausted` row (visible — no silent
+  skip; `inconclusive` never demotes).
 
 Both parse-only (added to `MetricThresholds` + `parseMetricMd`, NOT `formatMetricBlock`), like every
 prior A/B knob.
@@ -137,11 +138,15 @@ prior A/B knob.
 ## 5. The verbs + the gate
 
 ### 5.1 `inspect-plan <topic> <instrument> <exp> [--authorize-inspect]`
-Reads `result.json` + `metric.md`. Gates (in order, each → an early terminal row, no run):
-- not `--authorize-inspect` → `pending reason=inspect-deferred` (Maestro hasn't deemed it new-best).
-- C1 rows in `inspection.tsv` ≥ `c1_budget` → `pending reason=budget-exhausted`.
+Reads `result.json` + `metric.md`. Gates (in order, each → an early terminal row, no run). All
+terminal rows use the `inconclusive` verdict (the reason string carries the distinction; `inconclusive`
+never demotes — only a `not-reproduced` does, so a deferred/capped inspection is safe by construction.
+`pending` is an A1 `Verdict` value, NOT an `InspectVerdict` — C1's namespace is reproduced /
+not-reproduced / inconclusive):
+- not `--authorize-inspect` → `inconclusive reason=inspect-deferred` (Maestro hasn't deemed it new-best).
+- C1 rows in `inspection.tsv` ≥ `c1_budget` → `inconclusive reason=budget-exhausted`.
 - `data_spec` or `metric_formula` absent → `inconclusive reason=run-card-insufficient`.
-- inspector resolves same-family as the part → `inconclusive reason=same-family` (+ stderr warn).
+- inspector resolves same-family as the part → `inconclusive reason=same-family`.
 Otherwise prints `INSPECT_CWD=<exp-dir>/c1`, the run-card (the `data_spec` + `metric_formula` +
 `approach_label`/`approach_brief` + `metric_name` + the reported `metric_value` + the `integrity`
 claims) and an instruction for the Maestro to author fresh code there, obtain the data, re-run, and
