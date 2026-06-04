@@ -19,6 +19,11 @@ Your experiment:
   Approach label:  {{APPROACH_LABEL}}
   Approach brief:  {{APPROACH_BRIEF}}
 
+If the approach brief says you are improving on a prior experiment (a
+parent), change exactly ONE variable vs that parent so the metric delta
+is attributable — isolate first, combine only after each change is
+attributed. State the single variable you changed in `notes`.
+
 {{TASK_CONTEXT}}
 
 {{SOTA_BLOCK}}
@@ -92,7 +97,10 @@ the metric range) that adds a lot of code or hard-to-explain machinery
 is usually not worth it; equal-or-better results from less code is a
 clean win. If you find yourself adding scaffolding just to make a
 marginal number look better, document the trade-off in `notes` so the
-Maestro can weigh it.
+Maestro can weigh it. **Early experiments should be the simplest thing
+that could work** — establish a baseline before adding machinery; go
+deeper only once a baseline exists (over-engineering on turn one is the
+most common failure).
 
 In ONE turn, do all of the following:
 
