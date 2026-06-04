@@ -71,6 +71,7 @@ exists** (the user passed `--metric`), SKIP this whole phase. Otherwise the thre
    before done?", default 1), and any `hard_constraints` / `notes`. (Use <=4 options; nest if more.)
 4. Write `metric.md`: `$CS rehearsal metric <TOPIC> --kv "primary_metric=<m>,direction=<maximize|minimize>,min_acceptable=<op val>,target=<op val>,K_corroboration=<n>,hard_constraints=<...>,notes=<...>"` (omit absent keys). rc 2 = bad block; fix and retry.
    - **Coverage floor (B1):** the plateau stop requires `min_families` distinct approach families before it can fire (default 2; AIRA's healthy band is 3-4). The `metric` verb does NOT emit it; to require broader coverage, add a `**min_families:** N` line to `metric.md` with the Write tool after the verb runs (parse-only, like `verify_epsilon`/`ceiling`/`max_debug_attempts`).
+   - **Inspection budget (C1):** the independent re-implementation inspector (Step 3.5b) uses `**c1_epsilon:** <f>` (round-trip tolerance, default 0.02 = 2x `verify_epsilon` -- independent re-runs vary more than a re-run) and `**c1_budget:** <n>` (max inspections per session, default 2). Both parse-only; add to `metric.md` with the Write tool if you want non-defaults.
 5. **AskUserQuestion** (Header `Confirm`): "Here's how I'll frame the goal — OK to proceed?" Options:
    **Looks good** / **Revise** / **Cancel**. Revise → re-run step 4. **Cancel → teardown + exit.**
 
@@ -228,6 +229,11 @@ brief entirely when `RAN_SCORE=0` (only heartbeat/question/stale/stuck fired —
    `--parent` -- its metric delta is NOT cleanly attributable. Do not over-trust it; if it matters,
    re-confirm with an isolating single-change Improve before crowning it.
 
+   Inspection (C1): `[reimpl-mismatch!]` = an independent cross-family re-implementation could NOT
+   reproduce this leader's metric (strong gaming/irreproducibility signal -- demoted to `x<rank>`);
+   `[reimpl-ok]` = independently reproduced (corroborated); `[reimpl-inconclusive]` = the re-run
+   couldn't conclude (advisory only). C1 fires only on new-best leaders -- see Step 3.5b.
+
 3.5. **Verify the landed result (metric-trust gate).** After `score`/`status-brief`, for the
      experiment that just landed (`<instrument>`/`<exp>`):
 
@@ -257,6 +263,37 @@ brief entirely when `RAN_SCORE=0` (only heartbeat/question/stale/stuck fired —
         record the idea INFEASIBLE-final in `## Recent decisions` ("couldn't be validly executed", NOT
         refuted) and let the part move to a new idea. A REFUTED result (feasible `ok`, genuinely low)
         steers normally -- it is real evidence the idea is weak.
+
+3.5b. **Independent re-implementation inspection (C1) -- new-best leaders only.** This is the strongest
+     anti-gaming gate: where the A1 verify (3.5a-c) re-RUNS the part's OWN scoring command, C1 has YOU
+     (the cross-family Claude Maestro) regenerate the experiment from the part's run-card ALONE and
+     re-derive the metric -- catching a part whose own scoring code is the gamed artifact. It is
+     expensive, so fire it ONLY when the just-landed result is a NEW-BEST leader (rank 1 in the
+     status-brief top-3 -- the same judgment that gates A1's `--authorize-rerun`), is A1-`verified`, is
+     NOT `[suspect]`, and the part is a `codex` part (skip if it is a `claude` part -- you would be
+     same-family as the inspector).
+
+     a. `$CS rehearsal inspect-plan <TOPIC> <instrument> <exp> --authorize-inspect`. If it prints a
+        terminal `VERDICT=inconclusive reason=...` (inspect-deferred / budget-exhausted /
+        run-card-insufficient / same-family), STOP -- an inconclusive inspection never demotes; note it
+        and move on. (Budget: `metric.md` `c1_budget`, default 2 per session.)
+     b. If it printed `INSPECT_CWD=...` plus the run-card (`DATA_SPEC` / `METRIC_FORMULA` / `APPROACH` /
+        `REPORTED_METRIC` / `INTEGRITY`): author FRESH, INDEPENDENT code in that scratch dir (do NOT read
+        the part's `code/`). Obtain the same data per `DATA_SPEC`, re-run the experiment end-to-end with a
+        timeout, compute the metric per `METRIC_FORMULA`, and print `VERIFY_METRIC=<n>` as the last stdout
+        line; tee stdout to `<exp-dir>/c1/inspect-stdout.log`. **Explore-only: write ONLY under
+        `<exp-dir>/c1/` -- never the user's repo, never `/consort:perform`.** Also cross-check the
+        `INTEGRITY` claims against the split you reconstructed (e.g. does the data actually keep
+        train/test disjoint?).
+     c. `$CS rehearsal inspect-check <TOPIC> <instrument> <exp> --stdout-file <exp-dir>/c1/inspect-stdout.log`
+        (add `--integrity-refuted` if a reconstructed-split check contradicts an attested claim; use
+        `--run-failed` if your re-run errored).
+     d. The verdict annotates the next status-brief top-3: `[reimpl-ok]` (independently reproduced --
+        corroborated, a strong positive), `[reimpl-mismatch!]` (could NOT reproduce -- the score pass
+        demotes it to the `x<rank>` group like an INFEASIBLE; re-dispatch the idea via point f's loop, it
+        is "couldn't be independently reproduced", NOT refuted), or `[reimpl-inconclusive]` (couldn't
+        complete a confident re-run -- advisory only, do not act). NEVER crown a `[reimpl-mismatch!]`
+        leader.
 
 ### Step 4 — Completion check + DECISION POLICY
 The `status-brief` you just printed already shows the `**Completion check:**` line (computed by the same
