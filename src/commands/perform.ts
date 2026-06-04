@@ -2,15 +2,15 @@
 // Byte-faithful port of the prior bash plugin's deploy verb set; WIRES the Phase-A core modules.
 // Rebrand: _deploy/->_perform/, feat/deploy-->feat/perform-, conductor sender->From: maestro.
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, statSync, readdirSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile, kvParse } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
 import { repoRoot, repoStateDir } from "../core/paths.js";
 import { auditDoc } from "../core/audit.js";
 import {
-  parsePerformArgs, deriveTopicFromPath, resolveTarget, detectProvider,
-  performArtDir, iterTargets, assertPerformTopic, PerformArgError, PerformResolveError,
+  parsePerformArgs, deriveTopicFromPath, detectProvider,
+  performArtDir, iterTargets, assertPerformTopic, PerformArgError,
 } from "../core/perform.js";
 import { isoUtc, archiveTopic } from "../core/archive.js";
 import { extractComponentsPaths, matchDiffAgainstComponents } from "../core/performScope.js";
@@ -40,10 +40,6 @@ function latestObjections(stateFile: string): number {
   if (!existsSync(stateFile)) return 0;
   const ms = [...readFileSync(stateFile, "utf8").matchAll(/^OBJECTIONS=(\d+)\s*$/gm)];
   return ms.length ? Number(ms[ms.length - 1][1]) : 0;
-}
-/** Multi-repo iff the PLURAL Target header + an Execution DAG are both present (deploy-init.sh:87). */
-function detectRouting(docText: string): "single" | "multi" {
-  return /^\*\*Target Sub-Project\(s\):\*\*/m.test(docText) && /^## Execution DAG[ \t]*$/m.test(docText) ? "multi" : "single";
 }
 function usage(): number {
   log.error("usage: perform <init|audit|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|summary|finish|finish-one|forensics|archive|find-latest-doc> ...");
@@ -136,11 +132,9 @@ export async function initWith(tokens: string[], d: PerformInitDeps): Promise<nu
   const art = performArtDir(topic);
   if (existsSync(art)) { log.error(`perform init: topic already in flight: ${art} (run /consort:coda or pick a different --topic)`); return 2; }
 
-  let targetCwd: string;
-  try { targetCwd = resolveTarget(designPath, d.repoRoot()); }
-  catch (e) { if (e instanceof PerformResolveError) { log.error(e.message); return e.code; } throw e; }
+  const targetCwd = d.repoRoot();
 
-  const routing = parsed.targets.length > 0 ? "multi" : detectRouting(text);
+  const routing = "single";
   const provider: string = detectProvider(targetCwd);
 
   mkdirSync(art, { recursive: true });
@@ -149,7 +143,7 @@ export async function initWith(tokens: string[], d: PerformInitDeps): Promise<nu
   atomicWrite(join(art, "target_cwd.txt"), targetCwd + "\n");
   atomicWrite(join(art, "provider.txt"), provider + "\n");
   atomicWrite(join(art, "auto_provider.txt"), provider + "\n");   // deploy claude-confirm marker (the auto-detected provider)
-  atomicWrite(join(art, "multi-repo.txt"), (routing === "multi" ? "multi" : "single") + "\n");
+  atomicWrite(join(art, "multi-repo.txt"), "single\n");
 
   log.ok(`perform init: topic=${topic} routing=${routing} provider=${provider}`);
   process.stdout.write(`ART=${art}\nTOPIC=${topic}\nROUTING=${routing}\nPROVIDER=${provider}\nTARGET_CWD=${targetCwd}\n`);
@@ -306,38 +300,17 @@ const liveScopeDeps: ScopeDeps = { runnerFor: runnerAt };
 async function scopeCheckRun(rest: string[]): Promise<number> { const topic = rest[0]; if (!topic) { log.error("usage: perform scope-check <topic>"); return 2; } return scopeCheckWith(topic, liveScopeDeps); }
 /**
  * Scope conformance: collect the diff path set, then match it against the design's Components
- * paths. Multi-repo (parts.txt present) collects each declared sub-repo's diff and prefixes every
- * path with `<repo>/` (repo = basename(cwd)); single-repo path stays byte-identical (deploy.sh
- * `deploy.md:1304-1319` multi-repo diff-collection branch). Per-part baseline SHA comes from
- * `baselines/<slug>.tsv` field `baseline_sha` (the single `branch-base.sha` is last-target-wins for
- * multi and must NOT be used per-repo).
+ * paths. Single-repo: the diff comes from `target_cwd.txt` + `branch-base.sha`.
  */
 export async function scopeCheckWith(topic: string, d: ScopeDeps): Promise<number> {
   const art = performArtDir(topic);
   const designFile = join(art, "design.md");
-  const partsFile = join(art, "parts.txt");
-  let diffPaths: string[];
-  if (existsSync(partsFile)) {
-    // Multi-repo (deploy.md:1304-1313): per-sub-repo diff, prefixed with the repo slug.
-    if (!existsSync(designFile)) { log.error(`perform scope-check: design.md missing under ${art}`); return 1; }
-    diffPaths = [];
-    for (const t of iterTargets(topic)) {
-      if (!t.slug || !t.cwd) continue;
-      const base = kvFileField(join(art, "baselines", `${t.slug}.tsv`), "baseline_sha");
-      if (!base) continue;
-      const repo = basename(t.cwd);
-      const sub = d.runnerFor(t.cwd).run("git", ["diff", "--name-only", `${base}..HEAD`]).stdout.split("\n").filter((x) => x.length > 0);
-      for (const p of sub) diffPaths.push(`${repo}/${p}`);
-    }
-  } else {
-    // Single-repo — UNCHANGED behavior (target_cwd.txt + branch-base.sha).
-    const targetFile = join(art, "target_cwd.txt"), baseFile = join(art, "branch-base.sha");
-    if (!existsSync(targetFile) || !existsSync(baseFile)) { log.error(`perform scope-check: target_cwd.txt/branch-base.sha missing under ${art}`); return 1; }
-    if (!existsSync(designFile)) { log.error(`perform scope-check: design.md missing under ${art}`); return 1; }
-    const targetCwd = readFileSync(targetFile, "utf8").split("\n")[0].trim();
-    const base = readFileSync(baseFile, "utf8").split("\n")[0].trim();
-    diffPaths = d.runnerFor(targetCwd).run("git", ["diff", "--name-only", `${base}..HEAD`]).stdout.split("\n").filter((x) => x.length > 0);
-  }
+  const targetFile = join(art, "target_cwd.txt"), baseFile = join(art, "branch-base.sha");
+  if (!existsSync(targetFile) || !existsSync(baseFile)) { log.error(`perform scope-check: target_cwd.txt/branch-base.sha missing under ${art}`); return 1; }
+  if (!existsSync(designFile)) { log.error(`perform scope-check: design.md missing under ${art}`); return 1; }
+  const targetCwd = readFileSync(targetFile, "utf8").split("\n")[0].trim();
+  const base = readFileSync(baseFile, "utf8").split("\n")[0].trim();
+  const diffPaths = d.runnerFor(targetCwd).run("git", ["diff", "--name-only", `${base}..HEAD`]).stdout.split("\n").filter((x) => x.length > 0);
   atomicWrite(join(art, "diff-paths.txt"), diffPaths.length ? diffPaths.join("\n") + "\n" : "");
   const compPaths = extractComponentsPaths(readFileSync(designFile, "utf8"));
   atomicWrite(join(art, "components-paths.txt"), compPaths.length ? compPaths.join("\n") + "\n" : "");
@@ -423,9 +396,9 @@ export async function finishWith(topic: string, action: "merge" | "pr" | "keep" 
   }
   log.ok(`perform finish: ${n} target(s) completed`); return 0;
 }
-// Per-repo finish-one (deploy-finish.sh:1398-1419 / deploy.md:1398-1419, per-target granularity):
-// finishes a SINGLE target by slug and APPENDS to finish-results.tsv (no truncate). The multi-repo
-// directive truncates finish-results.tsv once, then calls finish-one per repo (finish menu per target).
+// finish-one (deploy-finish.sh:1398-1419 / deploy.md:1398-1419): finishes the lone 'main' target by
+// slug and APPENDS to finish-results.tsv (no truncate). The directive truncates finish-results.tsv
+// once, then calls finish-one for the target (finish menu per target).
 async function finishOneRun(rest: string[]): Promise<number> {
   const [topic, slug, action] = rest;
   if (!topic || !slug || !action) { log.error("usage: perform finish-one <topic> <slug> <merge|pr|keep|discard>"); return 2; }

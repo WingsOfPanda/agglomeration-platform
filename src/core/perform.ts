@@ -3,9 +3,8 @@
 // Byte-faithful port of the prior bash plugin's deploy core helpers (cosmetic rebrand: _deploy/ ->
 // _perform/, worker-noun -> "part", deploy env prefix -> CONSORT_PERFORM_*). Logic preserved verbatim.
 import { join, basename } from "node:path";
-import { readFileSync, existsSync, statSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { topicDir } from "./paths.js";
-import { extractTarget } from "./audit.js";
 import { kvParse } from "../args.js";
 
 /** `_perform` art dir for a topic. Honors CONSORT_PERFORM_ART_DIR_OVERRIDE; else <topicDir>/_perform. */
@@ -42,12 +41,10 @@ export interface PerformArgs {
   branchMode: "branch" | "no-branch";
   branchName?: string;
   topic?: string;
-  targets: string[];
   force: boolean;
 }
 
 export class PerformArgError extends Error { code = 2; }
-export class PerformResolveError extends Error { code = 1; constructor(message: string) { super(message); } }
 
 /** Parse the perform args tokens (port of deploy-init's argv parser). Default branch-on; --no-branch
  *  opts out. --max-rounds is REJECTED (the directive strips it before init). */
@@ -55,7 +52,6 @@ export function parsePerformArgs(tokens: string[]): PerformArgs {
   let branchMode: "branch" | "no-branch" = "branch";
   let branchName: string | undefined;
   let topic: string | undefined;
-  let targets: string[] = [];
   let force = false;
   const rest: string[] = [];
   for (let i = 0; i < tokens.length; i++) {
@@ -71,55 +67,10 @@ export function parsePerformArgs(tokens: string[]): PerformArgs {
     if (t === "--topic" || t.startsWith("--topic=")) {
       const { value, shift } = kvParse(t, tokens[i + 1]); topic = value; if (shift === 2) i++; continue;
     }
-    if (t === "--targets" || t.startsWith("--targets=")) {
-      const { value, shift } = kvParse(t, tokens[i + 1]);
-      targets = value.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
-      if (shift === 2) i++; continue;
-    }
     if (t.startsWith("-")) throw new PerformArgError(`perform init: unknown flag '${t}'`);
     rest.push(t);
   }
-  return { rest: rest.join(" "), branchMode, branchName, topic, targets, force };
-}
-
-/** True iff `<dir>/.git` exists as a directory (normal repo) or a file (gitdir worktree). */
-function hasGitDir(dir: string): boolean {
-  const dotgit = join(dir, ".git");
-  if (!existsSync(dotgit)) return false;
-  try { const st = statSync(dotgit); return st.isDirectory() || st.isFile(); } catch { return false; }
-}
-
-/** Port of deploy_resolve_target. No header -> cwd; invalid/ambiguous -> throw; valid + <cwd>/<slug>/.git
- *  -> <cwd>/<slug>; missing dir / no .git -> throw. Reads the doc from disk. */
-export function resolveTarget(docPath: string, cwd: string): string {
-  let docText: string;
-  try { docText = readFileSync(docPath, "utf8"); }
-  catch { throw new PerformResolveError(`resolveTarget: doc unreadable: ${docPath}`); }
-  const t = extractTarget(docText);
-  if (t.present && !t.valid) {
-    throw new PerformResolveError(`resolveTarget: invalid or ambiguous Target Sub-Project header in ${docPath}`);
-  }
-  if (!t.present) return cwd;
-  const slug = t.slug;
-  const sub = join(cwd, slug);
-  let isDir = false;
-  try { isDir = statSync(sub).isDirectory(); } catch { isDir = false; }
-  if (!isDir) {
-    // A single-target doc carries a `**Target Sub-Project:** <slug>` header minted from the hub.
-    // When perform runs from INSIDE that sub-project, <cwd>/<slug> is <slug>/<slug> and absent — but
-    // the header just names the repo we are already standing in. Treat that as single-repo.
-    if (basename(cwd) === slug) return cwd;
-    throw new PerformResolveError(`target sub-project '${slug}' not found at ${sub} (no directory; check spelling or that the sub-repo is checked out)`);
-  }
-  if (!hasGitDir(sub)) {
-    throw new PerformResolveError(`target sub-project '${slug}' is a directory but not a git repo (no .git/ at ${sub})`);
-  }
-  return sub;
-}
-
-/** Port of deploy_resolve_hub: both modes resolve to repoRoot in the current contract. */
-export function resolveHub(_docPath: string, repoRoot: string): string {
-  return repoRoot;
+  return { rest: rest.join(" "), branchMode, branchName, topic, force };
 }
 
 /** Port of deploy_detect_provider. plugin.json present -> claude; else codex. (The --provider override
@@ -130,21 +81,9 @@ export function detectProvider(repoRoot: string): "codex" | "claude" {
 
 export interface IterTarget { slug: string; cwd: string; }
 
-/** Port of deploy_iter_targets. Hub mode reads parts.txt (TSV <slug>\t<cwd>); single-repo synthesizes
- *  one 'main' row from target_cwd.txt; neither file -> []. (parts.txt, NOT the worker-noun file —
- *  gate-safe; the stale-token gate bans that substring.) */
+/** Port of deploy_iter_targets. Single-repo synthesizes one 'main' row from target_cwd.txt; absent -> []. */
 export function iterTargets(topic: string, opts?: { home?: string; cwd?: string }): IterTarget[] {
   const art = performArtDir(topic, opts);
-  const partsFile = join(art, "parts.txt");
-  if (existsSync(partsFile)) {
-    const out: IterTarget[] = [];
-    for (const line of readFileSync(partsFile, "utf8").split("\n")) {
-      if (line.length === 0) continue;
-      const cols = line.split("\t");
-      out.push({ slug: cols[0] ?? "", cwd: cols[1] ?? "" });
-    }
-    return out;
-  }
   const targetCwdFile = join(art, "target_cwd.txt");
   if (existsSync(targetCwdFile)) {
     const cwd = readFileSync(targetCwdFile, "utf8").replace(/\n$/, "");
