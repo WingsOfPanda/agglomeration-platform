@@ -17,18 +17,11 @@ import { extractComponentsPaths, matchDiffAgainstComponents } from "../core/perf
 import { runnerAt, preSnapshot, createOrResumeBranch, shortstat, finishBranchAction, type Runner } from "../core/gitwork.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { haveCmd } from "../core/deps.js";
-import { performState, composeRound1Prompt, composeFixPrompt, composeDagUnitPrompt } from "../core/performTurn.js";
-import { pickInstruments } from "../core/instruments.js";
+import { performState, composeRound1Prompt, composeFixPrompt } from "../core/performTurn.js";
 import { extractQuestionPayload, parseQuestionPayload } from "../core/performQuestions.js";
 import { outboxOffset, outboxPath, outboxWaitSince, statusPath, resolveModel, type OutboxEvent } from "../core/ipc.js";
 import { instrumentTimeoutMultiplier } from "../core/contracts.js";
 import { scaledTimeout, parseLatestOffset } from "../core/scoreTurn.js";
-import { parseDagLine, dagTopological, dagSectionBody, dagFanInRepos } from "../core/dag.js";
-// note: verify-dag-repos uses node.repo (the DagNode slug field) + an em-dash-separated DAG line.
-import {
-  enumerateSiblings, captureSiblingBaseline, formatBaselineFile,
-  parseBaselineFile, diffSiblingAgainstBaseline, revertAndReplay,
-} from "../core/performSibling.js";
 import { run as sendRun } from "./send.js";
 import { detectTestCommand } from "../core/solo.js";
 
@@ -53,7 +46,7 @@ function detectRouting(docText: string): "single" | "multi" {
   return /^\*\*Target Sub-Project\(s\):\*\*/m.test(docText) && /^## Execution DAG[ \t]*$/m.test(docText) ? "multi" : "single";
 }
 function usage(): number {
-  log.error("usage: perform <init|audit|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|sibling-baseline|sibling-verify|sibling-rescue|cross-signal|summary|finish|finish-one|forensics|archive|dag-parse|wave-wait|multi-init|send-unit|drop-part|find-latest-doc|verify-dag-repos> ...");
+  log.error("usage: perform <init|audit|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|summary|finish|finish-one|forensics|archive|find-latest-doc> ...");
   return 2;
 }
 
@@ -106,23 +99,13 @@ export async function run(args: string[]): Promise<number> {
     case "pre-snapshot": return preSnapshotRun(rest);
     case "branch":       return branchRun(applyArgsFile(rest));
     case "scope-check":  return scopeCheckRun(rest);
-    case "sibling-baseline": return siblingBaselineRun(rest);
-    case "sibling-verify":   return siblingVerifyRun(rest);
-    case "sibling-rescue":   return siblingRescueRun(rest);
-    case "cross-signal":     return crossSignalRun(rest);
     case "summary":      return summaryRun(rest);
     case "finish":       return finishRun(rest);
     case "finish-one":   return finishOneRun(rest);
     case "forensics":    return forensicsRun(rest);
     case "flag":         return runFlag("perform", rest[0], rest.slice(1).join(" "));
     case "archive":      return archiveRun(rest);
-    case "dag-parse":    return dagParseRun(rest);
-    case "wave-wait":    return waveWaitRun(rest);
-    case "multi-init": return multiInitRun(rest);
-    case "send-unit":  return sendUnitRun(rest);
-    case "drop-part":  return dropPartRun(rest);
     case "find-latest-doc": return findLatestDocRun(rest);
-    case "verify-dag-repos": return verifyDagReposRun(rest);
     default:          return usage();
   }
 }
@@ -265,9 +248,6 @@ function branchMapField(map: string, slug: string): string {
   return "";
 }
 function isDir(p: string): boolean { try { return statSync(p).isDirectory(); } catch { return false; } }
-function hasRepoMarker(dir: string): boolean {
-  return existsSync(join(dir, "CLAUDE.md")) || existsSync(join(dir, "AGENTS.md"));
-}
 
 // ---- pre-snapshot (deploy-pre-snapshot.sh) ----
 async function preSnapshotRun(rest: string[]): Promise<number> {
@@ -366,148 +346,6 @@ export async function scopeCheckWith(topic: string, d: ScopeDeps): Promise<numbe
   atomicWrite(oosPath, oos.length ? oos.join("\n") + "\n" : "");
   if (oos.length > 0) log.warn(`scope conformance: ${oos.length} out-of-scope path(s) detected`);
   process.stdout.write(`OOS_COUNT=${oos.length}\nOOS_PATH=${oosPath}\n`); return 0;
-}
-
-// ---- sibling guard (deploy-sibling-baseline.sh / deploy-sibling-verify.sh / deploy-sibling.sh) ----
-export interface SiblingDeps { runnerFor(cwd: string): Runner; }
-const liveSiblingDeps: SiblingDeps = { runnerFor: runnerAt };
-
-async function siblingBaselineRun(rest: string[]): Promise<number> {
-  const [topic, hub] = rest;
-  if (!topic || !hub) { log.error("usage: perform sibling-baseline <topic> <hub-cwd>"); return 2; }
-  return siblingBaselineWith(topic, hub, liveSiblingDeps);
-}
-export async function siblingBaselineWith(topic: string, hubCwd: string, d: SiblingDeps): Promise<number> {
-  const art = performArtDir(topic);
-  if (!existsSync(art)) { log.error(`perform sibling-baseline: art-dir missing: ${art}`); return 1; }
-  if (!isDir(hubCwd)) { log.error(`perform sibling-baseline: hub-cwd not a directory: ${hubCwd}`); return 1; }
-  const declared = iterTargets(topic).map((t) => basename(t.cwd)).filter((x) => x.length > 0);
-  const { outcome, siblings } = enumerateSiblings(hubCwd, declared);
-  if (outcome === "not-a-directory") { log.error(`perform sibling-baseline: hub-cwd not enumerable: ${hubCwd}`); return 1; }
-  const rows: string[] = [];
-  for (const slug of siblings) {
-    const sibCwd = join(hubCwd, slug);
-    const res = captureSiblingBaseline(d.runnerFor(sibCwd), sibCwd);
-    if (res.outcome === "ok" && res.row) rows.push(res.row);
-    else log.warn(`perform sibling-baseline: skipped ${slug} (${res.outcome})`);
-  }
-  atomicWrite(join(art, "sibling-baseline.txt"), formatBaselineFile(rows));
-  log.info(`perform sibling-baseline: ${rows.length} sibling repo(s) captured`);
-  return 0;
-}
-
-async function siblingVerifyRun(rest: string[]): Promise<number> {
-  const [topic, hub] = rest;
-  if (!topic || !hub) { log.error("usage: perform sibling-verify <topic> <hub-cwd>"); return 2; }
-  return siblingVerifyWith(topic, hub, liveSiblingDeps);
-}
-export async function siblingVerifyWith(topic: string, hubCwd: string, d: SiblingDeps): Promise<number> {
-  const art = performArtDir(topic);
-  const baselineFile = join(art, "sibling-baseline.txt");
-  if (!isDir(hubCwd)) { log.error(`perform sibling-verify: hub-cwd not a directory: ${hubCwd}`); return 1; }
-  if (!existsSync(baselineFile)) { log.error(`perform sibling-verify: no sibling-baseline.txt under ${art} (run sibling-baseline first)`); return 1; }
-  const rows = parseBaselineFile(readFileSync(baselineFile, "utf8"));
-  const out: string[] = [];
-  for (const { slug, sha, branch } of rows) {
-    const sibCwd = join(hubCwd, slug);
-    const res = diffSiblingAgainstBaseline(d.runnerFor(sibCwd), sha, branch);
-    if (res.outcome !== "ok") { log.warn(`perform sibling-verify: diff failed for ${slug} (${res.outcome}); skipping`); continue; }
-    for (const line of (res.log ?? "").split("\n")) {
-      if (line.length === 0) continue;
-      const sp = line.indexOf(" ");
-      const csha = sp === -1 ? line : line.slice(0, sp);
-      const subject = sp === -1 ? line : line.slice(sp + 1);   // byte-faithful to bash ${line#* }
-      out.push(`${slug}\t${csha}\t${subject}`);
-    }
-  }
-  atomicWrite(join(art, "sibling-rogue.txt"), out.length ? out.join("\n") + "\n" : "");
-  if (out.length > 0) log.warn(`perform sibling-verify: ${out.length} rogue commit(s) on undeclared sibling main branches`);
-  return 0;
-}
-
-async function siblingRescueRun(rest: string[]): Promise<number> {
-  const [topic, hub] = rest;
-  if (!topic || !hub) { log.error("usage: perform sibling-rescue <topic> <hub-cwd>"); return 2; }
-  return siblingRescueWith(topic, hub, liveSiblingDeps);
-}
-/**
- * Revert + replay on a feat branch — recovery for rogue sibling commits.
- * Byte-faithful port of deploy.md:1242-1261 (the inline revert-and-replay call
- * that sourced deploy-sibling.sh). consort has no shell libs, so it is a verb.
- * Groups rogue SHAs per slug in sibling-rogue.txt row order (deploy.md:1244-1248),
- * passes them verbatim to revertAndReplay (which builds feat/perform-<topic>-rescue),
- * and APPENDS `<slug>\trescued|rescue-failed` to sibling-rescue.txt.
- */
-export async function siblingRescueWith(topic: string, hubCwd: string, d: SiblingDeps): Promise<number> {
-  const art = performArtDir(topic);
-  const rogueFile = join(art, "sibling-rogue.txt"), baselineFile = join(art, "sibling-baseline.txt");
-  if (!existsSync(rogueFile)) { log.error(`perform sibling-rescue: no sibling-rogue.txt under ${art}`); return 1; }
-  if (!existsSync(baselineFile)) { log.error(`perform sibling-rescue: no sibling-baseline.txt under ${art}`); return 1; }
-  // Group rogue SHAs by slug in sibling-rogue.txt row order (deploy.md:1244-1248).
-  const shasBySlug = new Map<string, string[]>();
-  const order: string[] = [];
-  for (const line of readFileSync(rogueFile, "utf8").split("\n")) {
-    if (line.length === 0) continue;
-    const [slug, sha] = line.split("\t");
-    if (!slug) continue;
-    if (!shasBySlug.has(slug)) { shasBySlug.set(slug, []); order.push(slug); }
-    if (sha) shasBySlug.get(slug)!.push(sha);
-  }
-  const baseBySlug = new Map(parseBaselineFile(readFileSync(baselineFile, "utf8")).map((r) => [r.slug, r]));
-  const resultRows: string[] = [];
-  for (const slug of order) {
-    const b = baseBySlug.get(slug);
-    if (!b) { log.warn(`perform sibling-rescue: no baseline row for ${slug}; skipping`); continue; }
-    const sibCwd = join(hubCwd, slug);
-    const res = revertAndReplay(d.runnerFor(sibCwd), topic, b.sha, b.branch, shasBySlug.get(slug)!);
-    if (res.outcome === "ok") { log.ok(`perform sibling-rescue: rescued ${slug} (${res.rescue})`); resultRows.push(`${slug}\trescued`); }
-    else { log.warn(`perform sibling-rescue: rescue failed for ${slug} (${res.outcome})`); resultRows.push(`${slug}\trescue-failed`); }
-  }
-  appendFileSync(join(art, "sibling-rescue.txt"), resultRows.length ? resultRows.join("\n") + "\n" : "");
-  return 0;
-}
-
-// ---- cross-repo "feels unsafe" signal (deploy.md:1063-1085) ----
-export interface CrossSignalDeps { runnerFor(cwd: string): Runner; }
-const liveCrossSignalDeps: CrossSignalDeps = { runnerFor: runnerAt };
-async function crossSignalRun(rest: string[]): Promise<number> {
-  const topic = rest[0];
-  if (!topic) { log.error("usage: perform cross-signal <topic>"); return 2; }
-  return crossSignalWith(topic, liveCrossSignalDeps);
-}
-/**
- * Compute the deterministic "feels unsafe" heuristic the multi-repo cross-verify
- * stage reads. Byte-faithful port of deploy.md:1063-1085: WAVE_COUNT (unique
- * wave column of dag-waves.txt), FAN_IN_REPOS (dagFanInRepos), SHARED_PATHS
- * (filesystem paths touched by >= 2 parts, per-part baseline from
- * baselines/<slug>.tsv field baseline_sha), and UNSAFE (1 iff any trigger fires).
- * Emits all four as KV stdout; the bug collection itself stays Maestro directive work.
- */
-export async function crossSignalWith(topic: string, d: CrossSignalDeps): Promise<number> {
-  const art = performArtDir(topic);
-  const wavesFile = join(art, "dag-waves.txt"), edgesFile = join(art, "dag-edges.txt");
-  if (!existsSync(wavesFile)) { log.error(`perform cross-signal: dag-waves.txt missing under ${art} (run dag-parse first)`); return 1; }
-  const wavesText = readFileSync(wavesFile, "utf8");
-  const edgesText = existsSync(edgesFile) ? readFileSync(edgesFile, "utf8") : "";
-  const waves = new Set<string>();
-  for (const line of wavesText.split("\n")) { if (line.length === 0) continue; waves.add(line.split("\t")[0]); }
-  const waveCount = waves.size;
-  const fanIn = dagFanInRepos(edgesText, wavesText);
-  const pathCount = new Map<string, number>();
-  for (const t of iterTargets(topic)) {
-    if (!t.slug || !t.cwd) continue;
-    const base = kvFileField(join(art, "baselines", `${t.slug}.tsv`), "baseline_sha");
-    if (!base) continue;
-    const diff = d.runnerFor(t.cwd).run("git", ["diff", "--name-only", `${base}..HEAD`]).stdout;
-    for (const p of diff.split("\n")) { if (p.length === 0) continue; pathCount.set(p, (pathCount.get(p) ?? 0) + 1); }
-  }
-  const shared = [...pathCount.entries()].filter(([, n]) => n >= 2).map(([p]) => p).sort();
-  const unsafe = waveCount >= 3 || fanIn.length > 0 || shared.length > 0 ? 1 : 0;
-  if (waveCount >= 3) log.warn(`feels unsafe: wave count ${waveCount} >= 3`);
-  if (fanIn.length > 0) log.warn(`feels unsafe: fan-in repos: ${fanIn.join(" ")}`);
-  if (shared.length > 0) log.warn(`feels unsafe: shared filesystem paths: ${shared.join(" ")}`);
-  process.stdout.write(`WAVE_COUNT=${waveCount}\nFAN_IN_REPOS=${fanIn.join(" ")}\nSHARED_PATHS=${shared.join(" ")}\nUNSAFE=${unsafe}\n`);
-  return 0;
 }
 
 // ---- summary (deploy-summary.sh) ----
@@ -611,214 +449,4 @@ async function forensicsRun(rest: string[]): Promise<number> {
 export async function archiveRun(rest: string[]): Promise<number> {
   const topic = rest[0]; if (!topic) { log.error("usage: perform archive <topic>"); return 2; }
   archiveTopic(topic, "perform"); log.ok(`perform archive: archived _perform for ${topic}`); return 0;
-}
-
-// ---- dag-parse (deploy-dag-parse.sh) — the multi-repo DAG executor wiring ----
-export interface DagParseDeps { artDir(topic: string): string; }
-const liveDagParseDeps: DagParseDeps = { artDir: (t) => performArtDir(t) };
-async function dagParseRun(rest: string[]): Promise<number> {
-  if (rest.length !== 1 || !rest[0]) { log.error("usage: perform dag-parse <topic>"); return 2; }
-  return dagParseWith(rest[0], liveDagParseDeps);
-}
-export async function dagParseWith(topic: string, d: DagParseDeps): Promise<number> {
-  const art = d.artDir(topic);
-  const docPath = join(art, "design.md");
-  if (!existsSync(docPath)) { log.error(`perform dag-parse: design.md not found under ${art} (run perform init first)`); return 1; }
-  const body = dagSectionBody(readFileSync(docPath, "utf8"));
-  if (body.length === 0) { log.error("perform dag-parse: design doc missing '## Execution DAG' section"); return 1; }
-  const nodes: string[] = [];
-  const rows = new Map<string, { repo: string; path: string; desc: string }>();
-  const edges: Array<[string, string]> = [];
-  for (const line of body) {
-    if (line.trim() === "") continue;
-    if (!/^[ \t]*\d+\./.test(line)) continue;
-    const node = parseDagLine(line);
-    if (node === null) { log.error(`perform dag-parse: malformed DAG line: ${line}`); return 1; }
-    nodes.push(node.step);
-    rows.set(node.step, { repo: node.repo, path: node.path, desc: node.desc });
-    if (node.deps !== "none" && node.deps !== "") for (const dep of node.deps.split(",")) edges.push([dep, node.step]);
-  }
-  if (nodes.length === 0) { log.error("perform dag-parse: no DAG lines parsed from '## Execution DAG' section"); return 1; }
-  const topo = dagTopological(edges, nodes);
-  if (topo === null) return 1;                                   // dagTopological wrote the stderr diagnostic
-  const wavesText = topo.map((r) => { const [w, s] = r.split("\t"); const x = rows.get(s)!; return `${w}\t${s}\t${x.repo}\t${x.path}\t${x.desc}`; }).join("\n") + "\n";
-  const edgesText = edges.length ? edges.map(([f, t]) => `${f}\t${t}`).join("\n") + "\n" : "";
-  atomicWrite(join(art, "dag-waves.txt"), wavesText);
-  atomicWrite(join(art, "dag-edges.txt"), edgesText);
-  const waveCount = Number(topo[topo.length - 1].split("\t")[0]);
-  log.ok(`perform dag-parse: ${nodes.length} steps in ${waveCount} wave(s)`);
-  process.stdout.write(`WAVES=${waveCount}\nSTEPS=${nodes.length}\n`);
-  return 0;
-}
-
-// ---- wave-wait (deploy-wave-wait.sh) — per-part barrier; rc 0 ALWAYS ----
-const PERFORM_WAVE_TIMEOUT = (): number =>
-  Number(process.env.CONSORT_PERFORM_WAVE_TIMEOUT_OVERRIDE) || Number(process.env.CONSORT_PERFORM_TURN_TIMEOUT_S) || 14400;
-async function waveWaitRun(rest: string[]): Promise<number> {
-  const [topic, instrument, provider, dispatchStr, sinceStr] = rest;
-  if (!topic || !instrument || !provider || !dispatchStr) { log.error("usage: perform wave-wait <topic> <instrument> <provider> <dispatch> [<since>]"); return 2; }
-  if (!assertPerformTopic(topic) || !/^[a-z0-9_-]+$/.test(instrument) || !/^[a-z0-9_-]+$/.test(provider)) { log.error("perform wave-wait: bad topic/instrument/provider"); return 2; }
-  if (!/^[0-9]+$/.test(dispatchStr)) { log.error("perform wave-wait: dispatch must be a non-negative integer"); return 2; }
-  if (sinceStr !== undefined && !/^[0-9]+$/.test(sinceStr)) { log.error("perform wave-wait: since must be a non-negative integer"); return 2; }
-  return waveWaitWith(topic, instrument, provider, Number(dispatchStr), liveWaitDeps, sinceStr !== undefined ? Number(sinceStr) : undefined);
-}
-export async function waveWaitWith(topic: string, instrument: string, provider: string, dispatch: number, d: PerformWaitDeps, since?: number): Promise<number> {
-  const art = performArtDir(topic);
-  if (!existsSync(art)) { log.error(`perform wave-wait: _perform art-dir missing for ${topic}`); return 1; }
-  const dispatchFile = join(art, `wave-${instrument}-${dispatch}.txt`);
-  // Start offset: an explicit <since> (a re-arm past a handled question) wins; else the latest
-  // OFFSET= persisted for this dispatch; else 0 (first wait of the dispatch).
-  const startOffset = since ?? (existsSync(dispatchFile) ? (parseLatestOffset(readFileSync(dispatchFile, "utf8")) ?? 0) : 0);
-  const timeout = scaledTimeout(PERFORM_WAVE_TIMEOUT(), d.multiplier(provider));
-  log.info(`[wave-wait] ${instrument} dispatch=${dispatch} offset=${startOffset} timeout=${timeout}s`);
-  const ev = await d.wait(instrument, provider, topic, startOffset, ["done", "error", "question"], timeout);
-  let ts: string; const extra: string[] = [];
-  if (ev === null) { ts = "timeout"; extra.push(`TIMEOUT_S=${timeout}`); log.warn(`[wave-wait] ${instrument} TS=timeout`); }
-  else if (ev.event === "done") { ts = "ok"; extra.push("EVENT=done"); log.ok(`[wave-wait] ${instrument} TS=ok`); }
-  else if (ev.event === "error") { ts = "failed"; extra.push("EVENT=error", `REASON=${typeof ev.reason === "string" ? ev.reason : ""}`); log.error(`[wave-wait] ${instrument} TS=failed`); }
-  else if (ev.event === "question") {
-    const payload = extractQuestionPayload(ev, d.now());
-    if (payload !== null) {
-      ts = "question";
-      atomicWrite(join(art, `question-${instrument}-${dispatch}.txt`), payload);
-      const bumped = outboxOffset(outboxPath(instrument, provider, topic)); // wave-path identity
-      const objLine = parseQuestionPayload(payload).route === "objection"
-        ? `OBJECTIONS=${latestObjections(dispatchFile) + 1}\n` : "";
-      appendFileSync(dispatchFile, `OFFSET=${bumped}\nTS=question\n${objLine}`);
-      extra.push("EVENT=question");
-      log.ok(`[wave-wait] ${instrument} TS=question`);
-    } else { ts = "failed"; extra.push("EVENT=question-malformed"); log.warn(`[wave-wait] ${instrument} malformed question; TS=failed`); }
-  }
-  else { ts = "failed"; extra.push("EVENT=unknown"); log.error(`[wave-wait] ${instrument} TS=failed (unknown event)`); }
-  atomicWrite(join(art, `wave-${instrument}.txt`), `TS=${ts}\nINSTRUMENT=${instrument}\nPROVIDER=${provider}\nTOPIC=${topic}\n` + extra.map((l) => l + "\n").join(""));
-  writeFileSync(join(art, `wave-${instrument}.done`), "");
-  return 0;
-}
-
-// ---- multi-init (deploy-multi-init.sh) — assign one part per sub-repo in DAG order ----
-export interface MultiInitDeps { detectProvider(cwd: string): "codex" | "claude"; pickInstruments(topic: string, n: number): string[]; runnerFor(cwd: string): Runner; }
-const liveMultiInitDeps: MultiInitDeps = { detectProvider: (c) => detectProvider(c), pickInstruments, runnerFor: runnerAt };
-async function multiInitRun(rest: string[]): Promise<number> {
-  if (rest.length !== 2) { log.error("usage: perform multi-init <topic> <hub-cwd>"); return 2; }
-  return multiInitWith(rest[0], rest[1], liveMultiInitDeps);
-}
-export async function multiInitWith(topic: string, hubCwd: string, d: MultiInitDeps): Promise<number> {
-  const art = performArtDir(topic);
-  const wavesFile = join(art, "dag-waves.txt");
-  if (!existsSync(wavesFile)) { log.error(`perform multi-init: dag-waves.txt not found at ${wavesFile} (run perform dag-parse first)`); return 1; }
-  const reposOrdered: string[] = []; const seen = new Set<string>(); const repoToPath = new Map<string, string>();
-  for (const line of readFileSync(wavesFile, "utf8").split("\n")) {
-    const cols = line.split("\t"); const repo = cols[2];
-    if (!repo) continue;
-    if (!seen.has(repo)) { seen.add(repo); reposOrdered.push(repo); repoToPath.set(repo, cols[3] || "none"); }
-  }
-  if (reposOrdered.length === 0) { log.error("perform multi-init: no repos in dag-waves.txt"); return 1; }
-  const instruments = d.pickInstruments(topic, reposOrdered.length);
-  if (instruments.length < reposOrdered.length) { log.error(`perform multi-init: instrument pool exhausted (need ${reposOrdered.length}, got ${instruments.length})`); return 1; }
-  const rows: string[] = [];
-  for (let i = 0; i < reposOrdered.length; i++) {
-    const repo = reposOrdered[i];
-    const p = repoToPath.get(repo)!;
-    const cwd = p !== "none" && p !== "" ? p : join(hubCwd, repo);
-    if (!existsSync(cwd) || !statSync(cwd).isDirectory()) { log.error(`perform multi-init: sub-repo '${repo}' not found at ${cwd}`); return 1; }
-    if (!hasRepoMarker(cwd)) { log.error(`perform multi-init: sub-repo '${repo}' has no CLAUDE.md or AGENTS.md at ${cwd}`); return 1; }
-    const provider = d.detectProvider(cwd);
-    const instrument = instruments[i];
-    rows.push(`${instrument}\t${cwd}\t${provider}`);
-    const sha = d.runnerFor(cwd).run("git", ["rev-parse", "HEAD"]).stdout.trim();
-    atomicWrite(join(art, `${instrument}-branch-base.sha`), sha + "\n");
-  }
-  atomicWrite(join(art, "parts.txt"), rows.join("\n") + "\n");
-  log.ok(`perform multi-init: ${reposOrdered.length} part(s) assigned for ${topic}`);
-  return 0;
-}
-
-// ---- send-unit (deploy.md Step 3b per-repo dispatch) — compose + deliver the dag-unit prompt ----
-export interface SendUnitDeps { send(args: string[]): Promise<number>; }
-const liveSendUnitDeps: SendUnitDeps = { send: sendRun };
-async function sendUnitRun(rest: string[]): Promise<number> {
-  if (rest.length !== 2) { log.error("usage: perform send-unit <topic> <repo>"); return 2; }
-  return sendUnitWith(rest[0], rest[1], liveSendUnitDeps);
-}
-export async function sendUnitWith(topic: string, repo: string, d: SendUnitDeps): Promise<number> {
-  const art = performArtDir(topic);
-  let instrument = "";
-  const partsFile = join(art, "parts.txt");
-  for (const line of (existsSync(partsFile) ? readFileSync(partsFile, "utf8").split("\n") : [])) {
-    const c = line.split("\t"); if (c[1] && basename(c[1]) === repo) { instrument = c[0]; break; }
-  }
-  if (!instrument) { log.error(`perform send-unit: no part for repo '${repo}' in parts.txt`); return 1; }
-  const waves = readFileSync(join(art, "dag-waves.txt"), "utf8").split("\n").filter(Boolean).map((l) => l.split("\t"));
-  const total = new Set(waves.map((w) => w[2])).size;
-  const myStep = waves.find((w) => w[2] === repo)?.[1] ?? "";
-  const stepToRepo = new Map(waves.map((w) => [w[1], w[2]]));
-  const edgesFile = join(art, "dag-edges.txt");
-  const edges = (existsSync(edgesFile) ? readFileSync(edgesFile, "utf8") : "").split("\n").filter(Boolean).map((l) => l.split("\t"));
-  const upstreamRepos = edges.filter(([, to]) => to === myStep).map(([from]) => stepToRepo.get(from)).filter((x): x is string => Boolean(x));
-  const upstreamCsv = upstreamRepos.join(",");
-  const prompt = composeDagUnitPrompt({ slug: repo, designPath: join(art, "design.md"), step: myStep, total, upstreamCsv });
-  const promptFile = join(art, `${instrument}_dag_unit_prompt.md`);
-  atomicWrite(promptFile, prompt);
-  const rc = await d.send(["--from", "maestro", instrument, topic, `@${promptFile}`]);
-  if (rc !== 0) { log.error(`perform send-unit: send failed (rc=${rc}) for ${repo}`); return 1; }
-  log.info(`[send-unit] ${instrument} -> ${repo} (step ${myStep}/${total}, upstream: ${upstreamCsv || "none"})`);
-  return 0;
-}
-
-// ---- drop-part (deploy "proceed degraded") — rewrite parts.txt, removing one part's row ----
-// When a sub-repo persistently fails in a multi-repo run, the directive ships the rest: it drops
-// the failing part by instrument and reports the new N. The rewritten parts.txt stays byte-faithful
-// to the multiInitWith format (trailing newline; empty file when no rows remain) so iterTargets
-// reads it transparently.
-async function dropPartRun(rest: string[]): Promise<number> {
-  const [topic, instrument] = rest;
-  if (!topic || !instrument || rest.length !== 2) { log.error("usage: perform drop-part <topic> <instrument>"); return 2; }
-  const partsFile = join(performArtDir(topic), "parts.txt");
-  if (!existsSync(partsFile)) { log.error(`perform drop-part: parts.txt missing`); return 1; }
-  const kept: string[] = []; let dropped = false;
-  for (const line of readFileSync(partsFile, "utf8").split("\n")) {
-    if (line.length === 0) continue;
-    if (line.split("\t")[0] === instrument) { dropped = true; continue; }
-    kept.push(line);
-  }
-  if (!dropped) { log.error(`perform drop-part: no part for instrument=${instrument}`); return 1; }
-  atomicWrite(partsFile, kept.length ? kept.join("\n") + "\n" : "");
-  log.ok(`perform drop-part: dropped ${instrument}, ${kept.length} part(s) remain`);
-  process.stdout.write(`N=${kept.length}\n`);
-  return 0;
-}
-
-// ---- verify-dag-repos (deploy.md prose-DAG rescue precheck) — per-slug repo-layout check ----
-// Reads the topic's design.md, extracts the unique DAG repo slugs (dagSectionBody + parseDagLine),
-// then reports per-slug `ok | missing-dir | missing-marker` against <hub>/<slug>. A repo is ok iff
-// the dir exists AND has CLAUDE.md or AGENTS.md (same marker rule as multiInitWith). Hub defaults to
-// repoRoot() when --cwd is omitted. rc 1 if any slug is bad, else 0; rc 2 on bad usage.
-async function verifyDagReposRun(rest: string[]): Promise<number> {
-  let topic: string | undefined; let hub: string | undefined;
-  for (let i = 0; i < rest.length; i++) {
-    const t = rest[i];
-    if (t === "--cwd") { hub = rest[i + 1]; i++; }
-    else if (t.startsWith("--cwd=")) { hub = t.slice("--cwd=".length); }
-    else if (!topic) topic = t;
-  }
-  if (!topic) { log.error("usage: perform verify-dag-repos <topic> [--cwd <hub>]"); return 2; }
-  const doc = join(performArtDir(topic), "design.md");
-  if (!existsSync(doc)) { log.error(`perform verify-dag-repos: design.md missing under ${performArtDir(topic)}`); return 1; }
-  const hubDir = hub ?? repoRoot();
-  const slugs: string[] = [];
-  for (const line of dagSectionBody(readFileSync(doc, "utf8"))) {
-    const node = parseDagLine(line);
-    if (node && !slugs.includes(node.repo)) slugs.push(node.repo);
-  }
-  let bad = 0;
-  for (const slug of slugs) {
-    const dir = join(hubDir, slug);
-    let st: string;
-    if (!existsSync(dir) || !statSync(dir).isDirectory()) st = "missing-dir";
-    else if (!hasRepoMarker(dir)) st = "missing-marker";
-    else st = "ok";
-    if (st !== "ok") bad++;
-    process.stdout.write(`REPO=${slug}\tSTATUS=${st}\n`);
-  }
-  return bad > 0 ? 1 : 0;
 }
