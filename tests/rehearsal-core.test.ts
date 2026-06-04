@@ -1329,3 +1329,21 @@ describe("metric.md min_families (B1)", () => {
     expect(md).not.toContain("min_families");
   });
 });
+
+describe("metric.md c1 knobs (C1)", () => {
+  it("defaults: c1Epsilon/c1Budget undefined when absent", () => {
+    const t = parseMetricMd("**Primary metric:** accuracy\n");
+    expect(t.c1Epsilon).toBeUndefined();
+    expect(t.c1Budget).toBeUndefined();
+  });
+  it("parses explicit values", () => {
+    const t = parseMetricMd("**c1_epsilon:** 0.05\n**c1_budget:** 3\n");
+    expect(t.c1Epsilon).toBe(0.05);
+    expect(t.c1Budget).toBe(3);
+  });
+  it("parse-only: formatMetricBlock emits neither", () => {
+    const md = formatMetricBlock({ primary_metric: "accuracy", direction: "maximize" });
+    expect(md).not.toContain("c1_epsilon");
+    expect(md).not.toContain("c1_budget");
+  });
+});
