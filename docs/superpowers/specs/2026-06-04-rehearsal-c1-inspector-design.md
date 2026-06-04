@@ -228,9 +228,10 @@ because a C1 inspection is an out-of-band per-leader event, not a re-walk-derive
   → null.
 - `parseInspections`: instr/exp → latest verdict, header/blank skipped, last-write-wins.
 - `inspectionRow`/`INSPECTION_TSV_HEADER`: exact tab layout.
-- `inspect-plan`: `--authorize-inspect` absent → `pending inspect-deferred`; budget hit → `pending
-  budget-exhausted`; `data_spec`/`metric_formula` absent → `inconclusive run-card-insufficient`; happy
-  path → prints `INSPECT_CWD=` + run-card.
+- `inspect-plan`: `--authorize-inspect` absent → `inconclusive inspect-deferred`; budget hit →
+  `inconclusive budget-exhausted`; `data_spec`/`metric_formula` absent → `inconclusive
+  run-card-insufficient`; same-family → `inconclusive same-family`; happy path → prints `INSPECT_CWD=`
+  + run-card. (All gated rows are `inconclusive` — never demote; see §5.1.)
 - `inspect-check`: `--stdout-file` with a `VERIFY_METRIC=` marker within/beyond `c1_epsilon` →
   reproduced/not-reproduced row; `--run-failed` → inconclusive; `--integrity-refuted` → not-reproduced.
 - `computeScore`: an exp with an `inspection.tsv` `not-reproduced` verdict → `infeasibleReason
