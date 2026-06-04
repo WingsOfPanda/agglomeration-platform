@@ -34,6 +34,11 @@ const okDeps = (over: Partial<RehearsalInitDeps> = {}): RehearsalInitDeps => ({
 });
 
 describe("rehearsal init", () => {
+  it("a value flag with no value (trailing) throws KvError (missing flag value)", async () => {
+    const h = home();
+    await expect(initWith(["--metric"], okDeps({ opts: { home: h.home, cwd: h.home } })))
+      .rejects.toThrow(/--metric requires a value/);
+  });
   it("scaffolds the _rehearsal art dir, topic.txt, and a metric.txt seed; prints TOPIC + ART", async () => {
     const h = home();
     const out: string[] = [];

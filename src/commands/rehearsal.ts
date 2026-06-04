@@ -79,13 +79,14 @@ function parseInitArgs(args: string[]): InitArgs {
     if (a.startsWith("--")) {
       const eq = a.indexOf("=");
       const flag = eq > 0 ? a.slice(0, eq) : a;
-      const inline = eq > 0 ? a.slice(eq + 1) : undefined;
-      const val = (): string | undefined => inline ?? args[++i];
-      if (flag === "--seed-from") seedFrom = val();
-      else if (flag === "--time-budget") timeBudget = val();
-      else if (flag === "--metric") metric = val();
-      else if (flag === "--slug") slug = val();
-      else { badFlag = a; }
+      if (flag === "--seed-from" || flag === "--time-budget" || flag === "--metric" || flag === "--slug") {
+        const r = kvParse(a, args[i + 1]);   // pass the FULL token `a`; kvParse reads an inline `=value`
+        i += r.shift - 1;
+        if (flag === "--seed-from") seedFrom = r.value;
+        else if (flag === "--time-budget") timeBudget = r.value;
+        else if (flag === "--metric") metric = r.value;
+        else slug = r.value;
+      } else { badFlag = a; }
     } else { topic = args.slice(i).join(" "); break; }
   }
   return { topic, seedFrom, timeBudget, metric, slug, badFlag };
