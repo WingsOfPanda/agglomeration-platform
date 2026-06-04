@@ -1153,6 +1153,33 @@ describe("rehearsalBrief", () => {
     expect(out.endsWith("\n")).toBe(true);
     expect(out.endsWith("\n\n")).toBe(false);
   });
+
+  it("renders a Coverage line from coverage + completion floor (B1)", () => {
+    const out = buildStatusBrief({
+      parts: [],
+      scoreboardMd: "| Rank | Exp | Instrument | Metric | Status | Runtime | Approach | Metric name |\n",
+      completion: { floorMet: true, targetMet: false, kSoFar: 1, kRequired: 2, plateau: false,
+        familiesActive: 2, familiesImproving: 0, minFamilies: 2 },
+      coverage: [
+        { family: "single-pass", count: 4, best: "0.96", ts: "T" },
+        { family: "typed-routing", count: 3, best: "0.94", ts: "T" },
+      ],
+    });
+    expect(out).toContain("**Coverage:** 2 families [single-pass×4, typed-routing×3]; min_families=2 (met)");
+  });
+  it("marks the floor short when families < min_families", () => {
+    const out = buildStatusBrief({
+      parts: [], scoreboardMd: null,
+      completion: { floorMet: true, targetMet: false, kSoFar: 0, kRequired: 2, plateau: false,
+        familiesActive: 1, familiesImproving: 0, minFamilies: 3 },
+      coverage: [{ family: "single-pass", count: 2, best: "0.96", ts: "T" }],
+    });
+    expect(out).toContain("min_families=3 (short by 2)");
+  });
+  it("omits the Coverage line when no coverage data (back-compat)", () => {
+    const out = buildStatusBrief({ parts: [], scoreboardMd: null, completion: null });
+    expect(out).not.toContain("**Coverage:**");
+  });
 });
 
 describe("buildStatusBrief verify annotation", () => {
