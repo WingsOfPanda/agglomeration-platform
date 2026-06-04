@@ -1,10 +1,9 @@
 # Rehearsal research-validity upgrade — roadmap
 
-**Status:** approved scope + sequence (2026-06-03). This is a roadmap/epic, not a single
-design spec. Each phase below is its own future `brainstorm -> spec -> plan -> ship` cycle and
-gets its own `docs/superpowers/specs/` design doc when started. Confirmed execution order:
-**C0 -> A1 -> A3 -> A2 -> B1 -> B2**, with the heavy tail (**A4 / B3 / C1**) deferred and
-reconsidered after B2.
+**Status (updated 2026-06-04):** the **validity track (Q1) is SHIPPED** — C0 → A1 → A3 → A2, versions
+0.1.12–0.1.15. Remaining: the **idea-generation track (Q2)** — **B1 → B2** — with the heavy tail
+(**A4 / B3 / C1**) deferred and reconsidered after B2. Each phase is its own
+`brainstorm -> spec -> plan -> ship` cycle with its own `docs/superpowers/specs/` design doc.
 
 ## Why this exists
 
@@ -18,150 +17,142 @@ stop condition. Two core questions motivated a literature + codebase audit (2026
   of angles and steers the next round well, rather than converging prematurely or chasing a
   misleading metric?
 
-**The one-sentence thesis both questions reduce to:** a part's self-reported metric is a *claim, not
-evidence* — and rehearsal currently treats it as evidence. `validateResult`
-(`src/core/rehearsalResult.ts:39-62`) checks the metric's *shape* (non-null number when `status=ok`,
-name matches the locked metric, log files exist) but never its *correctness*; the Maestro never
-re-runs code, recomputes the metric, or reads the log to corroborate the number. Every downstream
-mechanism (scoreboard, plateau, completion, steering) rests on an unverified self-report. The SOTA
-fix is to move from honor-system trust to mechanical gates, and to **decouple idea-quality from
-execution-quality: only an execution-verified negative result may retire an angle.**
+**The one-sentence thesis both reduce to:** a part's self-reported metric is a *claim, not evidence* —
+rehearsal used to treat it as evidence. The fix is to move from honor-system trust to mechanical
+gates, and to **decouple idea-quality from execution-quality: only an execution-verified negative
+result may retire an angle.**
 
 ## Constraints (apply to every phase)
 
-- **Additive only** — new optional `result.json` fields, new harness verbs, new state files. No
-  frozen wire token is renamed (event names, `END_OF_INSTRUCTION`, existing `result.json` field
-  names, `contracts.yaml` keys, state filenames, `CLAUDE_CODE_SESSION_ID` stay byte-identical). A
-  new status distinction (e.g. INFEASIBLE) is expressed via a *new optional field*, not by mutating
-  the frozen `status` enum unless a phase spec deliberately decides otherwise.
-- **Explore-only preserved** — nothing here promotes to production code; promotion remains
-  `/consort:perform`.
-- **Faithful-port baseline** — rehearsal today is a faithful port of clone-wars `deep-research`, a
-  *bookkeeping* harness that delegated scientific validity to the Maestro's taste + honor-system
-  prose in `config/prompt-templates/rehearsal/experiment.md`. This upgrade is new behavior, not a
-  parity fix; each phase is spec-worthy.
+- **Additive only** — new optional `result.json`/`metric.md` fields, new state files, new pure
+  modules. No frozen wire token renamed (event names, `END_OF_INSTRUCTION`, existing `result.json`
+  field names, `contracts.yaml` keys, state filenames, `CLAUDE_CODE_SESSION_ID`). A new status
+  distinction is expressed via a *derived classification or a new optional field*, never by mutating
+  the frozen `status` enum.
+- **Open-ended task shape (settled in A1 brainstorming).** Experiments can be anything; the part owns
+  data + training + scoring. The harness CANNOT compute/verify an arbitrary metric, so **task-semantic**
+  checks must be part-attested (verified later by C1), while **task-agnostic** checks (numeric bounds,
+  rank parsing, label/family strings, log markers) are the mechanical teeth.
+- **Explore-only preserved** — promotion to real code remains `/consort:perform`.
 
-## Track C — cross-cutting
+## The proven implementation arc (reuse for every remaining phase)
 
-### C0 · Quick wins & groundwork  — SHIPPED in 0.1.12 (commit 7f57ec6)
-- DONE: Fixed the **scoreboard minimize-direction sort bug**. `buildScoreboard`
-  (`src/core/rehearsalResult.ts`) sorted descending unconditionally (faithful port of
-  deep-research.sh `sort -k1,1rn`), so for a minimize objective the "top-3", the handoff winner, and
-  the teardown winner symlink were all the WORST rows. `parseMetricMd` now reads `**Direction:**`,
-  and `buildScoreboard`/`computeScore` sort best-first by direction (maximize stays byte-identical).
-  Documented as a deliberate divergence from deep-research inline at `buildScoreboard`.
-- MOVED to A3: the **`--smoke-test` / `--context-file`** wiring. Wiring it meaningfully needs a
-  generated environment-probe script + a decision on what it asserts (the experiment `code/` dir is
-  empty at the Phase-4 first dispatch), so it is an A3 sanity-gate design question, not a quick win.
-- FOLDED into A1: the **additive `result.json` extension convention**.
+A1/A3/A2 converged on one repeatable shape — follow it:
+- a **pure core module** (`rehearsalVerify`/`rehearsalSanity`/`rehearsalInfeasible`) with injected FS;
+- the **score pass** (`computeScore`) computes per-experiment artifacts; `scoreWith` applies them;
+- a **flat `.tsv` state file** (`verification.tsv` append / `sanity.tsv` snapshot) joined by
+  `status-brief` (keyed `instrument/exp`) for a top-3 annotation;
+- optional **`metric.md` fields** parsed like `verify_epsilon`/`ceiling`/`max_debug_attempts`;
+- the **directive** (`commands/rehearsal.md`) drives the Maestro-side judgment + loop;
+- **subagent-driven execution**: grouped implementers, spec+code review each, a final adversarial
+  whole-branch review, then release (bump 3 manifests + rebuild `dist` + PR).
+- **Landmine:** the scoreboard's integer-rank parsing (`/^\|\s+\d+\s+\|/`) is the load-bearing
+  contract — A2's `xN` group rides it for free; B1's plateau work must respect it.
 
-### C1 · Independent re-implementation inspector  (large; expensive; selective — do last)
-- AIRepr-style round-trip: the **Claude Maestro (cross-family)** regenerates the experiment from the
-  part's structured run-card alone and re-derives the metric — only for new-best / direction-changing
-  runs (When-To-Verify budgeting). Cross-family avoids the correlated-blind-spot trap of
-  codex-judging-codex.
-- *Closes:* "consensus is opt-in, latest-ok-only, compares self-reports"; "direction quality has no
-  adversarial/external check." *Cost: high (extra full run). Deps: A1, B2.*
+---
 
-## Track A — execution validity (Q1)
+## SHIPPED — validity track (Q1)
 
-### A1 · Metric trust (the keystone)  (medium; highest leverage)
-- Harness recomputes the metric from the part's **saved predictions** against a **sealed holdout the
-  part cannot read or write**; self-reported `metric_value` becomes a cross-check (reject on
-  mismatch). Cheap variant: re-score from artifacts rather than re-train.
-- *Closes:* gap "no independent metric re-computation"; "metric_name match is name-only". *Mechanism:*
-  "only grader-measured performance counts" (reward-hacking benchmarks). *Cost: medium. Deps: C0.*
+### C0 · scoreboard direction fix — SHIPPED 0.1.12 (PR #33)
+Fixed `buildScoreboard` sorting descending regardless of `metric.md` `**Direction:**` (botched the
+leader/handoff/teardown for `minimize`). `parseMetricMd` now reads Direction; sort is best-first.
 
-### A3 · Sanity & integrity gates  (medium; cheap mechanical; feeds A2)
-- Degenerate-output (non-constant preds, no NaN/inf); **under-training floor** (min steps / runtime
-  floor / learning-curve sanity); **leakage attestation** + adversarial-validation AUC + **too-good-
-  to-be-true ceiling -> mandatory audit**; **log-content corroboration** (parse `log_paths`, not just
-  existence); harden the **audit.json diff** (`src/commands/rehearsal.ts:887-912`) to run
-  per-experiment, not only at finalize.
-- **Pre-dispatch environment validation (moved from C0):** wire the dormant `--smoke-test` /
-  `--context-file` gates (`src/commands/rehearsal.ts:378-388`, never passed by the Maestro at
-  `commands/rehearsal.md:158,265`) — including generating the environment-probe script and deciding
-  what it asserts, since the experiment `code/` dir is empty at the first dispatch.
-- *Closes:* gaps "no leakage check", "no under-training/degenerate detection", "no sanity baseline",
-  "audit diff narrow/advisory/late", "log existence != content", "smoke-test/context-file dormant in
-  the shipped flow". *Mechanism:* Kapoor & Narayanan leakage taxonomy; MLE-bench structure
-  validation. *Cost: low. Deps: C0.*
+### A1 · metric trust (verify-by-re-execution) — SHIPPED 0.1.13 (PR #34)
+Spec: `2026-06-03-rehearsal-a1-metric-trust-design.md`. **Reframed** from "recompute on a sealed
+holdout" to verify-by-re-execution once task shape was settled as open-ended: the part declares a
+`verify` block (rescore/rerun/none); the trusted Maestro re-runs that scoring step via Bash OUTSIDE
+the part's pane; `verify-plan`/`verify-check` adjudicate a verdict (verified/mismatch/unavailable/
+pending) into `verification.tsv`; `computeScore` snapshots a provenance `verify-manifest.json`;
+`status-brief` annotates. Substrate for C1.
 
-### A2 · Valid-vs-invalid execution  (medium; the original concern)
-- **INFEASIBLE vs REFUTED** taxonomy (new optional `validity` field) + a **bounded automatic debug
-  loop** (hard cap: N rounds / M minutes) before a metric counts as real. Extend the self-correction
-  loop (`src/core/rehearsalScore.ts:64-75`; `experiment.md:182-186`) from contract-errors-only to
-  execution-validity ("your run looks under-trained / leaky").
-- *Closes:* gap "validation self-correction covers only contract errors". *Mechanism:* AIDE
-  `is_buggy` triple-rule; AIRA bounded debug (10 nodes / 12h). *Cost: medium. Deps: A3 detectors, A1.*
+### A3 · sanity & integrity gates — SHIPPED 0.1.14 (PR #35)
+Spec: `2026-06-03-rehearsal-a3-sanity-gates-design.md`. **Scoped** (user choice) as mechanical
+task-agnostic checks + a recorded integrity attestation — the **smoke-test env gate was NOT
+included** (still deferred, see below). Score pass emits ceiling / under-run / log-contradiction /
+integrity-attestation-incomplete / per-experiment audit-knob-drift to a `sanity.tsv` snapshot;
+`status-brief` tags `[suspect: …]`; finalize folds non-audit flags into `## Warnings`. Orthogonal to
+A1. The part attests an `integrity` block (5 keys) for C1 to verify.
 
-### A4 · Noise & reproducibility  (large; cost multiplier; deferred tail)
-- Multi-seed (vary full nuisance set, not just init); **statistical gate** (paired bootstrap CI
-  lower-bound > 0 AND sign-flip permutation p < 0.05, or ASO eps < 0.2 with multiple-comparison
-  correction); **K-corroboration re-runs the SAME config** (today
-  `src/core/rehearsalComplete.ts:45-92` counts distinct at-target experiments, so a lucky seed
-  satisfies completion); sub-threshold deltas -> "inconclusive", never ranked by raw mean.
-- **K-streak direction bug (found during C0):** `checkCompletion`'s streak uses
-  `improving = mv > best` (`src/core/rehearsalComplete.ts:73`), assuming higher-is-better regardless
-  of `direction`, so the strictly-improving-at-target streak is wrong for `minimize` objectives. Fix
-  alongside the seed/completion rework.
-- *Closes:* gap "no reproducibility / seed control" + the minimize K-streak bug. *Mechanism:* Paired
-  Bootstrap Protocol; deep-significance/ASO; seed power analysis. *Cost: high (kx runs). Deps: A1.*
+### A2 · INFEASIBLE-vs-REFUTED — SHIPPED 0.1.15 (PR #36)
+Spec: `2026-06-04-rehearsal-a2-infeasible-design.md`. Closes the original concern. `computeScore`
+derives INFEASIBLE (A1 `mismatch` ∪ A3 `{under-run, log-contradiction, audit-knob-drift}`;
+ceiling/integrity stay advisory) from `verification.tsv` + flags, and `buildScoreboard` routes those
+ok-rows to an `x<rank>` group out of the ranked leader set. Because completion/top-3 parse only
+integer ranks, exclusion is AUTOMATIC (zero change to `checkCompletion`/`status-brief`). Directive:
+bounded re-dispatch (cap `metric.md max_debug_attempts`, default 2) + Lane-D counts feasible-only.
 
-## Track B — idea coverage & direction (Q2)
+---
 
-### B1 · Coverage & diversity guard  (medium; cheap & high value)
-- Mechanical **approach-family taxonomy + MAP-Elites coverage archive**; **dedup new ideas against
-  the ledger** (near-duplicate dispatch alarm; `experiment-send` currently never inspects
-  `approach_label`, `src/commands/rehearsal.ts:356-468`); **approach-aware plateau** (today's plateau
-  `rehearsalComplete.ts:84-88` looks only at the spread of the last 5 metric values regardless of
-  which approach produced them, so tuning one family reads identically to a global plateau); track
-  running unique-idea count as a premature-convergence alarm.
-- *Closes:* gaps "no mechanical coverage/diversity guard", "premature convergence unguarded",
+## REMAINING — idea-generation track (Q2)
+
+### B1 · Coverage & diversity guard  (NEXT; cheap, high value; deps: none)
+*Goal:* make "did we explore enough angles?" mechanical so the loop can't converge prematurely on one
+approach family.
+- **Mechanical (score-pass + tsv arc):** a **`coverage.tsv`** computed in `computeScore` from each
+  experiment's `approach_label` (family → count + best metric), surfaced in `status-brief`; a
+  **near-duplicate-dispatch alarm** when an `approach_label` repeats a covered family; and the prize —
+  **approach-aware plateau**: today's plateau (`rehearsalComplete.ts:84-88`) reads the last-5 metric
+  spread *regardless of which family*, so tuning one family looks like a global plateau. B1 makes
+  plateau require family stabilization, fixing a gameable stop. Track running unique-family count as a
+  premature-convergence alarm.
+- **Directive:** the Maestro assigns a coarse family at dispatch and is steered to cover
+  under-explored families.
+- *Closes:* "no mechanical coverage/diversity guard", "premature convergence unguarded",
   "plateau narrow/gameable". *Mechanism:* Si et al. diversity collapse; MAP-Elites / Quality-Diversity.
-  *Cost: low-medium. Deps: none (operates on approach labels).*
 
-### B2 · Operators & ideation quality  (medium; the proven direction bottleneck)
-- Enforce **one measurable change vs a named parent** (`parent_id` + single changed field; reject
-  multi-variable ideas at dispatch); **structured discovery lenses** + verbalized sampling in the
-  ideation prompt; **pairwise/Swiss ranking** for "which angle next" (not absolute self-scores);
-  prompt-adaptive boldness; re-ground ideation against SOTA (today the Phase-1.5 sweep is write-once
-  and decoupled from idea selection).
-- *Closes:* gaps "diversity prompt-enforced not mechanical", "SOTA stale and decoupled". *Mechanism:*
-  AIRA ("operators, not search, are the bottleneck"); Nova discovery lenses; Verbalized Sampling.
-  *Cost: medium (mostly template + dispatch-validation). Deps: B1.*
+### B2 · Operators & ideation quality  (the proven direction bottleneck; deps: B1)
+*Goal:* improve per-round idea quality — AIRA: "operators, not search, are the bottleneck."
+- **Mechanical (small):** **one-measurable-change vs a named `parent_id`** — `experiment-send`
+  validates an idea changes exactly one variable vs its parent, so a metric delta is attributable.
+- **Directive/template:** **discovery lenses + verbalized sampling** in ideation (orthogonal angles,
+  not three tweaks of the leader); **pairwise/Swiss ranking** for "which angle next" over absolute
+  self-scores; re-ground ideation against the SOTA sweep (today write-once, decoupled from selection).
+- *Closes:* "diversity prompt-enforced not mechanical", "SOTA stale and decoupled". *Mechanism:* AIRA
+  operators; Nova discovery lenses; Verbalized Sampling.
 
-### B3 · Search, budget & steering  (large; lowest marginal value; deferred tail)
-- Greedy-best-first + epsilon-revisit selection over the experiment tree; **ASHA cheap-fidelity
-  rungs** (promote top-1/eta); periodic **stage-gate re-rooting** (judge trustworthiness, not just the
-  number); held-out steering + **robust top-k final selection** at the stop (vs today's single-best
-  crown).
-- *Closes:* gaps "direction has no external check", "lane-D prunes parts not ideas". *Mechanism:*
-  AIRA / "Greedy Is a Strong Default" (do NOT build this first); AI Scientist v2 stage gate; ASHA.
-  *Cost: high. Deps: A1, B1.*
+---
 
-## Dependency graph
+## DEFERRED tail — reconsider after B2
+
+### A4 · Noise & reproducibility  (cost multiplier)
+Multi-seed + a paired-bootstrap/ASO statistical gate; **K-corroboration re-runs the SAME config**
+(today `rehearsalComplete.ts:45-92` counts distinct at-target experiments, so a lucky seed satisfies
+completion); sub-threshold deltas → "inconclusive". *Open question:* is k× compute worth it for the
+user's tasks? **STANDALONE BUG (shippable independently, C0-style):** the K-streak in `checkCompletion`
+(`rehearsalComplete.ts:73`, `improving = mv > best`) is direction-naive → wrong for `minimize`. Can be
+fixed now without the multi-seed machinery. *Deps: A1.*
+
+### B3 · Search, budget & steering  (lowest leverage; likely CUT)
+Greedy-best-first + epsilon-revisit; ASHA cheap-fidelity rungs; periodic stage-gate re-rooting;
+held-out steering + robust top-k final selection. "Greedy Is a Strong Default" says search
+sophistication buys ~nothing over greedy + early-stop once operators (B2) are good — so this is the
+least valuable phase and a strong cut candidate. *Deps: A1, B1.*
+
+### C1 · Independent re-implementation inspector  (the real open-ended anti-gaming; expensive)
+AIRepr-style round-trip: the cross-family Claude Maestro regenerates the experiment from the part's
+structured run-card alone, re-derives the metric, AND **verifies A3's `integrity` attestation** —
+only for new-best / direction-changing runs (When-To-Verify budgeting). The only mechanism that
+genuinely defends an open-ended metric against a deliberately-gaming part. *Deps: A1, B2.*
+
+## Dependency graph (remaining)
 
 ```
-C0 ──► A1 ──► A2        A3 ──► A2
-       │                 ▲
-       ├──► A4           └── C0
-       ├──► B3
-       └──► C1 ◄── B2 ◄── B1
+[C0,A1,A3,A2 done]      B1 ──► B2 ──► C1
+                                └────► (A4 / B3 deferred; A4 K-streak bug standalone)
 ```
 
-Keystone is **A1**; **A3 feeds A2**; **B1 is cheap and unblocks B2/B3**; **A4, B3, C1 are the
-heavy/expensive tail** and may be cut or deferred given the explore-only wall-clock budget.
+Recommended next: persist this refresh (done), fix the **K-streak bug** (quick standalone), then
+**B1 → B2**, and decide A4/B3/C1's fate after B2 (B3 likely cut; C1 is the high-value tail item).
 
 ## Source base
 
-Synthesized from a 2026-06-03 triple-search literature sweep + codebase grounding (10 agents). Key
-references: AIDE (arXiv:2502.13138), AIRA / AIRA-dojo (arXiv:2507.02554) + AIRA^2 (arXiv:2603.26499),
-"Greedy Is a Strong Default" (arXiv:2603.27415), MLE-bench (arXiv:2410.07095), R&D-Agent
-(arXiv:2505.14738), Si et al. "Can LLMs Generate Novel Research Ideas?" (arXiv:2409.04109), Nova
-(arXiv:2410.14255), Verbalized Sampling (arXiv:2510.01171), the Ideation-Execution Gap
-(arXiv:2506.20803), AI Scientist v2 (PMC13017497) + Beel et al. audit (arXiv:2502.14297) + Yu et al.
-Hidden Pitfalls (arXiv:2509.08713), reward-hacking benchmarks (arXiv:2511.21654 / 2603.11337 /
-2605.02964), AIRepr (arXiv:2502.16395), When-To-Verify (arXiv:2504.01005), Paired Bootstrap Protocol
-(arXiv:2511.19794), deep-significance/ASO, seed power analysis (arXiv:1806.08295), Kapoor & Narayanan
-leakage (Patterns 2023) + REFORMS, ASHA (OpenReview S1MAriC5F7), MAP-Elites / Quality-Diversity.
+2026-06-03 triple-search literature sweep + codebase grounding (10 agents). Key references: AIDE
+(arXiv:2502.13138), AIRA / AIRA-dojo (arXiv:2507.02554) + AIRA^2 (arXiv:2603.26499), "Greedy Is a
+Strong Default" (arXiv:2603.27415), MLE-bench (arXiv:2410.07095), R&D-Agent (arXiv:2505.14738), Si et
+al. "Can LLMs Generate Novel Research Ideas?" (arXiv:2409.04109), Nova (arXiv:2410.14255), Verbalized
+Sampling (arXiv:2510.01171), the Ideation-Execution Gap (arXiv:2506.20803), AI Scientist v2
+(PMC13017497) + Beel et al. (arXiv:2502.14297) + Yu et al. (arXiv:2509.08713), reward-hacking
+benchmarks (arXiv:2511.21654 / 2603.11337 / 2605.02964), AIRepr (arXiv:2502.16395), When-To-Verify
+(arXiv:2504.01005), Paired Bootstrap Protocol (arXiv:2511.19794), deep-significance/ASO, seed power
+analysis (arXiv:1806.08295), Kapoor & Narayanan leakage (Patterns 2023), ASHA (OpenReview S1MAriC5F7),
+MAP-Elites / Quality-Diversity.
