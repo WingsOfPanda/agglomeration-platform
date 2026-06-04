@@ -101,4 +101,7 @@ describe("applyArgsFile verbatim-tail (prose mode)", () => {
     expect(applyArgsFile(["--args-file", af("fix the part's thing")]))
       .toEqual(["fix", "the", "parts thing"]);
   });
+  it("a value-flag with no following value pushes only the flag (no empty token)", () => {
+    expect(applyArgsFile(["--args-file", af("--targets")], opts(["--targets"]))).toEqual(["--targets"]);
+  });
 });
