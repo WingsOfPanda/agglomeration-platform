@@ -120,6 +120,15 @@ Accepted tradeoff (user chose "Both"): a lone-target doc loses its human-readabl
 provenance line. Perform-side alone would suffice for correctness; the score-side change removes the
 ambiguous artifact at the source.
 
+Routing consequence (a deliberate clone-wars divergence — do NOT "restore" the singular header in a
+parity sweep): because the emitted doc is now header-less, a lone-target doc performed *from the hub*
+resolves to the hub (`!t.present => return cwd`) instead of descending into `<hub>/<slug>` the way
+clone-wars' `deploy` did. consort's single-target workflow runs `perform` from *inside* the
+sub-project (exactly the reported defect — `<hub>/<slug>/<slug>` not found), which the perform-side
+guard handles; the from-hub-descend-into-one-child affordance is intentionally dropped for lone
+targets. Genuine multi-target docs still emit the plural `**Target Sub-Project(s):**` header and
+descend per target, so cross-repo routing is unaffected.
+
 ### Components
 
 - `src/core/perform.ts` — `resolveTarget`: the `basename(cwd) === slug` guard inside `!isDir`; add
