@@ -23538,7 +23538,7 @@ __export(rehearsal_exports, {
   verifyPlanWith: () => verifyPlanWith
 });
 function usage4() {
-  log.error("usage: rehearsal <init|metric|sota|spawn-all|drop-part|verify-plan|verify-check|experiment-send|score|monitor|status-brief|finalize|refine|handoff-extract|teardown|fresh-part|forensics|abort|consensus> ...");
+  log.error("usage: rehearsal <init|metric|sota|spawn-all|drop-part|verify-plan|verify-check|inspect-plan|inspect-check|experiment-send|score|monitor|status-brief|finalize|refine|handoff-extract|teardown|fresh-part|forensics|abort|consensus> ...");
   return 2;
 }
 function parseInitArgs(args) {

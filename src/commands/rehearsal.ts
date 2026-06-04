@@ -46,7 +46,7 @@ import { run as codaRun } from "./coda.js";
 type PathOpts = { home?: string; cwd?: string };
 
 function usage(): number {
-  log.error("usage: rehearsal <init|metric|sota|spawn-all|drop-part|verify-plan|verify-check|experiment-send|score|monitor|status-brief|finalize|refine|handoff-extract|teardown|fresh-part|forensics|abort|consensus> ...");
+  log.error("usage: rehearsal <init|metric|sota|spawn-all|drop-part|verify-plan|verify-check|inspect-plan|inspect-check|experiment-send|score|monitor|status-brief|finalize|refine|handoff-extract|teardown|fresh-part|forensics|abort|consensus> ...");
   return 2;
 }
 
