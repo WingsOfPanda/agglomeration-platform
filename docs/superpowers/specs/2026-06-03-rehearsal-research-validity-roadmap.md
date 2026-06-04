@@ -1,11 +1,17 @@
 # Rehearsal research-validity upgrade — roadmap
 
-**Status (updated 2026-06-04):** the **validity track (Q1) is SHIPPED** — C0 → A1 → A3 → A2, versions
-0.1.12–0.1.15. The standalone **K-streak direction bug** (A4 tail) shipped in **0.1.16 (PR #38)**.
-The **idea-generation track (Q2)**: **B1 (coverage & diversity) SHIPPED in 0.1.17 (PR #39)**;
-**B2 (operators & ideation quality) is NEXT** (spec `2026-06-04-rehearsal-b2-operators-design.md`),
-with the heavy tail (**A4 multi-seed / B3 / C1**) deferred and reconsidered after B2. Each phase is its
-own `brainstorm -> spec -> plan -> ship` cycle with its own `docs/superpowers/specs/` design doc.
+**Status (updated 2026-06-04): THE PLANNED ROADMAP IS COMPLETE.** Every phase shipped across nine
+releases (0.1.11–0.1.19): the **validity track (Q1)** — C0 (0.1.12) → A1 (0.1.13) → A3 (0.1.14) → A2
+(0.1.15); the standalone **K-streak** fix (0.1.16, PR #38); and the **idea-generation track (Q2)** —
+**B1** (coverage & diversity, 0.1.17, PR #39) → **B2** (operators & ideation quality, 0.1.18, PR #40) →
+**C1** (independent re-implementation inspector — the anti-gaming capstone, 0.1.19, PR #41). The metric
+is now verified (A1), sanity-gated (A3), invalid-run-proof (A2), breadth-guarded (B1),
+attribution-disciplined (B2), and gaming-resistant (C1). Each phase was its own
+`brainstorm -> spec -> plan -> ship` cycle with a `docs/superpowers/specs/` design doc.
+**Only the low-priority tail remains, NOT started:** **A4** (multi-seed + paired-bootstrap/ASO gate —
+open question whether k× compute is worth it; C1 does one re-run, not a seed matrix) and **B3**
+(search/budget — LIKELY CUT per "Greedy Is a Strong Default"). Treat the track as DONE unless A4 is
+wanted.
 
 ## Why this exists
 
@@ -85,7 +91,7 @@ bounded re-dispatch (cap `metric.md max_debug_attempts`, default 2) + Lane-D cou
 
 ---
 
-## REMAINING — idea-generation track (Q2)
+## SHIPPED — idea-generation track (Q2)
 
 ### B1 · Coverage & diversity guard — SHIPPED 0.1.17 (PR #39)
 Spec: `2026-06-04-rehearsal-b1-coverage-diversity-design.md`. Approach-aware plateau
@@ -108,8 +114,8 @@ approach family.
 - *Closes:* "no mechanical coverage/diversity guard", "premature convergence unguarded",
   "plateau narrow/gameable". *Mechanism:* Si et al. diversity collapse; MAP-Elites / Quality-Diversity.
 
-### B2 · Operators & ideation quality  (NEXT; the proven direction bottleneck; deps: B1 [done])
-Spec: `2026-06-04-rehearsal-b2-operators-design.md` (approved). Directive-heavy: typed **Draft/Improve**
+### B2 · Operators & ideation quality — SHIPPED 0.1.18 (PR #40)
+Spec: `2026-06-04-rehearsal-b2-operators-design.md`. Directive-heavy: typed **Draft/Improve**
 operators (resolves the B1×B2 tension — Draft = new family, Improve = single-change on a parent),
 diverse Draft (discovery lenses + Verbalized Sampling + avoid-set), single-change Improve contract,
 SOTA re-grounding into selection, run-all + post-hoc metric (no pre-run pairwise). One light advisory
@@ -125,9 +131,9 @@ mechanical piece: `--parent` flag + `lineage.tsv` (audit-knob diff), surfacing o
 
 ---
 
-## DEFERRED tail — reconsider after B2
+## The tail — A4 / B3 deferred (NOT started); C1 capstone SHIPPED
 
-### A4 · Noise & reproducibility  (cost multiplier)
+### A4 · Noise & reproducibility  (cost multiplier — NOT started)
 Multi-seed + a paired-bootstrap/ASO statistical gate; **K-corroboration re-runs the SAME config**
 (today `rehearsalComplete.ts:45-92` counts distinct at-target experiments, so a lucky seed satisfies
 completion); sub-threshold deltas → "inconclusive". *Open question:* is k× compute worth it for the
@@ -142,21 +148,28 @@ held-out steering + robust top-k final selection. "Greedy Is a Strong Default" s
 sophistication buys ~nothing over greedy + early-stop once operators (B2) are good — so this is the
 least valuable phase and a strong cut candidate. *Deps: A1, B1.*
 
-### C1 · Independent re-implementation inspector  (the real open-ended anti-gaming; expensive)
-AIRepr-style round-trip: the cross-family Claude Maestro regenerates the experiment from the part's
-structured run-card alone, re-derives the metric, AND **verifies A3's `integrity` attestation** —
-only for new-best / direction-changing runs (When-To-Verify budgeting). The only mechanism that
-genuinely defends an open-ended metric against a deliberately-gaming part. *Deps: A1, B2.*
+### C1 · Independent re-implementation inspector — SHIPPED 0.1.19 (PR #41)
+Spec: `2026-06-04-rehearsal-c1-inspector-design.md`. The anti-gaming capstone. The cross-family Claude
+Maestro regenerates a new-best experiment from the part's run-card ALONE (never its `code/`), re-runs
+it end-to-end (**full AIRepr round-trip** — chosen over metric-re-derivation-only), re-derives the
+metric, and verifies A3's `integrity` attestation. THREE-WAY verdict reproduced/not-reproduced/
+**inconclusive** — `inconclusive` (the divergence from A1's `mismatch`) NEVER demotes; a confident
+`not-reproduced` GATES to A2's `x<rank>` group. New `rehearsalInspect` core + `inspect-plan`/
+`inspect-check` verbs (mirror A1) + `inspection.tsv` (distinct from verification.tsv) + optional
+`data_spec`/`metric_formula` run-card fields + `c1_epsilon`/`c1_budget` knobs + directive Step 3.5b
+(gated to new-best A1-verified non-suspect codex leaders; explore-only scratch `experiments/<exp>/c1/`).
+Cross-family is free (Claude Maestro vs codex parts). *Deps: A1, B2.*
 
-## Dependency graph (remaining)
+## Dependency graph
 
 ```
-[C0,A1,A3,A2 done] [K-streak fixed 0.1.16] [B1 done 0.1.17]      B2 ──► C1
-                                                                  └────► (A4 / B3 deferred)
+ALL PLANNED PHASES SHIPPED (0.1.11–0.1.19):
+  C0 → A1 → A3 → A2  [validity Q1]   ·   K-streak fix   ·   B1 → B2 → C1  [idea-gen Q2 + capstone]
+  Deferred, NOT started:  A4 (multi-seed)   ·   B3 (search — likely cut)
 ```
 
-Recommended next: ship **B2** (operators & ideation quality — spec approved), then decide A4/B3/C1's
-fate (B3 likely cut; C1 is the high-value tail item and consumes the lineage edge B2 records).
+The planned roadmap is complete. Only A4 (open: is k× compute worth it?) and B3 (likely cut) remain —
+both deferred, neither started. Treat the validity track as DONE unless A4 is wanted.
 
 ## Source base
 
