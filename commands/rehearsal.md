@@ -224,6 +224,10 @@ brief entirely when `RAN_SCORE=0` (only heartbeat/question/stale/stuck fired —
    exploration is still narrow (fewer than `min_families` families) -- a signal to open a new family
    on the next dispatch rather than tune the current leader.
 
+   Lineage (B2): a top-3 leader tagged `[multi-change]` had >1 mandated knob changed vs its
+   `--parent` -- its metric delta is NOT cleanly attributable. Do not over-trust it; if it matters,
+   re-confirm with an isolating single-change Improve before crowning it.
+
 3.5. **Verify the landed result (metric-trust gate).** After `score`/`status-brief`, for the
      experiment that just landed (`<instrument>`/`<exp>`):
 
@@ -307,13 +311,26 @@ For **each** part with `phase=idle` and no `$ART/halt.flag`:
 2. **Otherwise dispatch.** Compose a ~50-token direction ("direction, not plan") from
    `$ART/session-summary.md` (Current direction + Recent decisions), the recent `$ART/scoreboard.md` rows,
    and the topic/metric.
-   **Coverage steering (B1):** when the `Coverage:` line is `(short by K)` or one family dominates the
-   tally, open a NEW approach family this dispatch (give it a fresh `<approach-label>`) rather than
-   tuning the current leader -- aim for at least `min_families` distinct families (AIRA: <=2 = collapse
-   risk, 3-4 = healthy). You may align the label to one of the SOTA sweep's families.
-   Read `exp_counter` from the part's `state.txt`, increment, format `exp-NNN`, then:
+   **Operators (B2) -- each dispatch is one of two typed moves:**
+   - **Draft** = open a NEW orthogonal approach family. Use when the `Coverage:` line is `(short by K)`
+     or one family dominates the tally -- aim for at least `min_families` distinct families (AIRA:
+     <=2 = collapse risk, 3-4 = healthy). To make the Draft genuinely orthogonal (not a tweak of the
+     leader): pick a different **discovery lens** (mechanism-swap / representation-change /
+     constraint-relaxation / objective-reframe / decomposition); **verbalized-sample** ~3-5 candidate
+     angles before committing to one (the candidate set is for diversity -- do not act on any
+     self-assigned probabilities); and hold an **avoid-set** = the current leader + the already-tried
+     families from the `Coverage:` line. **SOTA re-grounding:** read `$ART/sota.md` and diff its
+     `family` column against the `Coverage:` line -- prefer an untried known family. Give the Draft a
+     fresh `<approach-label>` (no `--parent`).
+   - **Improve** = a single-variable change on a named parent. Use when a promising family is worth
+     refining. Pass `--parent <exp-id>` (a prior exp of the SAME part) and change exactly ONE variable
+     vs it, named in the `<direction>` -- so the metric delta is attributable.
+   Do NOT pre-rank un-run ideas: dispatch the diverse angles and let the real (verified) metric rank
+   them post-hoc.
+   Read `exp_counter` from the part's `state.txt`, increment, format `exp-NNN`, then dispatch (add
+   `--parent <exp-id>` for an Improve; omit it for a Draft):
    ```bash
-   $CS rehearsal experiment-send <TOPIC> <instrument> exp-NNN "<approach-label>" "<direction>"
+   $CS rehearsal experiment-send [--parent exp-id] <TOPIC> <instrument> exp-NNN "<approach-label>" "<direction>"
    ```
    The verb increments `exp_counter`, sets `phase=working, current_exp_id=exp-NNN`, and nudges the pane.
 

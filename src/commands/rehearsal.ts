@@ -14,6 +14,7 @@ import { rehearsalArtDir, partsDir, partStateDir, experimentsDir, experimentDir,
 import { computeScore, type ScoreFs, type ScoreComputation } from "../core/rehearsalScore.js";
 import { sanityRow, SANITY_TSV_HEADER } from "../core/rehearsalSanity.js";
 import { coverageRow, COVERAGE_TSV_HEADER, type CoverageRow } from "../core/rehearsalCoverage.js";
+import { lineageRow, LINEAGE_TSV_HEADER } from "../core/rehearsalLineage.js";
 import { parseState, mergeState, reconcileFromOutbox, readHaltFlag } from "../core/rehearsalState.js";
 import { checkCompletion, checkTimeBudget } from "../core/rehearsalComplete.js";
 import { normalizeResult, type ResultJson } from "../core/rehearsalResult.js";
@@ -372,13 +373,13 @@ export interface ExperimentSendDeps {
 
 interface ExperimentSendArgs {
   topic: string; instrument: string; expId: string; approachLabel: string; approachBrief: string;
-  inputs?: string; contextFile?: string; smokeTest?: string; timeout?: string;
+  inputs?: string; contextFile?: string; smokeTest?: string; timeout?: string; parentId?: string;
   badArgs?: boolean;
 }
 
 /** Flags-first then exactly 5 positionals (port of experiment-send.sh's getopts loop). */
 function parseExperimentSendArgs(args: string[]): ExperimentSendArgs {
-  let inputs: string | undefined, contextFile: string | undefined, smokeTest: string | undefined, timeout: string | undefined;
+  let inputs: string | undefined, contextFile: string | undefined, smokeTest: string | undefined, timeout: string | undefined, parentId: string | undefined;
   let i = 0;
   for (; i < args.length; i++) {
     const a = args[i];
@@ -387,12 +388,13 @@ function parseExperimentSendArgs(args: string[]): ExperimentSendArgs {
     else if (a === "--context-file" || a.startsWith("--context-file=")) { const r = kvParse(a, args[i + 1]); contextFile = r.value; i += r.shift - 1; }
     else if (a === "--smoke-test" || a.startsWith("--smoke-test=")) { const r = kvParse(a, args[i + 1]); smokeTest = r.value; i += r.shift - 1; }
     else if (a === "--timeout" || a.startsWith("--timeout=")) { const r = kvParse(a, args[i + 1]); timeout = r.value; i += r.shift - 1; }
+    else if (a === "--parent" || a.startsWith("--parent=")) { const r = kvParse(a, args[i + 1]); parentId = r.value; i += r.shift - 1; }
     else { return { topic: "", instrument: "", expId: "", approachLabel: "", approachBrief: "", badArgs: true }; }
   }
   const pos = args.slice(i);
   if (pos.length !== 5) return { topic: "", instrument: "", expId: "", approachLabel: "", approachBrief: "", badArgs: true };
   const [topic, instrument, expId, approachLabel, approachBrief] = pos;
-  return { topic, instrument, expId, approachLabel, approachBrief, inputs, contextFile, smokeTest, timeout };
+  return { topic, instrument, expId, approachLabel, approachBrief, inputs, contextFile, smokeTest, timeout, parentId };
 }
 
 /** Best-effort peer snapshot for the {{PEERS_BLOCK}} slot. Reads parts.txt (one instrument/line)
@@ -439,7 +441,7 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   const out = deps.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
   const opts = deps.opts;
   const p = parseExperimentSendArgs(args);
-  if (p.badArgs) { log.error("rehearsal experiment-send: usage: [--inputs csv] [--context-file path] [--smoke-test script] [--timeout N] <topic> <instrument> <exp-id> <approach-label> <approach-brief>"); return 2; }
+  if (p.badArgs) { log.error("rehearsal experiment-send: usage: [--inputs csv] [--context-file path] [--smoke-test script] [--timeout N] [--parent exp-id] <topic> <instrument> <exp-id> <approach-label> <approach-brief>"); return 2; }
   const { topic, instrument, expId, approachLabel, approachBrief } = p;
 
   if (!EXP_ID_RE.test(expId)) { log.error(`rehearsal experiment-send: exp-id must match exp-[0-9]+; got '${expId}'`); return 2; }
@@ -481,6 +483,12 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   const phase = parseState(readFileSync(stateTxt, "utf8")).phase ?? "";
   if (phase === "abandoned") { log.error(`rehearsal experiment-send: part ${instrument} lane is abandoned; not dispatching`); return 2; }
   if (phase !== "idle") { log.error(`rehearsal experiment-send: part ${instrument} not idle (phase=${phase}); wait or finalize first`); return 1; }
+
+  // --parent (B2): same-lane parent exp must exist (lineage is recorded for the advisory diff).
+  if (p.parentId !== undefined) {
+    if (!EXP_ID_RE.test(p.parentId)) { log.error(`rehearsal experiment-send: --parent must match exp-[0-9]+; got '${p.parentId}'`); return 2; }
+    if (!existsSync(experimentDir(art, instrument, p.parentId))) { log.error(`rehearsal experiment-send: --parent ${p.parentId} has no experiment dir under ${instrument}`); return 1; }
+  }
 
   // Branch dir + smoke-test BEFORE any state mutation.
   const branchDir = experimentDir(art, instrument, expId);
@@ -533,6 +541,7 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
 
   // Persist prompt.md, write the inbox (canonical fence), transition state.
   atomicWrite(join(branchDir, "prompt.md"), prompt);
+  if (p.parentId !== undefined) atomicWrite(join(branchDir, "lineage.txt"), `parent_id=${p.parentId}\n`);
   inboxWrite(instrument, model, topic, prompt, { from: "maestro", noDoneInstruction: true });
   atomicWrite(stateTxt, buildDispatchState(readFileSync(stateTxt, "utf8"), expId, deps.now()));
 
@@ -621,6 +630,7 @@ export async function scoreWith(args: string[], deps: RehearsalScoreDeps): Promi
   for (const m of c.manifests) deps.writeAtomic(m.path, m.body);
   deps.writeAtomic(join(art, "sanity.tsv"), SANITY_TSV_HEADER + c.sanityRows.map(sanityRow).join(""));
   deps.writeAtomic(join(art, "coverage.tsv"), COVERAGE_TSV_HEADER + c.coverageRows.map(coverageRow).join(""));
+  deps.writeAtomic(join(art, "lineage.tsv"), LINEAGE_TSV_HEADER + c.lineageRows.map(lineageRow).join(""));
   for (const w of c.warnings) log.warn(w);
   return 0;
 }
@@ -855,8 +865,19 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
     }
   }
 
+  const ltsv = join(art, "lineage.tsv");
+  let multiChange: Record<string, boolean> | undefined;
+  if (existsSync(ltsv)) {
+    multiChange = {};
+    for (const line of readFileSync(ltsv, "utf8").split("\n")) {
+      if (!line || line.startsWith("exp_id\t")) continue;
+      const cells = line.split("\t");            // exp_id, instrument, parent_id, knobs_changed, verdict, ts
+      if (cells[0] && cells[1] && cells[4] === "improve-multi") multiChange[`${cells[1]}/${cells[0]}`] = true;
+    }
+  }
+
   const latest = p.latestInstrument && p.latestExp ? { instrument: p.latestInstrument, exp: p.latestExp } : undefined;
-  out(buildStatusBrief({ parts, scoreboardMd, completion, latest, verdicts, suspects, coverage }));
+  out(buildStatusBrief({ parts, scoreboardMd, completion, latest, verdicts, suspects, coverage, multiChange }));
   return 0;
 }
 
@@ -1111,6 +1132,19 @@ export async function finalizeWith(args: string[], deps: RehearsalFinalizeDeps):
     if (extra.length) appendFileSync(warningsPath, extra.join("\n") + "\n");
   }
 
+  // B2: fold improve-multi lineage rows into warnings.txt (advisory: delta not cleanly attributable).
+  const lineageTsv = join(art, "lineage.tsv");
+  if (existsSync(lineageTsv)) {
+    const extra: string[] = [];
+    for (const line of readFileSync(lineageTsv, "utf8").split("\n")) {
+      if (!line || line.startsWith("exp_id\t")) continue;
+      const c = line.split("\t");                 // exp_id, instrument, parent_id, knobs_changed, verdict, ts
+      if (c[4] !== "improve-multi") continue;
+      if (c[0] && c[1]) extra.push(`lineage\t${c[1]}/${c[0]}\timprove-multi\tparent=${c[2] ?? ""} knobs_changed=${c[3] ?? ""}`);
+    }
+    if (extra.length) appendFileSync(warningsPath, extra.join("\n") + "\n");
+  }
+
   // 9. render session-summary.md (FULL re-render; wholesale atomic replace).
   const statusRows: StatusRow[] = [];
   for (const instrument of instruments) {
@@ -1173,6 +1207,8 @@ export async function finalizeWith(args: string[], deps: RehearsalFinalizeDeps):
       warnings.push(`- audit_warn: ${f[1]} ${f[2]} (${f[3]})`);
     } else if (f[0] === "sanity") {
       warnings.push(`- sanity: ${f[1]} ${f[2]} (${f[3]})`);
+    } else if (f[0] === "lineage") {
+      warnings.push(`- lineage: ${f[1]} ${f[2]} (${f[3]})`);
     }
   }
 

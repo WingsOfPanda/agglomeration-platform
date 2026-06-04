@@ -227,6 +227,25 @@ describe("rehearsal finalize", () => {
     expect(w.indexOf("size_warn")).toBeLessThan(w.indexOf("audit_warn"));
   });
 
+  it("folds an improve-multi lineage row into warnings.txt (B2)", async () => {
+    const h = home();
+    const { art } = scaffoldArt(h, ["oboe"]);
+    scaffoldPart(h, art, "oboe", "phase=idle\n", "");
+    writeFileSync(join(art, "lineage.tsv"),
+      "exp_id\tinstrument\tparent_id\tknobs_changed\tverdict\tts\n" +
+      "exp-003\toboe\texp-002\t2\timprove-multi\tT\n");
+    const rc = await finalizeWith([TOPIC], deps(h));
+    expect(rc).toBe(0);
+    const w = readFileSync(join(art, "warnings.txt"), "utf8");
+    expect(w).toContain("lineage");
+    expect(w).toContain("improve-multi");
+    expect(w).toContain("oboe/exp-003");
+    // ...and it must reach the rendered ## Warnings section of session-summary.md (not just warnings.txt).
+    const ss = readFileSync(join(art, "session-summary.md"), "utf8");
+    expect(ss).toContain("## Warnings");
+    expect(ss).toContain("lineage: oboe/exp-003 improve-multi");
+  });
+
   it("failed part is preserved (not coerced) when no terminal event reconciles it", async () => {
     const h = home();
     const { art } = scaffoldArt(h, ["timpani"]);
