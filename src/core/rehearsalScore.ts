@@ -9,6 +9,7 @@ import { parseMetricMd } from "./rehearsalMetric.js";
 import { parseVerifyBlock, buildManifest } from "./rehearsalVerify.js";
 import { sanityFlags, type SanityRow } from "./rehearsalSanity.js";
 import { tallyCoverage, type CoverageRow } from "./rehearsalCoverage.js";
+import { diffAuditKnobs, classifyLineage, type LineageRow } from "./rehearsalLineage.js";
 import { classifyInfeasible, parseVerdicts } from "./rehearsalInfeasible.js";
 import { parseHardConstraints } from "./rehearsalFinalize.js";
 import { partsDir, partStateDir, experimentsDir, experimentDir } from "./rehearsal.js";
@@ -42,6 +43,7 @@ export interface ScoreComputation {
   manifests: { path: string; body: string }[];
   sanityRows: SanityRow[];
   coverageRows: CoverageRow[];
+  lineageRows: LineageRow[];
 }
 
 function str(v: unknown): string {
@@ -62,6 +64,7 @@ export function computeScore(art: string, fs: ScoreFs, now: () => string): Score
   const warnings: string[] = [];
   const manifests: { path: string; body: string }[] = [];
   const sanityRows: SanityRow[] = [];
+  const lineageRows: LineageRow[] = [];
 
   // Walk like the bash `parts/*/experiments/*/` glob under nullglob: listDir
   // returns [] for a non-existent dir, so no explicit dir-existence gate.
@@ -115,6 +118,19 @@ export function computeScore(art: string, fs: ScoreFs, now: () => string): Score
       for (const f of flags) sanityRows.push({ expId, instrument, flag: f.flag, detail: f.detail, ts: now() });
       const infReason = classifyInfeasible(verdicts[`${instrument}/${expId}`], flags.map((f) => f.flag));
       if (infReason) scoreRow.infeasibleReason = infReason;
+
+      const lineageTxt = fs.read(join(branchDir, "lineage.txt"));
+      const parentId = lineageTxt ? (parseState(lineageTxt).parent_id ?? "") : "";
+      let knobs: number | null = null;
+      if (parentId) {
+        const parentAuditRaw = fs.read(join(experimentDir(art, instrument, parentId), "audit.json"));
+        let parentAudit: Record<string, unknown> | null = null;
+        if (parentAuditRaw) { try { parentAudit = JSON.parse(parentAuditRaw) as Record<string, unknown>; } catch { parentAudit = null; } }
+        knobs = diffAuditKnobs(parentAudit, auditObj);
+      }
+      lineageRows.push({ expId, instrument, parentId,
+        knobsChanged: knobs === null ? "" : String(knobs),
+        verdict: classifyLineage(parentId || undefined, knobs), ts: now() });
     }
   }
 
@@ -141,5 +157,5 @@ export function computeScore(art: string, fs: ScoreFs, now: () => string): Score
   }
 
   return { scoreboardMd: buildScoreboard(rows, parsed?.direction), resultsTsv: buildResultsTsv(tsvRows),
-    sidecars, staleSidecars, phaseClears, warnings, manifests, sanityRows, coverageRows };
+    sidecars, staleSidecars, phaseClears, warnings, manifests, sanityRows, coverageRows, lineageRows };
 }

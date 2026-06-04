@@ -970,6 +970,28 @@ describe("rehearsalScore", () => {
     expect(second).toEqual(first);                                  // identical, not doubled
     expect(second).toEqual([{ family: "single-pass", count: 1, best: "0.9", ts: "T" }]);
   });
+
+  it("classifies lineage from lineage.txt + parent audit diff (B2)", () => {
+    const okR = (label: string, mv: number) => JSON.stringify({
+      branch_id:"b",approach_label:label,metric_name:"accuracy",metric_value:mv,status:"ok",
+      runtime_s:5,log_paths:[],checkpoint_path:null,notes:"" });
+    const files: Record<string, string> = {
+      "/a/metric.md": "**Primary metric:** accuracy\n**Direction:** maximize\n",
+      "/a/parts/oboe/experiments/exp-001/result.json": okR("single-pass", 0.90),
+      "/a/parts/oboe/experiments/exp-001/audit.json": JSON.stringify({ lr: 0.1, depth: 4 }),
+      "/a/parts/oboe/experiments/exp-002/result.json": okR("single-pass", 0.93),
+      "/a/parts/oboe/experiments/exp-002/audit.json": JSON.stringify({ lr: 0.2, depth: 4 }),
+      "/a/parts/oboe/experiments/exp-002/lineage.txt": "parent_id=exp-001\n",
+      "/a/parts/oboe/experiments/exp-003/result.json": okR("single-pass", 0.95),
+      "/a/parts/oboe/experiments/exp-003/audit.json": JSON.stringify({ lr: 0.3, depth: 8 }),
+      "/a/parts/oboe/experiments/exp-003/lineage.txt": "parent_id=exp-002\n",
+    };
+    const c = computeScore("/a", fakeFs(files), () => "T");
+    const byExp = Object.fromEntries(c.lineageRows.map((r) => [r.expId, r.verdict]));
+    expect(byExp["exp-001"]).toBe("draft");
+    expect(byExp["exp-002"]).toBe("improve-single");
+    expect(byExp["exp-003"]).toBe("improve-multi");
+  });
 });
 
 function fakeFs(files: Record<string, string>): ScoreFs {

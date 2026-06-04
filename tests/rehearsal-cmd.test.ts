@@ -612,7 +612,7 @@ describe("rehearsal score", () => {
     const writes: { path: string; content: string }[] = [];
     const comp: ScoreComputation = {
       scoreboardMd: "", resultsTsv: "", sidecars: [], staleSidecars: [], phaseClears: [],
-      warnings: [], manifests: [], sanityRows: [],
+      warnings: [], manifests: [], sanityRows: [], lineageRows: [],
       coverageRows: [{ family: "single-pass", count: 2, best: "0.96", ts: "T" }],
     };
     const deps: RehearsalScoreDeps = {
