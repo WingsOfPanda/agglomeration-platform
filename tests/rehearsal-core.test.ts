@@ -353,6 +353,31 @@ describe("checkCompletion", () => {
     const sb = buildScoreboard([row("exp-001", "oboe", "0.951"), row("exp-002", "oboe", "0.952")]);
     expect(checkCompletion(sb, metricMd).plateau).toBe(false);
   });
+
+  // --- minimize direction: K-streak "improving" must mean DECREASING, not increasing. ---
+  const minMetricMd = formatMetricBlock({
+    primary_metric: "loss", direction: "minimize",
+    min_acceptable: "<= 0.20", target: "<= 0.10",
+    K_corroboration: "2", plateau_window: "3", plateau_threshold: "0.01",
+  });
+  function lrow(expId: string, instrument: string, metric: string, status = "ok"): ScoreRow {
+    return { expId, instrument, metric, status, runtime: "1", approach: "a", metricName: "loss" };
+  }
+  it("counts a strictly-DECREASING at-target streak for a minimize objective", () => {
+    // oboe loss: 0.10, 0.08, 0.06 (all <= target 0.10, strictly improving downward) -> chain 3, capped at K=2.
+    const sb = buildScoreboard([
+      lrow("exp-001", "oboe", "0.10"), lrow("exp-002", "oboe", "0.08"), lrow("exp-003", "oboe", "0.06"),
+    ], "minimize");
+    expect(checkCompletion(sb, minMetricMd).kSoFar).toBe(2);
+  });
+  it("an increasing (worse) result breaks the minimize streak", () => {
+    // 0.06 then 0.08: 0.08 is worse (higher) -> not improving, breaks; each is its own chain of 1.
+    const sb = buildScoreboard([
+      lrow("exp-001", "oboe", "0.06"), lrow("exp-002", "oboe", "0.08"), lrow("exp-003", "oboe", "0.05"),
+    ], "minimize");
+    // chains: [0.06] (0.08 worse breaks) then [0.05] -> longest = 1.
+    expect(checkCompletion(sb, minMetricMd).kSoFar).toBe(1);
+  });
 });
 
 import { checkTimeBudget } from "../src/core/rehearsalComplete.js";

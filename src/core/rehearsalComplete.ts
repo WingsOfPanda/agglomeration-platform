@@ -58,24 +58,29 @@ export function checkCompletion(scoreboardMd: string, metricMd: string): Complet
     if (cmp(r.metric, t.tgtOp, t.tgtVal)) targetMet = true;
   }
 
-  // K_so_far: per-part longest strictly-improving at-target streak.
+  // K_so_far: per-part longest strictly-improving at-target streak. "Improving" is
+  // direction-aware: a lower metric is better for minimize, higher for maximize. The
+  // seed sentinel (no prior value in the chain) is the worst-possible value for the
+  // direction, so the first at-target row always starts a chain.
+  const minimize = t.direction === "minimize";
+  const SEED = minimize ? Infinity : -Infinity;
   const tuples = [...allRows].sort((a, b) =>
     (a.instrument < b.instrument ? -1 : a.instrument > b.instrument ? 1 : 0) ||
     (a.exp < b.exp ? -1 : a.exp > b.exp ? 1 : 0));
-  let kSoFar = 0, chain = 0, best = -Infinity, prevInst = "";
+  let kSoFar = 0, chain = 0, best = SEED, prevInst = "";
   for (const r of tuples) {
     if (r.instrument !== prevInst) {
       if (chain > kSoFar) kSoFar = chain;
-      chain = 0; best = -Infinity; prevInst = r.instrument;
+      chain = 0; best = SEED; prevInst = r.instrument;
     }
     const mv = parseFloat(r.metric);
     const atTarget = cmp(r.metric, t.tgtOp, t.tgtVal);
-    const improving = best === -Infinity || mv > best;
+    const improving = best === SEED || (minimize ? mv < best : mv > best);
     if (r.status === "ok" && NUM.test(r.metric) && atTarget && improving) {
       chain += 1; best = mv;
     } else {
       if (chain > kSoFar) kSoFar = chain;
-      chain = 0; best = -Infinity;
+      chain = 0; best = SEED;
     }
   }
   if (chain > kSoFar) kSoFar = chain;
