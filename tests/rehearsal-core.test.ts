@@ -1276,6 +1276,16 @@ describe("rehearsalBrief", () => {
     expect(l3).toContain("[multi-change]");
     expect(l2).not.toContain("[multi-change]");
   });
+  it("tags top-3 rows with [reimpl-*] from inspections (C1)", () => {
+    const sb =
+      "| Rank | Exp | Instrument | Metric | Status | Runtime | Approach | Metric name |\n" +
+      "|---|---|---|---|---|---|---|---|\n" +
+      "| 1 | exp-003 | oboe | 0.95 | ok | 5 | x | accuracy |\n";
+    expect(buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG, inspections: { "oboe/exp-003": "reproduced" } })).toContain("[reimpl-ok]");
+    expect(buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG, inspections: { "oboe/exp-003": "not-reproduced" } })).toContain("[reimpl-mismatch!]");
+    expect(buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG, inspections: { "oboe/exp-003": "inconclusive" } })).toContain("[reimpl-inconclusive]");
+    expect(buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG })).not.toContain("[reimpl");
+  });
 });
 
 describe("buildStatusBrief verify annotation", () => {
