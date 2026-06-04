@@ -628,6 +628,30 @@ describe("rehearsal score", () => {
     expect(cov).toBeDefined();
     expect(cov!.content).toBe("family\tcount\tbest\tts\nsingle-pass\t2\t0.96\tT\n");
   });
+
+  it("writes lineage.tsv from computeScore's lineageRows (B2)", async () => {
+    const h = home();
+    const art = rehearsalArtDir("topic", { home: h.home });
+    mkdirSync(partsDir(art), { recursive: true });   // scoreWith requires parts/ to exist
+    const writes: { path: string; content: string }[] = [];
+    const comp: ScoreComputation = {
+      scoreboardMd: "", resultsTsv: "", sidecars: [], staleSidecars: [], phaseClears: [],
+      warnings: [], manifests: [], sanityRows: [], coverageRows: [],
+      lineageRows: [{ expId: "exp-003", instrument: "oboe", parentId: "exp-002", knobsChanged: "2", verdict: "improve-multi", ts: "T" }],
+    };
+    const deps: RehearsalScoreDeps = {
+      computeScore: () => comp,
+      fs: { exists: () => false, read: () => null, listDir: () => [] },
+      writeAtomic: (path, content) => { writes.push({ path, content }); },
+      removeFile: () => {},
+      now: () => "T",
+      opts: { home: h.home },
+    };
+    expect(await scoreWith(["topic"], deps)).toBe(0);
+    const lin = writes.find((w) => w.path === join(art, "lineage.tsv"));
+    expect(lin).toBeDefined();
+    expect(lin!.content).toBe("exp_id\tinstrument\tparent_id\tknobs_changed\tverdict\tts\nexp-003\toboe\texp-002\t2\timprove-multi\tT\n");
+  });
 });
 
 // ---- Phase C: monitor — per-part liveness scan loop (C7) ----
