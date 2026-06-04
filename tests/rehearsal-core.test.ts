@@ -1127,3 +1127,21 @@ describe("buildStatusBrief suspect annotation", () => {
     expect(out).toMatch(/\[verified\] \[suspect: ceiling-exceeded\]/);
   });
 });
+
+import { parseMetricMd as parseMetricMdB1, formatMetricBlock as formatMetricBlockB1 } from "../src/core/rehearsalMetric.js";
+
+describe("metric.md min_families (B1)", () => {
+  it("defaults to 2 when absent", () => {
+    expect(parseMetricMdB1("**Primary metric:** accuracy\n").minFamilies).toBe(2);
+  });
+  it("parses an explicit value", () => {
+    expect(parseMetricMdB1("**min_families:** 3\n").minFamilies).toBe(3);
+  });
+  it("clamps values below 1 to 1", () => {
+    expect(parseMetricMdB1("**min_families:** 0\n").minFamilies).toBe(1);
+  });
+  it("is parse-only: formatMetricBlock does NOT emit a min_families line", () => {
+    const md = formatMetricBlockB1({ primary_metric: "accuracy", direction: "maximize" });
+    expect(md).not.toContain("min_families");
+  });
+});
