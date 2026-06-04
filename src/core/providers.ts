@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
+import { splitNonCommentLines } from "./text.js";
 
 /** Parse a providers-*.txt body: one provider per line; skip blank and #-comment lines; trim. */
 export function parseProviderList(text: string): string[] {
-  return text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#"));
+  return splitNonCommentLines(text);
 }
 
 /** Read + parse a provider-list file. Missing or unreadable → []. */
