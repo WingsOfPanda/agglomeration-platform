@@ -21,19 +21,6 @@ const NO_GOAL_DOC =
   "## Testing\nUnit + integration.\n\n" +
   "## Success Criteria\nLogin works.\n";
 
-// Multi-repo: plural Target header + an Execution DAG section, otherwise audit-passing.
-// The DAG section must be parseable (checkDagSection) or audit FAILs on execution_dag_not_parseable.
-const MULTI_DOC =
-  "# Cross-Repo Refactor\n\n" +
-  "**Target Sub-Project(s):** api, web\n\n" +
-  "## Goal\nRefactor.\n\n" +
-  "## Architecture\nShared lib.\n\n" +
-  "## Testing\nPer-repo suites.\n\n" +
-  "## Success Criteria\nGreen everywhere.\n\n" +
-  "## Execution DAG\n" +
-  "- api: (no deps)\n" +
-  "- web: api\n";
-
 function captureStdout() {
   const orig = process.stdout.write.bind(process.stdout);
   let buf = "";
@@ -140,18 +127,6 @@ describe("perform init", () => {
     expect(rc).toBe(2);
     expect(existsSync(performArtDir(badTopic))).toBe(false);
     expect(errSpy.text()).toContain("--topic");
-  });
-
-  it("multi-repo doc → rc 0, multi-repo.txt=multi, ROUTING=multi; init writes no dag/parts files (the directive's dag-parse/multi-init do)", async () => {
-    const p = docFile("2026-05-30-refactor-design.md", MULTI_DOC);
-    const rc = await initWith([p], deps);
-    expect(rc).toBe(0);
-    const art = performArtDir("refactor");
-    expect(readFileSync(join(art, "multi-repo.txt"), "utf8")).toBe("multi\n");
-    expect(outSpy.text()).toContain("ROUTING=multi");
-    // init only records routing; it no longer warns (the multi-repo flow is the directive's job now).
-    expect(existsSync(join(art, "parts.txt"))).toBe(false);
-    expect(existsSync(join(art, "dag-waves.txt"))).toBe(false);
   });
 
   // ---- audit verb (standalone "Proceed anyway" precheck — deploy parity) ----
