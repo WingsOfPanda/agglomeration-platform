@@ -73,3 +73,59 @@ describe("duet init", () => {
     expect(await initWith(["--repo", repo, "dup"], okDeps)).toBe(2);
   });
 });
+
+import { branchWith } from "../src/commands/duet.js";
+import type { Runner } from "../src/core/gitwork.js";
+import { writeFileSync } from "node:fs";
+
+function fakeRunner(map: Record<string, { code?: number; stdout?: string }>): Runner {
+  return { run: (cmd, args) => { const key = [cmd, ...args].join(" "); const r = map[key] ?? matchPrefix(map, key); return { code: r?.code ?? 0, stdout: r?.stdout ?? "" }; } };
+}
+function matchPrefix(map: Record<string, { code?: number; stdout?: string }>, key: string) {
+  for (const k of Object.keys(map)) if (key.startsWith(k)) return map[k]; return undefined;
+}
+
+describe("duet branch", () => {
+  let h: { home: string; cleanup: () => void };
+  beforeEach(() => { h = freshHome(); });
+  afterEach(() => h.cleanup());
+
+  function seedInit(slug: string, repo: string) {
+    const exec = duetExecDir(slug); mkdirSync(exec, { recursive: true });
+    writeFileSync(join(exec, "target_cwd.txt"), repo + "\n");
+    writeFileSync(join(exec, "mode.txt"), "branch\n");
+  }
+
+  it("cuts feat/duet-<slug> and records start-branch/base; rc 0", async () => {
+    seedInit("t", "/abs/repoB");
+    const r = fakeRunner({
+      "git rev-parse --git-dir": { code: 0 },
+      "git symbolic-ref --short HEAD": { stdout: "main\n" },
+      "git rev-parse HEAD": { stdout: "deadbeef\n" },
+      "git status --porcelain": { stdout: "" },
+      "git show-ref": { code: 1 },              // branch doesn't exist yet
+      "git checkout -q -b feat/duet-t": { code: 0 },
+    });
+    const rc = await branchWith("t", "/abs/repoB", r);
+    expect(rc).toBe(0);
+    expect(readFileSync(join(duetExecDir("t"), "branch.txt"), "utf8").trim()).toBe("feat/duet-t");
+    expect(readFileSync(join(duetExecDir("t"), "start-branch.txt"), "utf8").trim()).toBe("main");
+  });
+
+  it("refuses when repo B is already on another feat/duet-* branch (single-occupancy); rc 1", async () => {
+    seedInit("t", "/abs/repoB");
+    const r = fakeRunner({
+      "git rev-parse --git-dir": { code: 0 },
+      "git symbolic-ref --short HEAD": { stdout: "feat/duet-other\n" },
+      "git rev-parse HEAD": { stdout: "deadbeef\n" },
+      "git status --porcelain": { stdout: "" },
+    });
+    expect(await branchWith("t", "/abs/repoB", r)).toBe(1);
+  });
+
+  it("rc 1 when target is not a git repo", async () => {
+    seedInit("t", "/abs/repoB");
+    const r = fakeRunner({ "git rev-parse --git-dir": { code: 1 } });
+    expect(await branchWith("t", "/abs/repoB", r)).toBe(1);
+  });
+});
