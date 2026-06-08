@@ -191,3 +191,50 @@ describe("duet round-send / round-wait", () => {
     expect(existsSync(join(duetExecDir("t"), "question-1.txt"))).toBe(true);
   });
 });
+
+import { finishWith } from "../src/commands/duet.js";
+
+describe("duet finish", () => {
+  let h: { home: string; cleanup: () => void };
+  beforeEach(() => { h = freshHome(); });
+  afterEach(() => h.cleanup());
+
+  it("fails closed (rc 1) when target_cwd.txt is absent — never pushes the conductor repo", async () => {
+    const { run: finishRun } = await import("../src/commands/duet.js");
+    duetExecDir("t"); mkdirSync(duetExecDir("t"), { recursive: true }); // exec dir but NO target_cwd.txt
+    expect(await finishRun(["finish", "t"])).toBe(1);
+  });
+
+  it("branch mode: writes diff-stats + finish-result, builds a duet: PR title", async () => {
+    const exec = duetExecDir("t"); mkdirSync(exec, { recursive: true });
+    writeFileSync(join(exec, "mode.txt"), "branch\n");
+    writeFileSync(join(exec, "branch.txt"), "feat/duet-t\n");
+    writeFileSync(join(exec, "start-branch.txt"), "main\n");
+    writeFileSync(join(exec, "branch-base.sha"), "base1\n");
+    writeFileSync(join(exec, "verify-result.txt"), "PASS\n");
+    writeFileSync(join(duetArtDir("t"), "topic-text.txt"), "the task");
+    let prTitle = "";
+    const r: Runner = { run: (cmd, args) => {
+      const key = [cmd, ...args].join(" ");
+      if (key.startsWith("git diff --shortstat")) return { code: 0, stdout: " 1 file changed\n" };
+      if (key === "git remote") return { code: 0, stdout: "origin\n" };
+      if (key.startsWith("git push")) return { code: 0, stdout: "" };
+      if (key.startsWith("git remote get-url")) return { code: 0, stdout: "git@x:y.git\n" };
+      if (cmd === "gh") { prTitle = args[args.indexOf("--title") + 1]; return { code: 0, stdout: "" }; }
+      return { code: 0, stdout: "" };
+    } };
+    const rc = await finishWith("t", r, true);
+    expect(rc).toBe(0);
+    expect(prTitle).toBe("duet: feat/duet-t");
+    expect(readFileSync(join(exec, "diff-stats.txt"), "utf8")).toContain("1 file changed");
+    expect(readFileSync(join(exec, "finish-result.txt"), "utf8")).toContain("pr");
+  });
+
+  it("in-place mode: no branch ops, records in-place finish-result", async () => {
+    const exec = duetExecDir("t"); mkdirSync(exec, { recursive: true });
+    writeFileSync(join(exec, "mode.txt"), "in-place\n");
+    const r: Runner = { run: () => ({ code: 0, stdout: "" }) };
+    expect(await finishWith("t", r, true)).toBe(0);
+    expect(readFileSync(join(exec, "finish-result.txt"), "utf8")).toContain("in-place");
+  });
+});

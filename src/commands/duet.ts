@@ -8,11 +8,14 @@ import { isoUtc } from "../core/archive.js";
 import { instrumentBinary } from "../core/contracts.js";
 import { haveCmd } from "../core/deps.js";
 import { pickRandomInstrument } from "../core/instruments.js";
-import { runnerAt, preSnapshot, createOrResumeBranch } from "../core/gitwork.js";
+import { runnerAt, preSnapshot, createOrResumeBranch, finishBranch } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
 import { readIfExists } from "../core/fsread.js";
 import { runForensics, runFlag } from "../core/forensics.js";
-import { parseDuetArgs, deriveSlug, duetArtDir, duetExecDir } from "../core/duet.js";
+import { detectTestCommand } from "../core/solo.js";
+import { repoRoot } from "../core/paths.js";
+import { parseDuetArgs, deriveSlug, duetArtDir, duetExecDir, renderDuetSummary, renderDuetResume } from "../core/duet.js";
+import type { DuetSummaryFacts } from "../core/duet.js";
 import { composeDuetBrief, composeDuetFollowup } from "../core/duetTurn.js";
 import { classifyTurn } from "../core/turn.js";
 import { parseLatestOffset } from "../core/scoreTurn.js";
@@ -33,6 +36,10 @@ export async function run(args: string[]): Promise<number> {
     case "branch": return branchRun(rest);
     case "round-send": return roundSendRun(rest);
     case "round-wait": return roundWaitRun(rest);
+    case "relay": return relayRun(rest);
+    case "detect-test": return detectTestRun(rest);
+    case "finish": return finishRun(rest);
+    case "summary": return summaryRun(rest);
     case "forensics": return runForensics("duet", duetArtDir, rest[0]);
     case "flag": return runFlag("duet", rest[0], rest.slice(1).join(" "));
     default: return usage();
@@ -212,5 +219,119 @@ export async function roundWaitWith(topic: string, round: number, d: TurnWaitDep
     appendFileSync(stateFile, `TS=${ts}\n`);
   }
   log.ok(`duet round-wait: round=${round} TS=${ts}`);
+  return 0;
+}
+
+// Local mirror of solo.ts's private kvField (reads a key=value line from a state file).
+function kvField(path: string, key: string): string {
+  if (!existsSync(path)) return "";
+  const k = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = readFileSync(path, "utf8").match(new RegExp(`^${k}=(.*)$`, "m"));
+  return m ? m[1].trim() : "";
+}
+
+async function relayRun(rest: string[]): Promise<number> {
+  const [topic, roundStr, ...answerParts] = rest;
+  const round = Number(roundStr);
+  if (!topic || !Number.isInteger(round) || round < 1 || answerParts.length === 0) {
+    log.error("usage: duet relay <topic> <round> <answer|@file>"); return 2;
+  }
+  const art = duetArtDir(topic);
+  const instrument = readField(join(art, "instrument.txt"));
+  const provider = readField(join(art, "selected-provider.txt"));
+  if (!instrument || !provider) { log.error("duet relay: missing instrument/provider (run duet init)"); return 1; }
+  const answer = answerParts.join(" ");
+  // NOTE: round-wait already bumped OFFSET past the question; relay only sends + records.
+  const rc = await sendRun(["--from", "maestro", instrument, topic, answer]);
+  if (rc !== 0) { log.error(`duet relay: send failed (rc=${rc})`); return 1; }
+  appendFileSync(join(duetExecDir(topic), `question-${round}.txt`), `RELAYED=${answer}\n`);
+  log.ok(`duet relay: round=${round} answered`);
+  return 0;
+}
+
+async function detectTestRun(rest: string[]): Promise<number> {
+  const cwd = rest[0] || repoRoot();
+  process.stdout.write(detectTestCommand(cwd) + "\n");
+  return 0;
+}
+
+async function finishRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: duet finish <topic>"); return 2; }
+  const target = readField(join(duetExecDir(topic), "target_cwd.txt"));
+  if (!target) { log.error("duet finish: target_cwd.txt missing/empty — refusing (will NOT fall back to the conductor repo)"); return 1; }
+  return finishWith(topic, runnerAt(target), haveCmd("gh"));
+}
+
+export async function finishWith(topic: string, r: Runner, hasGh: boolean): Promise<number> {
+  const exec = duetExecDir(topic);
+  const mode = readField(join(exec, "mode.txt")) || "branch";
+  if (mode === "in-place") {
+    atomicWrite(join(exec, "finish-result.txt"), "none\tin-place (commits on the current branch)\n");
+    log.ok("duet finish: in-place — commits left on the current branch");
+    return 0;
+  }
+  const branch = readField(join(exec, "branch.txt"));
+  const startBranch = readField(join(exec, "start-branch.txt")) || "main";
+  const base = readField(join(exec, "branch-base.sha"));
+  if (base) {
+    const ds = r.run("git", ["diff", "--shortstat", `${base}..HEAD`]).stdout.trim();
+    atomicWrite(join(exec, "diff-stats.txt"), (ds || "(no changes)") + "\n");
+  }
+  const task = readIfExists(join(duetArtDir(topic), "topic-text.txt"));
+  const verify = readField(join(exec, "verify-result.txt"));
+  const res = finishBranch(r, {
+    branch, startBranch, hasGh,
+    title: `duet: ${branch}`,
+    body: `${task}\n\nVerify: ${verify}\n\n(Automated duet branch — review and merge into ${startBranch}.)`,
+  });
+  atomicWrite(join(exec, "finish-result.txt"), `${res.action}\t${res.outcome}\n`);
+  log.ok(`duet finish: ${res.action} → ${res.outcome}`);
+  return 0;
+}
+
+async function summaryRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: duet summary <topic> [--aborted <phase> <gate> <reason...>]"); return 2; }
+  const art = duetArtDir(topic);
+  const exec = duetExecDir(topic);
+  const started = kvField(join(art, "timing.txt"), "started") || "unknown";
+  let ended: string | undefined, duration: number | undefined;
+  const i = rest.indexOf("--aborted");
+  const aborted = i >= 0;
+  if (!aborted) {
+    ended = isoUtc();
+    const s = Date.parse(started), e = Date.parse(ended);
+    duration = Number.isFinite(s) && Number.isFinite(e) ? Math.round((e - s) / 1000) : 0;
+    atomicWrite(join(art, "timing.txt"), `started=${started}\nended=${ended}\nduration=${duration}\n`);
+  }
+  // count rounds = highest round-<n>.txt present
+  let rounds = 0; for (let n = 1; n < 1000; n++) { if (existsSync(join(exec, `round-${n}.txt`))) rounds = n; else if (n > rounds + 2) break; }
+
+  const facts: DuetSummaryFacts = {
+    topic, status: aborted ? "aborted" : "ok", started, ended, duration,
+    provider: readField(join(art, "selected-provider.txt")) || "unknown",
+    instrument: readField(join(art, "instrument.txt")) || "unknown",
+    repo: readField(join(exec, "target_cwd.txt")) || "<repo>",
+    mode: readField(join(exec, "mode.txt")) || "branch",
+    branch: readField(join(exec, "branch.txt")) || "(none)",
+    rounds,
+    verify: readField(join(exec, "verify-result.txt")) || "unknown",
+    diffStats: readField(join(exec, "diff-stats.txt")) || "unknown",
+    archived: readField(join(art, "archived-path.txt")) || "(not archived)",
+    finishResult: readField(join(exec, "finish-result.txt")) || "(not finished)",
+    abortedPhase: aborted ? rest[i + 1] : undefined,
+    abortedGate: aborted ? rest[i + 2] : undefined,
+    abortedReason: aborted ? rest.slice(i + 3).join(" ") || "unknown" : undefined,
+  };
+  atomicWrite(join(art, "SUMMARY.md"), renderDuetSummary(facts));
+  if (aborted) {
+    atomicWrite(join(art, "RESUME.md"), renderDuetResume({
+      topic, repo: facts.repo, branch: facts.branch, mode: facts.mode, lastRound: rounds,
+      task: readIfExists(join(art, "topic-text.txt")),
+      phase: facts.abortedPhase ?? "unknown", gate: facts.abortedGate ?? "unknown",
+    }));
+  }
+  log.ok(`duet summary: wrote ${join(art, "SUMMARY.md")}`);
   return 0;
 }
