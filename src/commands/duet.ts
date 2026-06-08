@@ -8,7 +8,9 @@ import { isoUtc } from "../core/archive.js";
 import { instrumentBinary } from "../core/contracts.js";
 import { haveCmd } from "../core/deps.js";
 import { pickRandomInstrument } from "../core/instruments.js";
-import { runnerAt } from "../core/gitwork.js";
+import { runnerAt, preSnapshot, createOrResumeBranch } from "../core/gitwork.js";
+import type { Runner } from "../core/gitwork.js";
+import { readIfExists } from "../core/fsread.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { parseDuetArgs, deriveSlug, duetArtDir, duetExecDir } from "../core/duet.js";
 
@@ -22,6 +24,7 @@ export async function run(args: string[]): Promise<number> {
   const rest = args.slice(1);
   switch (verb) {
     case "init": return initRun(applyArgsFile(rest, { valueFlags: new Set(["--provider", "--repo"]) }));
+    case "branch": return branchRun(rest);
     case "forensics": return runForensics("duet", duetArtDir, rest[0]);
     case "flag": return runFlag("duet", rest[0], rest.slice(1).join(" "));
     default: return usage();
@@ -80,5 +83,36 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
 
   log.ok(`duet init: topic=${slug} instrument=${instrument} provider=${provider} mode=${mode} repo=${repo}`);
   process.stdout.write(`SLUG=${slug}\nINSTRUMENT=${instrument}\nPROVIDER=${provider}\nMODE=${mode}\nTARGET=${repo}\n`);
+  return 0;
+}
+
+function readField(path: string): string {
+  return readIfExists(path).split("\n")[0].trim();
+}
+
+async function branchRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: duet branch <topic>"); return 2; }
+  const target = readField(join(duetExecDir(topic), "target_cwd.txt"));
+  if (!target) { log.error("duet branch: target_cwd.txt missing — run duet init first"); return 1; }
+  return branchWith(topic, target, runnerAt(target));
+}
+
+export async function branchWith(topic: string, target: string, r: Runner): Promise<number> {
+  const snap = preSnapshot(r, "duet", topic);
+  if (snap.state === "not-git") { log.error(`duet branch: ${target} is not a git repository`); return 1; }
+  const branch = `feat/duet-${topic}`;
+  // Single-occupancy: refuse if repo B is already on a DIFFERENT duet branch from another live session.
+  if (snap.branch.startsWith("feat/duet-") && snap.branch !== branch) {
+    log.error(`duet branch: ${target} is already on ${snap.branch} (another duet session?) — refusing`);
+    return 1;
+  }
+  const onBranch = createOrResumeBranch(r, branch);
+  const exec = duetExecDir(topic);
+  atomicWrite(join(exec, "start-branch.txt"), snap.branch + "\n");
+  atomicWrite(join(exec, "branch-base.sha"), snap.baseSha + "\n");
+  atomicWrite(join(exec, "branch.txt"), branch + "\n");
+  if (!onBranch) { log.warn(`duet branch: checkout ${branch} failed; staying on ${snap.branch}`); }
+  log.ok(`duet branch: ${branch} (snapshot=${snap.state}, base=${snap.baseSha.slice(0, 8)})`);
   return 0;
 }
