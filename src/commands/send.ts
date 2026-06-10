@@ -1,7 +1,6 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { log } from "../core/log.js";
-import { topicDir } from "../core/paths.js";
-import { paneMetaModel, paneMetaRead, inboxWrite, inboxPath } from "../core/ipc.js";
+import { resolveModel, paneMetaRead, inboxWrite, inboxPath } from "../core/ipc.js";
 import { paneAlive, paneSend } from "../core/tmux.js";
 
 export async function run(args: string[]): Promise<number> {
@@ -12,10 +11,8 @@ export async function run(args: string[]): Promise<number> {
   const [instrument, topic] = a;
   let msg = a.slice(2).join(" ");
 
-  const td = topicDir(topic);
-  const dir = existsSync(td) ? readdirSync(td, { withFileTypes: true }).find((e) => e.isDirectory() && e.name.startsWith(`${instrument}-`)) : undefined;
-  if (!dir) { log.error(`no part '${instrument}' on topic '${topic}' (state dir absent)`); log.error(`  spawn first: consort spawn ${instrument} <model> ${topic}`); return 1; }
-  const model = paneMetaModel(instrument, dir.name.slice(instrument.length + 1), topic);
+  const model = resolveModel(instrument, topic);
+  if (!model) { log.error(`no part '${instrument}' on topic '${topic}' (state dir absent)`); log.error(`  spawn first: consort spawn ${instrument} <model> ${topic}`); return 1; }
   const pane = paneMetaRead(instrument, model, topic);
   if (!pane) { log.error(`pane.json missing for ${instrument}-${model} on ${topic}`); return 1; }
   if (!(await paneAlive(pane))) { log.error(`${instrument}'s pane ${pane} is gone (orphan); run consort coda ${instrument} ${topic}`); return 1; }

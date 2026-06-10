@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { partDir, topicDir, pluginRoot } from "./paths.js";
 import { atomicWrite } from "./atomic.js";
 import { isoUtc } from "./archive.js";
+import { readIfExists } from "./fsread.js";
 
 export function inboxPath(i: string, m: string, t: string) { return join(partDir(i, m, t), "inbox.md"); }
 export function outboxPath(i: string, m: string, t: string) { return join(partDir(i, m, t), "outbox.jsonl"); }
@@ -112,8 +113,7 @@ export async function outboxWait(i: string, m: string, t: string, events: string
 }
 
 export function outboxDump(i: string, m: string, t: string): string {
-  const p = outboxPath(i, m, t);
-  return existsSync(p) ? readFileSync(p, "utf8") : "";
+  return readIfExists(outboxPath(i, m, t));
 }
 
 export function paneMetaWrite(i: string, m: string, t: string, paneId: string, opts?: { now?: Date }): void {

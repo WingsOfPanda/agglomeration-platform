@@ -7,7 +7,7 @@ import { join, relative, resolve } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile, kvParse } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
-import { readIfExistsOrNull } from "../core/fsread.js";
+import { readIfExists, readIfExistsOrNull } from "../core/fsread.js";
 import { splitNonCommentLines } from "../core/text.js";
 import { archiveTopic, isoUtc } from "../core/archive.js";
 import { deriveSlug } from "../core/solo.js";
@@ -609,7 +609,7 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   const hardwareBlock = assembleHardwareBlock(probe, hardwareDiffAlert(baseline, probe));
 
   const topicTextPath = join(art, "topic.txt");
-  const topicText = existsSync(topicTextPath) ? readFileSync(topicTextPath, "utf8") : "";
+  const topicText = readIfExists(topicTextPath);
   const sotaPath = join(art, "sota.md");
   const sotaBlock = buildSotaBlock(readIfExistsOrNull(sotaPath));
   const peersBlock = formatPeersBlock(gatherPeers(art, instrument));
@@ -1423,7 +1423,7 @@ export async function handoffExtractWith(args: string[], deps: RehearsalHandoffD
   const topic = readFileSync(topicTxt, "utf8").replace(/\n/g, " ").replace(/\s+$/, "");
 
   const sbPath = join(art, "scoreboard.md");
-  const { winner, runnerUps } = parseScoreboard(existsSync(sbPath) ? readFileSync(sbPath, "utf8") : "");
+  const { winner, runnerUps } = parseScoreboard(readIfExists(sbPath));
 
   // Landscape doc: first rehearsal-*.md under art -> its basename (omit if none).
   let landscapeDoc: string | undefined;
