@@ -5,6 +5,7 @@ import { log } from "../core/log.js";
 import { inTmuxSession, tmuxVersionOk, haveCmd } from "../core/deps.js";
 import { topicDir, partDir, repoRoot } from "../core/paths.js";
 import { stateInit, stateArchive, isoUtc } from "../core/archive.js";
+import { readIfExists } from "../core/fsread.js";
 import { identityWrite, identityPath, inboxWrite, inboxPath, paneMetaWrite, outboxWait, outboxDump } from "../core/ipc.js";
 import { paneListedFor } from "../core/score.js";
 import { pickRandomInstrument, instrumentInUse, formatCollisionError } from "../core/instruments.js";
@@ -82,7 +83,7 @@ export async function run(args: string[]): Promise<number> {
       await paneLabelSet(pane, instrument, model, topic);
     } else {
       const lastFile = join(topicDir(topic), ".last_pane");
-      const prior = existsSync(lastFile) ? readFileSync(lastFile, "utf8").trim() : "";
+      const prior = readIfExists(lastFile).trim();
       if (prior && await paneAlive(prior)) pane = await splitDown(launch, prior, startDir);
       else pane = await splitRight(launch, undefined, startDir);
       await paneLabelSet(pane, instrument, model, topic);
