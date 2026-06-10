@@ -1,8 +1,9 @@
-import { existsSync, readFileSync, readdirSync, rmSync, rmdirSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, rmdirSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
 import { topicDir, repoStateDir, isArtifactDir, pluginRoot } from "../core/paths.js";
 import { stateArchive } from "../core/archive.js";
+import { readIfExists } from "../core/fsread.js";
 import { paneMetaRead, paneMetaReadForDir } from "../core/ipc.js";
 import { paneAlive, killGraceful, killNow } from "../core/tmux.js";
 
@@ -53,7 +54,7 @@ function liveDeps(): CodaDeps {
     killNow: (p) => killNow(p),
     stateArchive: (i, m, t) => stateArchive(i, m, t),
     sleep,
-    readLastPane: (t) => { const f = join(topicDir(t), ".last_pane"); return existsSync(f) ? readFileSync(f, "utf8").trim() : ""; },
+    readLastPane: (t) => { const f = join(topicDir(t), ".last_pane"); return readIfExists(f).trim(); },
     removeLastPane: (t) => { try { rmSync(join(topicDir(t), ".last_pane"), { force: true }); } catch { /* */ } },
   };
 }

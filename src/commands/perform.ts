@@ -20,6 +20,7 @@ import { haveCmd } from "../core/deps.js";
 import { performState, composeRound1Prompt, composeFixPrompt } from "../core/performTurn.js";
 import { extractQuestionPayload, parseQuestionPayload } from "../core/performQuestions.js";
 import { outboxOffset, outboxPath, outboxWaitSince, statusPath, resolveModel, type OutboxEvent } from "../core/ipc.js";
+import { readIfExists, readIfExistsOrNull } from "../core/fsread.js";
 import { instrumentTimeoutMultiplier } from "../core/contracts.js";
 import { scaledTimeout, parseLatestOffset } from "../core/scoreTurn.js";
 import { run as sendRun } from "./send.js";
@@ -30,8 +31,7 @@ const PERFORM_TURN_TIMEOUT = (): number => Number(process.env.CONSORT_PERFORM_TU
 
 /** model for the tutti part = the resolved provider (codex|claude). Reads provider.txt; default codex. */
 function partModel(art: string): string {
-  const p = join(art, "provider.txt");
-  return existsSync(p) ? (readFileSync(p, "utf8").trim() || "codex") : "codex";
+  return readIfExists(join(art, "provider.txt")).trim() || "codex";
 }
 /** The LAST `OBJECTIONS=<n>` count persisted in a per-dispatch state file (0 if absent). The
  *  objection cap reads + increments this on every re-arm so the count survives the background-task
@@ -159,7 +159,7 @@ export async function turnSendWith(topic: string, round: number, d: PerformSendD
   const art = performArtDir(topic);
   if (!existsSync(art)) { log.error(`perform turn-send: ${art} not found — run perform init first`); return 1; }
   const model = partModel(art);
-  const targetCwd = existsSync(join(art, "target_cwd.txt")) ? readFileSync(join(art, "target_cwd.txt"), "utf8").trim() : "";
+  const targetCwd = readIfExists(join(art, "target_cwd.txt")).trim();
   const testCmd = targetCwd ? detectTestCommand(targetCwd) : "";
   const stateFile = join(art, `turn-${PART}-${round}.txt`);
   if (existsSync(stateFile)) { log.error(`perform turn-send: ${stateFile} already exists; rm to retry`); return 1; }
@@ -197,7 +197,7 @@ export async function turnWaitWith(topic: string, round: number, d: PerformWaitD
   log.info(`[turn-wait] ${PART} round=${round} offset=${offset} timeout=${timeout}s`);
   const ev = await d.wait(PART, model, topic, offset, ["done", "error", "question"], timeout);
   const verifyPath = join(art, `verify-report-${round}.md`);
-  const verifyText = existsSync(verifyPath) ? readFileSync(verifyPath, "utf8") : null;
+  const verifyText = readIfExistsOrNull(verifyPath);
   let ts = performState(ev, verifyText);
   if (ts === "question" && ev) {
     const payload = extractQuestionPayload(ev, d.now());
