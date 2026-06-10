@@ -260,7 +260,7 @@ export async function researchWaitWith(topic: string, instrument: string, provid
   const ev = await d.wait(instrument, provider, topic, offset, ["done", "error", "question"], timeout);
 
   const findingsPath = join(partDir(instrument, provider, topic), "findings.md");
-  const findingsText = existsSync(findingsPath) ? readFileSync(findingsPath, "utf8") : null;
+  const findingsText = readIfExistsOrNull(findingsPath);
   const fs = researchState(ev, findingsText);
 
   if (fs === "question" && ev) {
@@ -375,7 +375,7 @@ export async function verifyWaitWith(topic: string, instrument: string, provider
   const ev = await d.wait(instrument, provider, topic, offset, ["done", "error", "question"], timeout);
 
   const verifyPath = join(partDir(instrument, provider, topic), "verify.md");
-  const verifyText = existsSync(verifyPath) ? readFileSync(verifyPath, "utf8") : null;
+  const verifyText = readIfExistsOrNull(verifyPath);
   const vs = verifyState(ev, verifyText);
 
   if (vs === "question" && ev) {

@@ -221,7 +221,7 @@ export async function researchWaitWith(topic: string, instrument: string, provid
   const ev = await d.wait(instrument, provider, topic, offset, ["done", "error", "question"], timeout);
 
   const findingsPath = join(art, `findings-${instrument}.md`);
-  const findingsText = existsSync(findingsPath) ? readFileSync(findingsPath, "utf8") : null;
+  const findingsText = readIfExistsOrNull(findingsPath);
   const fs = researchState(ev, findingsText);
   if (fs === "question" && ev) {
     atomicWrite(join(art, `question-${instrument}.txt`), JSON.stringify(ev) + "\n");
@@ -336,7 +336,7 @@ export async function adversaryWaitWith(topic: string, instrument: string, provi
   const ev = await d.wait(instrument, provider, topic, offset, ["done", "error", "question"], timeout);
 
   const outPath = join(art, `adversary-${instrument}.md`);
-  const text = existsSync(outPath) ? readFileSync(outPath, "utf8") : null;
+  const text = readIfExistsOrNull(outPath);
   const as = verifyState(ev, text); // done -> ok iff non-empty; mirrors the adversary wait's -s check
   if (as === "question" && ev) {
     atomicWrite(join(art, `question-${instrument}.txt`), JSON.stringify(ev) + "\n");
