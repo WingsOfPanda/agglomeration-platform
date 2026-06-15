@@ -1,4 +1,4 @@
-// Per-family coverage tally for /consort:rehearsal (B1 coverage & diversity guard).
+// Per-family coverage tally for /ap:rehearsal (B1 coverage & diversity guard).
 // Pure: no FS, no clock. normalizeFamily is the SINGLE family-canonicalization rule,
 // shared with checkCompletion's approach-aware plateau so the tally and the plateau
 // bucket experiments identically.

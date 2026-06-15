@@ -1,4 +1,4 @@
-// /consort:rehearsal CLI verbs (Phase B front half). Ports deep-research-init.sh
+// /ap:rehearsal CLI verbs (Phase B front half). Ports deep-research-init.sh
 // (slug/codex-gate/flags/scaffolding) + the deep-research.md Phase 0-3 surface.
 // Phase C: experiment-send (dispatch ONE experiment to a persistent codex part).
 import { accessSync, appendFileSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
@@ -115,7 +115,7 @@ export async function initWith(args: string[], deps: RehearsalInitDeps): Promise
 
   const binary = deps.instrumentBinary("codex");
   if (!binary) { log.error("rehearsal init: codex has no entry in contracts.yaml"); return 3; }
-  if (!deps.haveCmd(binary)) { log.error("rehearsal init: codex binary not on PATH; install codex and run /consort:soundcheck"); return 3; }
+  if (!deps.haveCmd(binary)) { log.error("rehearsal init: codex binary not on PATH; install codex and run /ap:soundcheck"); return 3; }
 
   let slug: string;
   if (p.slug !== undefined) {
@@ -652,7 +652,7 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
 /** Per-experiment wall-clock default: env override > contracts.yaml/1800. (The --timeout flag wins at
  *  the call site via `p.timeout ?? deps.consultTimeout()`, so the full chain is flag > env > default.) */
 export function experimentTimeoutDefault(): number {
-  const env = process.env.CONSORT_REHEARSAL_EXPERIMENT_TIMEOUT_OVERRIDE;
+  const env = process.env.AP_REHEARSAL_EXPERIMENT_TIMEOUT_OVERRIDE;
   return env && /^[1-9][0-9]*$/.test(env) ? Number(env) : consultTimeout("experiment");
 }
 
@@ -665,7 +665,7 @@ const liveExperimentSendDeps: ExperimentSendDeps = {
     try { execFileSync(script, [], { cwd, timeout: timeoutSec * 1000, encoding: "utf8" }); return { ok: true, stderr: "" }; }
     catch (e) { const err = e as { stderr?: string; message?: string }; return { ok: false, stderr: err.stderr ?? err.message ?? "" }; }
   },
-  dryRun: process.env.CONSORT_DRY_RUN === "1",
+  dryRun: process.env.AP_DRY_RUN === "1",
 };
 
 /** Best-effort GPU probe via nvidia-smi; "no-gpu" on any error. */
@@ -767,9 +767,9 @@ export async function monitorRun(args: string[], opts?: { home?: string; cwd?: s
   const stateTxt = join(stateDir, "state.txt");
 
   const thresholds = {
-    probeS: Number(process.env.CONSORT_PROBE_S ?? 900),
-    stuckS: Number(process.env.CONSORT_STUCK_S ?? 1800),
-    rescanEveryS: Number(process.env.CONSORT_RESCAN_EVERY_S ?? 30),
+    probeS: Number(process.env.AP_PROBE_S ?? 900),
+    stuckS: Number(process.env.AP_STUCK_S ?? 1800),
+    rescanEveryS: Number(process.env.AP_RESCAN_EVERY_S ?? 30),
   };
 
   const persist = (state: MonitorScanState): void => {
@@ -978,7 +978,7 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
 // ---- Phase D: finalize — Phase 4->5 wind-down. Idempotent FS orchestration. ----
 // Ports deep-research-finalize.sh: per-part reconcile + phase normalization,
 // result.json normalization, intermediate-checkpoint prune, pane-artifact link,
-// size + audit warnings, and a wholesale session-summary.md re-render. consort
+// size + audit warnings, and a wholesale session-summary.md re-render. ap
 // adaptations: NO active-marker lifecycle (omit the rm -f active-<sid>.txt step;
 // hook.ts is a no-op), and session-summary.md is the FULL renderSessionSummary.
 
@@ -1193,7 +1193,7 @@ export async function finalizeWith(args: string[], deps: RehearsalFinalizeDeps):
     if (np) atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: np }));
   }
 
-  // 3. (OMIT active-marker removal — consort has no active-marker lifecycle.)
+  // 3. (OMIT active-marker removal — ap has no active-marker lifecycle.)
 
   // 4. normalize_result: enforce status/metric_value joint validity per exp.
   normalizeResults(art, instruments);
@@ -1324,8 +1324,8 @@ export async function finalizeWith(args: string[], deps: RehearsalFinalizeDeps):
 
 const liveFinalizeDeps: RehearsalFinalizeDeps = {
   now: () => isoUtc(),
-  keepIntermediate: process.env.CONSORT_REHEARSAL_KEEP_INTERMEDIATE ? true : undefined,
-  sizeWarnGb: Number(process.env.CONSORT_REHEARSAL_SIZE_WARN_GB) || 2,
+  keepIntermediate: process.env.AP_REHEARSAL_KEEP_INTERMEDIATE ? true : undefined,
+  sizeWarnGb: Number(process.env.AP_REHEARSAL_SIZE_WARN_GB) || 2,
 };
 
 // ---- Phase D: refine — STATELESS mid-experiment scope-narrowing. ----
@@ -1387,7 +1387,7 @@ export async function refineWith(args: string[], deps: RehearsalRefineDeps): Pro
 
 const liveRefineDeps: RehearsalRefineDeps = {
   send: (a) => sendRun(a),
-  dryRun: process.env.CONSORT_DRY_RUN === "1",
+  dryRun: process.env.AP_DRY_RUN === "1",
 };
 
 // ---- Phase D: handoff-extract — write handoff-data.kv from the archived art dir. ----
@@ -1468,7 +1468,7 @@ export async function handoffExtractWith(args: string[], deps: RehearsalHandoffD
 const liveHandoffDeps: RehearsalHandoffDeps = { now: () => isoUtc() };
 
 // ---- Phase D: teardown — the rehearsal-state ARCHIVE step. ----
-// Ports deep-research-teardown.sh, consort-idiomatic: do the rehearsal-specific
+// Ports deep-research-teardown.sh, ap-idiomatic: do the rehearsal-specific
 // pre-steps (best-effort preflight orphan kill + shared/ sweep + winner symlink),
 // then call the shipped archiveTopic (status-stamp + mv _rehearsal -> archive +
 // rmdir-if-empty). The PANE teardown is the separate top-level `coda --pairs`

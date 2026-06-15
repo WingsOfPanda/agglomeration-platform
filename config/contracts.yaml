@@ -1,10 +1,10 @@
-# config/contracts.yaml — shipped defaults; copied to $CONSORT_HOME on first soundcheck run.
+# config/contracts.yaml — shipped defaults; copied to $AP_HOME on first soundcheck run.
 # Each provider row has:
 #   binary:           CLI executable name (must be on PATH)
 #   modes:            map of mode-name -> args list passed to the CLI
 #                     two modes are reserved: 'full' (yolo/bypass) and 'read-only'
-#   default_mode:     mode used by consort spawn when --mode is omitted
-#   ready_timeout_s:  how long consort spawn waits for the part's "ready"
+#   default_mode:     mode used by ap spawn when --mode is omitted
+#   ready_timeout_s:  how long ap spawn waits for the part's "ready"
 #                     event in outbox.jsonl before giving up
 #
 # Modes that have no native equivalent on a given provider are shipped as best-effort
@@ -75,7 +75,7 @@ opencode:
   bootstrap_sleep_s: 15
   # v0.35.0: DeepSeek V4 Pro is wall-clock slower than codex/claude; multiply
   # per-kind consult timeouts by this factor before the liveness probe kicks in.
-  # Closes the false-FS=timeout symptom hit during consort score when
+  # Closes the false-FS=timeout symptom hit during ap score when
   # a part recorded timeout while findings.md was 18 KB and the pane was
   # visibly working. See the part-liveness design notes for the full design.
   timeout_multiplier: 2.5

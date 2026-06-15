@@ -11,7 +11,7 @@ import { topicDir } from "../src/core/paths.js";
 
 function freshHome(): string { return mkdtempSync(join(tmpdir(), "perf-home-")); }
 
-afterEach(() => { delete process.env.CONSORT_PERFORM_ART_DIR_OVERRIDE; });
+afterEach(() => { delete process.env.AP_PERFORM_ART_DIR_OVERRIDE; });
 
 describe("performArtDir / performTopicDir", () => {
   it("art dir is <topicDir>/_perform", () => {
@@ -22,8 +22,8 @@ describe("performArtDir / performTopicDir", () => {
     const home = freshHome();
     expect(performTopicDir("foo", { home })).toBe(topicDir("foo", { home }));
   });
-  it("CONSORT_PERFORM_ART_DIR_OVERRIDE short-circuits", () => {
-    process.env.CONSORT_PERFORM_ART_DIR_OVERRIDE = "/tmp/override-art";
+  it("AP_PERFORM_ART_DIR_OVERRIDE short-circuits", () => {
+    process.env.AP_PERFORM_ART_DIR_OVERRIDE = "/tmp/override-art";
     expect(performArtDir("foo", { home: freshHome() })).toBe("/tmp/override-art");
   });
 });

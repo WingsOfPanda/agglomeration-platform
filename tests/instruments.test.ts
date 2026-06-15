@@ -5,10 +5,10 @@ import { join } from "node:path";
 import * as I from "../src/core/instruments.js";
 import { partDir } from "../src/core/paths.js";
 
-afterEach(() => { delete process.env.CONSORT_HOME; delete process.env.CLAUDE_CODE_SESSION_ID; });
+afterEach(() => { delete process.env.AP_HOME; delete process.env.CLAUDE_CODE_SESSION_ID; });
 function home() {
   const h = mkdtempSync(join(tmpdir(), "in-"));
-  process.env.CONSORT_HOME = h;
+  process.env.AP_HOME = h;
   writeFileSync(join(h, "instruments.yaml"), "instruments:\n  - violin\n  - viola\n  - cello\n");
   return h;
 }
@@ -45,7 +45,7 @@ describe("instruments", () => {
     expect(msg).toContain("violin is already deployed on demo; pick another instrument");
     expect(msg).toContain("owned by another Claude Code session");
     expect(msg).toContain("aaaaaaaa");
-    expect(msg).toContain("/consort:coda violin demo");
+    expect(msg).toContain("/ap:coda violin demo");
   });
   it("collision: same session omits owned-by line", () => {
     home();

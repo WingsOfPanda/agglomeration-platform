@@ -79,22 +79,22 @@ function rosterSet(providers: string[]): number {
 
 /** Restores the predecessor plugin's medic pane-border check (cosmetic — always WARN, never FAIL).
  *  Part labels render on the border only when pane-border-status is top/bottom AND
- *  pane-border-format reads the @cs_ user-options. A stale format keyed to the old (pre-rebrand)
- *  user-options makes consort parts fall back to the raw pane_title. Pure for testing; the live
+ *  pane-border-format reads the @ap_ user-options. A stale format keyed to the old (pre-rebrand)
+ *  user-options makes ap parts fall back to the raw pane_title. Pure for testing; the live
  *  tmux query lives in healthCheck. */
 export function paneBorderDiagnosis(pbs: string, pbf: string): { ok: boolean; lines: string[] } {
   const fix = [
-    "  fix: `consort` spawn sets this automatically, or add to ~/.tmux.conf:",
+    "  fix: `ap` spawn sets this automatically, or add to ~/.tmux.conf:",
     "    set -g pane-border-status top",
-    "    set -g pane-border-format ' #{?@cs_label_fmt,#{@cs_label_fmt},#[fg=#{?@cs_color,#{@cs_color},default}#,bold]#{?@cs_label,#{@cs_label},#{pane_title}}#[default]} '",
+    "    set -g pane-border-format ' #{?@ap_label_fmt,#{@ap_label_fmt},#[fg=#{?@ap_color,#{@ap_color},default}#,bold]#{?@ap_label,#{@ap_label},#{pane_title}}#[default]} '",
   ];
   if (pbs !== "top" && pbs !== "bottom") {
     return { ok: false, lines: [`pane-border-status is '${pbs || "off"}'; part labels won't render on pane borders`, ...fix] };
   }
-  if (!pbf.includes("@cs_label")) {
-    return { ok: false, lines: ["pane-border-format doesn't read @cs_label; consort part names won't show on pane borders", ...fix] };
+  if (!pbf.includes("@ap_label")) {
+    return { ok: false, lines: ["pane-border-format doesn't read @ap_label; ap part names won't show on pane borders", ...fix] };
   }
-  return { ok: true, lines: [`pane-border: status=${pbs}, format @cs_label-aware (part names visible)`] };
+  return { ok: true, lines: [`pane-border: status=${pbs}, format @ap_label-aware (part names visible)`] };
 }
 
 function tmuxGlobalOption(name: string): string {
@@ -108,7 +108,7 @@ function healthCheck(): number {
 
   const ver = tmuxVersionString();
   if (!ver) { log.error("tmux: not on PATH (install: https://github.com/tmux/tmux)"); fail = 1; }
-  else if (!tmuxVersionOk(ver)) { log.error(`tmux: ${ver} — consort requires >= 3.0`); fail = 1; }
+  else if (!tmuxVersionOk(ver)) { log.error(`tmux: ${ver} — ap requires >= 3.0`); fail = 1; }
   else log.ok(`tmux: ${ver}`);
 
   if (inTmuxSession()) {
@@ -116,7 +116,7 @@ function healthCheck(): number {
     const diag = paneBorderDiagnosis(tmuxGlobalOption("pane-border-status"), tmuxGlobalOption("pane-border-format"));
     if (diag.ok) log.ok(`  ${diag.lines[0]}`);
     else { for (const l of diag.lines) log.warn(l); warn = 1; }
-  } else { log.warn("tmux session: not set — `tmux new -s consort` before spawning"); warn = 1; }
+  } else { log.warn("tmux session: not set — `tmux new -s ap` before spawning"); warn = 1; }
 
   if (existsSync(root)) log.ok(`state dir: ${root} (writable)`);
   else { log.error(`state dir: ${root} cannot be created or is not writable`); fail = 1; }

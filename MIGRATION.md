@@ -1,5 +1,11 @@
 # Consort — Migration Guide (Bash `clone-wars` → TypeScript)
 
+> **HISTORICAL + REBRAND NOTE (2026-06-15).** This documents the completed `clone-wars` → TS `consort`
+> migration. The project is now being renamed `consort` → `agglomeration-platform` (namespace `ap`) and
+> de-musicalized — see `docs/superpowers/specs/2026-06-15-agglomeration-platform-rebrand-design.md`.
+> The `consort` / `CONSORT_HOME` / `/consort:` / musical-noun terms throughout this guide are
+> historical; they will be reconciled in the PR3 doc pass.
+
 > **What this is.** A complete, self-contained plan for rewriting the Bash plugin
 > `clone-wars` into TypeScript as **`consort`**. It captures the architecture, the
 > file-IPC wire protocol, the provider contracts, the command set, and a concrete

@@ -1,4 +1,4 @@
-// Independent re-implementation inspector pure logic for /consort:rehearsal (research-validity C1).
+// Independent re-implementation inspector pure logic for /ap:rehearsal (research-validity C1).
 // The cross-family Maestro re-runs the experiment from the run-card alone and re-derives the metric;
 // this adjudicates a THREE-WAY verdict. Unlike A1's checkVerify (which returns `mismatch` on a failed
 // re-run), C1 returns `inconclusive` on any couldn't-complete path so the gate never demotes an

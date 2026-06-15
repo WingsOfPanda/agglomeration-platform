@@ -5,11 +5,11 @@ import { join, basename, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 
 export function globalRoot(home?: string): string {
-  return home ?? process.env.CONSORT_HOME ?? join(homedir(), ".consort");
+  return home ?? process.env.AP_HOME ?? join(homedir(), ".ap");
 }
 
 /** Plugin install root. Precedence: explicit CLAUDE_PLUGIN_ROOT override -> self-locate from the
- *  running bundle (<root>/dist/consort.cjs) -> process.cwd(). The self-locate tier fixes the case
+ *  running bundle (<root>/dist/ap.cjs) -> process.cwd(). The self-locate tier fixes the case
  *  where command files interpolate ${CLAUDE_PLUGIN_ROOT} into the bundle path but never export it,
  *  so the node child would otherwise fall back to cwd (the target repo). The existsSync guard on a
  *  known shipped asset keeps tests/`node -e` (argv[1] not the bundle) on the cwd fallback. Single
@@ -25,8 +25,8 @@ export function pluginRoot(): string {
 
 export function stateRoot(opts?: { home?: string; cwd?: string }): string {
   if (opts?.home) return opts.home;
-  if (process.env.CONSORT_HOME) return process.env.CONSORT_HOME;
-  return join(opts?.cwd ?? process.cwd(), ".consort");
+  if (process.env.AP_HOME) return process.env.AP_HOME;
+  return join(opts?.cwd ?? process.cwd(), ".ap");
 }
 
 function ensureGitignore(dir: string): void {

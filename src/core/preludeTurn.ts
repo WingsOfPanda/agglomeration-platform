@@ -1,4 +1,4 @@
-// src/core/preludeTurn.ts — research + adversary prompt builders for /consort:prelude
+// src/core/preludeTurn.ts — research + adversary prompt builders for /ap:prelude
 // (port of config/prompt-templates/meditate/{research,adversary}.md, rebranded). These bodies do
 // NOT carry their own done-event line or END_OF_INSTRUCTION: prelude sends them via `send` →
 // `inboxWrite`, which appends exactly one done instruction + one END_OF_INSTRUCTION (same contract

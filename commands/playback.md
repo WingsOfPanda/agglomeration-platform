@@ -3,16 +3,16 @@ description: Review accumulated forensics from solo/score/perform/prelude/rehear
 allowed-tools: Bash, Read
 ---
 
-# /consort:playback
+# /ap:playback
 
-Survey the forensics that `/consort:solo`, `/consort:score`, `/consort:perform`, `/consort:prelude`, and
-`/consort:rehearsal` record at teardown (each writes a `command:<name>` file under
-`~/.consort/forensics/<date>/`; a failed `spawn` also writes a `command:spawn` file at the point of
+Survey the forensics that `/ap:solo`, `/ap:score`, `/ap:perform`, `/ap:prelude`, and
+`/ap:rehearsal` record at teardown (each writes a `command:<name>` file under
+`~/.ap/forensics/<date>/`; a failed `spawn` also writes a `command:spawn` file at the point of
 failure), surface what is **new since you last ran playback**, show how often each pattern has
 recurred over the life of the project, suggest one next action per cluster, then file the surveyed
 files away so the next run only shows new problems. **Zero arguments needed.**
 
-Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs"`.
+Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
 
 ## Steps
 
@@ -21,7 +21,7 @@ Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs"`.
    one TSV row per **live** (un-reviewed) forensics file: `<path>\t<command>\t<topic>\t<n_findings>`;
    after `TRENDS`, the top recurring signatures: `<signature>\t<count>\t<first_seen>\t<last_seen>`.
 2. **Healthy short-circuit.** If there are **zero** file rows before `TRENDS`, print
-   `no new forensics since last playback; consort has been healthy` and stop (nothing to archive).
+   `no new forensics since last playback; ap has been healthy` and stop (nothing to archive).
 3. **Read the findings.** For each surfaced path, `Read` (or one batched `cat` with `---SEP---`
    separators) the file's `## Mechanical findings` + `## Maestro reflection` sections.
 4. **Cluster.** Group findings whose `source` + meaningful `key`/`context` token match (e.g. all

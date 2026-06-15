@@ -1,4 +1,15 @@
-# CLAUDE.md — consort
+# CLAUDE.md — agglomeration-platform
+
+> **⟶ REBRAND IN PROGRESS (2026-06-15): `consort` → `agglomeration-platform`.** Authoritative spec +
+> plan: `docs/superpowers/specs/2026-06-15-agglomeration-platform-rebrand-design.md` and
+> `docs/superpowers/plans/2026-06-15-agglomeration-platform-rebrand.md`. The shipped CODE is being
+> renamed across 3 PRs. **New identity:** namespace `ap` (`/ap:<verb>`), env `AP_HOME`, state dir
+> `.ap/`, tmux `@ap_*`; nouns Maestro→hub, instrument→agent, part→worker, section→cluster, FINE→DONE;
+> verbs score→design, prelude→explore, rehearsal→autoresearch, perform→implement, solo→quick,
+> playback→review, roster→list, coda→stop, soundcheck→check, duet→bridge. **Until the PR3 doc pass,
+> treat the `consort`/`CONSORT_HOME`/`.consort`/`/consort:`/`@cs_` tokens and the "musical rebrand
+> (locked)" table BELOW as historical** — the renamed code is the source of truth (PR1 brand has
+> already landed the `ap` identity; PR2 the nouns; PR3 the verbs).
 
 Guidance for Claude Code working in this repository. These instructions override default
 behavior. The machine-wide `~/.claude/CLAUDE.md` and the workspace `/home/liupan/CC/CLAUDE.md`

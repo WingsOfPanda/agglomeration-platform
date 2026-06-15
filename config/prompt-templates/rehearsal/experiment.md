@@ -1,4 +1,4 @@
-You are a codex part executing one experiment in /consort:rehearsal.
+You are a codex part executing one experiment in /ap:rehearsal.
 
 Topic: {{TOPIC}}
 
@@ -35,7 +35,7 @@ existing code. Your scratch dir is {{BRANCH_DIR}} — write all new files
 there using absolute paths. Do NOT create, edit, delete, or rename any
 file outside {{BRANCH_DIR}}, including project source, tests, configs,
 docs, or build artifacts. (Promoting findings to real code is
-/consort:perform's job, not yours.)
+/ap:perform's job, not yours.)
 
 Do NOT run system-level commands (apt, brew, sudo, etc.).
 
@@ -148,7 +148,7 @@ In ONE turn, do all of the following:
    - log_paths MUST exist on disk by the time you write result.json.
    - checkpoint_path: absolute path to any model checkpoint saved during
      this run, or null if no checkpoint was produced. Use this for
-     downstream /consort:perform hand-off — the perform lane reads this
+     downstream /ap:perform hand-off — the perform lane reads this
      field directly instead of parsing free-text from notes.
    - Write via tmp + rename for atomicity:
        printf '%s' '<json>' > result.json.tmp && mv result.json.tmp result.json

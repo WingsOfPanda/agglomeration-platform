@@ -1,4 +1,4 @@
-// src/commands/duet.ts — /consort:duet collaborative cross-repo session.
+// src/commands/duet.ts — /ap:duet collaborative cross-repo session.
 import { existsSync, mkdirSync, readFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
@@ -78,7 +78,7 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
   if (!d.haveCmd(binary)) { log.error(`duet init: ${provider}'s binary '${binary}' is not on PATH`); return 3; }
 
   const art = duetArtDir(slug);
-  if (existsSync(art)) { log.error(`duet init: topic already in flight: ${art}`); log.error("  run /consort:coda or pick a different task"); return 2; }
+  if (existsSync(art)) { log.error(`duet init: topic already in flight: ${art}`); log.error("  run /ap:coda or pick a different task"); return 2; }
 
   const instrument = d.pickRandomInstrument(slug);
   if (!instrument) { log.error(`duet init: no available instrument in the pool for '${slug}'`); return 1; }
@@ -136,7 +136,7 @@ export interface TurnSendDeps {
   offsetFor(instrument: string, model: string, topic: string): number;
   send(args: string[]): Promise<number>;
 }
-const DUET_TURN_TIMEOUT = Number(process.env.CONSORT_DUET_TURN_TIMEOUT) || 14400;
+const DUET_TURN_TIMEOUT = Number(process.env.AP_DUET_TURN_TIMEOUT) || 14400;
 
 async function roundSendRun(rest: string[]): Promise<number> {
   const [topic, roundStr] = rest;

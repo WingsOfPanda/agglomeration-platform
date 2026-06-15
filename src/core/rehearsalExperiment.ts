@@ -1,4 +1,4 @@
-// Experiment-send pure logic for /consort:rehearsal. Faithful to
+// Experiment-send pure logic for /ap:rehearsal. Faithful to
 // deep-research-experiment-send.sh (template render, sota/hardware/peers block
 // assembly, dispatch state transition). Pure; FS/subprocess happen in the verb.
 import { mergeState } from "./rehearsalState.js";

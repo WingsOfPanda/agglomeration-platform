@@ -7,8 +7,8 @@ import { scoreArtDir, scoreDraftDir, scoreDocPath } from "../src/core/score.js";
 import { run as score } from "../src/commands/score.js";
 
 let prev: string | undefined;
-beforeEach(() => { prev = process.env.CONSORT_HOME; process.env.CONSORT_HOME = mkdtempSync(join(tmpdir(), "sa-")); });
-afterEach(() => { if (prev === undefined) delete process.env.CONSORT_HOME; else process.env.CONSORT_HOME = prev; });
+beforeEach(() => { prev = process.env.AP_HOME; process.env.AP_HOME = mkdtempSync(join(tmpdir(), "sa-")); });
+afterEach(() => { if (prev === undefined) delete process.env.AP_HOME; else process.env.AP_HOME = prev; });
 
 function scaffold(topic: string, sections: Record<string, string>) {
   const dd = scoreDraftDir(topic); mkdirSync(dd, { recursive: true });

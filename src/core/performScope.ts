@@ -1,7 +1,7 @@
 // src/core/performScope.ts
 //
 // SCOPE-CONFORMANCE guard for `perform` Phase A. Port of the prior bash plugin's scope-conformance
-// helpers (deploy-scope), EXTENDED in consort (deliberate divergence — see
+// helpers (deploy-scope), EXTENDED in ap (deliberate divergence — see
 // docs/superpowers/specs/2026-06-10-perform-scope-bullets-design.md) so extractComponentsPaths also
 // reads bullet-list Components, not only table rows:
 // deploy_extract_components_paths -> extractComponentsPaths,

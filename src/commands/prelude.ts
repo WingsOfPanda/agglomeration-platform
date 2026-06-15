@@ -1,4 +1,4 @@
-// src/commands/prelude.ts — /consort:prelude CLI verbs (port of meditate). Built on score's DI
+// src/commands/prelude.ts — /ap:prelude CLI verbs (port of meditate). Built on score's DI
 // pattern + IPC/wait/archive helpers; meditate-specific logic lives in src/core/prelude*.ts.
 // NOTE: verbs are added task-by-task; the dispatcher's switch grows as each verb lands.
 import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync, statSync, rmSync } from "node:fs";
@@ -81,13 +81,13 @@ export async function initWith(tokens: string[], d: PreludeInitDeps): Promise<nu
   let roster = d.activeProviders().filter((p) => d.isValidated(p));
   if (roster.length < 2) {
     log.error(`prelude init: needs >=2 consult-validated providers; got ${roster.length}`);
-    log.error("  just ask Claude directly (this session) — no /consort:prelude orchestration needed");
+    log.error("  just ask Claude directly (this session) — no /ap:prelude orchestration needed");
     return 1;
   }
   if (roster.length > 3) { log.warn(`prelude init: ${roster.length} providers available; capping to the first 3`); roster = roster.slice(0, 3); }
 
   const art = preludeArtDir(topic);
-  if (existsSync(art)) { log.error(`prelude init: topic already in flight: ${art}`); log.error("  run /consort:coda or pick a different topic"); return 2; }
+  if (existsSync(art)) { log.error(`prelude init: topic already in flight: ${art}`); log.error("  run /ap:coda or pick a different topic"); return 2; }
 
   const instruments = d.pickInstruments(topic, roster.length);
   if (instruments.length < roster.length) { log.error(`prelude init: instrument pool exhausted (need ${roster.length}, got ${instruments.length})`); return 1; }

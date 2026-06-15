@@ -7,7 +7,7 @@ import { scoreArtDir, scoreDraftDir, parseScoreArgs, scoreDocPath, formatRosterF
 
 describe("score paths", () => {
   it("scoreArtDir / scoreDraftDir hang off the topic dir under _score", () => {
-    process.env.CONSORT_HOME = "/R";
+    process.env.AP_HOME = "/R";
     const art = scoreArtDir("score-auth");
     expect(art.endsWith(join("score-auth", "_score"))).toBe(true);
     expect(scoreDraftDir("score-auth")).toBe(join(art, "design-doc", ".draft"));
@@ -32,7 +32,7 @@ describe("parseScoreArgs", () => {
 
 describe("scoreDocPath", () => {
   it("canonical design-doc path under design-doc/", () => {
-    process.env.CONSORT_HOME = "/R";
+    process.env.AP_HOME = "/R";
     expect(scoreDocPath("auth", "2026-05-29").endsWith(join("auth", "_score", "design-doc", "2026-05-29-auth-design.md"))).toBe(true);
   });
 });
@@ -41,7 +41,7 @@ describe("roster file", () => {
   it("format then parse round-trips provider/instrument rows", () => {
     const rows = [{ provider: "codex", instrument: "viola" }, { provider: "claude", instrument: "cello" }];
     const text = formatRosterFile(rows, "2026-05-29T00:00:00Z");
-    expect(text).toContain("by /consort:score");
+    expect(text).toContain("by /ap:score");
     expect(parseRosterFile(text)).toEqual(rows);
   });
   it("parse skips #/blank lines and rows missing a field", () => {
@@ -81,22 +81,22 @@ describe("drilldown paths", () => {
 });
 
 describe("score export-doc", () => {
-  it("scoreExportDocPath composes <root>/docs/consort/specs/<basename>", () => {
+  it("scoreExportDocPath composes <root>/docs/ap/specs/<basename>", () => {
     expect(scoreExportDocPath("/repo", "2026-06-01-x-design.md")).toBe(
-      join("/repo", "docs", "consort", "specs", "2026-06-01-x-design.md"),
+      join("/repo", "docs", "ap", "specs", "2026-06-01-x-design.md"),
     );
   });
 
   it("exportDocTo copies the assembled doc into the specs dir and returns the dest", () => {
     const home = mkdtempSync(join(tmpdir(), "cs-home-"));
     const root = mkdtempSync(join(tmpdir(), "cs-root-"));
-    process.env.CONSORT_HOME = home;
+    process.env.AP_HOME = home;
     const ddir = join(scoreArtDir("export-topic"), "design-doc");
     mkdirSync(ddir, { recursive: true });
     writeFileSync(join(ddir, "2026-06-01-export-topic-design.md"), "# DOC\nbody\n");
 
     const dest = exportDocTo("export-topic", root);
-    expect(dest).toBe(join(root, "docs", "consort", "specs", "2026-06-01-export-topic-design.md"));
+    expect(dest).toBe(join(root, "docs", "ap", "specs", "2026-06-01-export-topic-design.md"));
     expect(existsSync(dest!)).toBe(true);
     expect(rf(dest!, "utf8")).toBe("# DOC\nbody\n");
   });
@@ -104,7 +104,7 @@ describe("score export-doc", () => {
   it("exportDocTo returns null when no assembled doc exists", () => {
     const home = mkdtempSync(join(tmpdir(), "cs-home-"));
     const root = mkdtempSync(join(tmpdir(), "cs-root-"));
-    process.env.CONSORT_HOME = home;
+    process.env.AP_HOME = home;
     expect(exportDocTo("missing-topic", root)).toBeNull();
   });
 });

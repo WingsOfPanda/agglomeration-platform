@@ -4,7 +4,7 @@ argument-hint: <topic-text> [--provider codex|claude|agy|opencode] [--no-finish]
 allowed-tools: Bash, Write, Read, Edit
 ---
 
-# /consort:solo
+# /ap:solo
 
 The light, autonomous path for a small, clearly-specified single-repo change. One part (a
 non-conductor model, default **codex**) implements the change on its own `feat/solo-<topic>`
@@ -15,14 +15,14 @@ restores the start-branch checkout; a repo **with a remote** pushes the branch a
 Pass `--no-finish` to keep the branch local only (no push, no PR). There are **NO interactive
 gates**.
 
-Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs"`.
+Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
 
 ## Flagging suspicions
 
 At any point in the run, if something looks weird, surprising, or suspicious — even a likely false
 alarm — record it: `$CS solo flag <TOPIC> "<what looked off>"`. It writes straight to the playback
 feed (survives teardown and aborts) and costs nothing, so prefer over-recording. Review later with
-`/consort:playback`.
+`/ap:playback`.
 
 ## Stage 0 — Init + Brief
 
@@ -45,7 +45,7 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
    not a design doc). To find the state path, the directive does not need it: every later step
    takes `<SLUG>` as `<topic>` and resolves paths internally. Author the brief content from the
    topic and Write it to the path `solo init` logged (`solo init` logs `topic=<slug>`; the brief
-   path is `<repo>/.consort/state/<hash>/<SLUG>/_solo/task-brief.md`). Shape:
+   path is `<repo>/.ap/state/<hash>/<SLUG>/_solo/task-brief.md`). Shape:
    ```markdown
    ## Goal
    <1-2 sentences restating the change>
@@ -111,13 +111,13 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
 
 1. **Forensics + reflection (best-effort, BEFORE teardown).** `FORENSICS=$($CS solo forensics <SLUG>)`
    — scrapes the part's outbox/status/logs for mechanical signals and writes a `command:solo` file under
-   `~/.consort/forensics/<date>/` (prints its path only if signals were found, else empty — never blocks).
+   `~/.ap/forensics/<date>/` (prints its path only if signals were found, else empty — never blocks).
    Run this **before** `coda`, because `coda` archives the part dir and moves its `outbox.jsonl` /
    `status.json` out of reach. If `FORENSICS` is non-empty: tell the user "forensics captured: $FORENSICS",
    then **Read** it and **append** a `## Maestro reflection` section (3–5 interpretive bullets: what's
    surprising, repeat-vs-first-time patterns, the suggested next action) via the Write/Edit tool.
    **Idempotent:** skip the append if the file already contains the exact header `## Maestro reflection`.
-   The file lives OUTSIDE the topic state, so it survives teardown and `/consort:playback` later surveys it.
+   The file lives OUTSIDE the topic state, so it survives teardown and `/ap:playback` later surveys it.
 2. Tear down + archive the part with `coda` (graceful FINE banner → kill pane → archive the part
    dir), capturing the archived path it reports into `archived-path.txt` for the summary. Run this
    single command (do not invoke `coda` separately):
@@ -137,5 +137,5 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
   start branch restored. Use `--no-finish` to opt out. (This parity is intentional — do not
   re-flag it.)
 - On abort, `SUMMARY.md` + `RESUME.md` point at the partial state under `_solo/`; re-run
-  `/consort:solo` with revised framing to retry.
-- For research, a reviewable design doc, or multiple parts → `/consort:score` + `/consort:perform`.
+  `/ap:solo` with revised framing to retry.
+- For research, a reviewable design doc, or multiple parts → `/ap:score` + `/ap:perform`.

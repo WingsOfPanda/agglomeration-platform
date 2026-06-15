@@ -52,10 +52,10 @@ describe("composeAdversaryPrompt", () => {
 // codex parts missing their terminal `done` event. The inbox must carry exactly one of each.
 describe("prelude inbox carries a single done contract (no duplicate END_OF_INSTRUCTION)", () => {
   beforeEach(() => { process.env.CLAUDE_PLUGIN_ROOT = process.cwd(); });
-  afterEach(() => { delete process.env.CONSORT_HOME; });
+  afterEach(() => { delete process.env.AP_HOME; });
   const count = (s: string, sub: string): number => s.split(sub).length - 1;
   function seedPart(i: string, m: string, t: string): void {
-    process.env.CONSORT_HOME = mkdtempSync(join(tmpdir(), "pt-"));
+    process.env.AP_HOME = mkdtempSync(join(tmpdir(), "pt-"));
     const d = partDir(i, m, t); mkdirSync(d, { recursive: true }); writeFileSync(join(d, "outbox.jsonl"), "");
   }
 

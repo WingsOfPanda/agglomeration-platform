@@ -1,4 +1,4 @@
-// INFEASIBLE-vs-REFUTED classification for /consort:rehearsal (research-validity A2).
+// INFEASIBLE-vs-REFUTED classification for /ap:rehearsal (research-validity A2).
 // A result is INFEASIBLE ("couldn't be validly executed") iff its A1 verdict is `mismatch` OR its A3
 // sanity flags include a core-unambiguous invalidating flag. ceiling-exceeded /
 // integrity-attestation-incomplete stay advisory (do NOT make a result infeasible). Pure.

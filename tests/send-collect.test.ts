@@ -6,9 +6,9 @@ import { run as collect } from "../src/commands/collect.js";
 import { run as send } from "../src/commands/send.js";
 import { partDir } from "../src/core/paths.js";
 
-afterEach(() => { delete process.env.CONSORT_HOME; });
+afterEach(() => { delete process.env.AP_HOME; });
 function seed(i: string, m: string, t: string, outbox: string) {
-  const h = mkdtempSync(join(tmpdir(), "sc-")); process.env.CONSORT_HOME = h;
+  const h = mkdtempSync(join(tmpdir(), "sc-")); process.env.AP_HOME = h;
   const d = partDir(i, m, t); mkdirSync(d, { recursive: true });
   writeFileSync(join(d, "pane.json"), JSON.stringify({ pane_id: "%1", instrument: i, model: m, spawned_at: "t" }));
   writeFileSync(join(d, "outbox.jsonl"), outbox);
@@ -42,11 +42,11 @@ describe("send error paths", () => {
     expect(await send(["violin", "demo"])).toBe(2);
   });
   it("no state dir for the part → exit 1", async () => {
-    process.env.CONSORT_HOME = mkdtempSync(join(tmpdir(), "snd-"));
+    process.env.AP_HOME = mkdtempSync(join(tmpdir(), "snd-"));
     expect(await send(["ghost", "demo", "hello"])).toBe(1);
   });
   it("part dir present but pane.json missing → exit 1", async () => {
-    const h = mkdtempSync(join(tmpdir(), "snd2-")); process.env.CONSORT_HOME = h;
+    const h = mkdtempSync(join(tmpdir(), "snd2-")); process.env.AP_HOME = h;
     const d = partDir("violin", "codex", "demo"); mkdirSync(d, { recursive: true });
     // no pane.json written
     expect(await send(["violin", "demo", "hello"])).toBe(1);
