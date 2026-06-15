@@ -35,7 +35,7 @@ export function identityWrite(i: string, m: string, t: string): void {
   if (!existsSync(tplPath)) {
     throw new Error(
       `identityWrite: identity template not found at ${tplPath} (resolved pluginRoot=${root}). ` +
-      `Set CLAUDE_PLUGIN_ROOT to the consort plugin directory, or run consort from it.`,
+      `Set CLAUDE_PLUGIN_ROOT to the ap plugin directory, or run ap from it.`,
     );
   }
   const stateDir = partDir(i, m, t);

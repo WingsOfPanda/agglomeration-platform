@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
-# Simulated-parts end-to-end dogfood for /consort:prelude (port of meditate).
+# Simulated-parts end-to-end dogfood for /ap:prelude (port of meditate).
 #
-# Drives the REAL built CLI (`node dist/consort.cjs prelude <verb>`) across the full
-# prelude lifecycle against a throwaway CONSORT_HOME. The model PARTS are SIMULATED:
+# Drives the REAL built CLI (`node dist/ap.cjs prelude <verb>`) across the full
+# prelude lifecycle against a throwaway AP_HOME. The model PARTS are SIMULATED:
 # real codex pane spawns are blocked by codex's directory-trust prompt + need tmux, so
 # instead of `spawn-all` we write the parts' deliverables by hand — findings-<inst>.md
 # (research), the landscape-draft.md fixture, adversary-<inst>.md (critiques), and the
 # final landscape doc — then run the synth/confidence/handoff verbs against that state.
 #
-# Self-contained + idempotent: creates its own temp CONSORT_HOME, seeds a 2-provider
+# Self-contained + idempotent: creates its own temp AP_HOME, seeds a 2-provider
 # active list (-> N=2), runs, prints PASS/FAIL per assertion + a final tally.
 # Exit 0 iff every assertion passed.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO" || exit 1
-CS="node dist/consort.cjs"
+CS="node dist/ap.cjs"
 
-CONSORT_HOME="$(mktemp -d "${TMPDIR:-/tmp}/consort-prelude-dogfood.XXXXXX")"
-export CONSORT_HOME
-trap 'rm -rf "$CONSORT_HOME"' EXIT
+AP_HOME="$(mktemp -d "${TMPDIR:-/tmp}/ap-prelude-dogfood.XXXXXX")"
+export AP_HOME
+trap 'rm -rf "$AP_HOME"' EXIT
 
 # 2 consult-validated providers in the active list -> prelude init picks N=2.
-printf 'codex\nclaude\n' > "$CONSORT_HOME/providers-active.txt"
+printf 'codex\nclaude\n' > "$AP_HOME/providers-active.txt"
 
 PASS=0
 FAIL=0

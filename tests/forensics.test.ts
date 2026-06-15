@@ -6,8 +6,8 @@ import * as F from "../src/core/forensics.js";
 import { scrapeAuditLog, scrapeOutbox, scrapeStatus, scrapeSpawnResults, scrapeLogs, scrapeArtDir, renderArtForensics, captureArtDir } from "../src/core/forensics.js";
 import { partDir } from "../src/core/paths.js";
 
-afterEach(() => { delete process.env.CONSORT_HOME; });
-function home() { const h = mkdtempSync(join(tmpdir(), "fx-")); process.env.CONSORT_HOME = h; return h; }
+afterEach(() => { delete process.env.AP_HOME; });
+function home() { const h = mkdtempSync(join(tmpdir(), "fx-")); process.env.AP_HOME = h; return h; }
 const deps = (scroll = "") => ({
   partDir,
   capturePane: async () => scroll,
@@ -118,16 +118,16 @@ describe("scrapeArtDir + render", () => {
 
 describe("captureArtDir", () => {
   let prev: string | undefined;
-  beforeEach(() => { prev = process.env.CONSORT_HOME; });
-  afterEach(() => { if (prev === undefined) delete process.env.CONSORT_HOME; else process.env.CONSORT_HOME = prev; });
+  beforeEach(() => { prev = process.env.AP_HOME; });
+  afterEach(() => { if (prev === undefined) delete process.env.AP_HOME; else process.env.AP_HOME = prev; });
 
   it("zero findings → '' and no file", () => {
-    const home = mkdtempSync(join(tmpdir(), "fh-")); process.env.CONSORT_HOME = home;
+    const home = mkdtempSync(join(tmpdir(), "fh-")); process.env.AP_HOME = home;
     const art = join(mkdtempSync(join(tmpdir(), "fa-")), "clean", "_score"); mkdirSync(art, { recursive: true });
     expect(captureArtDir({ artDir: art, command: "score", now: new Date("2026-05-29T12:00:00Z") })).toBe("");
   });
   it("findings → writes under <home>/forensics/<date>/, returns the path", () => {
-    const home = mkdtempSync(join(tmpdir(), "fh-")); process.env.CONSORT_HOME = home;
+    const home = mkdtempSync(join(tmpdir(), "fh-")); process.env.AP_HOME = home;
     const topicDir = join(mkdtempSync(join(tmpdir(), "ft-")), "mytopic"); const art = join(topicDir, "_score");
     mkdirSync(join(art, "design-doc"), { recursive: true });
     writeFileSync(join(art, "design-doc", "audit.log"), "ISSUE=no_goal_section\n");

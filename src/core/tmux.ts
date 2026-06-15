@@ -39,21 +39,21 @@ export function sendKeysEnterArgs(pane: string): string[] {
   return ["send-keys", "-t", pane, "Enter"];
 }
 
-// Pane-border config so the per-pane @cs_label_fmt (stamped by paneLabelSet) actually renders on the
+// Pane-border config so the per-pane @ap_label_fmt (stamped by paneLabelSet) actually renders on the
 // pane border. Without it the border shows the program's own pane title (the raw TUI name). Rebranded
-// port of the prior bash plugin's tmux.conf convention to the @cs_ user-options; falls back to #{pane_title}
-// for panes with no @cs_ label (e.g. the conductor). The `#,` is an escaped comma inside #[...].
+// port of the prior bash plugin's tmux.conf convention to the @ap_ user-options; falls back to #{pane_title}
+// for panes with no @ap_ label (e.g. the conductor). The `#,` is an escaped comma inside #[...].
 export function paneBorderArgs(): string[][] {
   return [
     ["set-option", "-g", "pane-border-status", "top"],
     ["set-option", "-g", "pane-border-format",
-      " #{?@cs_label_fmt,#{@cs_label_fmt},#[fg=#{?@cs_color,#{@cs_color},default}#,bold]#{?@cs_label,#{@cs_label},#{pane_title}}#[default]} "],
+      " #{?@ap_label_fmt,#{@ap_label_fmt},#[fg=#{?@ap_color,#{@ap_color},default}#,bold]#{?@ap_label,#{@ap_label},#{pane_title}}#[default]} "],
     ["set-hook", "-g", "after-select-pane",
-      'set-option -g pane-active-border-style "fg=#{?@cs_color,#{@cs_color},green}"'],
+      'set-option -g pane-active-border-style "fg=#{?@ap_color,#{@ap_color},green}"'],
   ];
 }
 /** Force pane-border-status on a specific window (by pane or window id) so a window-local
- *  `pane-border-status off` can't suppress the @cs_ part label that paneLabelSet stamped. */
+ *  `pane-border-status off` can't suppress the @ap_ part label that paneLabelSet stamped. */
 export function windowBorderStatusArgs(target: string): string[] {
   return ["set-option", "-w", "-t", target, "pane-border-status", "top"];
 }
@@ -124,12 +124,12 @@ export async function conductorPane(): Promise<string> {
   return tmux(["display-message", "-p", "#{pane_id}"]);
 }
 
-// --- pane labels (the three @cs_* user-options) ---
+// --- pane labels (the three @ap_* user-options) ---
 export function paneLabelSetArgs(pane: string, instrument: string, model: string, topic: string): string[][] {
   return [
-    setOptionArgs(pane, "@cs_label", labelFor(instrument, model, topic)),
-    setOptionArgs(pane, "@cs_color", colorFor(instrument)),
-    setOptionArgs(pane, "@cs_label_fmt", labelFmt(instrument, model, topic)),
+    setOptionArgs(pane, "@ap_label", labelFor(instrument, model, topic)),
+    setOptionArgs(pane, "@ap_color", colorFor(instrument)),
+    setOptionArgs(pane, "@ap_label_fmt", labelFmt(instrument, model, topic)),
   ];
 }
 export async function paneLabelSet(pane: string, instrument: string, model: string, topic: string): Promise<void> {
@@ -138,14 +138,14 @@ export async function paneLabelSet(pane: string, instrument: string, model: stri
 
 // --- graceful kill with FINE banner ---
 export function gracefulRespawnCommand(snap: string, pluginRoot: string, label: string, color: string): string {
-  return `cat '${snap}'; node '${pluginRoot}/dist/consort.cjs' _banner '${label}' '${color}'; rm -f '${snap}'`;
+  return `cat '${snap}'; node '${pluginRoot}/dist/ap.cjs' _banner '${label}' '${color}'; rm -f '${snap}'`;
 }
 
 export async function paneLabel(pane: string): Promise<string> {
-  try { return (await execa("tmux", ["display-message", "-p", "-t", pane, "#{@cs_label}"])).stdout; } catch { return ""; }
+  try { return (await execa("tmux", ["display-message", "-p", "-t", pane, "#{@ap_label}"])).stdout; } catch { return ""; }
 }
 export async function paneColor(pane: string): Promise<string> {
-  try { return (await execa("tmux", ["display-message", "-p", "-t", pane, "#{@cs_color}"])).stdout; } catch { return ""; }
+  try { return (await execa("tmux", ["display-message", "-p", "-t", pane, "#{@ap_color}"])).stdout; } catch { return ""; }
 }
 
 export async function killGraceful(pane: string, pluginRoot: string): Promise<void> {

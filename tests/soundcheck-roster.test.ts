@@ -60,7 +60,7 @@ describe("soundcheck roster-set", () => {
     cap.restore();
     expect(rc).toBe(0);
     const body = readFileSync(join(globalRoot(), "providers-active.txt"), "utf8");
-    expect(body).toContain("by /consort:soundcheck");
+    expect(body).toContain("by /ap:soundcheck");
     expect(body.trim().split("\n").slice(-2)).toEqual(["codex", "claude"]);
     expect(cap.text()).toContain("active set: codex, claude");
   });

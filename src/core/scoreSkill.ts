@@ -25,7 +25,7 @@ export function classifyTopic(topic: string): "brainstorming" | "systematic-debu
 export function skillHintAppend(skillTxtPath: string, basePrompt: string): string {
   let skill = "none";
   if (existsSync(skillTxtPath)) skill = readFileSync(skillTxtPath, "utf8").replace(/\s/g, "");
-  if (process.env.CONSORT_SCORE_SKILL_OVERRIDE === "none") skill = "none";
+  if (process.env.AP_SCORE_SKILL_OVERRIDE === "none") skill = "none";
   if (skill !== "brainstorming" && skill !== "systematic-debugging") return basePrompt;
   const hintFile = join(pluginRoot(), "config", "skill-hints", `${skill}.md`);
   if (!existsSync(hintFile)) return basePrompt;

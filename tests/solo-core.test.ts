@@ -5,11 +5,11 @@ import { tmpdir } from "node:os";
 import { topicDir } from "../src/core/paths.js";
 import { soloArtDir, soloExecDir, deriveSlug, parseSoloArgs, detectTestCommand, renderSummary, renderResume } from "../src/core/solo.js";
 
-afterEach(() => { delete process.env.CONSORT_HOME; });
+afterEach(() => { delete process.env.AP_HOME; });
 
 describe("solo paths", () => {
   it("soloArtDir/soloExecDir nest under the topic dir", () => {
-    process.env.CONSORT_HOME = "/R";
+    process.env.AP_HOME = "/R";
     expect(soloArtDir("auth")).toBe(join(topicDir("auth"), "_solo"));
     expect(soloExecDir("auth")).toBe(join(topicDir("auth"), "_solo", "execute"));
   });
@@ -104,6 +104,6 @@ describe("renderResume", () => {
     const md = renderResume({ topic: "auth", branch: "feat/solo-auth", artDir: "/s/_solo", phase: "build", gate: "part-turn-failed" });
     expect(md).toContain("# RESUME — auth");
     expect(md).toContain("State dir: /s/_solo");
-    expect(md).toContain("re-run /consort:solo");
+    expect(md).toContain("re-run /ap:solo");
   });
 });

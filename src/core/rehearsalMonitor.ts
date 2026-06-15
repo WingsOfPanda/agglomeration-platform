@@ -1,4 +1,4 @@
-// Liveness state machine for /consort:rehearsal monitor. Faithful to
+// Liveness state machine for /ap:rehearsal monitor. Faithful to
 // deep-research-monitor.sh: byte-tail event emit (A), phase-gate stale/stuck (B),
 // periodic whole-outbox rescan dedup (C). Pure single-scan; the verb (C7) owns the
 // loop + persistence. Byte offsets are BYTES (Buffer.byteLength), never char counts.

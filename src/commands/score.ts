@@ -80,13 +80,13 @@ export async function initWith(tokens: string[], d: ScoreInitDeps): Promise<numb
   let roster = d.activeProviders().filter((p) => d.isValidated(p));
   if (roster.length < 2) {
     log.error(`score init: needs >=2 consult-validated providers; got ${roster.length}`);
-    log.error("  just ask Claude directly (this session) — no /consort:score orchestration needed");
+    log.error("  just ask Claude directly (this session) — no /ap:score orchestration needed");
     return 1;
   }
   if (roster.length > 3) { log.warn(`score init: ${roster.length} providers available; capping the ensemble to the first 3`); roster = roster.slice(0, 3); }
 
   const art = scoreArtDir(topic);
-  if (existsSync(art)) { log.error(`score init: topic already in flight: ${art}`); log.error("  run /consort:coda or pick a different topic"); return 2; }
+  if (existsSync(art)) { log.error(`score init: topic already in flight: ${art}`); log.error("  run /ap:coda or pick a different topic"); return 2; }
 
   const instruments = d.pickInstruments(topic, roster.length);
   if (instruments.length < roster.length) { log.error(`score init: instrument pool exhausted (need ${roster.length}, got ${instruments.length})`); return 1; }
@@ -477,7 +477,7 @@ interface DrilldownTestHooks { writeProbe?: (outPath: string) => void; }
 // Default to the research turn timeout (the bash predecessor's findings_timeout_s, ~600s) — a real
 // drill turn (read the doc + write cited notes) routinely exceeds 90s; env-overridable. The wait
 // returns as soon as done/error appears, so a generous ceiling only bounds the hang case.
-const DRILLDOWN_TIMEOUT = (): number => Number(process.env.CONSORT_DRILLDOWN_TIMEOUT_S) || consultTimeout("research");
+const DRILLDOWN_TIMEOUT = (): number => Number(process.env.AP_DRILLDOWN_TIMEOUT_S) || consultTimeout("research");
 
 async function drilldownRun(rest: string[]): Promise<number> {
   return drilldownWith(rest, { ...liveResearchSendDeps, ...liveResearchWaitDeps }, {});

@@ -1,4 +1,4 @@
-// Mechanical, task-agnostic sanity checks for /consort:rehearsal (research-validity A3).
+// Mechanical, task-agnostic sanity checks for /ap:rehearsal (research-validity A3).
 // Flags a VALID result as suspect; orthogonal to A1's verify verdict. Pure: FS injected; the score
 // pass applies the rows. A clean result returns no flags.
 

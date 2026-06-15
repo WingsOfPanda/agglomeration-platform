@@ -25,7 +25,7 @@ export function lastOutboxEvent(outbox: string): string | undefined {
 // Stale-window knob; empty-string falls back to 180 to mirror the sibling shell's `:-` default
 // (the `|| '180'` string-coerce, not `?? 180`, so set-but-empty also defaults). `classifyStale`'s
 // own guard rejects any non-finite/negative/fractional value.
-export const staleThresholdS = (): number => Number(process.env.CONSORT_STALE_THRESHOLD_S || "180");
+export const staleThresholdS = (): number => Number(process.env.AP_STALE_THRESHOLD_S || "180");
 
 export function classifyStale(state: string, outbox: string, thresholdS = 180): string {
   if (state !== "working" || !existsSync(outbox)) return state;

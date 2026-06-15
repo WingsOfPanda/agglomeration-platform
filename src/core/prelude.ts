@@ -1,4 +1,4 @@
-// src/core/prelude.ts — paths + slug for /consort:prelude (port of meditate-init.sh + the
+// src/core/prelude.ts — paths + slug for /ap:prelude (port of meditate-init.sh + the
 // _meditate art-dir helper). Built on score's bare-slug convention; the _prelude suffix
 // disambiguates from _score/_rehearsal, so no topic prefix.
 import { join } from "node:path";

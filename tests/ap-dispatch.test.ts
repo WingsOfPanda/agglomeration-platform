@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const CLI = join(process.cwd(), "dist", "consort.cjs");
+const CLI = join(process.cwd(), "dist", "ap.cjs");
 function run(args: string[], env: Record<string, string> = {}) {
   try {
     const stdout = execFileSync("node", [CLI, ...args], { encoding: "utf8", env: { ...process.env, ...env } });
@@ -20,13 +20,13 @@ describe("dispatcher (requires npm run build first)", () => {
   });
   it("--mint-args-file prints a path under _args and creates nothing harmful", () => {
     const home = mkdtempSync(join(tmpdir(), "disp-"));
-    const r = run(["roster", "--mint-args-file"], { CONSORT_HOME: home });
+    const r = run(["roster", "--mint-args-file"], { AP_HOME: home });
     expect(r.code).toBe(0);
     const path = r.stdout.trim();
     expect(path).toContain("/_args/");
   });
-  it("_banner renders FINE and exits 0 (fast countdown via CONSORT_BANNER_FAST)", () => {
-    const r = run(["_banner", "strings-violin:codex:demo", "colour110"], { CONSORT_BANNER_FAST: "1" });
+  it("_banner renders FINE and exits 0 (fast countdown via AP_BANNER_FAST)", () => {
+    const r = run(["_banner", "strings-violin:codex:demo", "colour110"], { AP_BANNER_FAST: "1" });
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("FINE — pane closing");
   });

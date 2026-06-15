@@ -5,8 +5,8 @@ import { join } from "node:path";
 import * as A from "../src/core/archive.js";
 import { partDir, topicDir, globalRoot, repoHash } from "../src/core/paths.js";
 
-afterEach(() => { delete process.env.CONSORT_HOME; delete process.env.CLAUDE_CODE_SESSION_ID; });
-function home() { const h = mkdtempSync(join(tmpdir(), "ar-")); process.env.CONSORT_HOME = h; return h; }
+afterEach(() => { delete process.env.AP_HOME; delete process.env.CLAUDE_CODE_SESSION_ID; });
+function home() { const h = mkdtempSync(join(tmpdir(), "ar-")); process.env.AP_HOME = h; return h; }
 
 describe("archive", () => {
   it("stateInit creates clean part dir + session id", () => {
@@ -58,13 +58,13 @@ describe("archive", () => {
   });
   it("finalizeArchived no-op on empty dir", () => {
     home();
-    expect(() => A.finalizeArchived(join(process.env.CONSORT_HOME!, "nope"))).not.toThrow();
+    expect(() => A.finalizeArchived(join(process.env.AP_HOME!, "nope"))).not.toThrow();
   });
 });
 
 describe("archiveTopic supports the score suite", () => {
   it("moves _score/ into the archive", () => {
-    process.env.CONSORT_HOME = mkdtempSync(join(tmpdir(), "arch-score-"));
+    process.env.AP_HOME = mkdtempSync(join(tmpdir(), "arch-score-"));
     const topic = "score-demo";
     const art = join(topicDir(topic), "_score");
     mkdirSync(art, { recursive: true });
@@ -78,7 +78,7 @@ describe("archiveTopic supports the score suite", () => {
 
 describe("archiveTopic supports the rehearsal suite", () => {
   it("moves _rehearsal/ into the archive and returns the dest path", () => {
-    process.env.CONSORT_HOME = mkdtempSync(join(tmpdir(), "arch-rehearsal-"));
+    process.env.AP_HOME = mkdtempSync(join(tmpdir(), "arch-rehearsal-"));
     const topic = "rehearsal-demo";
     const td = topicDir(topic);
     const art = join(td, "_rehearsal");

@@ -1,4 +1,4 @@
-// src/commands/perform.ts — single-repo command path for /consort:perform.
+// src/commands/perform.ts — single-repo command path for /ap:perform.
 // Byte-faithful port of the prior bash plugin's deploy verb set; WIRES the Phase-A core modules.
 // Rebrand: _deploy/->_perform/, feat/deploy-->feat/perform-, conductor sender->From: maestro.
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, statSync, readdirSync } from "node:fs";
@@ -27,7 +27,7 @@ import { run as sendRun } from "./send.js";
 import { detectTestCommand } from "../core/solo.js";
 
 const PART = "tutti";
-const PERFORM_TURN_TIMEOUT = (): number => Number(process.env.CONSORT_PERFORM_TURN_TIMEOUT_S) || 14400;
+const PERFORM_TURN_TIMEOUT = (): number => Number(process.env.AP_PERFORM_TURN_TIMEOUT_S) || 14400;
 
 /** model for the tutti part = the resolved provider (codex|claude). Reads provider.txt; default codex. */
 function partModel(art: string): string {
@@ -129,7 +129,7 @@ export async function initWith(tokens: string[], d: PerformInitDeps): Promise<nu
   }
 
   const art = performArtDir(topic);
-  if (existsSync(art)) { log.error(`perform init: topic already in flight: ${art} (run /consort:coda or pick a different --topic)`); return 2; }
+  if (existsSync(art)) { log.error(`perform init: topic already in flight: ${art} (run /ap:coda or pick a different --topic)`); return 2; }
 
   const targetCwd = d.repoRoot();
   const provider = detectProvider(targetCwd);

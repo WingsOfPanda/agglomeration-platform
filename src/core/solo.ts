@@ -111,7 +111,7 @@ export function renderSummary(f: SummaryFacts): string {
     `- ${f.abortedReason ?? "unknown"}`,
     "",
     "## RESUME instructions",
-    `- Read RESUME.md for the state pointer; re-run /consort:solo to retry.`,
+    `- Read RESUME.md for the state pointer; re-run /ap:solo to retry.`,
     "",
   ].join("\n");
 }
@@ -128,7 +128,7 @@ export function renderResume(f: ResumeFacts): string {
     `- Branch: ${f.branch}`,
     "",
     "## Manual resume",
-    `- Inspect ${f.artDir}/execute/ for the part's partial work, then re-run /consort:solo.`,
+    `- Inspect ${f.artDir}/execute/ for the part's partial work, then re-run /ap:solo.`,
     "",
   ].join("\n");
 }

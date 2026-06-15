@@ -1,4 +1,4 @@
-// tests/playback-core.test.ts — pure logic for /consort:playback.
+// tests/playback-core.test.ts — pure logic for /ap:playback.
 import { describe, it, expect } from "vitest";
 import {
   parseSince, parseForensicsFrontmatter, parseMechanicalFindings,
@@ -127,7 +127,7 @@ describe("trend ledger", () => {
 });
 
 describe("reviewedTarget", () => {
-  const root = "/home/u/.consort/forensics";
+  const root = "/home/u/.ap/forensics";
   it("live file -> .reviewed/<date>/<file>", () => {
     expect(reviewedTarget(root, `${root}/2026-05-30/11-00-00-perform-x.md`))
       .toBe(`${root}/.reviewed/2026-05-30/11-00-00-perform-x.md`);

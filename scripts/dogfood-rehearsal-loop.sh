@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase C ACCEPTANCE GATE + Phase D wind-down — simulated-parts dogfood for /consort:rehearsal.
+# Phase C ACCEPTANCE GATE + Phase D wind-down — simulated-parts dogfood for /ap:rehearsal.
 #
 # Drives the REAL CLI verbs (init/metric/experiment-send/score/monitor/status-brief)
 # across simulated experiment rounds, then exercises the Phase-D wind-down verbs
@@ -8,19 +8,19 @@
 # but live codex pane spawns are blocked by codex 0.135.0's directory-trust prompt +
 # need tmux, so the PARTS are SIMULATED: we scaffold their state + outbox by hand
 # instead of `spawn-all`, then dispatch/score/monitor against that state.
-# CONSORT_DRY_RUN=1 makes experiment-send skip the tmux pane nudge.
+# AP_DRY_RUN=1 makes experiment-send skip the tmux pane nudge.
 #
-# Self-contained + idempotent: creates its own temp CONSORT_HOME, runs, prints
+# Self-contained + idempotent: creates its own temp AP_HOME, runs, prints
 # PASS/FAIL per assertion + a final tally. Exit 0 iff every assertion passed.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
-CS="node dist/consort.cjs"
+CS="node dist/ap.cjs"
 
-CONSORT_HOME="$(mktemp -d "${TMPDIR:-/tmp}/consort-rehearsal-dogfood.XXXXXX")"
-export CONSORT_HOME
-trap 'rm -rf "$CONSORT_HOME"' EXIT
+AP_HOME="$(mktemp -d "${TMPDIR:-/tmp}/ap-rehearsal-dogfood.XXXXXX")"
+export AP_HOME
+trap 'rm -rf "$AP_HOME"' EXIT
 
 PASS=0
 FAIL=0
@@ -57,7 +57,7 @@ EOF
 
 # Dispatch one experiment (dry-run, no pane nudge); part must be phase=idle.
 dispatch() { # <topic> <inst> <expId> <label> <brief>
-  CONSORT_DRY_RUN=1 $CS rehearsal experiment-send "$1" "$2" "$3" "$4" "$5"
+  AP_DRY_RUN=1 $CS rehearsal experiment-send "$1" "$2" "$3" "$4" "$5"
 }
 
 completion_line() { $CS rehearsal status-brief "$1" 2>/dev/null | grep 'Completion check' || true; }
@@ -181,7 +181,7 @@ printf '%s\n' "{\"instrument\":\"$INST_P\",\"model\":\"codex\",\"pane_id\":\"%9\
 i=1
 for m in 0.905 0.906 0.904 0.905 0.906; do
   eid="$(printf 'exp-%03d' "$i")"
-  CONSORT_DRY_RUN=1 $CS rehearsal experiment-send "$TOPIC_B" "$INST_P" "$eid" "plateau" "incremental tweak $i" >/dev/null 2>&1
+  AP_DRY_RUN=1 $CS rehearsal experiment-send "$TOPIC_B" "$INST_P" "$eid" "plateau" "incremental tweak $i" >/dev/null 2>&1
   cat > "$ART_B/parts/$INST_P/experiments/$eid/result.json" <<EOF
 {"branch_id":"$eid","approach_label":"plateau","metric_name":"accuracy","metric_value":$m,"status":"ok","runtime_s":40.0,"log_paths":[],"checkpoint_path":null,"notes":"plateau $eid"}
 EOF
@@ -249,7 +249,7 @@ check "D5 forensics rc 0 (best-effort)" "$fo_rc"
 # D6 teardown: winner symlink + archive. Make the winner code dir real first.
 mkdir -p "$ART/parts/violin/experiments/exp-003/code"
 TD_OUT="$($CS rehearsal teardown "$TOPIC" 2>/dev/null)" && td_rc=0 || td_rc=$?
-ARCHIVE_ROOT="$CONSORT_HOME/archive"
+ARCHIVE_ROOT="$AP_HOME/archive"
 check "D6 teardown rc 0 + printed archive dest under archive/" \
   "$([ "$td_rc" -eq 0 ] && printf '%s' "$TD_OUT" | grep -q '/archive/.*/_rehearsal-' && echo 0 || echo 1)"
 check "D7 topic _rehearsal archived (live art dir gone; archive present)" \

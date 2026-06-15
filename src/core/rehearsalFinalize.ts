@@ -1,4 +1,4 @@
-// Pure finalize helpers for /consort:rehearsal. Faithful to the deep-research finalize script.
+// Pure finalize helpers for /ap:rehearsal. Faithful to the deep-research finalize script.
 const HC_RE = /^\s*([a-z_]+)\s*=\s*([0-9]+(?:\.[0-9]+)?)\b/;
 
 /** Phase case-map: working/stale/stuck/blocked->incomplete; idle/complete->complete; else null (no write). */

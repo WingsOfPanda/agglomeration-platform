@@ -4,13 +4,13 @@ argument-hint: [--ensemble] <topic — what to research / design>
 allowed-tools: Bash, Write, Read, Edit, AskUserQuestion, WebSearch, Skill, TodoWrite
 ---
 
-# /consort:score
+# /ap:score
 
 Run a cross-verified multi-model investigation on `$ARGUMENTS` and produce a single
 deploy-schema design doc (Problem / Goal / Architecture / Components / Testing / Success
-Criteria) that passes the deploy-audit gate — the artifact `/consort:perform` will consume.
+Criteria) that passes the deploy-audit gate — the artifact `/ap:perform` will consume.
 
-Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs"`.
+Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
 
 ## Progress tracking
 
@@ -27,7 +27,7 @@ high-level stages, marking each `in_progress` on entry and `completed` on exit:
 At any point in the run, if something looks weird, surprising, or suspicious — even a likely false
 alarm — record it: `$CS score flag <TOPIC> "<what looked off>"`. It writes straight to the playback
 feed (survives teardown and aborts) and costs nothing, so prefer over-recording. Review later with
-`/consort:playback`.
+`/ap:playback`.
 
 ## Stage 0 — args-file + init
 
@@ -86,11 +86,11 @@ emit the heading + a one-line explanation (never `_(skipped)_` on the four requi
 
 Then assemble + audit: `$CS score assemble <TOPIC>`.
 - **rc 0** → it prints the design-doc path. Run `EXPORTED=$($CS score export-doc <TOPIC> | sed -n
-  's/^EXPORTED=//p')` to copy the doc into `docs/consort/specs/` (a non-zero `export-doc` is
+  's/^EXPORTED=//p')` to copy the doc into `docs/ap/specs/` (a non-zero `export-doc` is
   non-fatal — just skip the exported path). **Read and present** the doc to the user, state its
-  location clearly — **`$EXPORTED` (docs/consort/specs/) as the primary, discoverable path**, with
+  location clearly — **`$EXPORTED` (docs/ap/specs/) as the primary, discoverable path**, with
   the `_score/design-doc/` path as the source — then point at the next step:
-  `/consort:perform $EXPORTED`.
+  `/ap:perform $EXPORTED`.
 - **rc 1** (audit FAIL) → it printed `ISSUE=<code>` lines to stderr. Map each to its section
   (`no_goal_section`→goal, `no_arch_section`→architecture, `no_testing_section`→testing,
   `no_success_section`→success-criteria, `tbd_marker`/`todo_marker`/`fill_in_later_marker`/
@@ -110,7 +110,7 @@ part in parallel (`--target-pane`, `--cwd <repo>`), and writes `$ART/spawn-resul
 - **rc 0** — all N parts ready → Stage 4.
 - **rc 1** (partial) — read `$ART/spawn-results.tsv`; the rows with `rc==0` are the survivors. If
   **≥2 survive**, **rewrite `$ART/roster.txt`** to only the survivor rows (TSV `<provider>\t<instrument>`,
-  one per line) and proceed degraded to Stage 4. If **<2 survive**, abort: run `/consort:coda
+  one per line) and proceed degraded to Stage 4. If **<2 survive**, abort: run `/ap:coda
   <instrument> <TOPIC>` for any ready part, tell the user the ensemble could not reach 2 parts, and stop.
 - **rc 2** (all failed) — retry once: `rm -f $ART/preflight-panes.txt $ART/spawn-results.tsv` and re-run
   `$CS score spawn-all <TOPIC>`. If it still returns rc 2, abort (redirect: "just ask Claude directly")
@@ -164,7 +164,7 @@ prints `<INST>\t<terminal|question|pending>` for every part and returns 0 only w
 `terminal`. rc 1 means at least one part is still `pending` (researching) or `question` (needs a
 relay): keep handling notifications / relay, then re-run the gate. Only on rc 0 proceed. Then build the **diff
 roster** = parts whose `findings.md` exists (`FS` ∈ {ok, empty, malformed}). If **<2** parts have
-findings → abort (run `/consort:coda <instrument> <TOPIC>` for each ready part, tell the user the
+findings → abort (run `/ap:coda <instrument> <TOPIC>` for each ready part, tell the user the
 ensemble could not produce 2 sets of findings, stop). If some parts were dropped, **rewrite
 `$ART/roster.txt`** to the diff roster before Stage 6.
 
@@ -236,7 +236,7 @@ so keep handling / relay and re-run. Only on rc 0 continue.
 
 `$CS score assemble <TOPIC>`.
 - **rc 0** → it prints the design-doc path. Immediately run `EXPORTED=$($CS score export-doc <TOPIC>
-  | sed -n 's/^EXPORTED=//p')` to copy the doc into `docs/consort/specs/` **before** teardown/
+  | sed -n 's/^EXPORTED=//p')` to copy the doc into `docs/ap/specs/` **before** teardown/
   archive (Stages 13b/14) so the `_score` source still exists (a non-zero `export-doc` is non-fatal).
   **Read and present** the doc, then continue to Stage 12 (Phase F). Carry `$EXPORTED` to Stage 15.
 - **rc 1** (audit FAIL) → it printed paired `ISSUE=<code>` + `SECTION=<mapped>` lines to stderr. For
@@ -278,7 +278,7 @@ $FORENSICS", then **Read** it and **append** a `## Maestro reflection` section (
 what's surprising, repeat-vs-first-time patterns, the suggested next action — a memory worth saving, a
 spec topic, a patch, or a one-off) via the Write/Edit tool. **Idempotent:** skip the append if the file
 already contains the exact header `## Maestro reflection`. The forensics file lives under
-`~/.consort/forensics/<date>/` — OUTSIDE the topic state — so it survives teardown + archive.
+`~/.ap/forensics/<date>/` — OUTSIDE the topic state — so it survives teardown + archive.
 
 ## Stage 13b — teardown (FINE banner)
 
@@ -291,16 +291,16 @@ per-part archive). Per-part failures are tolerated. (Equivalent fallback: `$CS c
 
 `$CS score archive <TOPIC>` → `archiveTopic(topic,'score')`: stamps every part `status.json` to
 `state=archived`, moves the whole `_score/` dir (including `drilldowns/`) to
-`~/.consort/archive/<repo-hash>/<TOPIC>/_score-<ts>`, and rmdirs the topic. The forensics file from
+`~/.ap/archive/<repo-hash>/<TOPIC>/_score-<ts>`, and rmdirs the topic. The forensics file from
 Stage 13a is untouched (it lives outside the state tree). Fast-path: skip (nothing beyond the doc).
 
 ## Stage 15 — present + perform handoff
 
 **Read and present** the final design-doc. State its location clearly: **`$EXPORTED`
-(`docs/consort/specs/`) is the primary, discoverable copy** (exported in Stage 11, survives
+(`docs/ap/specs/`) is the primary, discoverable copy** (exported in Stage 11, survives
 teardown/archive); the source `_score`/archive copy (`$ART/design-doc/<date>-<TOPIC>-design.md`, or
 the archived path after Stage 14) is noted as provenance. Then point the user at the next step:
-`/consort:perform $EXPORTED` — the deploy-audit gate already guarantees the doc is perform-ready.
+`/ap:perform $EXPORTED` — the deploy-audit gate already guarantees the doc is perform-ready.
 This is the end of `score`.
 
 ## Notes

@@ -41,7 +41,7 @@ export async function run(args: string[]): Promise<number> {
   if (!inTmuxSession()) { log.error("must run inside a tmux session"); return 1; }
   if (!haveCmd("tmux")) { log.error("tmux not on PATH"); return 1; }
   if (!tmuxVersionOk()) { log.error("tmux >= 3.0 required"); return 1; }
-  if (!(await ensurePaneBorders())) log.warn("could not set pane-border globals; part labels may not render"); // render @cs_ part labels on pane borders (not the raw TUI title)
+  if (!(await ensurePaneBorders())) log.warn("could not set pane-border globals; part labels may not render"); // render @ap_ part labels on pane borders (not the raw TUI title)
 
   if (instrument === "random") {
     const pick = pickRandomInstrument(topic);
@@ -127,7 +127,7 @@ export async function run(args: string[]): Promise<number> {
       initial = initial.replace(/^"|"$/g, "");
       inboxWrite(instrument, model, topic, initial);
       await paneSend(pane, `Read ${inboxPath(instrument, model, topic)} and execute the task. Reply when done.`);
-      log.info(`use: consort collect ${instrument} ${topic}  (to wait for {done})`);
+      log.info(`use: ap collect ${instrument} ${topic}  (to wait for {done})`);
     }
 
     process.stdout.write(`\n  part:    ${labelFor(instrument, model, topic)}\n  pane:    ${pane}\n  state:   ${partDir(instrument, model, topic)}\n  ready:   yes\n`);

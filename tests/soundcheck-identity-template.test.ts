@@ -17,11 +17,11 @@ describe("soundcheck identity-template check (M1)", () => {
   it("FAILs (rc 1) when the plugin-side identity template is missing", async () => {
     const home = mkdtempSync(join(tmpdir(), "sc-home-"));
     const root = stageRoot();
-    const prevHome = process.env.CONSORT_HOME, prevRoot = process.env.CLAUDE_PLUGIN_ROOT;
-    process.env.CONSORT_HOME = home; process.env.CLAUDE_PLUGIN_ROOT = root;
+    const prevHome = process.env.AP_HOME, prevRoot = process.env.CLAUDE_PLUGIN_ROOT;
+    process.env.AP_HOME = home; process.env.CLAUDE_PLUGIN_ROOT = root;
     try { expect(await soundcheck([])).toBe(1); }
     finally {
-      if (prevHome === undefined) delete process.env.CONSORT_HOME; else process.env.CONSORT_HOME = prevHome;
+      if (prevHome === undefined) delete process.env.AP_HOME; else process.env.AP_HOME = prevHome;
       if (prevRoot === undefined) delete process.env.CLAUDE_PLUGIN_ROOT; else process.env.CLAUDE_PLUGIN_ROOT = prevRoot;
       rmSync(home, { recursive: true, force: true }); rmSync(root, { recursive: true, force: true });
     }

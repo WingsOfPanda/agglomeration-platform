@@ -1,4 +1,4 @@
-// Pure metric helpers for /consort:rehearsal. Faithful to deep-research.sh
+// Pure metric helpers for /ap:rehearsal. Faithful to deep-research.sh
 // (extract_metric, format_metric_block, check_completion's metric.md parse,
 // format_sota_block), modernized to typed TS.
 

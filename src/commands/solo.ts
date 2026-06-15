@@ -48,7 +48,7 @@ export async function run(args: string[]): Promise<number> {
   }
 }
 
-// ---- forensics (delegates to core runForensics). Feeds /consort:playback. ----
+// ---- forensics (delegates to core runForensics). Feeds /ap:playback. ----
 export async function forensicsRun(rest: string[]): Promise<number> {
   return runForensics("solo", soloArtDir, rest[0]);
 }
@@ -69,7 +69,7 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
   if (!d.haveCmd(binary)) { log.error(`solo init: ${provider}'s binary '${binary}' is not on PATH`); return 3; }
 
   const art = soloArtDir(slug);
-  if (existsSync(art)) { log.error(`solo init: topic already in flight: ${art}`); log.error("  run /consort:coda or pick a different topic"); return 2; }
+  if (existsSync(art)) { log.error(`solo init: topic already in flight: ${art}`); log.error("  run /ap:coda or pick a different topic"); return 2; }
 
   const instrument = d.pickRandomInstrument(slug);
   if (!instrument) { log.error(`solo init: no available instrument in the pool for '${slug}'`); return 1; }
@@ -171,7 +171,7 @@ export interface TurnWaitDeps {
   wait(instrument: string, model: string, topic: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null>;
 }
 
-const SOLO_TURN_TIMEOUT = Number(process.env.CONSORT_SOLO_TURN_TIMEOUT) || 14400;
+const SOLO_TURN_TIMEOUT = Number(process.env.AP_SOLO_TURN_TIMEOUT) || 14400;
 
 async function turnWaitRun(rest: string[]): Promise<number> {
   const [topic, roundStr] = rest;
