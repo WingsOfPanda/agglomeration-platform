@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Port-parity dogfood — exercises the new CLI verbs added in the port-parity workstream
 # end-to-end against the REAL built bundle (`node dist/ap.cjs`) and a throwaway
-# AP_HOME. Covers the surface that the per-command dogfoods (rehearsal/prelude) miss:
+# AP_HOME. Covers the surface that the per-command dogfoods (autoresearch/explore) miss:
 #
-#   score   offset-reset  — clean-retry cascade wipes findings/diff/state for one worker/phase
-#   perform drop-worker     — rewrites workers.txt, removing one row + reports new N
-#   perform find-latest-doc — newest */_score/design-doc/*-design.md by mtime
-#   rehearsal init        — seeds <art>/lib/ from config/rehearsal-lib-seed/ (arena.py present)
+#   design   offset-reset  — clean-retry cascade wipes findings/diff/state for one worker/phase
+#   implement drop-worker     — rewrites workers.txt, removing one row + reports new N
+#   implement find-latest-doc — newest */_design/design-doc/*-design.md by mtime
+#   autoresearch init        — seeds <art>/lib/ from config/autoresearch-lib-seed/ (arena.py present)
 #
 # State is seeded by hand at the exact filenames the verbs operate on (mirroring the unit
 # tests) so the script is self-contained, git-less-cwd-safe, and needs no model panes/tmux.
@@ -43,15 +43,15 @@ REPO_HASH="$(cd "$WD" && node -e 'const{createHash}=require("crypto");const{real
 STATE="$AP_HOME/state/$REPO_HASH"
 
 ############################################################################
-# Scenario A — score offset-reset (research clean-retry cascade)
+# Scenario A — design offset-reset (research clean-retry cascade)
 ############################################################################
 echo "===================================================================="
-echo "Scenario A — score offset-reset wipes one worker's research artifacts"
+echo "Scenario A — design offset-reset wipes one worker's research artifacts"
 echo "===================================================================="
 
 TOPIC_S=svc
 INST_S=bravo
-ART_S="$STATE/$TOPIC_S/_score"
+ART_S="$STATE/$TOPIC_S/_design"
 PART_S="$STATE/$TOPIC_S/$INST_S-codex"   # <inst>-<model> worker dir
 mkdir -p "$ART_S" "$PART_S"
 
@@ -66,12 +66,12 @@ printf 'sim consensus\n'   > "$ART_S/consensus.txt"
 printf 'sim only\n'        > "$ART_S/codex_only_items.txt"
 printf 'done\n'            > "$ART_S/research-$INST_S.txt"
 # An UNRELATED file that must survive (different worker's findings + the metric doc).
-printf 'keep me\n'         > "$ART_S/scoreboard.md"
+printf 'keep me\n'         > "$ART_S/designboard.md"
 mkdir -p "$STATE/$TOPIC_S/alpha-codex"
 printf 'alpha findings\n' > "$STATE/$TOPIC_S/alpha-codex/findings.md"
 
-or_rc="$(wd_rc $CS score offset-reset "$TOPIC_S" "$INST_S" research)"
-assert "A1 score offset-reset research rc 0" "$or_rc"
+or_rc="$(wd_rc $CS design offset-reset "$TOPIC_S" "$INST_S" research)"
+assert "A1 design offset-reset research rc 0" "$or_rc"
 assert "A2 worker findings.md removed" \
   "$([ ! -f "$PART_S/findings.md" ] && echo 0 || echo 1)"
 assert "A3 art diff.md + adjudicated-draft.md removed" \
@@ -80,31 +80,31 @@ assert "A4 glob targets (consensus.txt + *_only_items.txt) removed" \
   "$([ ! -f "$ART_S/consensus.txt" ] && [ ! -f "$ART_S/codex_only_items.txt" ] && echo 0 || echo 1)"
 assert "A5 state research-$INST_S.txt removed" \
   "$([ ! -f "$ART_S/research-$INST_S.txt" ] && echo 0 || echo 1)"
-assert "A6 unrelated scoreboard.md + sibling worker findings survive" \
-  "$([ -f "$ART_S/scoreboard.md" ] && [ -f "$STATE/$TOPIC_S/alpha-codex/findings.md" ] && echo 0 || echo 1)"
+assert "A6 unrelated designboard.md + sibling worker findings survive" \
+  "$([ -f "$ART_S/designboard.md" ] && [ -f "$STATE/$TOPIC_S/alpha-codex/findings.md" ] && echo 0 || echo 1)"
 
 # --keep-findings leaves the worker deliverable intact (seed a fresh one first).
 printf 'fresh findings\n' > "$PART_S/findings.md"
-kf_rc="$(wd_rc $CS score offset-reset "$TOPIC_S" "$INST_S" research --keep-findings)"
-assert "A7 score offset-reset --keep-findings rc 0 + findings.md preserved" \
+kf_rc="$(wd_rc $CS design offset-reset "$TOPIC_S" "$INST_S" research --keep-findings)"
+assert "A7 design offset-reset --keep-findings rc 0 + findings.md preserved" \
   "$([ "$kf_rc" -eq 0 ] && [ -f "$PART_S/findings.md" ] && echo 0 || echo 1)"
 
 ############################################################################
-# Scenario B — perform drop-worker (rewrite workers.txt, drop one row)
+# Scenario B — implement drop-worker (rewrite workers.txt, drop one row)
 ############################################################################
 echo "===================================================================="
-echo "Scenario B — perform drop-worker removes a row + reports new N"
+echo "Scenario B — implement drop-worker removes a row + reports new N"
 echo "===================================================================="
 
 TOPIC_P=mr
-ART_P="$STATE/$TOPIC_P/_perform"
+ART_P="$STATE/$TOPIC_P/_implement"
 mkdir -p "$ART_P"
 # workers.txt = 3-col TSV (slug \t cwd \t provider) per the multiInit format. drop-worker
 # matches on col 0 (the agent slug) and must keep the other rows byte-faithfully.
 printf 'bravo\t/repo/a\tcodex\nalpha\t/repo/b\tcodex\ncharlie\t/repo/c\tclaude\n' > "$ART_P/workers.txt"
 
-DP_OUT="$(wd_out $CS perform drop-worker "$TOPIC_P" alpha)"; dp_rc=$?
-assert "B1 perform drop-worker rc 0" "$dp_rc"
+DP_OUT="$(wd_out $CS implement drop-worker "$TOPIC_P" alpha)"; dp_rc=$?
+assert "B1 implement drop-worker rc 0" "$dp_rc"
 assert "B2 drop-worker prints N=2" \
   "$(printf '%s' "$DP_OUT" | grep -q '^N=2$' && echo 0 || echo 1)"
 assert "B3 alpha row gone; bravo + charlie remain" \
@@ -112,20 +112,20 @@ assert "B3 alpha row gone; bravo + charlie remain" \
 assert "B4 workers.txt now has exactly 2 rows" \
   "$([ "$(wc -l < "$ART_P/workers.txt")" -eq 2 ] && echo 0 || echo 1)"
 # dropping a non-existent agent -> rc 1 (not 2; usage is well-formed).
-no_rc="$(wd_rc $CS perform drop-worker "$TOPIC_P" ghost)"
+no_rc="$(wd_rc $CS implement drop-worker "$TOPIC_P" ghost)"
 assert "B5 drop-worker unknown agent rc 1" "$([ "$no_rc" -eq 1 ] && echo 0 || echo 1)"
 
 ############################################################################
-# Scenario C — perform find-latest-doc (newest *-design.md by mtime)
+# Scenario C — implement find-latest-doc (newest *-design.md by mtime)
 ############################################################################
 echo "===================================================================="
-echo "Scenario C — perform find-latest-doc resolves the newest design doc"
+echo "Scenario C — implement find-latest-doc resolves the newest design doc"
 echo "===================================================================="
 
 # Empty home (different cwd => no state) -> rc 1 already covered by the unit tests; here we
-# seed two */_score/design-doc/*-design.md under our state and assert the newer wins.
-DD1="$STATE/topic-old/_score/design-doc"
-DD2="$STATE/topic-new/_score/design-doc"
+# seed two */_design/design-doc/*-design.md under our state and assert the newer wins.
+DD1="$STATE/topic-old/_design/design-doc"
+DD2="$STATE/topic-new/_design/design-doc"
 mkdir -p "$DD1" "$DD2"
 printf '# old\n' > "$DD1/alpha-design.md"
 printf '# new\n' > "$DD2/beta-design.md"
@@ -133,23 +133,23 @@ printf '# new\n' > "$DD2/beta-design.md"
 touch -d '2026-05-01T00:00:00' "$DD1/alpha-design.md"
 touch -d '2026-05-30T00:00:00' "$DD2/beta-design.md"
 
-FL_OUT="$(wd_out $CS perform find-latest-doc)"; fl_rc=$?
+FL_OUT="$(wd_out $CS implement find-latest-doc)"; fl_rc=$?
 assert "C1 find-latest-doc rc 0" "$fl_rc"
 assert "C2 find-latest-doc prints DOC=<newest> (beta-design.md)" \
-  "$(printf '%s' "$FL_OUT" | grep -q '^DOC=.*topic-new/_score/design-doc/beta-design.md$' && echo 0 || echo 1)"
+  "$(printf '%s' "$FL_OUT" | grep -q '^DOC=.*topic-new/_design/design-doc/beta-design.md$' && echo 0 || echo 1)"
 
 ############################################################################
-# Scenario D — rehearsal init seeds <art>/lib/ (arena.py present)
+# Scenario D — autoresearch init seeds <art>/lib/ (arena.py present)
 ############################################################################
 echo "===================================================================="
-echo "Scenario D — rehearsal init seeds <art>/lib/ from rehearsal-lib-seed"
+echo "Scenario D — autoresearch init seeds <art>/lib/ from autoresearch-lib-seed"
 echo "===================================================================="
 
-# rehearsal init resolves contracts.yaml + rehearsal-lib-seed/ relative to CLAUDE_PLUGIN_ROOT
+# autoresearch init resolves contracts.yaml + autoresearch-lib-seed/ relative to CLAUDE_PLUGIN_ROOT
 # (defaulting to cwd); pin it to the repo so config resolves from our throwaway cwd.
-RH_OUT="$( cd "$WD" && CLAUDE_PLUGIN_ROOT="$REPO" $CS rehearsal init --slug df-lib-seed 'maximize accuracy for the lib-seed dogfood' 2>/dev/null )"; rh_rc=$?
+RH_OUT="$( cd "$WD" && CLAUDE_PLUGIN_ROOT="$REPO" $CS autoresearch init --slug df-lib-seed 'maximize accuracy for the lib-seed dogfood' 2>/dev/null )"; rh_rc=$?
 ART_R="$(printf '%s\n' "$RH_OUT" | sed -n 's/^ART=//p')"
-assert "D1 rehearsal init rc 0 + prints ART=" \
+assert "D1 autoresearch init rc 0 + prints ART=" \
   "$([ "$rh_rc" -eq 0 ] && [ -n "$ART_R" ] && echo 0 || echo 1)"
 assert "D2 <art>/lib/arena.py seeded" \
   "$([ -n "$ART_R" ] && [ -f "$ART_R/lib/arena.py" ] && echo 0 || echo 1)"

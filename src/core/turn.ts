@@ -52,7 +52,7 @@ export function classifyTurn(ev: OutboxEvent | null): TurnStatus {
 /** Fix-round prompt body (round >= 2). Same fence note as composeRound1Prompt. */
 export function composeFixPrompt(issuesText: string, round: number): string {
   return [
-    `You are entering ROUND ${round} of /ap:solo (fix loop), still on the same branch.`,
+    `You are entering ROUND ${round} of /ap:quick (fix loop), still on the same branch.`,
     "",
     "This is one autonomous turn: fix each issue below, commit per fix, re-run the tests, then report.",
     "",

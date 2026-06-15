@@ -162,14 +162,14 @@ export async function killGraceful(pane: string, pluginRoot: string): Promise<vo
 
 // --- preflight grid ---
 export interface PreflightEntry { agent: string; model: string; cwd?: string; }
-export async function preflightLayout(topic: string, roster: PreflightEntry[], opts: { writePanes: (tsv: string) => void }): Promise<Array<{ agent: string; pane: string }>> {
+export async function preflightLayout(topic: string, list: PreflightEntry[], opts: { writePanes: (tsv: string) => void }): Promise<Array<{ agent: string; pane: string }>> {
   const conductor = await conductorPane();
   const created: string[] = [];
   const out: Array<{ agent: string; pane: string }> = [];
   let prev = conductor;
   let flag: "-h" | "-v" = "-h";
   try {
-    for (const e of roster) {
+    for (const e of list) {
       const sentinel = sentinelCommand(labelFmt(e.agent, e.model, topic));
       const args = [...preflightSplitArgs(flag, prev, e.cwd), sentinel];
       const { stdout } = await execa("tmux", args);

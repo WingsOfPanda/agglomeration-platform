@@ -60,7 +60,7 @@ export function pickRandomAgent(topic: string, rng: () => number = Math.random):
 
 /** Pick n DISTINCT agents for a topic. Prefers globally-unused names; falls back to
  *  topic-unused; already-picked-this-call are always excluded. Returns up to n (fewer if the
- *  pool is exhausted). Generalizes pickRandomAgent for the N-worker score ensemble. */
+ *  pool is exhausted). Generalizes pickRandomAgent for the N-worker design ensemble. */
 export function pickAgents(topic: string, n: number, rng: () => number = Math.random): string[] {
   const pool = loadAgentPool();
   const globalUsed = new Set(agentsInUseGlobally());
@@ -82,6 +82,6 @@ export function formatCollisionError(agent: string, model: string, topic: string
   if (existsSync(sidFile)) owner = readFileSync(sidFile, "utf8").split("\n")[0] ?? "";
   const me = sessionId ?? process.env.CLAUDE_CODE_SESSION_ID ?? "unknown";
   if (owner && owner !== me) lines.push(`  owned by another Claude Code session (id=${owner.slice(0, 8)}…, mine=${me.slice(0, 8)}…)`);
-  lines.push(`  or run: /ap:coda ${agent} ${topic}`);
+  lines.push(`  or run: /ap:stop ${agent} ${topic}`);
   return lines.join("\n");
 }

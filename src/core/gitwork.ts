@@ -43,7 +43,7 @@ export function preSnapshot(r: Runner, command: string, topic: string): Snapshot
   return { branch, baseSha: r.run("git", ["rev-parse", "HEAD"]).stdout.trim(), state: "wip-committed" };
 }
 
-/** Create feat/solo-<topic> from current HEAD, or resume it if it already exists. */
+/** Create feat/quick-<topic> from current HEAD, or resume it if it already exists. */
 export function createOrResumeBranch(r: Runner, name: string): boolean {
   if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${name}`]).code === 0) {
     return r.run("git", ["checkout", "-q", name]).code === 0;
@@ -75,8 +75,8 @@ export function finishBranch(r: Runner, o: FinishOpts): FinishResult {
   let outcome: string;
   if (r.run("git", ["push", "-q", "-u", "origin", o.branch]).code === 0) {
     const url = o.originUrl ?? r.run("git", ["remote", "get-url", "origin"]).stdout.trim();
-    const title = o.title ?? `solo: ${o.branch}`;
-    const body = o.body ?? `Automated solo branch. Review and merge into ${o.startBranch}.`;
+    const title = o.title ?? `quick: ${o.branch}`;
+    const body = o.body ?? `Automated quick branch. Review and merge into ${o.startBranch}.`;
     if (o.hasGh && r.run("gh", ["pr", "create", "--repo", url, "--base", o.startBranch, "--head", o.branch, "--title", title, "--body", body]).code === 0) {
       outcome = "pr-opened";
     } else {
@@ -94,7 +94,7 @@ export interface FinishActionOpts {
   hasGh: boolean; originUrl?: string; title?: string; body?: string;
 }
 /** Action-driven finisher (port of deploy_finish_branch @ deploy.sh:651). Restores startBranch
- *  (best-effort). New additive export; the auto finishBranch (used by solo) is unchanged. */
+ *  (best-effort). New additive export; the auto finishBranch (used by quick) is unchanged. */
 export function finishBranchAction(r: Runner, o: FinishActionOpts): string {
   if (!o.branch || o.branch === o.startBranch ||
       r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${o.branch}`]).code !== 0) return "no-branch";
@@ -110,8 +110,8 @@ export function finishBranchAction(r: Runner, o: FinishActionOpts): string {
       if (r.run("git", ["push", "-q", "-u", "origin", o.branch]).code === 0) {
         const url = o.originUrl ?? r.run("git", ["remote", "get-url", "origin"]).stdout.trim();
         if (o.hasGh && r.run("gh", ["pr", "create", "--repo", url, "--base", o.startBranch, "--head", o.branch,
-          "--title", o.title ?? `perform: ${o.branch}`,
-          "--body", o.body ?? `Automated perform branch. Review and merge into ${o.startBranch}.`]).code === 0) outcome = "pr-opened";
+          "--title", o.title ?? `implement: ${o.branch}`,
+          "--body", o.body ?? `Automated implement branch. Review and merge into ${o.startBranch}.`]).code === 0) outcome = "pr-opened";
         else outcome = "pr-pushed-no-gh";
       } else outcome = "pr-failed-kept";
       r.run("git", ["checkout", "-q", o.startBranch]); return outcome;
@@ -130,7 +130,7 @@ export interface PrMergeOpts {
 }
 export interface PrMergeResult { action: "pr-merge" | "local-merge" | "push-only" | "none"; outcome: string; }
 
-/** duet's finisher: open a PR, merge it (a merge commit), and fast-forward local base — a SINGLE
+/** bridge's finisher: open a PR, merge it (a merge commit), and fast-forward local base — a SINGLE
  *  integration point, so local base never diverges from the remote. Graceful fallbacks for
  *  no-remote / no-gh / merge-blocked / ff-fail. Ends checked out on `base` (best-effort). */
 export function finishBranchPrMerge(r: Runner, o: PrMergeOpts): PrMergeResult {
@@ -158,8 +158,8 @@ export function finishBranchPrMerge(r: Runner, o: PrMergeOpts): PrMergeResult {
     return { action: "push-only", outcome: "pushed-no-gh" };
   }
   const url = o.originUrl ?? r.run("git", ["remote", "get-url", "origin"]).stdout.trim();
-  const title = o.title ?? `duet: ${o.branch}`;
-  const body = o.body ?? `Automated duet branch. Merged into ${o.base}.`;
+  const title = o.title ?? `bridge: ${o.branch}`;
+  const body = o.body ?? `Automated bridge branch. Merged into ${o.base}.`;
   if (r.run("gh", ["pr", "create", "--repo", url, "--base", o.base, "--head", o.branch, "--title", title, "--body", body]).code !== 0) {
     r.run("git", ["checkout", "-q", o.base]);
     return { action: "pr-merge", outcome: "pr-create-failed" };
