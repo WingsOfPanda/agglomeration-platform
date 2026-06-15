@@ -8,7 +8,7 @@ import { paneMetaRead, paneMetaReadForDir } from "../core/ipc.js";
 import { paneAlive, killGraceful, killNow } from "../core/tmux.js";
 
 export const GRACEFUL_BATCH_WAIT_MS = 9000;
-export interface Pair { instrument: string; model: string; }
+export interface Pair { agent: string; model: string; }
 
 export interface CodaDeps {
   paneMetaRead(i: string, m: string, t: string): string | null;
@@ -23,10 +23,10 @@ export interface CodaDeps {
 
 export async function teardownBatch(topic: string, pairs: Pair[], d: CodaDeps): Promise<void> {
   const pending: string[] = [];
-  for (const { instrument, model } of pairs) {
-    const pane = d.paneMetaRead(instrument, model, topic) ?? "";
+  for (const { agent, model } of pairs) {
+    const pane = d.paneMetaRead(agent, model, topic) ?? "";
     if (pane && (await d.paneAlive(pane))) {
-      log.info(`graceful shutdown for ${instrument}-${model} on ${topic} (pane ${pane})`);
+      log.info(`graceful shutdown for ${agent}-${model} on ${topic} (pane ${pane})`);
       await d.killGraceful(pane);
       pending.push(pane);
     }
@@ -36,9 +36,9 @@ export async function teardownBatch(topic: string, pairs: Pair[], d: CodaDeps): 
     await d.sleep(GRACEFUL_BATCH_WAIT_MS);
     for (const p of pending) await d.killNow(p);
   }
-  for (const { instrument, model } of pairs) {
-    const dest = d.stateArchive(instrument, model, topic);
-    if (dest) log.ok(`archived ${instrument}-${model}: ${dest}`);
+  for (const { agent, model } of pairs) {
+    const dest = d.stateArchive(agent, model, topic);
+    if (dest) log.ok(`archived ${agent}-${model}: ${dest}`);
   }
   const last = d.readLastPane(topic);
   if (last && pending.includes(last)) d.removeLastPane(topic);
@@ -66,21 +66,21 @@ function collectTopicPairs(topic: string): Pair[] {
   for (const name of readdirSync(td, { withFileTypes: true })) {
     if (!name.isDirectory() || isArtifactDir(name.name)) continue;
     const m = paneMetaReadForDir(join(td, name.name));
-    pairs.push({ instrument: m.instrument, model: m.model });
+    pairs.push({ agent: m.agent, model: m.model });
   }
   return pairs;
 }
 
-function collectInstrumentPairs(topic: string, instruments: string[]): Pair[] {
+function collectAgentPairs(topic: string, agents: string[]): Pair[] {
   const td = topicDir(topic);
   if (!existsSync(td)) return [];
   const dirs = readdirSync(td, { withFileTypes: true }).filter((e) => e.isDirectory());
   const pairs: Pair[] = [];
-  for (const instrument of instruments) {
+  for (const agent of agents) {
     for (const e of dirs) {
-      if (e.name.startsWith(`${instrument}-`)) {
+      if (e.name.startsWith(`${agent}-`)) {
         const m = paneMetaReadForDir(join(td, e.name));
-        if (m.instrument === instrument) pairs.push({ instrument, model: m.model });
+        if (m.agent === agent) pairs.push({ agent, model: m.model });
       }
     }
   }
@@ -97,12 +97,12 @@ export async function run(args: string[]): Promise<number> {
   const d = liveDeps();
   const a0 = args[0] ?? "";
   if (a0 === "" || a0 === "-h" || a0 === "--help") {
-    process.stderr.write("Usage: coda <topic>\n       coda <instrument> <topic>\n       coda --all\n       coda --pairs <topic> <i1> [i2...]\n");
+    process.stderr.write("Usage: coda <topic>\n       coda <agent> <topic>\n       coda --all\n       coda --pairs <topic> <i1> [i2...]\n");
     return 2;
   }
   if (a0 === "--all") {
     if (!args.includes("--yes")) {
-      log.warn("coda --all tears down EVERY part across every topic in this repo; re-run to confirm: coda --all --yes");
+      log.warn("coda --all tears down EVERY worker across every topic in this repo; re-run to confirm: coda --all --yes");
       return 2;
     }
     const repo = repoStateDir();
@@ -114,22 +114,22 @@ export async function run(args: string[]): Promise<number> {
   }
   if (a0 === "--pairs") {
     const topic = args[1];
-    const instruments = args.slice(2);
-    if (!topic || instruments.length === 0) { log.error("--pairs requires <topic> <i1> [i2...]"); return 2; }
-    const pairs = collectInstrumentPairs(topic, instruments);
-    if (pairs.length === 0) log.warn(`no matching part dirs found for any of: ${instruments.join(" ")}`);
+    const agents = args.slice(2);
+    if (!topic || agents.length === 0) { log.error("--pairs requires <topic> <i1> [i2...]"); return 2; }
+    const pairs = collectAgentPairs(topic, agents);
+    if (pairs.length === 0) log.warn(`no matching worker dirs found for any of: ${agents.join(" ")}`);
     else await teardownBatch(topic, pairs, d);
     cleanupTopicDir(topic);
     return 0;
   }
   if (args.length === 1) { await teardownBatch(a0, collectTopicPairs(a0), d); cleanupTopicDir(a0); return 0; }
   if (args.length === 2) {
-    const [instrument, topic] = args;
-    const pairs = collectInstrumentPairs(topic, [instrument]);
-    if (pairs.length === 0) { log.error(`no part '${instrument}' on topic '${topic}'`); return 1; }
+    const [agent, topic] = args;
+    const pairs = collectAgentPairs(topic, [agent]);
+    if (pairs.length === 0) { log.error(`no worker '${agent}' on topic '${topic}'`); return 1; }
     await teardownBatch(topic, pairs, d); cleanupTopicDir(topic);
     return 0;
   }
-  process.stderr.write("Usage: coda <topic> | <instrument> <topic> | --all | --pairs <topic> <i...>\n");
+  process.stderr.write("Usage: coda <topic> | <agent> <topic> | --all | --pairs <topic> <i...>\n");
   return 2;
 }

@@ -5,9 +5,9 @@ import { log } from "../core/log.js";
 import { applyArgsFile } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
 import { isoUtc } from "../core/archive.js";
-import { instrumentBinary } from "../core/contracts.js";
+import { agentBinary } from "../core/contracts.js";
 import { haveCmd } from "../core/deps.js";
-import { pickRandomInstrument } from "../core/instruments.js";
+import { pickRandomAgent } from "../core/agents.js";
 import { runnerAt, preSnapshot, createOrResumeBranch, finishBranchPrMerge } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
 import { readIfExists } from "../core/fsread.js";
@@ -48,13 +48,13 @@ export async function run(args: string[]): Promise<number> {
 
 export interface InitDeps {
   haveCmd(bin: string): boolean;
-  instrumentBinary(provider: string): string | undefined;
-  pickRandomInstrument(slug: string): string | null;
+  agentBinary(provider: string): string | undefined;
+  pickRandomAgent(slug: string): string | null;
   isGitRepo(dir: string): boolean;
   headSha(dir: string): string;
 }
 const liveInitDeps: InitDeps = {
-  haveCmd, instrumentBinary, pickRandomInstrument,
+  haveCmd, agentBinary, pickRandomAgent,
   isGitRepo: (dir) => runnerAt(dir).run("git", ["rev-parse", "--is-inside-work-tree"]).code === 0,
   headSha: (dir) => runnerAt(dir).run("git", ["rev-parse", "HEAD"]).stdout.trim(),
 };
@@ -73,15 +73,15 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
   if (!slug) { log.error("duet init: task produced an empty slug; provide alphanumerics"); return 1; }
 
   const provider = provArg ?? "codex";
-  const binary = d.instrumentBinary(provider);
+  const binary = d.agentBinary(provider);
   if (!binary) { log.error(`duet init: provider '${provider}' has no entry in contracts.yaml`); return 3; }
   if (!d.haveCmd(binary)) { log.error(`duet init: ${provider}'s binary '${binary}' is not on PATH`); return 3; }
 
   const art = duetArtDir(slug);
   if (existsSync(art)) { log.error(`duet init: topic already in flight: ${art}`); log.error("  run /ap:coda or pick a different task"); return 2; }
 
-  const instrument = d.pickRandomInstrument(slug);
-  if (!instrument) { log.error(`duet init: no available instrument in the pool for '${slug}'`); return 1; }
+  const agent = d.pickRandomAgent(slug);
+  if (!agent) { log.error(`duet init: no available agent in the pool for '${slug}'`); return 1; }
 
   const mode = inPlace ? "in-place" : "branch";
   const exec = duetExecDir(slug);
@@ -89,15 +89,15 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
   atomicWrite(join(art, "topic.txt"), slug + "\n");
   atomicWrite(join(art, "topic-text.txt"), taskText);
   atomicWrite(join(art, "selected-provider.txt"), provider + "\n");
-  atomicWrite(join(art, "instrument.txt"), instrument + "\n");
+  atomicWrite(join(art, "agent.txt"), agent + "\n");
   atomicWrite(join(art, "timing.txt"), `started=${isoUtc()}\n`);
   atomicWrite(join(exec, "provider.txt"), provider + "\n");
   atomicWrite(join(exec, "mode.txt"), mode + "\n");
   atomicWrite(join(exec, "target_cwd.txt"), repo + "\n");      // INVARIANT: init owns this (branch is skipped under --in-place)
   atomicWrite(join(exec, "repo-b-head.txt"), (inPlace ? "" : d.headSha(repo)) + "\n");
 
-  log.ok(`duet init: topic=${slug} instrument=${instrument} provider=${provider} mode=${mode} repo=${repo}`);
-  process.stdout.write(`SLUG=${slug}\nINSTRUMENT=${instrument}\nPROVIDER=${provider}\nMODE=${mode}\nTARGET=${repo}\n`);
+  log.ok(`duet init: topic=${slug} agent=${agent} provider=${provider} mode=${mode} repo=${repo}`);
+  process.stdout.write(`SLUG=${slug}\nAGENT=${agent}\nPROVIDER=${provider}\nMODE=${mode}\nTARGET=${repo}\n`);
   return 0;
 }
 
@@ -133,7 +133,7 @@ export async function branchWith(topic: string, target: string, r: Runner): Prom
 }
 
 export interface TurnSendDeps {
-  offsetFor(instrument: string, model: string, topic: string): number;
+  offsetFor(agent: string, model: string, topic: string): number;
   send(args: string[]): Promise<number>;
 }
 const DUET_TURN_TIMEOUT = Number(process.env.AP_DUET_TURN_TIMEOUT) || 14400;
@@ -151,14 +151,14 @@ async function roundSendRun(rest: string[]): Promise<number> {
 export async function roundSendWith(topic: string, round: number, d: TurnSendDeps): Promise<number> {
   const art = duetArtDir(topic);
   const exec = duetExecDir(topic);
-  const instrument = readField(join(art, "instrument.txt"));
+  const agent = readField(join(art, "agent.txt"));
   const provider = readField(join(art, "selected-provider.txt"));
-  if (!instrument || !provider) { log.error("duet round-send: missing instrument.txt/selected-provider.txt (run duet init)"); return 1; }
+  if (!agent || !provider) { log.error("duet round-send: missing agent.txt/selected-provider.txt (run duet init)"); return 1; }
 
-  const outbox = outboxPath(instrument, provider, topic);
-  if (!existsSync(outbox)) { log.error(`duet round-send: outbox not found at ${outbox} — was ${instrument} spawned?`); return 1; }
-  const sp = statusPath(instrument, provider, topic);
-  if (existsSync(sp)) { const m = readFileSync(sp, "utf8").match(/"state":"([^"]*)"/); if (m && m[1] && m[1] !== "idle") { log.error(`duet round-send: part not idle (state=${m[1]}); previous round still in flight`); return 1; } }
+  const outbox = outboxPath(agent, provider, topic);
+  if (!existsSync(outbox)) { log.error(`duet round-send: outbox not found at ${outbox} — was ${agent} spawned?`); return 1; }
+  const sp = statusPath(agent, provider, topic);
+  if (existsSync(sp)) { const m = readFileSync(sp, "utf8").match(/"state":"([^"]*)"/); if (m && m[1] && m[1] !== "idle") { log.error(`duet round-send: worker not idle (state=${m[1]}); previous round still in flight`); return 1; } }
 
   const stateFile = join(exec, `round-${round}.txt`);
   if (existsSync(stateFile)) { log.error(`duet round-send: ${stateFile} already exists; rm to retry`); return 1; }
@@ -177,17 +177,17 @@ export async function roundSendWith(topic: string, round: number, d: TurnSendDep
 
   const promptFile = join(exec, `round-prompt-${round}.md`);
   atomicWrite(promptFile, prompt);
-  const offset = d.offsetFor(instrument, provider, topic);
+  const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}\n`);
 
-  const rc = await d.send([instrument, topic, `@${promptFile}`]);
+  const rc = await d.send([agent, topic, `@${promptFile}`]);
   if (rc !== 0) { log.error(`duet round-send: send failed (rc=${rc}); ${stateFile} kept for retry`); return 1; }
   log.ok(`duet round-send: round=${round} offset=${offset}`);
   return 0;
 }
 
 export interface TurnWaitDeps {
-  wait(instrument: string, model: string, topic: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null>;
+  wait(agent: string, model: string, topic: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null>;
 }
 
 async function roundWaitRun(rest: string[]): Promise<number> {
@@ -200,20 +200,20 @@ async function roundWaitRun(rest: string[]): Promise<number> {
 export async function roundWaitWith(topic: string, round: number, d: TurnWaitDeps): Promise<number> {
   const art = duetArtDir(topic);
   const exec = duetExecDir(topic);
-  const instrument = readField(join(art, "instrument.txt"));
+  const agent = readField(join(art, "agent.txt"));
   const provider = readField(join(art, "selected-provider.txt"));
-  if (!instrument || !provider) { log.error("duet round-wait: missing instrument.txt/selected-provider.txt"); return 1; }
+  if (!agent || !provider) { log.error("duet round-wait: missing agent.txt/selected-provider.txt"); return 1; }
   const stateFile = join(exec, `round-${round}.txt`);
   if (!existsSync(stateFile)) { log.error(`duet round-wait: ${stateFile} missing (run duet round-send first)`); return 1; }
   const offset = parseLatestOffset(readFileSync(stateFile, "utf8"));
   if (offset === null) { log.error(`duet round-wait: OFFSET not set in ${stateFile}`); return 1; }
 
   log.info(`duet round-wait: round=${round} offset=${offset} timeout=${DUET_TURN_TIMEOUT}s`);
-  const ev = await d.wait(instrument, provider, topic, offset, ["done", "error", "question"], DUET_TURN_TIMEOUT);
+  const ev = await d.wait(agent, provider, topic, offset, ["done", "error", "question"], DUET_TURN_TIMEOUT);
   const ts = classifyTurn(ev);
   if (ts === "question" && ev) {
     atomicWrite(join(exec, `question-${round}.txt`), JSON.stringify(ev) + "\n");
-    const bumped = outboxOffset(outboxPath(instrument, provider, topic));
+    const bumped = outboxOffset(outboxPath(agent, provider, topic));
     appendFileSync(stateFile, `OFFSET=${bumped}\nTS=question\n`);
   } else {
     appendFileSync(stateFile, `TS=${ts}\n`);
@@ -237,12 +237,12 @@ async function relayRun(rest: string[]): Promise<number> {
     log.error("usage: duet relay <topic> <round> <answer|@file>"); return 2;
   }
   const art = duetArtDir(topic);
-  const instrument = readField(join(art, "instrument.txt"));
+  const agent = readField(join(art, "agent.txt"));
   const provider = readField(join(art, "selected-provider.txt"));
-  if (!instrument || !provider) { log.error("duet relay: missing instrument/provider (run duet init)"); return 1; }
+  if (!agent || !provider) { log.error("duet relay: missing agent/provider (run duet init)"); return 1; }
   const answer = answerParts.join(" ");
   // NOTE: round-wait already bumped OFFSET past the question; relay only sends + records.
-  const rc = await sendRun(["--from", "maestro", instrument, topic, answer]);
+  const rc = await sendRun(["--from", "hub", agent, topic, answer]);
   if (rc !== 0) { log.error(`duet relay: send failed (rc=${rc})`); return 1; }
   appendFileSync(join(duetExecDir(topic), `question-${round}.txt`), `RELAYED=${answer}\n`);
   log.ok(`duet relay: round=${round} answered`);
@@ -312,7 +312,7 @@ async function summaryRun(rest: string[]): Promise<number> {
   const facts: DuetSummaryFacts = {
     topic, status: aborted ? "aborted" : "ok", started, ended, duration,
     provider: readField(join(art, "selected-provider.txt")) || "unknown",
-    instrument: readField(join(art, "instrument.txt")) || "unknown",
+    agent: readField(join(art, "agent.txt")) || "unknown",
     repo: readField(join(exec, "target_cwd.txt")) || "<repo>",
     mode: readField(join(exec, "mode.txt")) || "branch",
     branch: readField(join(exec, "branch.txt")) || "(none)",

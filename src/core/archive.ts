@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync, renameSync, rmSync, readdirSync, readFileSync, openSync, closeSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { partDir, topicDir, globalRoot, repoHash } from "./paths.js";
+import { workerDir, topicDir, globalRoot, repoHash } from "./paths.js";
 import { atomicWrite } from "./atomic.js";
 
 export function archiveTs(now: Date = new Date()): string {
@@ -13,8 +13,8 @@ export function isoUtc(now: Date = new Date()): string {
 
 const STALE = ["identity.md", "inbox.md", "outbox.jsonl", "status.json", "pane.json", ".session_id"];
 
-export function stateInit(instrument: string, model: string, topic: string): void {
-  const dir = partDir(instrument, model, topic);
+export function stateInit(agent: string, model: string, topic: string): void {
+  const dir = workerDir(agent, model, topic);
   mkdirSync(dir, { recursive: true });
   for (const f of STALE) rmSync(join(dir, f), { force: true });
   closeSync(openSync(join(dir, "outbox.jsonl"), "w")); // touch fresh empty
@@ -27,11 +27,11 @@ function uniqueDest(base: string): string {
   throw new Error("too many same-second archive collisions; aborting");
 }
 
-export function stateArchive(instrument: string, model: string, topic: string, suffix?: string, opts?: { now?: Date }): string | null {
-  const src = partDir(instrument, model, topic);
+export function stateArchive(agent: string, model: string, topic: string, suffix?: string, opts?: { now?: Date }): string | null {
+  const src = workerDir(agent, model, topic);
   if (!existsSync(src)) return null;
   const ts = archiveTs(opts?.now);
-  let base = join(globalRoot(), "archive", repoHash(), topic, `${instrument}-${model}-${ts}`);
+  let base = join(globalRoot(), "archive", repoHash(), topic, `${agent}-${model}-${ts}`);
   if (suffix) base += `-${suffix}`;
   const dest = uniqueDest(base);
   mkdirSync(dirname(dest), { recursive: true });

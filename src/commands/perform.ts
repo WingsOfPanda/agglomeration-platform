@@ -1,6 +1,6 @@
 // src/commands/perform.ts — single-repo command path for /ap:perform.
 // Byte-faithful port of the prior bash plugin's deploy verb set; WIRES the Phase-A core modules.
-// Rebrand: _deploy/->_perform/, feat/deploy-->feat/perform-, conductor sender->From: maestro.
+// Rebrand: _deploy/->_perform/, feat/deploy-->feat/perform-, conductor sender->From: hub.
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, statSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
@@ -21,7 +21,7 @@ import { performState, composeRound1Prompt, composeFixPrompt } from "../core/per
 import { extractQuestionPayload, parseQuestionPayload } from "../core/performQuestions.js";
 import { outboxOffset, outboxPath, outboxWaitSince, statusPath, resolveModel, type OutboxEvent } from "../core/ipc.js";
 import { readIfExists, readIfExistsOrNull } from "../core/fsread.js";
-import { instrumentTimeoutMultiplier } from "../core/contracts.js";
+import { agentTimeoutMultiplier } from "../core/contracts.js";
 import { scaledTimeout, parseLatestOffset } from "../core/scoreTurn.js";
 import { run as sendRun } from "./send.js";
 import { detectTestCommand } from "../core/solo.js";
@@ -29,8 +29,8 @@ import { detectTestCommand } from "../core/solo.js";
 const PART = "tutti";
 const PERFORM_TURN_TIMEOUT = (): number => Number(process.env.AP_PERFORM_TURN_TIMEOUT_S) || 14400;
 
-/** model for the tutti part = the resolved provider (codex|claude). Reads provider.txt; default codex. */
-function partModel(art: string): string {
+/** model for the tutti worker = the resolved provider (codex|claude). Reads provider.txt; default codex. */
+function workerModel(art: string): string {
   return readIfExists(join(art, "provider.txt")).trim() || "codex";
 }
 /** The LAST `OBJECTIONS=<n>` count persisted in a per-dispatch state file (0 if absent). The
@@ -158,7 +158,7 @@ async function turnSendRun(rest: string[]): Promise<number> {
 export async function turnSendWith(topic: string, round: number, d: PerformSendDeps): Promise<number> {
   const art = performArtDir(topic);
   if (!existsSync(art)) { log.error(`perform turn-send: ${art} not found — run perform init first`); return 1; }
-  const model = partModel(art);
+  const model = workerModel(art);
   const targetCwd = readIfExists(join(art, "target_cwd.txt")).trim();
   const testCmd = targetCwd ? detectTestCommand(targetCwd) : "";
   const stateFile = join(art, `turn-${PART}-${round}.txt`);
@@ -166,20 +166,20 @@ export async function turnSendWith(topic: string, round: number, d: PerformSendD
   const outbox = outboxPath(PART, model, topic);
   if (!existsSync(outbox)) { log.error(`perform turn-send: outbox not found at ${outbox} — was ${PART} spawned?`); return 1; }
   const sp = statusPath(PART, model, topic);
-  if (existsSync(sp)) { const m = readFileSync(sp, "utf8").match(/"state":"([^"]*)"/); if (m && m[1] && m[1] !== "idle") { log.error(`perform turn-send: part not idle (state=${m[1]}); previous turn still in flight`); return 1; } }
+  if (existsSync(sp)) { const m = readFileSync(sp, "utf8").match(/"state":"([^"]*)"/); if (m && m[1] && m[1] !== "idle") { log.error(`perform turn-send: worker not idle (state=${m[1]}); previous turn still in flight`); return 1; } }
   const promptFile = join(art, `${PART}_turn_prompt_${round}.md`);
   if (round === 1) atomicWrite(promptFile, composeRound1Prompt({ designPath: join(art, "design.md"), planPath: join(art, "plan.md"), verifyPath: join(art, "verify-report-1.md"), round, testCmd }));
   else { const bundle = join(art, `fix-prompt-${round}.md`); if (!existsSync(bundle)) { log.error(`perform turn-send: fix-prompt-${round}.md not found at ${bundle}; the directive must write it first`); return 1; } atomicWrite(promptFile, composeFixPrompt(round, readFileSync(bundle, "utf8"), join(art, `verify-report-${round}.md`), testCmd)); }
   const offset = d.offsetFor(PART, model, topic);             // BEFORE send (deploy_send_dispatch order)
   atomicWrite(stateFile, `OFFSET=${offset}\n`);
-  const rc = await d.send(["--from", "maestro", PART, topic, `@${promptFile}`]);
+  const rc = await d.send(["--from", "hub", PART, topic, `@${promptFile}`]);
   if (rc !== 0) { log.error(`perform turn-send: send failed (rc=${rc}); ${stateFile} kept (rm to retry)`); return 1; }
   log.info(`[turn-send] ${PART} round=${round} offset=${offset}`); return 0;
 }
 
 // ---- turn-wait (deploy-turn-wait.sh) — rc 0 ALWAYS; TS= carries outcome ----
 export interface PerformWaitDeps { wait(i: string, m: string, t: string, off: number, ev: string[], to: number): Promise<OutboxEvent | null>; multiplier(model: string): string; now(): number; }
-const liveWaitDeps: PerformWaitDeps = { wait: outboxWaitSince, multiplier: instrumentTimeoutMultiplier, now: () => Math.floor(Date.now() / 1000) };
+const liveWaitDeps: PerformWaitDeps = { wait: outboxWaitSince, multiplier: agentTimeoutMultiplier, now: () => Math.floor(Date.now() / 1000) };
 async function turnWaitRun(rest: string[]): Promise<number> {
   const [topic, roundStr] = rest;
   if (!topic || !roundStr) { log.error("usage: perform turn-wait <topic> <round>"); return 2; }
@@ -188,7 +188,7 @@ async function turnWaitRun(rest: string[]): Promise<number> {
 }
 export async function turnWaitWith(topic: string, round: number, d: PerformWaitDeps): Promise<number> {
   const art = performArtDir(topic);
-  const model = partModel(art);
+  const model = workerModel(art);
   const stateFile = join(art, `turn-${PART}-${round}.txt`);
   if (!existsSync(stateFile)) { log.error(`perform turn-wait: ${stateFile} missing — run perform turn-send first`); return 1; }
   const offset = parseLatestOffset(readFileSync(stateFile, "utf8"));
@@ -213,16 +213,16 @@ export async function turnWaitWith(topic: string, round: number, d: PerformWaitD
   log.ok(`[turn-wait] ${PART} round=${round} TS=${ts}`); return 0;
 }
 
-// ---- reset-status — force a not-idle part back to idle (deploy "Force-retry" recovery) ----
+// ---- reset-status — force a not-idle worker back to idle (deploy "Force-retry" recovery) ----
 // The not-idle gate in turnSendWith refuses when status.json state != idle. After a timed-out
-// turn the part is left non-idle; the directive calls this to force-reset so the retry can send.
+// turn the worker is left non-idle; the directive calls this to force-reset so the retry can send.
 async function resetStatusRun(rest: string[]): Promise<number> {
-  const [topic, instrument] = rest;
-  if (!topic || !instrument || rest.length !== 2) { log.error("usage: perform reset-status <topic> <instrument>"); return 2; }
-  const model = resolveModel(instrument, topic);
-  if (model === null) { log.error(`perform reset-status: no part for instrument=${instrument} on topic=${topic}`); return 1; }
-  atomicWrite(statusPath(instrument, model, topic), `{"state":"idle","last_event":"force-reset"}\n`);
-  log.ok(`perform reset-status: ${instrument} state=idle`);
+  const [topic, agent] = rest;
+  if (!topic || !agent || rest.length !== 2) { log.error("usage: perform reset-status <topic> <agent>"); return 2; }
+  const model = resolveModel(agent, topic);
+  if (model === null) { log.error(`perform reset-status: no worker for agent=${agent} on topic=${topic}`); return 1; }
+  atomicWrite(statusPath(agent, model, topic), `{"state":"idle","last_event":"force-reset"}\n`);
+  log.ok(`perform reset-status: ${agent} state=idle`);
   return 0;
 }
 
@@ -373,7 +373,7 @@ async function finishRun(rest: string[]): Promise<number> {
   return finishWith(topic, action as "merge" | "pr" | "keep" | "discard", liveFinishDeps);
 }
 // Shared per-target finish body (deploy-finish.sh:1398-1419 / deploy.md:1398-1419). Resolves the
-// part's feat branch + start branch, then delegates the branch action.
+// worker's feat branch + start branch, then delegates the branch action.
 function applyFinish(art: string, t: { slug: string; cwd: string }, action: "merge" | "pr" | "keep" | "discard", d: FinishDeps): string {
   const branch = branchMapField(join(art, "perform-branches.tsv"), t.slug);
   const startBranch = kvFileField(join(art, "baselines", `${t.slug}.tsv`), "branch");

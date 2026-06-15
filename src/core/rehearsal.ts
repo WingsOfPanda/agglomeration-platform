@@ -7,24 +7,24 @@ export function rehearsalArtDir(topic: string, opts?: { home?: string; cwd?: str
   return join(topicDir(topic, opts), "_rehearsal");
 }
 
-/** <artDir>/parts — the per-part state root. */
-export function partsDir(artDir: string): string {
-  return join(artDir, "parts");
+/** <artDir>/workers — the per-worker state root. */
+export function workersDir(artDir: string): string {
+  return join(artDir, "workers");
 }
 
-/** <artDir>/parts/<instrument> — one persistent part's dir (state.txt, experiments/, outbox.jsonl). */
-export function partStateDir(artDir: string, instrument: string): string {
-  return join(partsDir(artDir), instrument);
+/** <artDir>/workers/<agent> — one persistent worker's dir (state.txt, experiments/, outbox.jsonl). */
+export function workerStateDir(artDir: string, agent: string): string {
+  return join(workersDir(artDir), agent);
 }
 
-/** <artDir>/parts/<instrument>/experiments — the part's experiment branches. */
-export function experimentsDir(artDir: string, instrument: string): string {
-  return join(partStateDir(artDir, instrument), "experiments");
+/** <artDir>/workers/<agent>/experiments — the worker's experiment branches. */
+export function experimentsDir(artDir: string, agent: string): string {
+  return join(workerStateDir(artDir, agent), "experiments");
 }
 
-/** <artDir>/parts/<instrument>/experiments/<exp-id> — one experiment branch (code/, result.json, …). */
-export function experimentDir(artDir: string, instrument: string, expId: string): string {
-  return join(experimentsDir(artDir, instrument), expId);
+/** <artDir>/workers/<agent>/experiments/<exp-id> — one experiment branch (code/, result.json, …). */
+export function experimentDir(artDir: string, agent: string, expId: string): string {
+  return join(experimentsDir(artDir, agent), expId);
 }
 
 /** Copy config/rehearsal-lib-seed/* into <art>/lib/ (skip-if-exists, never throws).

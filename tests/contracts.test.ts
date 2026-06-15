@@ -37,36 +37,36 @@ consult:
 `;
 
 describe("contracts", () => {
-  it("listInstruments: file order, excludes consult", () => {
+  it("listAgents: file order, excludes consult", () => {
     withContracts(SAMPLE);
-    expect(K.listInstruments()).toEqual(["codex", "claude", "opencode"]);
+    expect(K.listAgents()).toEqual(["codex", "claude", "opencode"]);
   });
   it("binary / default_mode / modeArgs", () => {
     withContracts(SAMPLE);
-    expect(K.instrumentBinary("codex")).toBe("codex");
-    expect(K.instrumentBinary("nope")).toBeUndefined();
-    expect(K.instrumentModeArgs("codex", "read-only")).toEqual(["--sandbox", "read-only"]);
-    expect(K.instrumentModeArgs("opencode", "full")).toEqual(["-m", "deepseek/deepseek-v4-pro"]);
+    expect(K.agentBinary("codex")).toBe("codex");
+    expect(K.agentBinary("nope")).toBeUndefined();
+    expect(K.agentModeArgs("codex", "read-only")).toEqual(["--sandbox", "read-only"]);
+    expect(K.agentModeArgs("opencode", "full")).toEqual(["-m", "deepseek/deepseek-v4-pro"]);
   });
   it("readyTimeout default 30; bootstrapSleep claude=12 else 8", () => {
     withContracts(SAMPLE);
-    expect(K.instrumentReadyTimeout("codex")).toBe(90);
-    expect(K.instrumentReadyTimeout("claude")).toBe(60);
-    expect(K.instrumentBootstrapSleep("codex")).toBe(20);
-    expect(K.instrumentBootstrapSleep("claude")).toBe(12);   // absent → claude default 12
-    expect(K.instrumentBootstrapSleep("opencode")).toBe(15);
-    expect(K.instrumentBootstrapSleep("unknownx")).toBe(8);
+    expect(K.agentReadyTimeout("codex")).toBe(90);
+    expect(K.agentReadyTimeout("claude")).toBe(60);
+    expect(K.agentBootstrapSleep("codex")).toBe(20);
+    expect(K.agentBootstrapSleep("claude")).toBe(12);   // absent → claude default 12
+    expect(K.agentBootstrapSleep("opencode")).toBe(15);
+    expect(K.agentBootstrapSleep("unknownx")).toBe(8);
   });
   it("timeoutMultiplier keeps string, bad→1.0", () => {
     withContracts(SAMPLE);
-    expect(K.instrumentTimeoutMultiplier("opencode")).toBe("2.5");
-    expect(K.instrumentTimeoutMultiplier("codex")).toBe("1.0");
+    expect(K.agentTimeoutMultiplier("opencode")).toBe("2.5");
+    expect(K.agentTimeoutMultiplier("codex")).toBe("1.0");
   });
   it("consultValidated safe default false", () => {
     withContracts(SAMPLE);
-    expect(K.instrumentConsultValidated("codex")).toBe(true);
-    expect(K.instrumentConsultValidated("opencode")).toBe(false);
-    expect(K.instrumentConsultValidated("absent")).toBe(false);
+    expect(K.agentConsultValidated("codex")).toBe(true);
+    expect(K.agentConsultValidated("opencode")).toBe(false);
+    expect(K.agentConsultValidated("absent")).toBe(false);
   });
   it("consultTimeout defaults + bad-kind throws", () => {
     withContracts(SAMPLE);

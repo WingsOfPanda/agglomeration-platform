@@ -4,8 +4,8 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
-import { refineWith, handoffExtractWith, forensicsRun, teardownWith, freshPartWith, abortWith, consensusWith, type RehearsalRefineDeps, type RehearsalTeardownDeps, type RehearsalFreshPartDeps, type RehearsalAbortDeps, type RehearsalConsensusDeps } from "../src/commands/rehearsal.js";
-import { experimentDir, partStateDir, partsDir, rehearsalArtDir } from "../src/core/rehearsal.js";
+import { refineWith, handoffExtractWith, forensicsRun, teardownWith, freshWorkerWith, abortWith, consensusWith, type RehearsalRefineDeps, type RehearsalTeardownDeps, type RehearsalFreshWorkerDeps, type RehearsalAbortDeps, type RehearsalConsensusDeps } from "../src/commands/rehearsal.js";
+import { experimentDir, workerStateDir, workersDir, rehearsalArtDir } from "../src/core/rehearsal.js";
 import { parseState } from "../src/core/rehearsalState.js";
 
 const cleanups: Array<() => void> = [];
@@ -13,12 +13,12 @@ afterEach(() => { while (cleanups.length) cleanups.pop()!(); });
 function home() { const h = freshHome(); cleanups.push(h.cleanup); return h; }
 
 // Resolve the branch dir the way refineWith does (rehearsalArtDir(topic, opts) -> experimentDir).
-function branchPath(homeDir: string, topic: string, instrument: string, expId: string): string {
+function branchPath(homeDir: string, topic: string, agent: string, expId: string): string {
   const art = rehearsalArtDir(topic, { home: homeDir, cwd: homeDir });
-  return experimentDir(art, instrument, expId);
+  return experimentDir(art, agent, expId);
 }
-function mkBranch(homeDir: string, topic: string, instrument: string, expId: string): string {
-  const dir = branchPath(homeDir, topic, instrument, expId);
+function mkBranch(homeDir: string, topic: string, agent: string, expId: string): string {
+  const dir = branchPath(homeDir, topic, agent, expId);
   mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -43,7 +43,7 @@ describe("refine", () => {
     expect(await refineWith([], deps(h.home))).toBe(2);
   });
 
-  it("rc 2 on bad instrument", async () => {
+  it("rc 2 on bad agent", async () => {
     const h = home();
     expect(await refineWith([TOPIC, "Viola", EXP, "narrow it"], deps(h.home))).toBe(2);
   });
@@ -112,14 +112,14 @@ describe("refine", () => {
     expect(await refineWith([TOPIC, INST, EXP, "throw nudge"], deps(h.home, { send: throwingSend }))).toBe(0);
   });
 
-  it("passes the ap send signature [--from maestro, instrument, topic, msg] referencing the refine path + exp-id", async () => {
+  it("passes the ap send signature [--from hub, agent, topic, msg] referencing the refine path + exp-id", async () => {
     const h = home();
     const dir = mkBranch(h.home, TOPIC, INST, EXP);
     let captured: string[] = [];
     const sent = async (a: string[]): Promise<number> => { captured = a; return 0; };
     expect(await refineWith([TOPIC, INST, EXP, "capture me"], deps(h.home, { send: sent }))).toBe(0);
     expect(captured[0]).toBe("--from");
-    expect(captured[1]).toBe("maestro");
+    expect(captured[1]).toBe("hub");
     expect(captured[2]).toBe(INST);
     expect(captured[3]).toBe(TOPIC);
     expect(captured[4]).toContain(join(dir, "refine-1.md"));
@@ -129,9 +129,9 @@ describe("refine", () => {
   it("NO state mutation: a scaffolded state.txt is byte-unchanged after refine", async () => {
     const h = home();
     const dir = mkBranch(h.home, TOPIC, INST, EXP);
-    // Scaffold a part-level state.txt alongside the experiment branch.
-    const partDir = join(dir, "..", "..");
-    const stateTxt = join(partDir, "state.txt");
+    // Scaffold a worker-level state.txt alongside the experiment branch.
+    const workerDir = join(dir, "..", "..");
+    const stateTxt = join(workerDir, "state.txt");
     const stateBody = "phase\tworking\ncurrent_exp_id\texp-1\nlast_event_ts\t2026-05-30T00:00:00Z\n";
     writeFileSync(stateTxt, stateBody);
     const before = readFileSync(stateTxt);
@@ -153,7 +153,7 @@ describe("handoff-extract", () => {
     return o;
   }
 
-  // Write a result.json under <art>/parts/<inst>/experiments/<exp>/.
+  // Write a result.json under <art>/workers/<inst>/experiments/<exp>/.
   function writeResult(art: string, inst: string, exp: string, obj: unknown): void {
     const dir = experimentDir(art, inst, exp);
     mkdirSync(dir, { recursive: true });
@@ -161,7 +161,7 @@ describe("handoff-extract", () => {
   }
 
   const WINNER_SB =
-    "| rank | exp | instrument | metric | status |\n" +
+    "| rank | exp | agent | metric | status |\n" +
     "| --- | --- | --- | --- | --- |\n" +
     "| 1 | exp-003 | violin | 0.9950 | ok |\n" +
     "| 2 | exp-002 | viola | 0.9100 | ok |\n";
@@ -181,13 +181,13 @@ describe("handoff-extract", () => {
     const kv = parseKvBody(readFileSync(join(art, "handoff-data.kv"), "utf8"));
     expect(kv.mode).toBe("rehearsal");
     expect(kv.topic).toBe("Tune the model for accuracy");
-    expect(kv.winner_instrument).toBe("violin");
+    expect(kv.winner_agent).toBe("violin");
     expect(kv.winner_exp).toBe("exp-003");
     expect(kv.winner_metric).toBe("0.9950");
     expect(kv.winner_approach).toBe("deep-net");
     expect(kv.winner_notes).toBe("best run");
-    expect(kv.winner_checkpoint).toBe("parts/violin/experiments/exp-003/ckpt.pt");
-    expect(kv.winner_code_dir).toBe("parts/violin/experiments/exp-003/code/");
+    expect(kv.winner_checkpoint).toBe("workers/violin/experiments/exp-003/ckpt.pt");
+    expect(kv.winner_code_dir).toBe("workers/violin/experiments/exp-003/code/");
     expect(kv.runner_up_1).toBe("viola/exp-002:0.9100:wide-net");
     expect(kv.landscape_doc).toBe("rehearsal-2026-05-30-landscape.md");
     expect(kv.mandates_block_path).toBe("metric.md");
@@ -200,11 +200,11 @@ describe("handoff-extract", () => {
     mkdirSync(art, { recursive: true });
     writeFileSync(join(art, "topic.txt"), "nothing worked");
     writeFileSync(join(art, "scoreboard.md"),
-      "| rank | exp | instrument | metric | status |\n| 1 | exp-001 | violin | n/a | fail |\n");
+      "| rank | exp | agent | metric | status |\n| 1 | exp-001 | violin | n/a | fail |\n");
     expect(await handoffExtractWith([art], { now: () => "T" })).toBe(0);
     const kv = parseKvBody(readFileSync(join(art, "handoff-data.kv"), "utf8"));
     expect(kv.mode).toBe("rehearsal-no-winner");
-    expect(kv.winner_instrument).toBeUndefined();
+    expect(kv.winner_agent).toBeUndefined();
   });
 
   it("checkpoint: absolute path passes through verbatim; relative is prefixed", async () => {
@@ -229,7 +229,7 @@ describe("handoff-extract", () => {
     writeResult(artR, "viola", "exp-002", {});
     expect(await handoffExtractWith([artR], { now: () => "T" })).toBe(0);
     const kvR = parseKvBody(readFileSync(join(artR, "handoff-data.kv"), "utf8"));
-    expect(kvR.winner_checkpoint).toBe("parts/violin/experiments/exp-003/best.pt");
+    expect(kvR.winner_checkpoint).toBe("workers/violin/experiments/exp-003/best.pt");
   });
 
   it("rc 2 on missing art-dir arg", async () => {
@@ -268,10 +268,10 @@ describe("forensics", () => {
     const topic = "buggy";
     const art = rehearsalArtDir(topic);
     mkdirSync(art, { recursive: true });
-    // Sibling part dir under the topic dir carries an error event in its outbox.
-    const partDir = join(art, "..", "violin-codex");
-    mkdirSync(partDir, { recursive: true });
-    writeFileSync(join(partDir, "outbox.jsonl"), '{"event":"error","reason":"boom"}\n');
+    // Sibling worker dir under the topic dir carries an error event in its outbox.
+    const workerDir = join(art, "..", "violin-codex");
+    mkdirSync(workerDir, { recursive: true });
+    writeFileSync(join(workerDir, "outbox.jsonl"), '{"event":"error","reason":"boom"}\n');
 
     const lines: string[] = [];
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation((c: unknown): boolean => { lines.push(String(c)); return true; });
@@ -286,13 +286,13 @@ describe("forensics", () => {
 describe("teardown", () => {
   // Scoreboard with a top-1 ok row -> winner violin/exp-003.
   const WINNER_SB =
-    "| rank | exp | instrument | metric | status |\n" +
+    "| rank | exp | agent | metric | status |\n" +
     "| --- | --- | --- | --- | --- |\n" +
     "| 1 | exp-003 | violin | 0.9950 | ok |\n" +
     "| 2 | exp-002 | viola | 0.9100 | ok |\n";
   // Scoreboard whose only data row is partial (~) -> no ok row -> no winner.
   const PARTIAL_SB =
-    "| rank | exp | instrument | metric | status |\n" +
+    "| rank | exp | agent | metric | status |\n" +
     "| --- | --- | --- | --- | --- |\n" +
     "| ~1 | exp-001 | violin | n/a | ~partial |\n";
 
@@ -322,7 +322,7 @@ describe("teardown", () => {
     mkdirSync(art, { recursive: true });
     writeFileSync(join(art, "scoreboard.md"), WINNER_SB);
     // REAL top-1 code dir.
-    mkdirSync(join(art, "parts", "violin", "experiments", "exp-003", "code"), { recursive: true });
+    mkdirSync(join(art, "workers", "violin", "experiments", "exp-003", "code"), { recursive: true });
 
     // Fake archiveTopic asserts the symlink already exists at call time (ordering proof).
     let symlinkAtArchive: { isLink: boolean; target: string } | null = null;
@@ -341,7 +341,7 @@ describe("teardown", () => {
     // Symlink existed at archive time, relative target rides along inside _rehearsal.
     expect(symlinkAtArchive).not.toBeNull();
     expect(symlinkAtArchive!.isLink).toBe(true);
-    expect(symlinkAtArchive!.target).toBe("parts/violin/experiments/exp-003/code");
+    expect(symlinkAtArchive!.target).toBe("workers/violin/experiments/exp-003/code");
     // The archive dest is written to stdout for the directive.
     expect(lines).toContain("/archive/here/_rehearsal-20260530T000000Z");
   });
@@ -350,7 +350,7 @@ describe("teardown", () => {
     const h = home();
     const opts = { home: h.home, cwd: h.home };
     const art = rehearsalArtDir("tune-model", opts);
-    mkdirSync(join(art, "parts", "violin", "experiments", "exp-003", "code"), { recursive: true });
+    mkdirSync(join(art, "workers", "violin", "experiments", "exp-003", "code"), { recursive: true });
     writeFileSync(join(art, "scoreboard.md"), WINNER_SB);          // a winner exists...
     writeFileSync(join(art, "preflight-panes.txt"), "violin\t%1\nviola\t%2\n");
     writeFileSync(join(art, "metric.md"), "primary_metric: acc\n");
@@ -430,28 +430,28 @@ describe("teardown", () => {
       opts, killPane: async (p) => { killed.push(p); },
     }));
     expect(rc).toBe(0);
-    // Each non-blank "<instrument>\t<pane>" line passes only the PANE field (tab-split) to killPane.
+    // Each non-blank "<agent>\t<pane>" line passes only the PANE field (tab-split) to killPane.
     expect(killed).toEqual(["%1", "%2"]);
     // The file is removed after the kill sweep.
     expect(existsSync(join(art, "preflight-panes.txt"))).toBe(false);
   });
 });
 
-describe("fresh-part", () => {
+describe("fresh-worker", () => {
   const TOPIC = "tune-model";
   const INST = "violin";
 
-  // Scaffold <art>/parts/<inst>/state.txt by hand with the given KV body.
-  function scaffoldState(homeDir: string, topic: string, instrument: string, body: string): string {
+  // Scaffold <art>/workers/<inst>/state.txt by hand with the given KV body.
+  function scaffoldState(homeDir: string, topic: string, agent: string, body: string): string {
     const art = rehearsalArtDir(topic, { home: homeDir, cwd: homeDir });
-    const dir = partStateDir(art, instrument);
+    const dir = workerStateDir(art, agent);
     mkdirSync(dir, { recursive: true });
     const stateTxt = join(dir, "state.txt");
     writeFileSync(stateTxt, body);
     return stateTxt;
   }
 
-  function fpDeps(homeDir: string, over: Partial<RehearsalFreshPartDeps> = {}): RehearsalFreshPartDeps {
+  function fpDeps(homeDir: string, over: Partial<RehearsalFreshWorkerDeps> = {}): RehearsalFreshWorkerDeps {
     return {
       teardown: async () => {},
       spawn: async () => 0,
@@ -463,19 +463,19 @@ describe("fresh-part", () => {
 
   it("rc 2 on wrong arg count", async () => {
     const h = home();
-    expect(await freshPartWith([TOPIC], fpDeps(h.home))).toBe(2);
-    expect(await freshPartWith([TOPIC, INST, "extra"], fpDeps(h.home))).toBe(2);
-    expect(await freshPartWith([], fpDeps(h.home))).toBe(2);
+    expect(await freshWorkerWith([TOPIC], fpDeps(h.home))).toBe(2);
+    expect(await freshWorkerWith([TOPIC, INST, "extra"], fpDeps(h.home))).toBe(2);
+    expect(await freshWorkerWith([], fpDeps(h.home))).toBe(2);
   });
 
-  it("rc 2 on bad instrument", async () => {
+  it("rc 2 on bad agent", async () => {
     const h = home();
-    expect(await freshPartWith([TOPIC, "Violin"], fpDeps(h.home))).toBe(2);
+    expect(await freshWorkerWith([TOPIC, "Violin"], fpDeps(h.home))).toBe(2);
   });
 
   it("rc 1 when state.txt is missing", async () => {
     const h = home();
-    expect(await freshPartWith([TOPIC, INST], fpDeps(h.home))).toBe(1);
+    expect(await freshWorkerWith([TOPIC, INST], fpDeps(h.home))).toBe(1);
   });
 
   it("rc 1 REFUSAL when phase=working; no teardown, no spawn", async () => {
@@ -486,13 +486,13 @@ describe("fresh-part", () => {
     const errs: string[] = [];
     const spy = vi.spyOn(process.stderr, "write").mockImplementation((c: unknown): boolean => { errs.push(String(c)); return true; });
     try {
-      const rc = await freshPartWith([TOPIC, INST], fpDeps(h.home, {
+      const rc = await freshWorkerWith([TOPIC, INST], fpDeps(h.home, {
         teardown: async (t, i) => { tearDowns.push([t, i]); },
         spawn: async (a) => { spawns.push(a); return 0; },
       }));
       expect(rc).toBe(1);
     } finally { spy.mockRestore(); }
-    expect(errs.join("\n")).toContain(`part ${INST} is mid-experiment (phase=working); abort or wait for done before fresh-part.`);
+    expect(errs.join("\n")).toContain(`worker ${INST} is mid-experiment (phase=working); abort or wait for done before fresh-worker.`);
     expect(tearDowns.length).toBe(0);
     expect(spawns.length).toBe(0);
   });
@@ -503,7 +503,7 @@ describe("fresh-part", () => {
       "phase=idle\nexp_counter=7\ncurrent_exp_id=exp-007\nprobe_sent_ts=xyz\nlast_event=done\n");
     const tearDowns: Array<[string, string]> = [];
     const spawns: string[][] = [];
-    const rc = await freshPartWith([TOPIC, INST], fpDeps(h.home, {
+    const rc = await freshWorkerWith([TOPIC, INST], fpDeps(h.home, {
       teardown: async (t, i) => { tearDowns.push([t, i]); },
       spawn: async (a) => { spawns.push(a); return 0; },
     }));
@@ -515,7 +515,7 @@ describe("fresh-part", () => {
     expect(st.current_exp_id).toBe("");      // cleared to empty (mergeState preserves empty-value keys)
     expect(st.probe_sent_ts).toBe("");       // cleared to empty
     expect(st.exp_counter).toBe("7");        // PRESERVED
-    expect(st.last_event).toBe("fresh-part-respawn");
+    expect(st.last_event).toBe("fresh-worker-respawn");
     expect(st.last_event_ts).toBe("T");
   });
 
@@ -525,7 +525,7 @@ describe("fresh-part", () => {
     const lines: string[] = [];
     const spy = vi.spyOn(process.stdout, "write").mockImplementation((c: unknown): boolean => { lines.push(String(c)); return true; });
     try {
-      expect(await freshPartWith([TOPIC, INST], fpDeps(h.home))).toBe(0);
+      expect(await freshWorkerWith([TOPIC, INST], fpDeps(h.home))).toBe(0);
     } finally { spy.mockRestore(); }
     expect(parseState(readFileSync(stateTxt, "utf8")).exp_counter).toBe("0");
   });
@@ -538,7 +538,7 @@ describe("fresh-part", () => {
     const spy = vi.spyOn(process.stderr, "write").mockImplementation((c: unknown): boolean => { errs.push(String(c)); return true; });
     let rc: number;
     try {
-      rc = await freshPartWith([TOPIC, INST], fpDeps(h.home, { spawn: async () => 1 }));
+      rc = await freshWorkerWith([TOPIC, INST], fpDeps(h.home, { spawn: async () => 1 }));
     } finally { spy.mockRestore(); }
     expect(rc).toBe(1);
     expect(errs.join("\n")).toContain(`spawn failed for ${INST} on ${TOPIC}`);
@@ -550,7 +550,7 @@ describe("fresh-part", () => {
     const h = home();
     const stateTxt = scaffoldState(h.home, TOPIC, INST, "phase=idle\nexp_counter=2\ncurrent_exp_id=exp-002\n");
     const spawns: string[][] = [];
-    const rc = await freshPartWith([TOPIC, INST], fpDeps(h.home, {
+    const rc = await freshWorkerWith([TOPIC, INST], fpDeps(h.home, {
       teardown: async () => { throw new Error("dead pane"); },
       spawn: async (a) => { spawns.push(a); return 0; },
     }));
@@ -558,7 +558,7 @@ describe("fresh-part", () => {
     expect(spawns).toEqual([[INST, "codex", TOPIC]]);
     const st = parseState(readFileSync(stateTxt, "utf8"));
     expect(st.phase).toBe("idle");
-    expect(st.last_event).toBe("fresh-part-respawn");
+    expect(st.last_event).toBe("fresh-worker-respawn");
     expect(st.exp_counter).toBe("2");
     expect(st.current_exp_id).toBe("");
   });
@@ -717,7 +717,7 @@ describe("consensus", () => {
     };
   }
 
-  // Write a result.json into <art>/parts/<inst>/experiments/<exp>/.
+  // Write a result.json into <art>/workers/<inst>/experiments/<exp>/.
   function writeResult(homeDir: string, topic: string, inst: string, exp: string, obj: unknown): void {
     const art = rehearsalArtDir(topic, { home: homeDir, cwd: homeDir });
     const dir = experimentDir(art, inst, exp);
@@ -735,7 +735,7 @@ describe("consensus", () => {
     expect(await consensusWith(["--bogus", TOPIC], csDeps(h.home))).toBe(2);
   });
 
-  it("rc 1 when the parts/ dir is missing", async () => {
+  it("rc 1 when the workers/ dir is missing", async () => {
     const h = home();
     const art = rehearsalArtDir(TOPIC, { home: h.home, cwd: h.home });
     mkdirSync(art, { recursive: true });
@@ -744,13 +744,13 @@ describe("consensus", () => {
     try {
       expect(await consensusWith([TOPIC], csDeps(h.home))).toBe(1);
     } finally { spy.mockRestore(); }
-    expect(errs.join("\n")).toContain("no parts dir");
+    expect(errs.join("\n")).toContain("no workers dir");
   });
 
-  it("rc 1 when parts exist but no ok result.json", async () => {
+  it("rc 1 when workers exist but no ok result.json", async () => {
     const h = home();
     const art = rehearsalArtDir(TOPIC, { home: h.home, cwd: h.home });
-    mkdirSync(partsDir(art), { recursive: true });
+    mkdirSync(workersDir(art), { recursive: true });
     writeResult(h.home, TOPIC, "violin", "exp-001", { status: "fail", metric_value: 0.1 });
     const errs: string[] = [];
     const spy = vi.spyOn(process.stderr, "write").mockImplementation((c: unknown): boolean => { errs.push(String(c)); return true; });
@@ -760,10 +760,10 @@ describe("consensus", () => {
     expect(errs.join("\n")).toContain("no ok result.json files found");
   });
 
-  it("happy path: writes consensus.md with Agreed/Contested/All-missing; latest-ok per part drives the matrix", async () => {
+  it("happy path: writes consensus.md with Agreed/Contested/All-missing; latest-ok per worker drives the matrix", async () => {
     const h = home();
     const art = rehearsalArtDir(TOPIC, { home: h.home, cwd: h.home });
-    mkdirSync(partsDir(art), { recursive: true });
+    mkdirSync(workersDir(art), { recursive: true });
     // violin: an EARLIER ok exp + a LATER ok exp — the later one must win.
     writeResult(h.home, TOPIC, "violin", "exp-001", { status: "ok", metric_name: "acc", metric_value: 0.10, approach_label: "early" });
     writeResult(h.home, TOPIC, "violin", "exp-009", { status: "ok", metric_name: "acc", metric_value: 0.90, approach_label: "late" });
@@ -781,7 +781,7 @@ describe("consensus", () => {
     expect(md).toContain("## Agreed");
     expect(md).toContain("## Contested");
     expect(md).toContain("## All-missing");
-    // metric_name agrees across both parts.
+    // metric_name agrees across both workers.
     expect(md).toContain("| metric_name | acc |");
     // latest-ok selection: violin's LATER exp (late / 0.90) drives the matrix, not the earlier (early / 0.10).
     expect(md).toContain("late");
@@ -793,7 +793,7 @@ describe("consensus", () => {
   it("--epsilon=0.05 is parsed (metric_value within 0.05 counts as Agreed)", async () => {
     const h = home();
     const art = rehearsalArtDir(TOPIC, { home: h.home, cwd: h.home });
-    mkdirSync(partsDir(art), { recursive: true });
+    mkdirSync(workersDir(art), { recursive: true });
     writeResult(h.home, TOPIC, "violin", "exp-001", { status: "ok", metric_value: 0.50 });
     writeResult(h.home, TOPIC, "viola", "exp-001", { status: "ok", metric_value: 0.53 });
 

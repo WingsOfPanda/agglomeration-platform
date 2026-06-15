@@ -25,7 +25,7 @@ describe("paths", () => {
     const h = P.repoHash(process.cwd());
     expect(P.repoStateDir()).toBe(`/R/state/${h}`);
     expect(P.topicDir("foo")).toBe(`/R/state/${h}/foo`);
-    expect(P.partDir("violin", "codex", "foo")).toBe(`/R/state/${h}/foo/violin-codex`);
+    expect(P.workerDir("violin", "codex", "foo")).toBe(`/R/state/${h}/foo/violin-codex`);
   });
   it("isArtifactDir", () => {
     expect(P.isArtifactDir("/a/b/_consult")).toBe(true);

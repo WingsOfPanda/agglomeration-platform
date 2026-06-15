@@ -12,7 +12,7 @@ afterEach(() => { if (prev === undefined) delete process.env.AP_HOME; else proce
 
 function deps(providers: string[], picks: string[]): ScoreInitDeps {
   return {
-    activeProviders: () => providers, isValidated: () => true, pickInstruments: () => picks,
+    activeProviders: () => providers, isValidated: () => true, pickAgents: () => picks,
   };
 }
 

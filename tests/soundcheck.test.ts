@@ -27,7 +27,7 @@ describe("soundcheck ensures global config root", () => {
     try {
       await soundcheck([]);                 // must not throw; must create home + copy config
       expect(exists(join(home, "contracts.yaml"))).toBe(true);
-      expect(exists(join(home, "instruments.yaml"))).toBe(true);
+      expect(exists(join(home, "agents.yaml"))).toBe(true);
     } finally {
       if (prev === undefined) delete process.env.AP_HOME; else process.env.AP_HOME = prev;
     }

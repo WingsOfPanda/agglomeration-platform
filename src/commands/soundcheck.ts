@@ -6,7 +6,7 @@ import { log } from "../core/log.js";
 import { haveCmd, inTmuxSession, tmuxVersionOk, tmuxVersionString } from "../core/deps.js";
 import { globalRoot, pluginRoot } from "../core/paths.js";
 import { atomicWrite } from "../core/atomic.js";
-import { contractsExist, listInstruments, instrumentBinary, instrumentConsultValidated } from "../core/contracts.js";
+import { contractsExist, listAgents, agentBinary, agentConsultValidated } from "../core/contracts.js";
 import { readProviderList, planRoster, formatActiveFile, formatProviderFile } from "../core/providers.js";
 import { isoUtc } from "../core/archive.js";
 
@@ -26,7 +26,7 @@ export function opencodePermissionCheck(cfgPath?: string): PermissionResult {
   try { obj = JSON.parse(readFileSync(p, "utf8")); } catch { return { rc: 1, message: "opencode.json: unparseable", configPath: p }; }
   const perm = obj?.permission;
   if (perm === "allow") return { rc: 0, configPath: p };
-  if (typeof perm === "string") return { rc: 1, message: `opencode.json: permission is '${perm}' (need 'allow' for part auto-approve)`, configPath: p };
+  if (typeof perm === "string") return { rc: 1, message: `opencode.json: permission is '${perm}' (need 'allow' for worker auto-approve)`, configPath: p };
   if (perm && typeof perm === "object") return { rc: 2, message: "opencode.json: object-form permission detected; soundcheck does not introspect per-tool keys", configPath: p };
   return { rc: 1, message: "opencode.json: no top-level 'permission' key (defaults to 'ask')", configPath: p };
 }
@@ -45,7 +45,7 @@ function partitionAvailable(): { available: string[]; detected: string[]; skippe
   const detected: string[] = [];
   const skipped: string[] = [];
   for (const p of available) {
-    if (instrumentConsultValidated(p)) detected.push(p);
+    if (agentConsultValidated(p)) detected.push(p);
     else skipped.push(`${p} (consult_validated: false)`);
   }
   return { available, detected, skipped };
@@ -78,9 +78,9 @@ function rosterSet(providers: string[]): number {
 }
 
 /** Restores the predecessor plugin's medic pane-border check (cosmetic — always WARN, never FAIL).
- *  Part labels render on the border only when pane-border-status is top/bottom AND
+ *  Worker labels render on the border only when pane-border-status is top/bottom AND
  *  pane-border-format reads the @ap_ user-options. A stale format keyed to the old (pre-rebrand)
- *  user-options makes ap parts fall back to the raw pane_title. Pure for testing; the live
+ *  user-options makes ap workers fall back to the raw pane_title. Pure for testing; the live
  *  tmux query lives in healthCheck. */
 export function paneBorderDiagnosis(pbs: string, pbf: string): { ok: boolean; lines: string[] } {
   const fix = [
@@ -89,12 +89,12 @@ export function paneBorderDiagnosis(pbs: string, pbf: string): { ok: boolean; li
     "    set -g pane-border-format ' #{?@ap_label_fmt,#{@ap_label_fmt},#[fg=#{?@ap_color,#{@ap_color},default}#,bold]#{?@ap_label,#{@ap_label},#{pane_title}}#[default]} '",
   ];
   if (pbs !== "top" && pbs !== "bottom") {
-    return { ok: false, lines: [`pane-border-status is '${pbs || "off"}'; part labels won't render on pane borders`, ...fix] };
+    return { ok: false, lines: [`pane-border-status is '${pbs || "off"}'; worker labels won't render on pane borders`, ...fix] };
   }
   if (!pbf.includes("@ap_label")) {
-    return { ok: false, lines: ["pane-border-format doesn't read @ap_label; ap part names won't show on pane borders", ...fix] };
+    return { ok: false, lines: ["pane-border-format doesn't read @ap_label; ap worker names won't show on pane borders", ...fix] };
   }
-  return { ok: true, lines: [`pane-border: status=${pbs}, format @ap_label-aware (part names visible)`] };
+  return { ok: true, lines: [`pane-border: status=${pbs}, format @ap_label-aware (worker names visible)`] };
 }
 
 function tmuxGlobalOption(name: string): string {
@@ -121,7 +121,7 @@ function healthCheck(): number {
   if (existsSync(root)) log.ok(`state dir: ${root} (writable)`);
   else { log.error(`state dir: ${root} cannot be created or is not writable`); fail = 1; }
 
-  for (const f of ["contracts.yaml", "instruments.yaml"]) {
+  for (const f of ["contracts.yaml", "agents.yaml"]) {
     const dest = join(globalRoot(), f);
     if (existsSync(dest)) log.ok(`config: ${f}`);
     else {
@@ -138,9 +138,9 @@ function healthCheck(): number {
   const detected: string[] = [];
   if (!contractsExist()) { log.error(`contracts.yaml not found at ${join(globalRoot(), "contracts.yaml")}`); fail = 1; }
   else {
-    for (const prov of listInstruments()) {
+    for (const prov of listAgents()) {
       total++;
-      const bin = instrumentBinary(prov);
+      const bin = agentBinary(prov);
       if (!bin) { log.warn(`  ${prov}: binary field missing in contracts.yaml`); continue; }
       if (haveCmd(bin)) {
         let ver = ""; try { ver = execFileSync(bin, ["--version"], { encoding: "utf8" }).split("\n")[0].trim(); } catch { /* best-effort */ }
@@ -158,7 +158,7 @@ function healthCheck(): number {
   atomicWrite(availablePath(), formatProviderFile(detected, isoUtc(), "providers detected with binary on PATH + contracts.yaml row"));
 
   if (fail !== 0 || ok === 0) {
-    if (ok === 0 && total > 0) log.error(`no providers available; install at least one of: ${listInstruments().join(" ")}`);
+    if (ok === 0 && total > 0) log.error(`no providers available; install at least one of: ${listAgents().join(" ")}`);
     process.stdout.write("Verdict: FAIL — fix items above before spawning\n");
     return 1;
   }

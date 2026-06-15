@@ -4,12 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run as soundcheck } from "../src/commands/soundcheck.js";
 
-// stage a CLAUDE_PLUGIN_ROOT whose config/ has contracts+instruments but NOT the identity template
+// stage a CLAUDE_PLUGIN_ROOT whose config/ has contracts+agents but NOT the identity template
 function stageRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "sc-root-"));
   mkdirSync(join(root, "config", "prompt-templates"), { recursive: true });
   writeFileSync(join(root, "config", "contracts.yaml"), "codex:\n  binary: codex\n");
-  writeFileSync(join(root, "config", "instruments.yaml"), "violin:\n");
+  writeFileSync(join(root, "config", "agents.yaml"), "violin:\n");
   return root;
 }
 

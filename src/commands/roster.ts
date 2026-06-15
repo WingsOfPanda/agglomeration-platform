@@ -37,7 +37,7 @@ export function classifyStale(state: string, outbox: string, thresholdS = 180): 
 export async function run(args: string[]): Promise<number> {
   const filter = args.find((a) => !a.startsWith("--"));
   const repo = repoStateDir();
-  if (!existsSync(repo)) { process.stdout.write(`no parts deployed (state dir absent: ${repo})\n`); return 0; }
+  if (!existsSync(repo)) { process.stdout.write(`no workers deployed (state dir absent: ${repo})\n`); return 0; }
   const W = (s: string, n: number) => s.padEnd(n);
   process.stdout.write(`${W("PART", 32)} ${W("MODEL", 8)} ${W("TOPIC", 12)} ${W("PANE", 9)} STATE\n`);
   process.stdout.write(`${"-".repeat(32)} ${"-".repeat(8)} ${"-".repeat(12)} ${"-".repeat(9)} -----\n`);
@@ -50,10 +50,10 @@ export async function run(args: string[]): Promise<number> {
       const dir = join(td, p.name);
       const meta = paneMetaReadForDir(dir);
       const pane = meta.paneId || "?";
-      const ob = outboxPath(meta.instrument, meta.model, t.name);
+      const ob = outboxPath(meta.agent, meta.model, t.name);
       let state = "[ORPHAN]";
       if (pane !== "?" && (await paneAlive(pane))) state = classifyStale(deriveState(lastOutboxEvent(ob)), ob, staleThresholdS());
-      process.stdout.write(`${W(meta.instrument, 32)} ${W(meta.model, 8)} ${W(t.name, 12)} ${W(pane, 9)} ${state}\n`);
+      process.stdout.write(`${W(meta.agent, 32)} ${W(meta.model, 8)} ${W(t.name, 12)} ${W(pane, 9)} ${state}\n`);
     }
   }
   return 0;

@@ -16,7 +16,7 @@ const NUM = /^[0-9.]+$/;
 
 /** Canonical family key: lowercase -> trim -> collapse internal whitespace -> strip
  *  surrounding punctuation. Blank/punctuation-only -> "". Shared by tallyCoverage and
- *  checkCompletion's plateau. Internal punctuation is preserved (Maestro intent). */
+ *  checkCompletion's plateau. Internal punctuation is preserved (Hub intent). */
 export function normalizeFamily(label: string): string {
   return label
     .toLowerCase()

@@ -40,7 +40,7 @@ export interface DuetResumeFacts {
 export function renderDuetResume(f: DuetResumeFacts): string {
   const restore = f.mode === "in-place"
     ? "(in-place run — no branch was cut; nothing to restore)"
-    : `git -C ${f.repo} checkout <your-original-branch>   # the part's work is on ${f.branch}`;
+    : `git -C ${f.repo} checkout <your-original-branch>   # the worker's work is on ${f.branch}`;
   return [
     `# RESUME — ${f.topic} (aborted at ${f.phase}.${f.gate})`,
     "",
@@ -61,7 +61,7 @@ export function renderDuetResume(f: DuetResumeFacts): string {
 
 export interface DuetSummaryFacts {
   topic: string; status: "ok" | "aborted"; started: string; ended?: string; duration?: number;
-  provider: string; instrument: string; repo: string; mode: string; branch: string;
+  provider: string; agent: string; repo: string; mode: string; branch: string;
   rounds: number; verify: string; diffStats: string; archived: string; finishResult: string;
   abortedPhase?: string; abortedGate?: string; abortedReason?: string;
 }
@@ -78,7 +78,7 @@ export function renderDuetSummary(f: DuetSummaryFacts): string {
     `- Repo B: ${f.repo}`,
     `- Mode: ${f.mode}`,
     `- Branch: ${f.branch}`,
-    `- Instrument: ${f.instrument} (${f.provider})`,
+    `- Agent: ${f.agent} (${f.provider})`,
     `- rounds: ${f.rounds}`,
     `- Verify: ${f.verify}`,
     `- Diff: ${f.diffStats}`,

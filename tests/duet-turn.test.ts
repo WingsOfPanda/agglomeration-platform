@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { composeDuetBrief, composeDuetFollowup } from "../src/core/duetTurn.js";
 import { inboxWrite, inboxPath } from "../src/core/ipc.js";
-import { partDir } from "../src/core/paths.js";
+import { workerDir } from "../src/core/paths.js";
 import { freshHome } from "./helpers/tmpHome.js";
 
 describe("composeDuetBrief", () => {
@@ -39,7 +39,7 @@ describe("duet inbox carries a single done contract (no duplicate END_OF_INSTRUC
   afterEach(() => h.cleanup());
   const count = (s: string, sub: string): number => s.split(sub).length - 1;
   it("brief → exactly one END_OF_INSTRUCTION and one done line", () => {
-    const d = partDir("viola", "codex", "demo"); mkdirSync(d, { recursive: true }); writeFileSync(join(d, "outbox.jsonl"), "");
+    const d = workerDir("viola", "codex", "demo"); mkdirSync(d, { recursive: true }); writeFileSync(join(d, "outbox.jsonl"), "");
     inboxWrite("viola", "codex", "demo", composeDuetBrief("t", "/abs/repoB", "feat/duet-demo"));
     const txt = readFileSync(inboxPath("viola", "codex", "demo"), "utf8");
     expect(count(txt, "END_OF_INSTRUCTION")).toBe(1);

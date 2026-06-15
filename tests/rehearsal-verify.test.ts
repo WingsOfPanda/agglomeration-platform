@@ -52,7 +52,7 @@ describe("recomputedFromOutput", () => {
 
 describe("verificationRow", () => {
   it("renders a 6-col tsv row", () => {
-    expect(verificationRow({ expId: "exp-001", instrument: "viola", verdict: "verified", reason: "", recomputed: "0.93", ts: "T" }))
+    expect(verificationRow({ expId: "exp-001", agent: "viola", verdict: "verified", reason: "", recomputed: "0.93", ts: "T" }))
       .toBe("exp-001\tviola\tverified\t\t0.93\tT\n");
   });
 });
@@ -75,8 +75,8 @@ describe("planVerify", () => {
     expect(planVerify({ block: undefined, manifest: null, authorizeRerun: false, readInput: read }))
       .toEqual({ run: false, verdict: "unavailable", reason: "no-contract" });
   });
-  it("kind=none -> unavailable part-declined", () => {
-    expect((planVerify({ block: { kind: "none" }, manifest: null, authorizeRerun: false, readInput: read }) as { reason: string }).reason).toBe("part-declined");
+  it("kind=none -> unavailable worker-declined", () => {
+    expect((planVerify({ block: { kind: "none" }, manifest: null, authorizeRerun: false, readInput: read }) as { reason: string }).reason).toBe("worker-declined");
   });
   it("rerun without authorization -> pending rerun-deferred", () => {
     expect(planVerify({ block: { kind: "rerun", command: "c" }, manifest: fixed(), authorizeRerun: false, readInput: read }))

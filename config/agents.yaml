@@ -1,8 +1,8 @@
-# config/instruments.yaml — curated instrument-name pool; user-editable.
-# `spawn random <model> <topic>` picks an unused instrument from this pool.
+# config/agents.yaml — curated agent-name pool; user-editable.
+# `spawn random <model> <topic>` picks an unused agent from this pool.
 # Names are matched case-insensitively; conventionally lowercase at use site.
 # Grouping by section is documentation only; section membership lives in core/colors.ts.
-instruments:
+agents:
   # strings
   - violin
   - viola

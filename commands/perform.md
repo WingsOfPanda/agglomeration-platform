@@ -1,13 +1,13 @@
 ---
-description: Implement a deploy-schema design doc — audit, spawn one part to plan/implement/self-verify, Maestro cross-verifies and runs a bounded fix-loop, then finish + teardown (single-repo)
+description: Implement a deploy-schema design doc — audit, spawn one worker to plan/implement/self-verify, Hub cross-verifies and runs a bounded fix-loop, then finish + teardown (single-repo)
 argument-hint: [--no-branch] [--branch <n>] [--topic <slug>] [--max-rounds N] [<design-doc-path>]
 allowed-tools: Bash, Write, Read, Edit, AskUserQuestion, Skill, TodoWrite, mcp__codegraph
 ---
 
 # /ap:perform
 
-Run a part-implements / Maestro-verifies pipeline on `$ARGUMENTS` — the consumer of the
-deploy-schema design doc that `/ap:score` produces. The `tutti` part stays attached for the
+Run a worker-implements / Hub-verifies pipeline on `$ARGUMENTS` — the consumer of the
+deploy-schema design doc that `/ap:score` produces. The `tutti` worker stays attached for the
 whole run; `tmux select-pane` to watch.
 
 Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
@@ -18,7 +18,7 @@ Maintain a **TodoWrite** list so the user can see where the run is. Seed it righ
 `init` succeeds, mark each item `in_progress` when you enter that stage and `completed` when you
 leave it, and use **one rolling todo** for the dynamic fix-rounds rather than one todo per round.
 
-- Seed: `spawn part`, `build+verify loop`, `scope+finish`, `teardown+archive`.
+- Seed: `spawn worker`, `build+verify loop`, `scope+finish`, `teardown+archive`.
 
 ## Flagging suspicions
 
@@ -27,8 +27,8 @@ alarm — record it: `$CS perform flag <TOPIC> "<what looked off>"`. It writes s
 feed (survives teardown and aborts) and costs nothing, so prefer over-recording. Review later with
 `/ap:playback`.
 
-> **Scope:** single-repo. One part implements the design doc on its own `feat/perform-<TOPIC>`
-> branch; the Maestro cross-verifies and runs a bounded fix-loop, then a finish menu + teardown/archive.
+> **Scope:** single-repo. One worker implements the design doc on its own `feat/perform-<TOPIC>`
+> branch; the Hub cross-verifies and runs a bounded fix-loop, then a finish menu + teardown/archive.
 
 ## Stage 0 — args-file + init + branch
 
@@ -66,7 +66,7 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
    ART=<abs path to the _perform art dir>
    TOPIC=<slug>
    PROVIDER=<codex|claude>
-   TARGET_CWD=<abs path the part runs in>
+   TARGET_CWD=<abs path the worker runs in>
    ```
    Capture all four. Non-zero aborts:
    - **rc 1** — the doc/topic/target was unreadable/unresolvable (the audit was already cleared
@@ -79,11 +79,11 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
    from the clean HEAD and records `branch-base.sha`). With `--no-branch`, run
    `$CS perform branch --no-branch <TOPIC>` (stays on the current branch).
 
-> **Claude-confirm gate (before the spawn).** `init` records the part's auto-detected provider
+> **Claude-confirm gate (before the spawn).** `init` records the worker's auto-detected provider
 > (`PROVIDER=<codex|claude>` on stdout; also written to `$ART/auto_provider.txt`). **Before
-> spawning the part when its provider is `claude`** (this repo has a `.claude-plugin/plugin.json`),
+> spawning the worker when its provider is `claude`** (this repo has a `.claude-plugin/plugin.json`),
 > **AskUserQuestion**:
-> - question: "This repo has .claude-plugin/plugin.json — Claude is the recommended part for plugin
+> - question: "This repo has .claude-plugin/plugin.json — Claude is the recommended worker for plugin
 >   testing (it can load slash commands, run hooks, exercise the Claude Code surface natively). It will
 >   use claude tokens. Use claude or fall back to codex?"
 > - options: "Use claude (recommended for plugin testing)" / "Fall back to codex (cheaper)"
@@ -91,35 +91,35 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
 > On *Use claude* keep the provider as `claude`; on *Fall back to codex* set the spawn's provider
 > to `codex`. Apply this gate at the Stage 1.1 spawn.
 
-## Stage 1.1 — spawn the part (single-repo)
+## Stage 1.1 — spawn the worker (single-repo)
 
 First apply the **Claude-confirm gate** (defined after Stage 0): if `PROVIDER=claude`, AskUserQuestion
 as specified there and, on *Fall back to codex*, set `PROVIDER=codex` for this spawn. Then spawn one
-part in the resolved target cwd:
+worker in the resolved target cwd:
 
 ```bash
 $CS spawn tutti "$PROVIDER" "$TOPIC" --cwd "$(cat "$ART/target_cwd.txt")"
 ```
 
-On spawn failure (non-zero): `$CS perform archive <TOPIC>` and stop (nothing to tear down — the part
+On spawn failure (non-zero): `$CS perform archive <TOPIC>` and stop (nothing to tear down — the worker
 never came up).
 
-## Stage 1 — run the part turn (round-aware, auto-retry-once)
+## Stage 1 — run the worker turn (round-aware, auto-retry-once)
 
 Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. Then per round:
 
 1. Dispatch: `$CS perform turn-send <TOPIC> <ROUND>`. If it exits **non-zero with a "not idle"
-   message** (the part's `status.json` state is not `idle`, so the send is refused),
+   message** (the worker's `status.json` state is not `idle`, so the send is refused),
    **AskUserQuestion** ("Wait 60s and retry / Force-retry / Abort"):
    - *Wait 60s and retry* — `sleep 60`, then re-run `$CS perform turn-send <TOPIC> <ROUND>`.
-   - *Force-retry* — `$CS perform reset-status <TOPIC> tutti` (atomically resets the part to `idle`),
+   - *Force-retry* — `$CS perform reset-status <TOPIC> tutti` (atomically resets the worker to `idle`),
      then re-run `$CS perform turn-send <TOPIC> <ROUND>`.
    - *Abort* — `$CS coda <TOPIC>` then `$CS perform archive <TOPIC>`; stop.
-   (The single-repo part is the `tutti` instrument.) Any other non-zero rc → surface and stop.
+   (The single-repo worker is the `tutti` agent.) Any other non-zero rc → surface and stop.
 2. Wait in the background so your pane stays interactive:
    ```
    Bash(command='$CS perform turn-wait "$TOPIC" "$ROUND"', run_in_background: true,
-        description="maestro await tutti round=$ROUND")
+        description="hub await tutti round=$ROUND")
    ```
    The default turn budget is 4 hours (`AP_PERFORM_TURN_TIMEOUT_S=14400`); override the env var
    for unusually large or small tasks.
@@ -133,40 +133,40 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
        do NOT tear down; stop.
      - *Abort* — `$CS coda <TOPIC>` then `$CS perform archive <TOPIC>`; stop.
      - *Try-again* — `RETRY=0`; loop back to step 1.
-   - **`TS=question`** → the part halted with a question. Read the payload file
+   - **`TS=question`** → the worker halted with a question. Read the payload file
      `$ART/question-tutti-<ROUND>.txt` (KV: `TEXT=` percent-encoded, `CLAIM_KIND=`, `CLAIM_VALUE=`,
      `ROUTE=verify|escalate|objection`). Decode `TEXT` with the same scheme `score` uses
      (`%0A`→newline, etc.).
      - **`ROUTE=verify`** — verify the claim against ground truth: run the matching check for
        `CLAIM_KIND` in `TARGET_CWD` (`path`→exists+readable, `git`→`git -C "$TARGET_CWD" rev-parse
        --verify <value>`, `env`→is the var set, `cmd`→`command -v <value>`, `test`→`timeout 30 bash -c
-       <value>`). Compose the reply: `From: maestro` then `Verdict: FOUND|NOT FOUND|UNVERIFIABLE` +
+       <value>`). Compose the reply: `From: hub` then `Verdict: FOUND|NOT FOUND|UNVERIFIABLE` +
        the claim kind/value + the evidence + `Resume implementation.`. Write it to a temp file and
-       deliver: `$CS send --from maestro tutti "$TOPIC" @<reply-file>`.
+       deliver: `$CS send --from hub tutti "$TOPIC" @<reply-file>`.
      - **`ROUTE=escalate`** (or an unverifiable claim) — **AskUserQuestion** with the decoded `TEXT`
        as the question; write the user's answer to a temp file and deliver it the same way.
-     - **`ROUTE=objection`** — the part believes the plan is wrong. Read the latest `OBJECTIONS=`
+     - **`ROUTE=objection`** — the worker believes the plan is wrong. Read the latest `OBJECTIONS=`
        line from `$ART/turn-tutti-<ROUND>.txt`.
        - If `OBJECTIONS >= 3` (the cap of 2 is exceeded): **force-escalate** — handle exactly like
          `ROUTE=escalate` above (AskUserQuestion with the decoded `TEXT`; deliver the answer). Do
          NOT offer Revise/Override again.
-       - Otherwise render the decoded `TEXT` (if it is empty, render "the part objects to the plan
+       - Otherwise render the decoded `TEXT` (if it is empty, render "the worker objects to the plan
          (no detail given)") and **AskUserQuestion** ("Revise the plan / Override (proceed as
          planned) / Abort"):
          - *Revise* — **Edit** `$ART/design.md` and/or `$ART/plan.md` to address the objection, then
-           write a reply to a temp file (`From: maestro`, then "Plan updated — re-read the plan and
-           continue.") and deliver it: `$CS send --from maestro tutti "$TOPIC" @<reply-file>`.
-         - *Override* — write a reply (`From: maestro`, then "Proceeding as planned: <your reason>.
+           write a reply to a temp file (`From: hub`, then "Plan updated — re-read the plan and
+           continue.") and deliver it: `$CS send --from hub tutti "$TOPIC" @<reply-file>`.
+         - *Override* — write a reply (`From: hub`, then "Proceeding as planned: <your reason>.
            Resume implementation.") and deliver it the same way.
          - *Abort* — `$CS coda <TOPIC>` then `$CS perform archive <TOPIC>`; stop.
      - **Re-arm** the wait on the **same** round: re-run the background `turn-wait <TOPIC> <ROUND>`
        (the prior question-wait appended a fresh `OFFSET=`, so it resumes past the question). The next
-       event you see should be the part's `ack`, then its next terminal event.
+       event you see should be the worker's `ack`, then its next terminal event.
 
-## Stage 2 — cross-verify (Maestro)
+## Stage 2 — cross-verify (Hub)
 
 Invoke `superpowers:verification-before-completion`. Read (capped):
-- `$ART/verify-report-<ROUND>.md` (the part's self-verify),
+- `$ART/verify-report-<ROUND>.md` (the worker's self-verify),
 - `$ART/test-output-<ROUND>.log` (tail for pass/fail counts),
 - `git -C "$TARGET_CWD" log --oneline "$(cat "$ART/branch-base.sha")"..HEAD` and
   `git -C "$TARGET_CWD" diff --stat "$(cat "$ART/branch-base.sha")"..HEAD`,
@@ -202,7 +202,7 @@ Then `ROUND=$((ROUND+1))`, `RETRY=0`, and loop back to Stage 1.
    parseable component paths, so the OOS list is the entire diff — a guard **no-op**, not a real
    finding; prefer *Amend* (add a real Components table) and do NOT *Force-keep* the no-op. Otherwise,
    if `OOS_COUNT > 0`, read the file and **AskUserQuestion** ("Amend the design / Send back to the
-   part / Force-keep"):
+   worker / Force-keep"):
    - *Amend* — draft the new Components-table rows, present them, **Edit** `$ART/design.md` to insert
      them, and record `amended-rows=<n>` to `$ART/scope-amended.txt`.
    - *Send back* — append the out-of-scope paths as a `[scope]` bug to `$ART/fix-prompt-$((ROUND+1)).md`
@@ -217,9 +217,9 @@ Then `ROUND=$((ROUND+1))`, `RETRY=0`, and loop back to Stage 1.
    the branch was preserved and the repo restored to the start branch (resolve `git merge
    feat/perform-<TOPIC>` by hand).
 4. **Forensics + reflection.** `$CS perform forensics <TOPIC>`. If it printed a path, use the
-   **Edit/Write tool** to APPEND an idempotent `## Maestro reflection` section to that file — 3-5
+   **Edit/Write tool** to APPEND an idempotent `## Hub reflection` section to that file — 3-5
    short bullets interpreting the mechanical findings.
-5. **Teardown + archive.** `$CS coda <TOPIC>` (closes the part's pane; prints the **FINE** banner),
+5. **Teardown + archive.** `$CS coda <TOPIC>` (closes the worker's pane; prints the **DONE** banner),
    then `$CS perform archive <TOPIC>`.
 6. **Final summary.** Print: the branch + commit count (`git -C "$TARGET_CWD" log --oneline
    "$(cat "$ART/branch-base.sha")"..HEAD | wc -l`), the finish outcome, and the archive path.

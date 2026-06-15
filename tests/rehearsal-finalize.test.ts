@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { finalizePhase, parseHardConstraints } from "../src/core/rehearsalFinalize.js";
 import { finalizeWith, type RehearsalFinalizeDeps } from "../src/commands/rehearsal.js";
-import { rehearsalArtDir, partStateDir, experimentDir } from "../src/core/rehearsal.js";
-import { partDir } from "../src/core/paths.js";
+import { rehearsalArtDir, workerStateDir, experimentDir } from "../src/core/rehearsal.js";
+import { workerDir } from "../src/core/paths.js";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => { while (cleanups.length) cleanups.pop()!(); });
@@ -65,24 +65,24 @@ describe("rehearsal finalize", () => {
     ...over,
   });
 
-  /** Scaffold the art dir with parts.txt listing the given instruments. */
-  function scaffoldArt(h: { home: string }, instruments: string[]) {
+  /** Scaffold the art dir with workers.txt listing the given agents. */
+  function scaffoldArt(h: { home: string }, agents: string[]) {
     const o = opts(h);
     const art = rehearsalArtDir(TOPIC, o);
     mkdirSync(art, { recursive: true });
-    writeFileSync(join(art, "parts.txt"), instruments.join("\n") + "\n");
+    writeFileSync(join(art, "workers.txt"), agents.join("\n") + "\n");
     return { art, o };
   }
 
-  /** Scaffold one part: its art-tree state.txt + a live pane dir (pane.json + outbox.jsonl). */
+  /** Scaffold one worker: its art-tree state.txt + a live pane dir (pane.json + outbox.jsonl). */
   function scaffoldPart(h: { home: string }, art: string, inst: string, stateKv: string, outbox = "") {
     const o = opts(h);
-    const sd = partStateDir(art, inst);
+    const sd = workerStateDir(art, inst);
     mkdirSync(sd, { recursive: true });
     writeFileSync(join(sd, "state.txt"), stateKv);
-    const pd = partDir(inst, MODEL, TOPIC, o);
+    const pd = workerDir(inst, MODEL, TOPIC, o);
     mkdirSync(pd, { recursive: true });
-    writeFileSync(join(pd, "pane.json"), JSON.stringify({ pane_id: "%1", instrument: inst, model: MODEL, spawned_at: "t" }));
+    writeFileSync(join(pd, "pane.json"), JSON.stringify({ pane_id: "%1", agent: inst, model: MODEL, spawned_at: "t" }));
     writeFileSync(join(pd, "outbox.jsonl"), outbox);
     return { sd, pd };
   }
@@ -100,7 +100,7 @@ describe("rehearsal finalize", () => {
     expect(rc).toBe(1);
   });
 
-  it("working part with a terminal done event + a result.json -> reconciled to complete", async () => {
+  it("working worker with a terminal done event + a result.json -> reconciled to complete", async () => {
     const h = home();
     const { art } = scaffoldArt(h, ["violin"]);
     const outbox = '{"event":"done","summary":"ok","ts":"2026-05-30T11:00:00Z"}\n';
@@ -111,26 +111,26 @@ describe("rehearsal finalize", () => {
     });
     const rc = await finalizeWith([TOPIC], deps(h));
     expect(rc).toBe(0);
-    const st = readFileSync(join(partStateDir(art, "violin"), "state.txt"), "utf8");
+    const st = readFileSync(join(workerStateDir(art, "violin"), "state.txt"), "utf8");
     expect(st).toContain("phase=complete");
   });
 
-  it("working part with NO terminal event -> incomplete", async () => {
+  it("working worker with NO terminal event -> incomplete", async () => {
     const h = home();
     const { art } = scaffoldArt(h, ["viola"]);
     scaffoldPart(h, art, "viola", "phase=working\ncurrent_exp_id=exp-001\n", "");
     const rc = await finalizeWith([TOPIC], deps(h));
     expect(rc).toBe(0);
-    const st = readFileSync(join(partStateDir(art, "viola"), "state.txt"), "utf8");
+    const st = readFileSync(join(workerStateDir(art, "viola"), "state.txt"), "utf8");
     expect(st).toContain("phase=incomplete");
   });
 
-  it("idle part -> complete", async () => {
+  it("idle worker -> complete", async () => {
     const h = home();
     const { art } = scaffoldArt(h, ["cello"]);
     scaffoldPart(h, art, "cello", "phase=idle\n", "");
     await finalizeWith([TOPIC], deps(h));
-    const st = readFileSync(join(partStateDir(art, "cello"), "state.txt"), "utf8");
+    const st = readFileSync(join(workerStateDir(art, "cello"), "state.txt"), "utf8");
     expect(st).toContain("phase=complete");
   });
 
@@ -151,7 +151,7 @@ describe("rehearsal finalize", () => {
     const h = home();
     const { art } = scaffoldArt(h, ["flute"]);
     scaffoldPart(h, art, "flute", "phase=idle\n", "");
-    writeFileSync(join(art, "halt.flag"), "halted_by=maestro\nhalted_at=2026-05-30T11:00:00Z\nreason=converged\n");
+    writeFileSync(join(art, "halt.flag"), "halted_by=hub\nhalted_at=2026-05-30T11:00:00Z\nreason=converged\n");
     const rc = await finalizeWith([TOPIC], deps(h));
     expect(rc).toBe(0);
     const ss = readFileSync(join(art, "session-summary.md"), "utf8");
@@ -159,7 +159,7 @@ describe("rehearsal finalize", () => {
     expect(ss).toContain("reason=converged");
     expect(ss).not.toContain("format=");
     expect(ss).toContain("## Status");
-    expect(ss).toContain("| Part |");
+    expect(ss).toContain("| Worker |");
   });
 
   it("prune removes other *.pt files, keeps checkpoint_path; --keep-intermediate keeps both", async () => {
@@ -232,7 +232,7 @@ describe("rehearsal finalize", () => {
     const { art } = scaffoldArt(h, ["oboe"]);
     scaffoldPart(h, art, "oboe", "phase=idle\n", "");
     writeFileSync(join(art, "lineage.tsv"),
-      "exp_id\tinstrument\tparent_id\tknobs_changed\tverdict\tts\n" +
+      "exp_id\tagent\tparent_id\tknobs_changed\tverdict\tts\n" +
       "exp-003\toboe\texp-002\t2\timprove-multi\tT\n");
     const rc = await finalizeWith([TOPIC], deps(h));
     expect(rc).toBe(0);
@@ -251,7 +251,7 @@ describe("rehearsal finalize", () => {
     const { art } = scaffoldArt(h, ["oboe"]);
     scaffoldPart(h, art, "oboe", "phase=idle\n", "");
     writeFileSync(join(art, "inspection.tsv"),
-      "exp_id\tinstrument\tverdict\treason\treimpl_metric\tts\n" +
+      "exp_id\tagent\tverdict\treason\treimpl_metric\tts\n" +
       "exp-003\toboe\tnot-reproduced\tvalue:0.5vs0.9\t0.5\tT\n");
     expect(await finalizeWith([TOPIC], deps(h))).toBe(0);
     const w = readFileSync(join(art, "warnings.txt"), "utf8");
@@ -262,13 +262,13 @@ describe("rehearsal finalize", () => {
     expect(ss).toContain("reimpl: oboe/exp-003 not-reproduced");
   });
 
-  it("failed part is preserved (not coerced) when no terminal event reconciles it", async () => {
+  it("failed worker is preserved (not coerced) when no terminal event reconciles it", async () => {
     const h = home();
     const { art } = scaffoldArt(h, ["timpani"]);
     scaffoldPart(h, art, "timpani", "phase=failed\n", "");
     const rc = await finalizeWith([TOPIC], deps(h));
     expect(rc).toBe(0);
-    const st = readFileSync(join(partStateDir(art, "timpani"), "state.txt"), "utf8");
+    const st = readFileSync(join(workerStateDir(art, "timpani"), "state.txt"), "utf8");
     expect(st).toContain("phase=failed");
   });
 

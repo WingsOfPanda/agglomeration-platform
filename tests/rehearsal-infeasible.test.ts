@@ -23,8 +23,8 @@ describe("classifyInfeasible", () => {
 });
 
 describe("parseVerdicts", () => {
-  it("maps instrument/exp -> verdict, last write wins, header/blank skipped", () => {
-    const tsv = "exp_id\tinstrument\tverdict\treason\trecomputed\tts\n" +
+  it("maps agent/exp -> verdict, last write wins, header/blank skipped", () => {
+    const tsv = "exp_id\tagent\tverdict\treason\trecomputed\tts\n" +
       "exp-001\tviola\tverified\t\t0.9\tT1\n" +
       "exp-001\tviola\tmismatch\tvalue\t0.5\tT2\n" +
       "exp-002\toboe\tunavailable\tno-contract\t\tT3\n";

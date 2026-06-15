@@ -1,4 +1,4 @@
-// src/core/performTurn.ts — single-part TURN machinery for `perform` (Phase A).
+// src/core/performTurn.ts — single-worker TURN machinery for `perform` (Phase A).
 // Byte-faithful port of deploy-turn-wait.sh (the TS= state machine) + deploy_build_turn_prompt_round1
 // and deploy_build_turn_prompt_fix. Mirrors scoreTurn.ts conventions; prompt composers OMIT
 // END_OF_INSTRUCTION and the done line (inboxWrite appends them). A question round-trip is ONE
@@ -8,7 +8,7 @@ import { dirname } from "node:path";
 
 export type PerformState = "ok" | "failed" | "timeout" | "question";
 
-/** Map a single-part turn's wait outcome to TS= (port of the `case "$EVENT"` block in
+/** Map a single-worker turn's wait outcome to TS= (port of the `case "$EVENT"` block in
  *  deploy-turn-wait.sh:59-93). null -> timeout; question -> question; done + verify present AND
  *  non-empty -> ok else failed; error / unknown -> failed. */
 export function performState(ev: OutboxEvent | null, verifyText: string | null): PerformState {
@@ -46,8 +46,8 @@ function blockers(testCmd: string): string {
     "  or an approach that will not work (NOT a missing referent) — do NOT\n" +
     "  silently implement it. Halt and append ONE question whose message begins\n" +
     '  "OBJECTION:" explaining why, OMIT the "claim" object, then stop. The\n' +
-    "  Maestro will revise the plan or tell you to proceed.\n" +
-    "- The Maestro verifies the claim and replies via your inbox.md, then re-engages you.\n" +
+    "  Hub will revise the plan or tell you to proceed.\n" +
+    "- The Hub verifies the claim and replies via your inbox.md, then re-engages you.\n" +
     "- After reading any inbox.md reply, acknowledge by appending an ack event:\n" +
     '    {"event":"ack","task_summary":"<what you read>","ts":"<iso>"}\n' +
     "- The 'test' kind runs a diagnostic command under a 30s timeout — it\n" +

@@ -36,16 +36,16 @@ describe("parseMechanicalFindings", () => {
     const body =
       "## Mechanical findings\n\n" +
       "- **audit_log** ISSUE=todo_marker _(source: audit.log)_\n" +
-      '- **outbox** {"event":"error","reason":"timeout"} _(source: part=oboe)_\n';
+      '- **outbox** {"event":"error","reason":"timeout"} _(source: worker=oboe)_\n';
     expect(parseMechanicalFindings(body)).toEqual([
       { source: "audit_log", key: "ISSUE=todo_marker", context: "audit.log" },
-      { source: "outbox", key: '{"event":"error","reason":"timeout"}', context: "part=oboe" },
+      { source: "outbox", key: '{"event":"error","reason":"timeout"}', context: "worker=oboe" },
     ]);
   });
   it("key with spaces round-trips (non-greedy key / greedy context boundary)", () => {
-    const body = "- **spawn_results** rc=124 reason=timeout _(source: part=oboe)_\n";
+    const body = "- **spawn_results** rc=124 reason=timeout _(source: worker=oboe)_\n";
     expect(parseMechanicalFindings(body)).toEqual([
-      { source: "spawn_results", key: "rc=124 reason=timeout", context: "part=oboe" },
+      { source: "spawn_results", key: "rc=124 reason=timeout", context: "worker=oboe" },
     ]);
   });
   it("skips malformed lines", () => {
@@ -70,25 +70,25 @@ describe("findingSignature (per-source)", () => {
       .toBe("audit_log||ISSUE=todo_marker");
   });
   it("status -> state verbatim", () => {
-    expect(findingSignature({ source: "status", key: "state=error", context: "part=oboe" }))
+    expect(findingSignature({ source: "status", key: "state=error", context: "worker=oboe" }))
       .toBe("status||state=error");
   });
   it("spawn_results -> rc + reason word (lowercased)", () => {
-    expect(findingSignature({ source: "spawn_results", key: "rc=124 reason=Timeout waiting", context: "part=oboe" }))
+    expect(findingSignature({ source: "spawn_results", key: "rc=124 reason=Timeout waiting", context: "worker=oboe" }))
       .toBe("spawn_results||rc=124 reason=timeout");
   });
   it("spawn_results with no reason -> bare rc (empty reason column)", () => {
-    expect(findingSignature({ source: "spawn_results", key: "rc=124", context: "part=oboe" }))
+    expect(findingSignature({ source: "spawn_results", key: "rc=124", context: "worker=oboe" }))
       .toBe("spawn_results||rc=124");
   });
   it("outbox -> event + reason from JSON (volatile bits ignored)", () => {
-    expect(findingSignature({ source: "outbox", key: '{"event":"error","reason":"dispatch_timeout","ts":"2026-05-30T00:00:00Z"}', context: "part=oboe" }))
+    expect(findingSignature({ source: "outbox", key: '{"event":"error","reason":"dispatch_timeout","ts":"2026-05-30T00:00:00Z"}', context: "worker=oboe" }))
       .toBe("outbox||event=error reason=dispatch_timeout");
-    expect(findingSignature({ source: "outbox", key: '{"event":"question"}', context: "part=oboe" }))
+    expect(findingSignature({ source: "outbox", key: '{"event":"question"}', context: "worker=oboe" }))
       .toBe("outbox||event=question");
   });
   it("outbox non-JSON key -> normalized-class fallback", () => {
-    expect(findingSignature({ source: "outbox", key: "not json sha 3827f1c4f6", context: "part=oboe" }))
+    expect(findingSignature({ source: "outbox", key: "not json sha 3827f1c4f6", context: "worker=oboe" }))
       .toBe("outbox||not json sha <sha>");
   });
   it("session_log -> volatile-normalized error class", () => {
@@ -114,9 +114,9 @@ describe("trend ledger", () => {
   });
   it("accrue: first-seen sets both dates; repeat bumps count + lastSeen", () => {
     const l = { counts: {} as Record<string, { count: number; firstSeen: string; lastSeen: string }> };
-    accrue(l, [{ source: "status", key: "state=error", context: "part=a" }], "2026-05-01");
+    accrue(l, [{ source: "status", key: "state=error", context: "worker=a" }], "2026-05-01");
     expect(l.counts["status||state=error"]).toEqual({ count: 1, firstSeen: "2026-05-01", lastSeen: "2026-05-01" });
-    accrue(l, [{ source: "status", key: "state=error", context: "part=b" }], "2026-05-03");
+    accrue(l, [{ source: "status", key: "state=error", context: "worker=b" }], "2026-05-03");
     expect(l.counts["status||state=error"]).toEqual({ count: 2, firstSeen: "2026-05-01", lastSeen: "2026-05-03" });
   });
   it("renderTrendDigest: count desc then signature asc; topN", () => {
