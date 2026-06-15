@@ -1,4 +1,4 @@
-SKILL HINT — this score run is design-shaped.
+SKILL HINT — this design run is design-shaped.
 
 Use the `superpowers:brainstorming` skill to structure your thinking. The
 skill normally asks design questions one at a time; the protocol below
@@ -6,7 +6,7 @@ lets you do that without deadlocking the run.
 
 AUTONOMY CONTRACT
 
-This score run is automated. The skill you invoke may try to ask design
+This design run is automated. The skill you invoke may try to ask design
 questions one at a time. You may ask questions back to the Hub
 via your outbox, but follow these rules:
 

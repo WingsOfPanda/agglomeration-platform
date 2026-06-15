@@ -1,97 +1,87 @@
 # CLAUDE.md — agglomeration-platform
 
-> **⟶ REBRAND IN PROGRESS (2026-06-15): `consort` → `agglomeration-platform`.** Authoritative spec +
-> plan: `docs/superpowers/specs/2026-06-15-agglomeration-platform-rebrand-design.md` and
-> `docs/superpowers/plans/2026-06-15-agglomeration-platform-rebrand.md`. The shipped CODE is being
-> renamed across 3 PRs. **New identity:** namespace `ap` (`/ap:<verb>`), env `AP_HOME`, state dir
-> `.ap/`, tmux `@ap_*`; nouns Maestro→hub, instrument→agent, part→worker, section→cluster, FINE→DONE;
-> verbs score→design, prelude→explore, rehearsal→autoresearch, perform→implement, solo→quick,
-> playback→review, roster→list, coda→stop, soundcheck→check, duet→bridge. **Until the PR3 doc pass,
-> treat the `consort`/`CONSORT_HOME`/`.consort`/`/consort:`/`@cs_` tokens and the "musical rebrand
-> (locked)" table BELOW as historical** — the renamed code is the source of truth (PR1 brand has
-> already landed the `ap` identity; PR2 the nouns; PR3 the verbs).
-
 Guidance for Claude Code working in this repository. These instructions override default
 behavior. The machine-wide `~/.claude/CLAUDE.md` and the workspace `/home/liupan/CC/CLAUDE.md`
 also apply and are not restated here.
 
+> **Naming lineage (all cosmetic; the wire protocol is frozen throughout).** This plugin was a Bash
+> tool, rewritten to TypeScript as `consort`, then renamed + de-musicalized to **`agglomeration-platform`**
+> (the 2026-06-15 rebrand: spec/plan under `docs/superpowers/{specs,plans}/2026-06-15-agglomeration-platform-rebrand*`).
+> Historical specs/plans under `docs/` still use the older `consort`/musical names and are left as a
+> dated record. The shipped code (below) is the source of truth.
+
 ## What this is
 
-`consort` is a **TypeScript rewrite of the Bash plugin `clone-wars`** (`/home/liupan/CC/clone-wars`).
-It is a Claude Code plugin where a **conductor** (a Claude Code session running `/consort:*`
-commands) spawns and orchestrates real interactive model TUIs (`codex` / `claude` / `agy` /
+`agglomeration-platform` is a Claude Code plugin where a **hub** (a Claude Code session running
+`/ap:*` commands) spawns and orchestrates real interactive model TUIs (`codex` / `claude` / `agy` /
 `opencode`) as **tmux panes** the user can attach to. Coordination is **file-based IPC**
-(inbox / outbox / status / pane), not in-process messaging.
+(inbox / outbox / status / pane), not in-process messaging. The platform agglomerates **agents** into
+color-coded **clusters**; a spawned agent working a task is a **worker**.
 
-The language and packaging change (Bash → TS; 61 `bin/*.sh` → one committed `dist/consort.cjs`);
-the **wire protocol, state layout, and tmux mechanics stay byte-identical** so the external model
-binaries behave exactly as they do under clone-wars.
+The **wire protocol, state layout, and tmux mechanics are frozen** so the external model binaries are
+drop-in. One committed `dist/ap.cjs` (zero-build install) is dispatched by subcommand.
 
 ## Canonical docs — read before touching code
 
 | Doc | What it is |
 |---|---|
-| `docs/superpowers/specs/2026-05-29-consort-foundation-design.md` | the approved design (scope, naming, IPC + tmux contract, risks, acceptance) — **wins over MIGRATION.md where they differ** |
-| `docs/superpowers/plans/2026-05-29-consort-foundation-0{1,2,3}-*.md` | the phased TDD implementation plans (scaffold+core / primitives / verify+dogfood) |
-| `MIGRATION.md` | full architecture + phasing reference |
-| `/home/liupan/CC/clone-wars` | the **behavioral spec** — preserve *behavior*, not *implementation*; grep by symbol (line numbers drift). Bible: `clone-wars/docs/DESIGN.md` |
+| `docs/superpowers/specs/2026-06-15-agglomeration-platform-rebrand-design.md` | the rebrand spec (vocabulary, frozen wall, gate, PR split) |
+| `docs/superpowers/specs/2026-05-29-consort-foundation-design.md` | the original foundation design (historical names) — IPC + tmux contract, acceptance |
+| `MIGRATION.md` | full architecture + phasing reference (historical names; carries a rebrand banner) |
+| `docs/superpowers/specs/2026-06-04-multi-repo-retirement-design.md` | why the multi-sub-repo subsystem was retired |
 
 ## Current phase guard — load-bearing
 
-**Shipped:** the foundation (scaffold + `core/*` + the six primitives
-`spawn`/`send`/`collect`/`roster`/`coda`/`soundcheck` + `preflight`) and the high-level commands
-**`solo`** (was strike), **`score`** (consult), **`perform`** (deploy), **`playback`**
-(review-forensics), **`rehearsal`** (deep-research), and **`prelude`** (meditate) — each grounded by
-its own spec under `docs/superpowers/specs/` and a live dogfood. `rehearsal` ships the full A–D port:
-the six core `rehearsal*` modules + the verbs `init`/`metric`/`sota`/`spawn-all`/`experiment-send`/`score`/`monitor`/
-`status-brief`/`finalize`/`refine`/`handoff-extract`/`forensics`/`teardown`/`fresh-part`/`abort`/`consensus`,
-the inline loop, and Phases 0–7 of `commands/rehearsal.md`. `prelude` ships the five core `prelude*`
-modules (`prelude`/`preludeLit`/`preludeConfidence`/`preludeTurn`/`preludeHandoff`) + the verbs
-`init`/`classify`/`spawn-all`/`research-send`/`research-wait`/`synth-preliminary`/`confidence`/
-`adversary-send`/`adversary-wait`/`synth-final`/`forensics`/`teardown`/`handoff-extract`, the lit-track
-classifier, the 5-signal confidence gate, the adversary round, and Phases 0–10 of `commands/prelude.md`.
+**Shipped:** the foundation (scaffold + `core/*` + the primitives `spawn`/`send`/`collect`/`preflight`)
+and the high-level commands **`quick`**, **`design`**, **`implement`**, **`review`**,
+**`autoresearch`**, **`explore`**, plus the operational commands **`list`**, **`stop`**, **`check`**,
+and the cross-repo **`bridge`** — each grounded by its own spec under `docs/superpowers/specs/` and a
+live dogfood. `autoresearch` ships the full research-validity layer (verify / sanity / INFEASIBLE-vs-REFUTED
+/ coverage / lineage / independent inspector).
 
-**Fully ported, then deliberately narrowed.** Every clone-wars command has a consort equivalent. As of
-0.1.24 the **multi-sub-repo subsystem has been retired** — consort is **single-repo-only**: no
-`--targets`, no `score` multi-repo detection / 8-section walk, no `perform` DAG/wave/sibling execution
-(design: `docs/superpowers/specs/2026-06-04-multi-repo-retirement-design.md`). New behavior beyond a
-faithful port — or a deliberate divergence like the retirement — still needs its own spec under
-`docs/superpowers/specs/`; do not import features across command boundaries without a design doc.
+**Single-repo only.** The multi-sub-repo subsystem was retired (design:
+`docs/superpowers/specs/2026-06-04-multi-repo-retirement-design.md`): no `--targets`, no multi-repo
+detection, no DAG/wave/sibling execution. New behavior beyond a faithful port — or a deliberate
+divergence like the retirement or the rebrand — needs its own spec under `docs/superpowers/specs/`; do
+not import features across command boundaries without a design doc.
 
-## The musical rebrand (locked) — change everything cosmetic, freeze the protocol
+## Vocabulary & the frozen protocol
 
-Cosmetic renames (apply everywhere; the stale-token test enforces the absence of the old terms):
+The current (de-musicalized) vocabulary:
 
-| clone-wars | consort |
+| Concept | Term |
 |---|---|
-| `commander` (concept + `pane.json`/`ready` JSON key) | `instrument` |
-| worker noun "trooper" | "part" |
-| conductor "Master Yoda" / `From: master-yoda` | "Maestro" / `From: maestro` |
-| `commanders.yaml` | `instruments.yaml`; cast = instrument names |
-| rank / legion (color grouping + label prefix) | orchestral **section** (strings/woodwinds/brass/percussion/keys/early) |
-| `@cw_*` tmux options | `@cs_*` |
-| teardown banner "MISSION ACCOMPLISHED" | "FINE" |
-| `cw_*` fn prefix / `CLONE_WARS_HOME` / `.clone-wars/` | dropped / `CONSORT_HOME` / `.consort/` |
-| commands `consult/meditate/deep-research/deploy/strike/review-forensics` | `score/prelude/rehearsal/perform/solo/playback` |
-| commands `list/teardown/medic` | `roster/coda/soundcheck` |
-| primitives `spawn`/`send`/`collect` | **unchanged** (CLI-internal plumbing) |
+| orchestrating Claude Code session | **hub** (IPC `From: hub`) |
+| configured model role (`agents.yaml`) + `pane.json`/`ready` JSON key | **agent** |
+| a spawned agent working a task | **worker** |
+| color grouping of agents (pane-border color family) | **cluster** (`azure`/`sage`/`amber`/`slate`/`ivory`/`violet`/`neutral`) |
+| default agent call-signs | NATO phonetic (`alpha`..`zulu`, in `config/agents.yaml` + `core/colors.ts`) |
+| teardown banner | **DONE** |
+| namespace / env / state dir / tmux opts / bundle | `ap` (`/ap:<verb>`) / `AP_HOME` / `.ap/` / `@ap_*` / `dist/ap.cjs` |
+| commands | `design` `explore` `autoresearch` `implement` `quick` `review` `list` `stop` `check` `bridge` |
+| primitives (CLI-internal plumbing) | `spawn` `send` `collect` `preflight` `hook` — unchanged |
 
 **FROZEN — never rename** (drop-in compatibility with the external model binaries depends on it):
 event names `ready/ack/progress/done/error/question`; sentinel `END_OF_INSTRUCTION`; JSON fields
 `ts/summary/artifacts/note/message/fatal/task_summary/model/topic`; `contracts.yaml` keys
-(`binary/modes/default_mode/ready_timeout_s/bootstrap_sleep_s/timeout_multiplier/consult_validated`);
-state filenames; `CLAUDE_CODE_SESSION_ID`.
+(`binary/modes/default_mode/ready_timeout_s/bootstrap_sleep_s/timeout_multiplier/consult_validated` —
+**`consult_validated` keeps that name** though the command is now `design`); state filenames;
+`CLAUDE_CODE_SESSION_ID`. Note the `autoresearch` command keeps a **`score`** subcommand and an
+internal **scoreboard** metric (`buildScoreboard`/`ScoreRow`) — that `score` is the metric, distinct
+from the retired `score` command (now `design`); do not rename it.
 
-A `tests/stale-tokens.test.ts` gate fails the build if `clone-wars` / `cw_` / `master-yoda` /
-`MISSION ACCOMPLISHED` / `@cw_` appears in shipped `src`/`config`/`commands`/`hooks`/`.claude-plugin`.
-Fix the offending file; never weaken the gate.
+A `tests/stale-tokens.test.ts` gate fails the build if removed brand/metaphor tokens reappear in
+shipped `src`/`config`/`commands`/`hooks`/`.claude-plugin`: case-sensitive `clone-wars`/`cw_`/
+`master-yoda`/`MISSION ACCOMPLISHED`/`@cw_`/`cs_`/`@cs_`; case-insensitive `trooper`/`commander`/
+`consort`/`maestro`/`instrument`. Generic English (`part`/`section`/`score`/`perform`/`solo`/`fine`)
+is intentionally **not** banned (false positives). Fix the offending file; never weaken the gate.
 
 ## Architecture & conventions
 
-- **One esbuild bundle:** `dist/consort.cjs`, dispatched by subcommand (`src/consort.ts` →
+- **One esbuild bundle:** `dist/ap.cjs`, dispatched by subcommand (`src/ap.ts` →
   `src/commands/<verb>.run(args)`). Logic in `src/core/*`; one file per responsibility.
 - **`dist/` is committed** (zero-build install). After changing `src/`, run `npm run build` and
-  commit the refreshed `dist/consort.cjs`.
+  commit the refreshed `dist/ap.cjs`.
 - **tmux is the only subprocess surface** (via `execa`). Test tmux code as **pure arg-array
   builders**; never spawn real panes in unit tests (live behavior = the dogfood).
 - **Typed objects + `JSON.parse`, not shell parsing.** Event matching is `JSON.parse(line)` then
@@ -102,16 +92,16 @@ Fix the offending file; never weaken the gate.
 - No emojis in shipped output (grep-ability). Errors to **stderr**, never the outbox. Closed
   provider set (a new provider = a `contracts.yaml` row + dogfood, not an open OpenAI-compat set).
 
-## Commands (per AGENTS-style toolchain)
+## Commands (toolchain)
 
 ```
-npm run typecheck   # tsc --noEmit (replaces clone-wars' static-wiring locks)
+npm run typecheck   # tsc --noEmit
 npm run test        # vitest run
 npm run lint        # eslint
-npm run build       # esbuild → dist/consort.cjs (commit the result)
+npm run build       # esbuild → dist/ap.cjs (commit the result)
 ```
 
-Test isolation: set `CONSORT_HOME` to a fresh temp dir per test (see `tests/helpers/tmpHome.ts`).
+Test isolation: set `AP_HOME` to a fresh temp dir per test (see `tests/helpers/tmpHome.ts`).
 For the live dogfood, run inside tmux with `CLAUDE_PLUGIN_ROOT=$PWD`.
 
 ## CodeGraph

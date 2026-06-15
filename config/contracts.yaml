@@ -1,4 +1,4 @@
-# config/contracts.yaml — shipped defaults; copied to $AP_HOME on first soundcheck run.
+# config/contracts.yaml — shipped defaults; copied to $AP_HOME on first check run.
 # Each provider row has:
 #   binary:           CLI executable name (must be on PATH)
 #   modes:            map of mode-name -> args list passed to the CLI
@@ -24,11 +24,11 @@ codex:
   # nudge arrived before codex was draining its TTY, leading to silent buffer
   # drops + ready-timeout. Warm starts are unaffected (the sleep is a floor
   # before the nudge fires). The directive-side auto-retry-once that
-  # complements this lives in commands/score.md (Stage 3 spawn-all retry).
+  # complements this lives in commands/design.md (Stage 3 spawn-all retry).
   bootstrap_sleep_s: 20
   # 0.1.31: codex-xhigh research/adversary turns reliably run ~10-12 min and
   # tripped the 600s research_timeout_s by 1-2 min, forcing a re-arm dance
-  # (playback 2026-06-08: 4x across distinct prelude/score topics). Same lever
+  # (review 2026-06-08: 4x across distinct explore/design topics). Same lever
   # opencode uses for its wall-clock slowness; 1.5 -> 900s gives margin and the
   # liveness probe still catches genuinely-dead workers.
   timeout_multiplier: 1.5
@@ -75,7 +75,7 @@ opencode:
   bootstrap_sleep_s: 15
   # v0.35.0: DeepSeek V4 Pro is wall-clock slower than codex/claude; multiply
   # per-kind consult timeouts by this factor before the liveness probe kicks in.
-  # Closes the false-FS=timeout symptom hit during ap score when
+  # Closes the false-FS=timeout symptom hit during ap design when
   # a worker recorded timeout while findings.md was 18 KB and the pane was
   # visibly working. See the worker-liveness design notes for the full design.
   timeout_multiplier: 2.5

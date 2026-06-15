@@ -101,7 +101,7 @@ export function scrapeLogs(text: string, basename: string): Finding[] {
   return text.split("\n").filter((l) => l.includes("[error]") || l.includes("log_error")).map((l) => ({ source: "session_log", key: l.trim(), context: basename }));
 }
 
-/** Best-effort walk of an _score art dir + its sibling worker dirs → deduped Finding[]. Each read is
+/** Best-effort walk of an _design art dir + its sibling worker dirs → deduped Finding[]. Each read is
  *  individually guarded; any failure contributes nothing (never throws). Outbox/status worker label =
  *  the worker dir's basename. */
 export function scrapeArtDir(artDir: string): Finding[] {
@@ -110,7 +110,7 @@ export function scrapeArtDir(artDir: string): Finding[] {
   const a = read(join(artDir, "design-doc", "audit.log")); if (a !== null) out.push(...scrapeAuditLog(a));
   const sr = read(join(artDir, "spawn-results.tsv")); if (sr !== null) out.push(...scrapeSpawnResults(sr));
   try { for (const f of readdirSync(artDir)) { if (f.endsWith(".log") || f === "session-summary.md") { const t = read(join(artDir, f)); if (t !== null) out.push(...scrapeLogs(t, f)); } } } catch { /* */ }
-  // sibling worker dirs live under the TOPIC dir (parent of _score): <topic>/<inst>-<model>/
+  // sibling worker dirs live under the TOPIC dir (parent of _design): <topic>/<inst>-<model>/
   const topicDir = dirname(artDir);
   try {
     for (const d of readdirSync(topicDir, { withFileTypes: true })) {
@@ -125,7 +125,7 @@ export function scrapeArtDir(artDir: string): Finding[] {
 
 export interface ForensicsMeta { command: string; topicSlug: string; repoHash: string; artDir: string; invokedAt: string; }
 
-/** Common playback-feed write shared by all three feed writers. Splits the single `now` instant into
+/** Common review-feed write shared by all three feed writers. Splits the single `now` instant into
  *  the UTC `<date>` directory + `<time>` filename segment (so filename + frontmatter share one
  *  timestamp), resolves repoHash, ensures globalRoot()/forensics/<date>/, then renders + atomic-writes.
  *  `fileNameFor(time)` builds the leaf basename from the HH-MM-SS segment; `meta` carries the
@@ -178,7 +178,7 @@ export function captureArtDir(opts: { artDir: string; command: string; now?: Dat
 }
 
 /** Shared body for each command's `forensics` wind-down verb: usage-guard the topic, capture, report.
- *  Best-effort — rc 0 unless the topic arg is missing (rc 2). Feeds /ap:playback. */
+ *  Best-effort — rc 0 unless the topic arg is missing (rc 2). Feeds /ap:review. */
 export function runForensics(command: string, artDirFor: (topic: string) => string, topic: string | undefined): number {
   if (!topic) { log.error(`usage: ${command} forensics <topic>`); return 2; }
   const path = captureArtDir({ artDir: artDirFor(topic), command });
@@ -198,9 +198,9 @@ export function bootstrapFailureArgs(
     : { reason: "timeout", detail: NO_EVENT_SENTINEL, failureReportPath };
 }
 
-/** Approach A: write a spawn/bootstrap-failure finding straight to the playback feed
+/** Approach A: write a spawn/bootstrap-failure finding straight to the review feed
  *  (globalRoot()/forensics/<date>/<time>-spawn-<topic>.md, command:spawn), reusing renderArtForensics
- *  so /ap:playback consumes it unchanged. Teardown-independent — works before the worker dir exists
+ *  so /ap:review consumes it unchanged. Teardown-independent — works before the worker dir exists
  *  and when teardown never runs. Best-effort: returns the written path, or "" on zero-effect / any
  *  error. Never throws. */
 export function captureSpawnFailure(opts: {
@@ -221,9 +221,9 @@ export function captureSpawnFailure(opts: {
   } catch { return ""; }
 }
 
-/** Record a Hub suspicion straight to the playback feed
+/** Record a Hub suspicion straight to the review feed
  *  (globalRoot()/forensics/<date>/<time>-<command>-flag-<topic>.md, source=hub_flag), reusing
- *  renderArtForensics so /ap:playback consumes it unchanged. Teardown-independent (lands even on
+ *  renderArtForensics so /ap:review consumes it unchanged. Teardown-independent (lands even on
  *  abort/handoff). Best-effort: returns the written path, or "" on empty note / any error. Never throws. */
 export function recordHubFlag(opts: { command: string; topic: string; note: string; now?: Date }): string {
   try {
@@ -239,7 +239,7 @@ export function recordHubFlag(opts: { command: string; topic: string; note: stri
 }
 
 /** Shared `<command> flag <topic> <note>` verb: usage-guard, record, report. rc 2 on missing
- *  topic/empty note, else rc 0 (best-effort; mirrors runForensics). Feeds /ap:playback. */
+ *  topic/empty note, else rc 0 (best-effort; mirrors runForensics). Feeds /ap:review. */
 export function runFlag(command: string, topic: string | undefined, note: string): number {
   if (!topic || !note.trim()) { log.error(`usage: ${command} flag <topic> <observation>`); return 2; }
   const path = recordHubFlag({ command, topic, note });

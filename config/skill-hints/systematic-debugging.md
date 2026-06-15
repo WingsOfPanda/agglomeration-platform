@@ -1,4 +1,4 @@
-SKILL HINT — this score run is bug-hunt shaped.
+SKILL HINT — this design run is bug-hunt shaped.
 
 Use the `superpowers:systematic-debugging` skill to structure your
 investigation. The skill walks through hypothesis → reproduction → root
@@ -7,7 +7,7 @@ deadlocking the run.
 
 AUTONOMY CONTRACT
 
-This score run is automated. The skill you invoke may try to ask
+This design run is automated. The skill you invoke may try to ask
 clarifying questions one at a time. You may ask questions back to the
 Hub via your outbox, but follow these rules:
 

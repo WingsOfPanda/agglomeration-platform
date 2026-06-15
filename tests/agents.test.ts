@@ -37,7 +37,7 @@ describe("agents", () => {
     home(); seed("bravo", "codex", "x"); seed("alpha", "codex", "x"); seed("charlie", "codex", "x");
     expect(I.pickRandomAgent("x", () => 0)).toBeNull();
   });
-  it("collision: foreign owner shows owned-by line + coda command", () => {
+  it("collision: foreign owner shows owned-by line + stop command", () => {
     home();
     const d = seed("bravo", "codex", "demo");
     writeFileSync(join(d, ".session_id"), "aaaaaaaa-1111\n");
@@ -45,7 +45,7 @@ describe("agents", () => {
     expect(msg).toContain("bravo is already deployed on demo; pick another agent");
     expect(msg).toContain("owned by another Claude Code session");
     expect(msg).toContain("aaaaaaaa");
-    expect(msg).toContain("/ap:coda bravo demo");
+    expect(msg).toContain("/ap:stop bravo demo");
   });
   it("collision: same session omits owned-by line", () => {
     home();

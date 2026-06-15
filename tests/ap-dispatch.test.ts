@@ -20,7 +20,7 @@ describe("dispatcher (requires npm run build first)", () => {
   });
   it("--mint-args-file prints a path under _args and creates nothing harmful", () => {
     const home = mkdtempSync(join(tmpdir(), "disp-"));
-    const r = run(["roster", "--mint-args-file"], { AP_HOME: home });
+    const r = run(["list", "--mint-args-file"], { AP_HOME: home });
     expect(r.code).toBe(0);
     const path = r.stdout.trim();
     expect(path).toContain("/_args/");

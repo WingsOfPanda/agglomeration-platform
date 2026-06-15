@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, existsSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { recordHubFlag, runFlag } from "../src/core/forensics.js";
-import { parseForensicsFrontmatter, parseMechanicalFindings } from "../src/core/playback.js";
+import { parseForensicsFrontmatter, parseMechanicalFindings } from "../src/core/review.js";
 import { globalRoot } from "../src/core/paths.js";
 
 let env: { home: string; cleanup: () => void };
@@ -15,33 +15,33 @@ const fdir = (date: string) => join(globalRoot(), "forensics", date);
 describe("recordHubFlag", () => {
   it("writes a hub_flag finding straight to the global feed", () => {
     const now = new Date("2026-06-02T09:15:30Z");
-    const p = recordHubFlag({ command: "perform", topic: "auth-x", note: "  the diff touched an unrelated file  ", now });
-    expect(p).toBe(join(fdir("2026-06-02"), "09-15-30-perform-flag-auth-x.md"));
+    const p = recordHubFlag({ command: "implement", topic: "auth-x", note: "  the diff touched an unrelated file  ", now });
+    expect(p).toBe(join(fdir("2026-06-02"), "09-15-30-implement-flag-auth-x.md"));
     expect(existsSync(p)).toBe(true);
     const text = readFileSync(p, "utf8");
     const meta = parseForensicsFrontmatter(text);
-    expect(meta.command).toBe("perform");
+    expect(meta.command).toBe("implement");
     expect(meta.topic).toBe("auth-x");
     expect(meta.nFindings).toBe(1);
     expect(parseMechanicalFindings(text)).toEqual([
-      { source: "hub_flag", key: "the diff touched an unrelated file", context: "from=hub command=perform" },
+      { source: "hub_flag", key: "the diff touched an unrelated file", context: "from=hub command=implement" },
     ]);
   });
   it("returns '' for an empty/whitespace note (nothing written)", () => {
-    expect(recordHubFlag({ command: "score", topic: "t", note: "   " })).toBe("");
+    expect(recordHubFlag({ command: "design", topic: "t", note: "   " })).toBe("");
   });
 });
 
 describe("runFlag", () => {
   it("rc 2 on missing topic or empty note", () => {
-    expect(runFlag("solo", undefined, "x")).toBe(2);
-    expect(runFlag("solo", "t", "")).toBe(2);
+    expect(runFlag("quick", undefined, "x")).toBe(2);
+    expect(runFlag("quick", "t", "")).toBe(2);
   });
   it("rc 0 and writes a hub_flag file on a valid flag", () => {
-    const rc = runFlag("score", "topic-y", "looks off");
+    const rc = runFlag("design", "topic-y", "looks off");
     expect(rc).toBe(0);
     const date = new Date().toISOString().slice(0, 10);
     const files = readdirSync(fdir(date), { withFileTypes: true }).filter((d: Dirent) => d.isFile());
-    expect(files.some((f) => f.name.includes("score-flag-topic-y"))).toBe(true);
+    expect(files.some((f) => f.name.includes("design-flag-topic-y"))).toBe(true);
   });
 });
