@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Simulated-parts end-to-end dogfood for /ap:prelude (port of meditate).
+# Simulated-workers end-to-end dogfood for /ap:prelude (port of meditate).
 #
 # Drives the REAL built CLI (`node dist/ap.cjs prelude <verb>`) across the full
 # prelude lifecycle against a throwaway AP_HOME. The model PARTS are SIMULATED:
 # real codex pane spawns are blocked by codex's directory-trust prompt + need tmux, so
-# instead of `spawn-all` we write the parts' deliverables by hand — findings-<inst>.md
+# instead of `spawn-all` we write the workers' deliverables by hand — findings-<inst>.md
 # (research), the landscape-draft.md fixture, adversary-<inst>.md (critiques), and the
 # final landscape doc — then run the synth/confidence/handoff verbs against that state.
 #
@@ -34,7 +34,7 @@ assert() { if [ "$2" -eq 0 ]; then pass "$1"; else fail "$1"; fi; }
 TOPIC_TEXT="attention kernels for long context"
 
 echo "===================================================================="
-echo "prelude simulated-parts dogfood — TOPIC: $TOPIC_TEXT"
+echo "prelude simulated-workers dogfood — TOPIC: $TOPIC_TEXT"
 echo "===================================================================="
 
 # --- Step 1: init -----------------------------------------------------------
@@ -55,17 +55,17 @@ assert "2a classify rc 0" "$rc"
 assert "2b lit-track.txt starts with ON" \
   "$([ -f "$ART/lit-track.txt" ] && head -c2 "$ART/lit-track.txt" | grep -q '^ON$' && echo 0 || echo 1)"
 
-# --- Step 3: simulate research findings (one per instrument in roster) -------
-INSTRUMENTS="$(awk -F'\t' '!/^#/ && NF>=2 {print $2}' "$ART/roster.txt")"
-assert "3a roster yields >=2 instruments" \
-  "$([ "$(printf '%s\n' "$INSTRUMENTS" | grep -c .)" -ge 2 ] && echo 0 || echo 1)"
-for inst in $INSTRUMENTS; do
+# --- Step 3: simulate research findings (one per agent in roster) -------
+AGENTS="$(awk -F'\t' '!/^#/ && NF>=2 {print $2}' "$ART/roster.txt")"
+assert "3a roster yields >=2 agents" \
+  "$([ "$(printf '%s\n' "$AGENTS" | grep -c .)" -ge 2 ] && echo 0 || echo 1)"
+for inst in $AGENTS; do
   printf '## Approaches\n1. [https://arxiv.org/abs/2205.14135] FlashAttention — fused kernel\n## Notes\nuncertain about batch sizes.\n' \
     > "$ART/findings-$inst.md"
 done
 miss=0
-for inst in $INSTRUMENTS; do [ -s "$ART/findings-$inst.md" ] || miss=1; done
-assert "3b findings-<inst>.md written + non-empty for every instrument" "$miss"
+for inst in $AGENTS; do [ -s "$ART/findings-$inst.md" ] || miss=1; done
+assert "3b findings-<inst>.md written + non-empty for every agent" "$miss"
 
 # --- Step 4: synth-preliminary (input validator -> draft path) --------------
 DRAFT_PATH="$($CS prelude synth-preliminary "$TOPIC")"; rc=$?
@@ -90,13 +90,13 @@ assert "6a confidence --decision continue rc 0" "$rc"
 assert "6b adversary-skip.txt now has user_decision: continue" \
   "$(grep -q '^user_decision: continue$' "$ART/adversary-skip.txt" && echo 0 || echo 1)"
 
-# --- Step 7: simulate adversary critiques (one per instrument) --------------
-for inst in $INSTRUMENTS; do
+# --- Step 7: simulate adversary critiques (one per agent) --------------
+for inst in $AGENTS; do
   printf '## Verdict\naccept\n## Material findings\n(none)\n' > "$ART/adversary-$inst.md"
 done
 miss=0
-for inst in $INSTRUMENTS; do [ -s "$ART/adversary-$inst.md" ] || miss=1; done
-assert "7a adversary-<inst>.md written + non-empty for every instrument" "$miss"
+for inst in $AGENTS; do [ -s "$ART/adversary-$inst.md" ] || miss=1; done
+assert "7a adversary-<inst>.md written + non-empty for every agent" "$miss"
 
 # --- Step 8: synth-final (input validator -> final landscape path) ----------
 FINAL_PATH="$($CS prelude synth-final "$TOPIC")"; rc=$?

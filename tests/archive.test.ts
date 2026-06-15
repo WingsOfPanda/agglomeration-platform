@@ -3,16 +3,16 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, readdi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as A from "../src/core/archive.js";
-import { partDir, topicDir, globalRoot, repoHash } from "../src/core/paths.js";
+import { workerDir, topicDir, globalRoot, repoHash } from "../src/core/paths.js";
 
 afterEach(() => { delete process.env.AP_HOME; delete process.env.CLAUDE_CODE_SESSION_ID; });
 function home() { const h = mkdtempSync(join(tmpdir(), "ar-")); process.env.AP_HOME = h; return h; }
 
 describe("archive", () => {
-  it("stateInit creates clean part dir + session id", () => {
+  it("stateInit creates clean worker dir + session id", () => {
     home();
     process.env.CLAUDE_CODE_SESSION_ID = "sess-123";
-    const dir = partDir("violin", "codex", "demo");
+    const dir = workerDir("violin", "codex", "demo");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "outbox.jsonl"), "STALE\n");
     A.stateInit("violin", "codex", "demo");
@@ -21,7 +21,7 @@ describe("archive", () => {
   });
   it("stateArchive moves dir, returns dest, collision suffixes", () => {
     home();
-    const dir = partDir("violin", "codex", "demo");
+    const dir = workerDir("violin", "codex", "demo");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "f"), "x");
     const d1 = A.stateArchive("violin", "codex", "demo", "FAILED", { now: new Date("2026-05-29T14:30:22Z") });
@@ -34,7 +34,7 @@ describe("archive", () => {
     expect(d2).not.toBe(d1);
     expect(d2!.endsWith("-2")).toBe(true);
   });
-  it("stateArchive returns null when part dir absent", () => {
+  it("stateArchive returns null when worker dir absent", () => {
     home();
     expect(A.stateArchive("ghost", "codex", "demo")).toBeNull();
   });

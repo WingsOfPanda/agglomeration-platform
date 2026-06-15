@@ -53,7 +53,7 @@ export function paneBorderArgs(): string[][] {
   ];
 }
 /** Force pane-border-status on a specific window (by pane or window id) so a window-local
- *  `pane-border-status off` can't suppress the @ap_ part label that paneLabelSet stamped. */
+ *  `pane-border-status off` can't suppress the @ap_ worker label that paneLabelSet stamped. */
 export function windowBorderStatusArgs(target: string): string[] {
   return ["set-option", "-w", "-t", target, "pane-border-status", "top"];
 }
@@ -79,7 +79,7 @@ export const respawn = async (pane: string, launch: string, cwd?: string): Promi
   return pane;
 };
 
-/** Apply the orchestra pane-border config (idempotent `set -g`) so part labels render on the
+/** Apply the orchestra pane-border config (idempotent `set -g`) so worker labels render on the
  *  border instead of the raw TUI title. Called from spawn; tolerant of tmux errors. Returns
  *  false if any set-option failed (caller may warn). */
 export async function ensurePaneBorders(): Promise<boolean> {
@@ -125,18 +125,18 @@ export async function conductorPane(): Promise<string> {
 }
 
 // --- pane labels (the three @ap_* user-options) ---
-export function paneLabelSetArgs(pane: string, instrument: string, model: string, topic: string): string[][] {
+export function paneLabelSetArgs(pane: string, agent: string, model: string, topic: string): string[][] {
   return [
-    setOptionArgs(pane, "@ap_label", labelFor(instrument, model, topic)),
-    setOptionArgs(pane, "@ap_color", colorFor(instrument)),
-    setOptionArgs(pane, "@ap_label_fmt", labelFmt(instrument, model, topic)),
+    setOptionArgs(pane, "@ap_label", labelFor(agent, model, topic)),
+    setOptionArgs(pane, "@ap_color", colorFor(agent)),
+    setOptionArgs(pane, "@ap_label_fmt", labelFmt(agent, model, topic)),
   ];
 }
-export async function paneLabelSet(pane: string, instrument: string, model: string, topic: string): Promise<void> {
-  for (const args of paneLabelSetArgs(pane, instrument, model, topic)) await execa("tmux", args);
+export async function paneLabelSet(pane: string, agent: string, model: string, topic: string): Promise<void> {
+  for (const args of paneLabelSetArgs(pane, agent, model, topic)) await execa("tmux", args);
 }
 
-// --- graceful kill with FINE banner ---
+// --- graceful kill with DONE banner ---
 export function gracefulRespawnCommand(snap: string, pluginRoot: string, label: string, color: string): string {
   return `cat '${snap}'; node '${pluginRoot}/dist/ap.cjs' _banner '${label}' '${color}'; rm -f '${snap}'`;
 }
@@ -150,7 +150,7 @@ export async function paneColor(pane: string): Promise<string> {
 
 export async function killGraceful(pane: string, pluginRoot: string): Promise<void> {
   if (!(await paneAlive(pane))) return;
-  const label = (await paneLabel(pane)) || "part";
+  const label = (await paneLabel(pane)) || "worker";
   const color = await paneColor(pane);
   const snap = join(mkdtempSync(join(tmpdir(), "cs-snap-")), "snap.txt");
   try {
@@ -161,28 +161,28 @@ export async function killGraceful(pane: string, pluginRoot: string): Promise<vo
 }
 
 // --- preflight grid ---
-export interface PreflightEntry { instrument: string; model: string; cwd?: string; }
-export async function preflightLayout(topic: string, roster: PreflightEntry[], opts: { writePanes: (tsv: string) => void }): Promise<Array<{ instrument: string; pane: string }>> {
+export interface PreflightEntry { agent: string; model: string; cwd?: string; }
+export async function preflightLayout(topic: string, roster: PreflightEntry[], opts: { writePanes: (tsv: string) => void }): Promise<Array<{ agent: string; pane: string }>> {
   const conductor = await conductorPane();
   const created: string[] = [];
-  const out: Array<{ instrument: string; pane: string }> = [];
+  const out: Array<{ agent: string; pane: string }> = [];
   let prev = conductor;
   let flag: "-h" | "-v" = "-h";
   try {
     for (const e of roster) {
-      const sentinel = sentinelCommand(labelFmt(e.instrument, e.model, topic));
+      const sentinel = sentinelCommand(labelFmt(e.agent, e.model, topic));
       const args = [...preflightSplitArgs(flag, prev, e.cwd), sentinel];
       const { stdout } = await execa("tmux", args);
       const pane = stdout.trim();
       created.push(pane);
-      await paneLabelSet(pane, e.instrument, e.model, topic);
-      out.push({ instrument: e.instrument, pane });
+      await paneLabelSet(pane, e.agent, e.model, topic);
+      out.push({ agent: e.agent, pane });
       prev = pane;
       flag = "-v";
     }
     await selectLayoutMainVertical(conductor);
     await ensureWindowBorderStatus(conductor);
-    opts.writePanes(out.map((o) => `${o.instrument}\t${o.pane}`).join("\n") + "\n");
+    opts.writePanes(out.map((o) => `${o.agent}\t${o.pane}`).join("\n") + "\n");
     return out;
   } catch (e) {
     for (const p of created) { try { await execa("tmux", ["kill-pane", "-t", p]); } catch { /* */ } }

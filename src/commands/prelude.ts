@@ -17,8 +17,8 @@ import {
 } from "../core/score.js";
 import { readProviderList } from "../core/providers.js";
 import { activeProvidersPath, repoRoot } from "../core/paths.js";
-import { pickInstruments } from "../core/instruments.js";
-import { instrumentConsultValidated, consultTimeout, instrumentTimeoutMultiplier } from "../core/contracts.js";
+import { pickAgents } from "../core/agents.js";
+import { agentConsultValidated, consultTimeout, agentTimeoutMultiplier } from "../core/contracts.js";
 import { classifyTopic } from "../core/preludeLit.js";
 import { computeSignals, renderSkipRecord, type Decision } from "../core/preludeConfidence.js";
 import { outboxOffset, outboxPath, outboxWaitSince, type OutboxEvent } from "../core/ipc.js";
@@ -63,12 +63,12 @@ export async function run(args: string[]): Promise<number> {
 export interface PreludeInitDeps {
   activeProviders(): string[];
   isValidated(provider: string): boolean;
-  pickInstruments(topic: string, n: number): string[];
+  pickAgents(topic: string, n: number): string[];
 }
 const livePreludeInitDeps: PreludeInitDeps = {
   activeProviders: () => readProviderList(activeProvidersPath()),
-  isValidated: instrumentConsultValidated,
-  pickInstruments,
+  isValidated: agentConsultValidated,
+  pickAgents,
 };
 async function initRun(tokens: string[]): Promise<number> { return initWith(tokens, livePreludeInitDeps); }
 
@@ -89,9 +89,9 @@ export async function initWith(tokens: string[], d: PreludeInitDeps): Promise<nu
   const art = preludeArtDir(topic);
   if (existsSync(art)) { log.error(`prelude init: topic already in flight: ${art}`); log.error("  run /ap:coda or pick a different topic"); return 2; }
 
-  const instruments = d.pickInstruments(topic, roster.length);
-  if (instruments.length < roster.length) { log.error(`prelude init: instrument pool exhausted (need ${roster.length}, got ${instruments.length})`); return 1; }
-  const rows: RosterRow[] = roster.map((provider, i) => ({ provider, instrument: instruments[i] }));
+  const agents = d.pickAgents(topic, roster.length);
+  if (agents.length < roster.length) { log.error(`prelude init: agent pool exhausted (need ${roster.length}, got ${agents.length})`); return 1; }
+  const rows: RosterRow[] = roster.map((provider, i) => ({ provider, agent: agents[i] }));
 
   mkdirSync(art, { recursive: true });
   atomicWrite(join(art, "topic.txt"), topicText);
@@ -100,7 +100,7 @@ export async function initWith(tokens: string[], d: PreludeInitDeps): Promise<nu
   log.ok(`prelude init: topic=${topic} N=${rows.length}`);
   process.stdout.write(
     `TOPIC=${topic}\nN=${rows.length}\nART=${art}\n` +
-    rows.map((r) => `PART=${r.instrument}:${r.provider}`).join("\n") + "\n",
+    rows.map((r) => `PART=${r.agent}:${r.provider}`).join("\n") + "\n",
   );
   return 0;
 }
@@ -137,7 +137,7 @@ export async function spawnAllWith(topic: string, d: PreludeSpawnAllDeps): Promi
   const rosterPath = join(art, "roster.txt");
   if (!existsSync(rosterPath)) { log.error(`prelude spawn-all: roster.txt missing at ${rosterPath} (run prelude init)`); return 2; }
   const rows = parseRosterFile(readFileSync(rosterPath, "utf8"));
-  if (rows.length < 2) { log.error(`prelude spawn-all: need >=2 parts in roster.txt, got ${rows.length}`); return 2; }
+  if (rows.length < 2) { log.error(`prelude spawn-all: need >=2 workers in roster.txt, got ${rows.length}`); return 2; }
 
   const pf = await d.preflight([topic, String(rows.length), "--roster", spawnRosterArg(rows), "--art-dir", art]);
   if (pf !== 0) { log.error(`prelude spawn-all: preflight failed (rc=${pf})`); return 2; }
@@ -145,26 +145,26 @@ export async function spawnAllWith(topic: string, d: PreludeSpawnAllDeps): Promi
   const panesPath = join(art, "preflight-panes.txt");
   if (!existsSync(panesPath)) { log.error(`prelude spawn-all: preflight wrote no ${panesPath}`); return 2; }
   const panes = parsePanesFile(readFileSync(panesPath, "utf8"));
-  const orphans = rows.filter((r) => !panes.has(r.instrument));
-  if (orphans.length) { log.error(`prelude spawn-all: parts missing a preflight pane: ${orphans.map((r) => r.instrument).join(", ")}`); return 2; }
+  const orphans = rows.filter((r) => !panes.has(r.agent));
+  if (orphans.length) { log.error(`prelude spawn-all: workers missing a preflight pane: ${orphans.map((r) => r.agent).join(", ")}`); return 2; }
 
   const cwd = d.repoRoot();
   const results: SpawnResult[] = await Promise.all(rows.map(async (r) => {
-    const rc = await d.spawn([r.instrument, r.provider, topic, "--target-pane", panes.get(r.instrument)!, "--cwd", cwd, "--preflight-art-dir", art]);
-    return { instrument: r.instrument, provider: r.provider, rc };
+    const rc = await d.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent)!, "--cwd", cwd, "--preflight-art-dir", art]);
+    return { agent: r.agent, provider: r.provider, rc };
   }));
   atomicWrite(join(art, "spawn-results.tsv"), spawnResultsTsv(results));
 
   const rc = spawnTally(results.map((r) => r.rc));
   const nOk = results.filter((r) => r.rc === 0).length;
-  if (rc === 0) log.ok(`prelude spawn-all: ${nOk}/${rows.length} parts ready`);
-  else log.warn(`prelude spawn-all: ${nOk}/${rows.length} parts ready (rc=${rc})`);
+  if (rc === 0) log.ok(`prelude spawn-all: ${nOk}/${rows.length} workers ready`);
+  else log.warn(`prelude spawn-all: ${nOk}/${rows.length} workers ready (rc=${rc})`);
   return rc;
 }
 
 // ---- research-send / research-wait ----
 export interface ResearchSendDeps {
-  offsetFor(instrument: string, model: string, topic: string): number;
+  offsetFor(agent: string, model: string, topic: string): number;
   send(args: string[]): Promise<number>;
 }
 const liveResearchSendDeps: ResearchSendDeps = {
@@ -172,72 +172,72 @@ const liveResearchSendDeps: ResearchSendDeps = {
   send: sendRun,
 };
 async function researchSendRun(rest: string[]): Promise<number> {
-  const [topic, instrument, provider] = rest;
-  if (!topic || !instrument || !provider) { log.error("usage: prelude research-send <topic> <instrument> <provider>"); return 2; }
-  return researchSendWith(topic, instrument, provider, liveResearchSendDeps);
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: prelude research-send <topic> <agent> <provider>"); return 2; }
+  return researchSendWith(topic, agent, provider, liveResearchSendDeps);
 }
-export async function researchSendWith(topic: string, instrument: string, provider: string, d: ResearchSendDeps): Promise<number> {
+export async function researchSendWith(topic: string, agent: string, provider: string, d: ResearchSendDeps): Promise<number> {
   const art = preludeArtDir(topic);
-  const stateFile = join(art, `research-${instrument}.txt`);
+  const stateFile = join(art, `research-${agent}.txt`);
   if (existsSync(stateFile)) { log.error(`prelude research-send: ${stateFile} exists; rm to retry`); return 1; }
   const topicText = readIf(join(art, "topic.txt")).trim();
   if (!topicText) { log.error(`prelude research-send: topic.txt missing/empty at ${art} (run prelude init)`); return 1; }
 
   const track = readIf(join(art, "lit-track.txt")).startsWith("ON") ? "ON" : "OFF";
-  const findingsPath = join(art, `findings-${instrument}.md`); // art-dir-flat (faithful to meditate)
-  const promptFile = join(art, `${instrument}_research_prompt.md`);
+  const findingsPath = join(art, `findings-${agent}.md`); // art-dir-flat (faithful to meditate)
+  const promptFile = join(art, `${agent}_research_prompt.md`);
   atomicWrite(promptFile, composePreludeResearchPrompt(topicText, findingsPath, litGuidance(track)));
 
-  const offset = d.offsetFor(instrument, provider, topic);
+  const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}\n`);
-  const rc = await d.send(["--from", "maestro", instrument, topic, `@${promptFile}`]);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
   if (rc !== 0) { log.error(`prelude research-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`); return 1; }
-  log.ok(`prelude research-send: ${instrument} offset=${offset}`);
+  log.ok(`prelude research-send: ${agent} offset=${offset}`);
   return 0;
 }
 
 export interface ResearchWaitDeps {
-  wait(instrument: string, model: string, topic: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null>;
+  wait(agent: string, model: string, topic: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null>;
   multiplier(provider: string): string;
 }
 const liveResearchWaitDeps: ResearchWaitDeps = {
   wait: (i, m, t, off, ev, to) => outboxWaitSince(i, m, t, off, ev, to),
-  multiplier: instrumentTimeoutMultiplier,
+  multiplier: agentTimeoutMultiplier,
 };
 async function researchWaitRun(rest: string[]): Promise<number> {
-  const [topic, instrument, provider] = rest;
-  if (!topic || !instrument || !provider) { log.error("usage: prelude research-wait <topic> <instrument> <provider>"); return 2; }
-  return researchWaitWith(topic, instrument, provider, liveResearchWaitDeps);
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: prelude research-wait <topic> <agent> <provider>"); return 2; }
+  return researchWaitWith(topic, agent, provider, liveResearchWaitDeps);
 }
-export async function researchWaitWith(topic: string, instrument: string, provider: string, d: ResearchWaitDeps): Promise<number> {
+export async function researchWaitWith(topic: string, agent: string, provider: string, d: ResearchWaitDeps): Promise<number> {
   const art = preludeArtDir(topic);
-  const stateFile = join(art, `research-${instrument}.txt`);
+  const stateFile = join(art, `research-${agent}.txt`);
   if (!existsSync(stateFile)) { log.error(`prelude research-wait: ${stateFile} missing (run prelude research-send first)`); return 1; }
   const offset = parseLatestOffset(readFileSync(stateFile, "utf8"));
   if (offset === null) { log.error(`prelude research-wait: OFFSET not set in ${stateFile}`); return 1; }
 
   const timeout = scaledTimeout(consultTimeout("research"), d.multiplier(provider));
-  log.info(`prelude research-wait: ${instrument} offset=${offset} timeout=${timeout}s`);
-  const ev = await d.wait(instrument, provider, topic, offset, ["done", "error", "question"], timeout);
+  log.info(`prelude research-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, ["done", "error", "question"], timeout);
 
-  const findingsPath = join(art, `findings-${instrument}.md`);
+  const findingsPath = join(art, `findings-${agent}.md`);
   const findingsText = readIfExistsOrNull(findingsPath);
   const fs = researchState(ev, findingsText);
   if (fs === "question" && ev) {
-    atomicWrite(join(art, `question-${instrument}.txt`), JSON.stringify(ev) + "\n");
-    const bumped = outboxOffset(outboxPath(instrument, provider, topic));
+    atomicWrite(join(art, `question-${agent}.txt`), JSON.stringify(ev) + "\n");
+    const bumped = outboxOffset(outboxPath(agent, provider, topic));
     appendFileSync(stateFile, `OFFSET=${bumped}\nFS=question\n`);
   } else {
     appendFileSync(stateFile, `FS=${fs}\n`);
   }
-  writeFileSync(join(art, `research-${instrument}.done`), "");
-  log.ok(`prelude research-wait: ${instrument} FS=${fs}`);
+  writeFileSync(join(art, `research-${agent}.done`), "");
+  log.ok(`prelude research-wait: ${agent} FS=${fs}`);
   return 0;
 }
 
-/** Roster rows whose `<prefix>-<instrument>.md` art file is missing/empty → list of the missing filenames. */
+/** Roster rows whose `<prefix>-<agent>.md` art file is missing/empty → list of the missing filenames. */
 function missingRosterArtifacts(art: string, rows: RosterRow[], prefix: string): string[] {
-  return rows.filter((r) => !readIf(join(art, `${prefix}-${r.instrument}.md`)).trim()).map((r) => `${prefix}-${r.instrument}.md`);
+  return rows.filter((r) => !readIf(join(art, `${prefix}-${r.agent}.md`)).trim()).map((r) => `${prefix}-${r.agent}.md`);
 }
 
 // ---- synth-preliminary (input validator) ----
@@ -277,7 +277,7 @@ export async function confidenceRun(rest: string[]): Promise<number> {
   const draft = readIf(join(art, "landscape-draft.md"));
   if (!draft.trim()) { log.error(`prelude confidence: landscape-draft.md missing/empty at ${art}`); return 1; }
   const rows = parseRosterFile(readIf(join(art, "roster.txt")));
-  const findings = rows.map((r) => readIf(join(art, `findings-${r.instrument}.md`)));
+  const findings = rows.map((r) => readIf(join(art, `findings-${r.agent}.md`)));
 
   const s = computeSignals(draft, findings);
   log.info(`prelude confidence: S1=${s.s1} S2=${s.s2} S3=${s.s3} S4=${s.s4} S5=${s.s5} — ALL_HOLD=${s.allHold}`);
@@ -290,63 +290,63 @@ export async function confidenceRun(rest: string[]): Promise<number> {
   if (!s.allHold) { // gate not offered → record not-offered, fall through to adversary
     atomicWrite(join(art, "adversary-skip.txt"), renderSkipRecord({ signals: s, decision: "not-offered", now: isoUtc() }));
   }
-  // ALL_HOLD=true with no flag: write nothing — the Maestro asks, then re-invokes with --decision.
+  // ALL_HOLD=true with no flag: write nothing — the Hub asks, then re-invokes with --decision.
   return 0;
 }
 
 // ---- adversary-send / adversary-wait ----
 async function adversarySendRun(rest: string[]): Promise<number> {
-  const [topic, instrument, provider] = rest;
-  if (!topic || !instrument || !provider) { log.error("usage: prelude adversary-send <topic> <instrument> <provider>"); return 2; }
-  return adversarySendWith(topic, instrument, provider, liveResearchSendDeps);
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: prelude adversary-send <topic> <agent> <provider>"); return 2; }
+  return adversarySendWith(topic, agent, provider, liveResearchSendDeps);
 }
-export async function adversarySendWith(topic: string, instrument: string, provider: string, d: ResearchSendDeps): Promise<number> {
+export async function adversarySendWith(topic: string, agent: string, provider: string, d: ResearchSendDeps): Promise<number> {
   const art = preludeArtDir(topic);
   const draft = readIf(join(art, "landscape-draft.md"));
   if (!draft.trim()) { log.error("prelude adversary-send: landscape-draft.md missing or empty — run synth-preliminary first"); return 1; }
-  const stateFile = join(art, `adversary-${instrument}.txt`);
+  const stateFile = join(art, `adversary-${agent}.txt`);
   if (existsSync(stateFile)) { log.error(`prelude adversary-send: ${stateFile} exists; rm to retry`); return 1; }
 
-  const outPath = join(art, `adversary-${instrument}.md`);
-  const promptFile = join(art, `${instrument}_adversary_prompt.md`);
-  atomicWrite(promptFile, composeAdversaryPrompt(draft, instrument, outPath));
+  const outPath = join(art, `adversary-${agent}.md`);
+  const promptFile = join(art, `${agent}_adversary_prompt.md`);
+  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath));
 
-  const offset = d.offsetFor(instrument, provider, topic);
+  const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}\n`);
-  const rc = await d.send(["--from", "maestro", instrument, topic, `@${promptFile}`]);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
   if (rc !== 0) { log.error(`prelude adversary-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`); return 1; }
-  log.ok(`prelude adversary-send: ${instrument} offset=${offset}`);
+  log.ok(`prelude adversary-send: ${agent} offset=${offset}`);
   return 0;
 }
 
 async function adversaryWaitRun(rest: string[]): Promise<number> {
-  const [topic, instrument, provider] = rest;
-  if (!topic || !instrument || !provider) { log.error("usage: prelude adversary-wait <topic> <instrument> <provider>"); return 2; }
-  return adversaryWaitWith(topic, instrument, provider, liveResearchWaitDeps);
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: prelude adversary-wait <topic> <agent> <provider>"); return 2; }
+  return adversaryWaitWith(topic, agent, provider, liveResearchWaitDeps);
 }
-export async function adversaryWaitWith(topic: string, instrument: string, provider: string, d: ResearchWaitDeps): Promise<number> {
+export async function adversaryWaitWith(topic: string, agent: string, provider: string, d: ResearchWaitDeps): Promise<number> {
   const art = preludeArtDir(topic);
-  const stateFile = join(art, `adversary-${instrument}.txt`);
+  const stateFile = join(art, `adversary-${agent}.txt`);
   if (!existsSync(stateFile)) { log.error(`prelude adversary-wait: ${stateFile} missing (run prelude adversary-send first)`); return 1; }
   const offset = parseLatestOffset(readFileSync(stateFile, "utf8"));
   if (offset === null) { log.error(`prelude adversary-wait: OFFSET not set in ${stateFile}`); return 1; }
 
   const timeout = scaledTimeout(consultTimeout("adversary"), d.multiplier(provider));
-  log.info(`prelude adversary-wait: ${instrument} offset=${offset} timeout=${timeout}s`);
-  const ev = await d.wait(instrument, provider, topic, offset, ["done", "error", "question"], timeout);
+  log.info(`prelude adversary-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, ["done", "error", "question"], timeout);
 
-  const outPath = join(art, `adversary-${instrument}.md`);
+  const outPath = join(art, `adversary-${agent}.md`);
   const text = readIfExistsOrNull(outPath);
   const as = verifyState(ev, text); // done -> ok iff non-empty; mirrors the adversary wait's -s check
   if (as === "question" && ev) {
-    atomicWrite(join(art, `question-${instrument}.txt`), JSON.stringify(ev) + "\n");
-    const bumped = outboxOffset(outboxPath(instrument, provider, topic));
+    atomicWrite(join(art, `question-${agent}.txt`), JSON.stringify(ev) + "\n");
+    const bumped = outboxOffset(outboxPath(agent, provider, topic));
     appendFileSync(stateFile, `OFFSET=${bumped}\nAS=question\n`);
   } else {
     appendFileSync(stateFile, `AS=${as}\n`);
   }
-  writeFileSync(join(art, `adversary-${instrument}.done`), "");
-  log.ok(`prelude adversary-wait: ${instrument} AS=${as}`);
+  writeFileSync(join(art, `adversary-${agent}.done`), "");
+  log.ok(`prelude adversary-wait: ${agent} AS=${as}`);
   return 0;
 }
 
@@ -359,18 +359,18 @@ export async function preludeWaitGateRun(rest: string[]): Promise<number> {
   const rosterPath = join(art, "roster.txt");
   if (!existsSync(rosterPath)) { log.error(`prelude wait-gate: roster.txt missing at ${art}`); return 2; }
   const rows = parseRosterFile(readFileSync(rosterPath, "utf8"));
-  if (rows.length === 0) { log.error("prelude wait-gate: roster.txt has no parts"); return 2; }
+  if (rows.length === 0) { log.error("prelude wait-gate: roster.txt has no workers"); return 2; }
   const key = phase === "research" ? "FS" : "AS";
-  const parts = rows.map((r) => {
-    const stateFile = join(art, `${phase}-${r.instrument}.txt`);
+  const workers = rows.map((r) => {
+    const stateFile = join(art, `${phase}-${r.agent}.txt`);
     return {
-      instrument: r.instrument,
-      doneExists: existsSync(join(art, `${phase}-${r.instrument}.done`)),
+      agent: r.agent,
+      doneExists: existsSync(join(art, `${phase}-${r.agent}.done`)),
       stateText: readIfExistsOrNull(stateFile),
     };
   });
-  const states = gateState(parts, key);
-  for (const s of states) process.stdout.write(`${s.instrument}\t${s.status}\n`);
+  const states = gateState(workers, key);
+  for (const s of states) process.stdout.write(`${s.agent}\t${s.status}\n`);
   return states.every((s) => s.status === "terminal") ? 0 : 1;
 }
 

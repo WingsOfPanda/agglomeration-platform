@@ -16,7 +16,7 @@ describe("prelude wait-gate (verb)", () => {
     return art;
   }
 
-  it("research phase (FS): rc 0 only when every part terminal", async () => {
+  it("research phase (FS): rc 0 only when every worker terminal", async () => {
     const art = seedRoster("t");
     for (const inst of ["viola", "cello"]) {
       writeFileSync(join(art, `research-${inst}.txt`), "OFFSET=1\nFS=ok\n");
@@ -25,14 +25,14 @@ describe("prelude wait-gate (verb)", () => {
     expect(await preludeWaitGateRun(["t", "research"])).toBe(0);
   });
 
-  it("research phase: rc 1 when one part is still pending (no .done)", async () => {
+  it("research phase: rc 1 when one worker is still pending (no .done)", async () => {
     const art = seedRoster("t");
     writeFileSync(join(art, "research-viola.txt"), "OFFSET=1\nFS=ok\n");
     writeFileSync(join(art, "research-viola.done"), "");
     expect(await preludeWaitGateRun(["t", "research"])).toBe(1);
   });
 
-  it("adversary phase (AS): rc 1 when one part's last line is a question", async () => {
+  it("adversary phase (AS): rc 1 when one worker's last line is a question", async () => {
     const art = seedRoster("t");
     writeFileSync(join(art, "adversary-viola.txt"), "OFFSET=1\nAS=ok\n");
     writeFileSync(join(art, "adversary-viola.done"), "");

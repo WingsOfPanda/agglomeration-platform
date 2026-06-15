@@ -149,17 +149,17 @@ describe("verifyClaim — test (injected runner)", () => {
 describe("formatReply", () => {
   it("rc 0 -> FOUND verdict, ends with Resume directive", () => {
     expect(formatReply("path", "src/a.ts", 0, "- 12 src/a.ts")).toBe(
-      "From: maestro\n\nVerdict: FOUND\nClaim kind: path\nClaim value: src/a.ts\n\nEvidence:\n- 12 src/a.ts\n\nResume implementation.\n");
+      "From: hub\n\nVerdict: FOUND\nClaim kind: path\nClaim value: src/a.ts\n\nEvidence:\n- 12 src/a.ts\n\nResume implementation.\n");
   });
   it("rc 1 -> NOT FOUND", () => { expect(formatReply("git", "HEAD", 1, "")).toContain("Verdict: NOT FOUND"); });
   it("rc 2 -> UNVERIFIABLE", () => { expect(formatReply("cmd", "foo", 2, "")).toContain("Verdict: UNVERIFIABLE"); });
   it("kind=test inserts the NOTE block before resume", () => {
     expect(formatReply("test", "echo ok", 0, "ok")).toBe(
-      "From: maestro\n\nVerdict: FOUND\nClaim kind: test\nClaim value: echo ok\n\nEvidence:\nok\n\n" +
+      "From: hub\n\nVerdict: FOUND\nClaim kind: test\nClaim value: echo ok\n\nEvidence:\nok\n\n" +
       "NOTE: kind=test was a diagnostic check only — running your full test\nsuite is your job, not mine. Use this protocol for short verification\nqueries, not for offloading work.\n\nResume implementation.\n");
   });
   it("non-test kind has no NOTE block", () => { expect(formatReply("env", "HOME", 0, "/home/x")).not.toContain("NOTE: kind=test"); });
-  it("uses the rebranded From: maestro sender", () => { expect(formatReply("path", "v", 0, "e")).toContain("From: maestro"); });
+  it("uses the rebranded From: hub sender", () => { expect(formatReply("path", "v", 0, "e")).toContain("From: hub"); });
 });
 
 describe("extractQuestionPayload", () => {

@@ -3,8 +3,8 @@
 # end-to-end against the REAL built bundle (`node dist/ap.cjs`) and a throwaway
 # AP_HOME. Covers the surface that the per-command dogfoods (rehearsal/prelude) miss:
 #
-#   score   offset-reset  — clean-retry cascade wipes findings/diff/state for one part/phase
-#   perform drop-part     — rewrites parts.txt, removing one row + reports new N
+#   score   offset-reset  — clean-retry cascade wipes findings/diff/state for one worker/phase
+#   perform drop-worker     — rewrites workers.txt, removing one row + reports new N
 #   perform find-latest-doc — newest */_score/design-doc/*-design.md by mtime
 #   rehearsal init        — seeds <art>/lib/ from config/rehearsal-lib-seed/ (arena.py present)
 #
@@ -46,33 +46,33 @@ STATE="$AP_HOME/state/$REPO_HASH"
 # Scenario A — score offset-reset (research clean-retry cascade)
 ############################################################################
 echo "===================================================================="
-echo "Scenario A — score offset-reset wipes one part's research artifacts"
+echo "Scenario A — score offset-reset wipes one worker's research artifacts"
 echo "===================================================================="
 
 TOPIC_S=svc
 INST_S=violin
 ART_S="$STATE/$TOPIC_S/_score"
-PART_S="$STATE/$TOPIC_S/$INST_S-codex"   # <inst>-<model> part dir
+PART_S="$STATE/$TOPIC_S/$INST_S-codex"   # <inst>-<model> worker dir
 mkdir -p "$ART_S" "$PART_S"
 
 # Seed the research-phase artifacts the cascade must invalidate:
-#   part-dir: findings.md         (the part's research deliverable)
+#   worker-dir: findings.md         (the worker's research deliverable)
 #   art-dir : diff.md, adjudicated-draft.md, consensus.txt, <x>_only_items.txt
-#   state   : research-<inst>.txt (per-part research state file)
+#   state   : research-<inst>.txt (per-worker research state file)
 printf 'sim findings for %s\n' "$INST_S" > "$PART_S/findings.md"
 printf 'sim diff\n'        > "$ART_S/diff.md"
 printf 'sim draft\n'       > "$ART_S/adjudicated-draft.md"
 printf 'sim consensus\n'   > "$ART_S/consensus.txt"
 printf 'sim only\n'        > "$ART_S/codex_only_items.txt"
 printf 'done\n'            > "$ART_S/research-$INST_S.txt"
-# An UNRELATED file that must survive (different part's findings + the metric doc).
+# An UNRELATED file that must survive (different worker's findings + the metric doc).
 printf 'keep me\n'         > "$ART_S/scoreboard.md"
 mkdir -p "$STATE/$TOPIC_S/viola-codex"
 printf 'viola findings\n' > "$STATE/$TOPIC_S/viola-codex/findings.md"
 
 or_rc="$(wd_rc $CS score offset-reset "$TOPIC_S" "$INST_S" research)"
 assert "A1 score offset-reset research rc 0" "$or_rc"
-assert "A2 part findings.md removed" \
+assert "A2 worker findings.md removed" \
   "$([ ! -f "$PART_S/findings.md" ] && echo 0 || echo 1)"
 assert "A3 art diff.md + adjudicated-draft.md removed" \
   "$([ ! -f "$ART_S/diff.md" ] && [ ! -f "$ART_S/adjudicated-draft.md" ] && echo 0 || echo 1)"
@@ -80,40 +80,40 @@ assert "A4 glob targets (consensus.txt + *_only_items.txt) removed" \
   "$([ ! -f "$ART_S/consensus.txt" ] && [ ! -f "$ART_S/codex_only_items.txt" ] && echo 0 || echo 1)"
 assert "A5 state research-$INST_S.txt removed" \
   "$([ ! -f "$ART_S/research-$INST_S.txt" ] && echo 0 || echo 1)"
-assert "A6 unrelated scoreboard.md + sibling part findings survive" \
+assert "A6 unrelated scoreboard.md + sibling worker findings survive" \
   "$([ -f "$ART_S/scoreboard.md" ] && [ -f "$STATE/$TOPIC_S/viola-codex/findings.md" ] && echo 0 || echo 1)"
 
-# --keep-findings leaves the part deliverable intact (seed a fresh one first).
+# --keep-findings leaves the worker deliverable intact (seed a fresh one first).
 printf 'fresh findings\n' > "$PART_S/findings.md"
 kf_rc="$(wd_rc $CS score offset-reset "$TOPIC_S" "$INST_S" research --keep-findings)"
 assert "A7 score offset-reset --keep-findings rc 0 + findings.md preserved" \
   "$([ "$kf_rc" -eq 0 ] && [ -f "$PART_S/findings.md" ] && echo 0 || echo 1)"
 
 ############################################################################
-# Scenario B — perform drop-part (rewrite parts.txt, drop one row)
+# Scenario B — perform drop-worker (rewrite workers.txt, drop one row)
 ############################################################################
 echo "===================================================================="
-echo "Scenario B — perform drop-part removes a row + reports new N"
+echo "Scenario B — perform drop-worker removes a row + reports new N"
 echo "===================================================================="
 
 TOPIC_P=mr
 ART_P="$STATE/$TOPIC_P/_perform"
 mkdir -p "$ART_P"
-# parts.txt = 3-col TSV (slug \t cwd \t provider) per the multiInit format. drop-part
-# matches on col 0 (the instrument slug) and must keep the other rows byte-faithfully.
-printf 'violin\t/repo/a\tcodex\nviola\t/repo/b\tcodex\ncello\t/repo/c\tclaude\n' > "$ART_P/parts.txt"
+# workers.txt = 3-col TSV (slug \t cwd \t provider) per the multiInit format. drop-worker
+# matches on col 0 (the agent slug) and must keep the other rows byte-faithfully.
+printf 'violin\t/repo/a\tcodex\nviola\t/repo/b\tcodex\ncello\t/repo/c\tclaude\n' > "$ART_P/workers.txt"
 
-DP_OUT="$(wd_out $CS perform drop-part "$TOPIC_P" viola)"; dp_rc=$?
-assert "B1 perform drop-part rc 0" "$dp_rc"
-assert "B2 drop-part prints N=2" \
+DP_OUT="$(wd_out $CS perform drop-worker "$TOPIC_P" viola)"; dp_rc=$?
+assert "B1 perform drop-worker rc 0" "$dp_rc"
+assert "B2 drop-worker prints N=2" \
   "$(printf '%s' "$DP_OUT" | grep -q '^N=2$' && echo 0 || echo 1)"
 assert "B3 viola row gone; violin + cello remain" \
-  "$(! grep -q '^viola' "$ART_P/parts.txt" && grep -q '^violin' "$ART_P/parts.txt" && grep -q '^cello' "$ART_P/parts.txt" && echo 0 || echo 1)"
-assert "B4 parts.txt now has exactly 2 rows" \
-  "$([ "$(wc -l < "$ART_P/parts.txt")" -eq 2 ] && echo 0 || echo 1)"
-# dropping a non-existent instrument -> rc 1 (not 2; usage is well-formed).
-no_rc="$(wd_rc $CS perform drop-part "$TOPIC_P" ghost)"
-assert "B5 drop-part unknown instrument rc 1" "$([ "$no_rc" -eq 1 ] && echo 0 || echo 1)"
+  "$(! grep -q '^viola' "$ART_P/workers.txt" && grep -q '^violin' "$ART_P/workers.txt" && grep -q '^cello' "$ART_P/workers.txt" && echo 0 || echo 1)"
+assert "B4 workers.txt now has exactly 2 rows" \
+  "$([ "$(wc -l < "$ART_P/workers.txt")" -eq 2 ] && echo 0 || echo 1)"
+# dropping a non-existent agent -> rc 1 (not 2; usage is well-formed).
+no_rc="$(wd_rc $CS perform drop-worker "$TOPIC_P" ghost)"
+assert "B5 drop-worker unknown agent rc 1" "$([ "$no_rc" -eq 1 ] && echo 0 || echo 1)"
 
 ############################################################################
 # Scenario C — perform find-latest-doc (newest *-design.md by mtime)

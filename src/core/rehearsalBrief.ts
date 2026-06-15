@@ -1,15 +1,15 @@
 // Status-brief renderer for /ap:rehearsal. Faithful to deep-research.sh's
 // render_status_brief: a compact chat-shaped update emitted after every
-// done/error — header, per-part table, scoreboard top-3, completion line. Pure:
-// the verb gathers per-part data + reads files; this renders. The completion
+// done/error — header, per-worker table, scoreboard top-3, completion line. Pure:
+// the verb gathers per-worker data + reads files; this renders. The completion
 // line uses the modernized field layout (booleans -> yes/no; separate K_so_far /
 // K_required, single-spaced) rather than the bash's combined "K_so_far=N/Kr" form.
 
 import type { CompletionSignals } from "./rehearsalComplete.js";
 import type { CoverageRow } from "./rehearsalCoverage.js";
 
-export interface PartBrief {
-  instrument: string;
+export interface WorkerBrief {
+  agent: string;
   phase: string;
   currentOrLast: string;
   approach: string;
@@ -17,33 +17,33 @@ export interface PartBrief {
 }
 
 export interface StatusBriefInput {
-  parts: PartBrief[];
+  workers: WorkerBrief[];
   scoreboardMd: string | null; // null = scoreboard.md absent on disk
   completion: CompletionSignals | null; // null = scoreboard.md OR metric.md absent -> can't compute
-  latest?: { instrument: string; exp: string };
-  /** instrument/exp -> verdict, joined from verification.tsv; omit for back-compat (no annotation). */
+  latest?: { agent: string; exp: string };
+  /** agent/exp -> verdict, joined from verification.tsv; omit for back-compat (no annotation). */
   verdicts?: Record<string, string>;
-  /** instrument/exp -> sanity flags, joined from sanity.tsv; omit for back-compat (no annotation). */
+  /** agent/exp -> sanity flags, joined from sanity.tsv; omit for back-compat (no annotation). */
   suspects?: Record<string, string[]>;
   /** per-family coverage rows joined from coverage.tsv; omit for back-compat (no Coverage line). */
   coverage?: CoverageRow[];
-  /** instrument/exp -> improve-multi (B2), joined from lineage.tsv; omit for back-compat (no tag). */
+  /** agent/exp -> improve-multi (B2), joined from lineage.tsv; omit for back-compat (no tag). */
   multiChange?: Record<string, boolean>;
-  /** instrument/exp -> C1 verdict (reproduced|not-reproduced|inconclusive), joined from inspection.tsv. */
+  /** agent/exp -> C1 verdict (reproduced|not-reproduced|inconclusive), joined from inspection.tsv. */
   inspections?: Record<string, string>;
 }
 
-interface SbTop { rank: string; exp: string; instrument: string; metric: string; metricName: string; }
+interface SbTop { rank: string; exp: string; agent: string; metric: string; metricName: string; }
 
 /** Parse the plain-rank OK data rows (| <int> | exp-… | …), in existing rank order.
  *  Same row-parse shape as checkCompletion's private parseRows:
- *  c[1]=rank c[2]=exp c[3]=instrument c[4]=metric c[8]=metric_name. */
+ *  c[1]=rank c[2]=exp c[3]=agent c[4]=metric c[8]=metric_name. */
 function parseTopRows(scoreboardMd: string): SbTop[] {
   const out: SbTop[] = [];
   for (const line of scoreboardMd.split("\n")) {
     if (!/^\|\s+\d+\s+\|\s+exp-/.test(line)) continue;
     const c = line.split("|").map((s) => s.trim());
-    out.push({ rank: c[1], exp: c[2], instrument: c[3], metric: c[4], metricName: c[8] ?? "" });
+    out.push({ rank: c[1], exp: c[2], agent: c[3], metric: c[4], metricName: c[8] ?? "" });
   }
   return out;
 }
@@ -52,25 +52,25 @@ function yn(b: boolean): string {
   return b ? "yes" : "no";
 }
 
-/** Render the status brief. Sections: header -> per-part table -> scoreboard
+/** Render the status brief. Sections: header -> per-worker table -> scoreboard
  *  top-3 -> completion line, joined with one blank line, single trailing newline. */
 export function buildStatusBrief(input: StatusBriefInput): string {
   const sections: string[] = [];
 
   // Header.
   if (input.latest) {
-    sections.push(`## Experiment status — ${input.latest.exp} (${input.latest.instrument}) just landed`);
+    sections.push(`## Experiment status — ${input.latest.exp} (${input.latest.agent}) just landed`);
   } else {
     sections.push("## Experiment status");
   }
 
-  // Per-part table.
+  // Per-worker table.
   const table = [
-    "| Part | Phase | Current/last | Approach | Metric |",
+    "| Worker | Phase | Current/last | Approach | Metric |",
     "|---|---|---|---|---|",
   ];
-  for (const p of input.parts) {
-    table.push(`| ${p.instrument} | ${p.phase} | ${p.currentOrLast} | ${p.approach} | ${p.metric} |`);
+  for (const p of input.workers) {
+    table.push(`| ${p.agent} | ${p.phase} | ${p.currentOrLast} | ${p.approach} | ${p.metric} |`);
   }
   sections.push(table.join("\n"));
 
@@ -84,14 +84,14 @@ export function buildStatusBrief(input: StatusBriefInput): string {
       sb.push("_(no scored experiments yet)_");
     } else {
       for (const r of rows) {
-        const v = input.verdicts?.[`${r.instrument}/${r.exp}`];
+        const v = input.verdicts?.[`${r.agent}/${r.exp}`];
         const tag = v ? ` [${v === "mismatch" ? "mismatch!" : v}]` : "";
-        const s = input.suspects?.[`${r.instrument}/${r.exp}`];
+        const s = input.suspects?.[`${r.agent}/${r.exp}`];
         const stag = s && s.length ? ` [suspect: ${s.join(",")}]` : "";
-        const mc = input.multiChange?.[`${r.instrument}/${r.exp}`] ? " [multi-change]" : "";
-        const iv = input.inspections?.[`${r.instrument}/${r.exp}`];
+        const mc = input.multiChange?.[`${r.agent}/${r.exp}`] ? " [multi-change]" : "";
+        const iv = input.inspections?.[`${r.agent}/${r.exp}`];
         const itag = iv === "reproduced" ? " [reimpl-ok]" : iv === "not-reproduced" ? " [reimpl-mismatch!]" : iv === "inconclusive" ? " [reimpl-inconclusive]" : "";
-        sb.push(`${r.rank}. ${r.instrument}/${r.exp} — ${r.metric} — ${r.metricName}${tag}${stag}${mc}${itag}`);
+        sb.push(`${r.rank}. ${r.agent}/${r.exp} — ${r.metric} — ${r.metricName}${tag}${stag}${mc}${itag}`);
       }
     }
   }

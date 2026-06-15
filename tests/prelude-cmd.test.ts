@@ -10,7 +10,7 @@ function initDeps(over: Partial<PreludeInitDeps> = {}): PreludeInitDeps {
   return {
     activeProviders: () => ["codex", "claude"],
     isValidated: () => true,
-    pickInstruments: (_t, n) => ["viola", "cello", "oboe"].slice(0, n),
+    pickAgents: (_t, n) => ["viola", "cello", "oboe"].slice(0, n),
     ...over,
   };
 }
@@ -71,7 +71,7 @@ describe("prelude classify", () => {
 });
 
 describe("prelude spawn-all", () => {
-  it("preflights then spawns each roster part; rc0 when all ok", async () => {
+  it("preflights then spawns each roster worker; rc0 when all ok", async () => {
     const { cleanup } = freshHome();
     try {
       await initWith(["x"], initDeps());
@@ -102,7 +102,7 @@ describe("prelude research-send/wait", () => {
       expect(readFileSync(join(art, "research-viola.txt"), "utf8")).toContain("OFFSET=7");
       const prompt = readFileSync(join(art, "viola_research_prompt.md"), "utf8");
       expect(prompt).toContain(join(art, "findings-viola.md"));
-      expect(sent).toEqual(["--from", "maestro", "viola", "x", `@${join(art, "viola_research_prompt.md")}`]);
+      expect(sent).toEqual(["--from", "hub", "viola", "x", `@${join(art, "viola_research_prompt.md")}`]);
     } finally { cleanup(); }
   });
   it("wait classifies a done event with findings as FS=ok and writes the .done sentinel", async () => {
@@ -142,7 +142,7 @@ describe("prelude synth-preliminary", () => {
       expect(rc).toBe(0);
     } finally { cleanup(); }
   });
-  it("rc1 when a part's findings are missing", async () => {
+  it("rc1 when a worker's findings are missing", async () => {
     const { cleanup } = freshHome();
     try {
       await initWith(["x"], initDeps());
@@ -175,7 +175,7 @@ describe("prelude confidence", () => {
       expect(readFileSync(join(art, "adversary-skip.txt"), "utf8")).toContain("user_decision: skip");
     } finally { cleanup(); }
   });
-  it("ALL_HOLD=true + no flag writes nothing (two-call: Maestro asks before --decision)", async () => {
+  it("ALL_HOLD=true + no flag writes nothing (two-call: Hub asks before --decision)", async () => {
     const { cleanup } = freshHome();
     try {
       await initWith(["x"], initDeps());

@@ -6,16 +6,18 @@ import { execSync } from "node:child_process";
 // and this test file itself.
 describe("stale-token gate", () => {
   const banned = ["clone-wars", "cw_", "master-yoda", "MISSION ACCOMPLISHED", "@cw_", "@cs_"];
-  // Rebrand worker-noun residue: "trooper" -> "part", "commander" -> "instrument".
+  // Rebrand worker-noun residue: "trooper" -> "worker", "commander" -> "agent".
   // Checked case-insensitively so prose ("Troopers") and identifiers alike are caught.
-  // The shipped tree must use part/instrument, never these.
+  // The shipped tree must use worker/agent, never these.
   //
   // consort -> agglomeration-platform rebrand (2026-06-15): brand bans added per-PR.
   // PR1 brand adds "@cs_" (tmux opts -> @ap_) above and "consort" below (-> ap /
   // agglomeration-platform; case-insensitive so it also catches CONSORT_HOME/.consort/Consort).
   // Bare "cs_" is intentionally NOT banned: it is a substring of docs_/specs_ (false positives),
   // and consort never had a bare cs_ fn prefix.
-  const bannedCaseInsensitive = ["trooper", "commander", "consort"];
+  // PR2 roles add "maestro" (-> hub) and "instrument" (-> agent). NOT "part"/"section"/"fine":
+  // those are generic English (false positives); the orchestral grouping concept is now "cluster".
+  const bannedCaseInsensitive = ["trooper", "commander", "consort", "maestro", "instrument"];
   const scan = (token: string, ci: boolean): string => {
     let out = "";
     try {

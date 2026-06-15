@@ -14,7 +14,7 @@ import {
 
 const TOPIC = "add-oauth";
 
-// Seed the art dir + part dir for a given provider; returns the art path.
+// Seed the art dir + worker dir for a given provider; returns the art path.
 function seed(provider: "codex" | "claude", opts?: { state?: string }): string {
   const art = performArtDir(TOPIC);
   mkdirSync(art, { recursive: true });
@@ -62,7 +62,7 @@ describe("perform turn-send", () => {
       round: 1,
       testCmd: "",
     }));
-    expect(captured).toEqual(["--from", "maestro", "tutti", TOPIC, "@" + promptFile]);
+    expect(captured).toEqual(["--from", "hub", "tutti", TOPIC, "@" + promptFile]);
   });
 
   it("round 2 with NO fix-prompt-2.md → rc 1, send NOT called", async () => {
@@ -82,7 +82,7 @@ describe("perform turn-send", () => {
     expect(called).toBe(false);
   });
 
-  it("status.json state=working → rc 1 (part not idle)", async () => {
+  it("status.json state=working → rc 1 (worker not idle)", async () => {
     seed("codex", { state: "working" });
     let called = false;
     const rc = await turnSendWith(TOPIC, 1, sendDeps({ send: async () => { called = true; return 0; } }));
@@ -103,7 +103,7 @@ describe("perform turn-send", () => {
     expect(existsSync(join(art, "turn-tutti-1.txt"))).toBe(true);
   });
 
-  it("provider.txt=claude → uses the tutti-claude part dir outbox", async () => {
+  it("provider.txt=claude → uses the tutti-claude worker dir outbox", async () => {
     const art = seed("claude");
     let captured: string[] | null = null;
     const rc = await turnSendWith(TOPIC, 1, sendDeps({ send: async (a) => { captured = a; return 0; } }));

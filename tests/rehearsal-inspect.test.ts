@@ -37,7 +37,7 @@ describe("inspectInfeasibleReason", () => {
 });
 
 describe("parseInspections", () => {
-  it("keys instrument/exp, last-write-wins, header skipped", () => {
+  it("keys agent/exp, last-write-wins, header skipped", () => {
     const tsv = INSPECTION_TSV_HEADER +
       "exp-001\toboe\treproduced\t\t0.9\tT\n" +
       "exp-002\toboe\tnot-reproduced\tvalue\t0.5\tT\n" +
@@ -50,8 +50,8 @@ describe("parseInspections", () => {
 
 describe("inspectionRow + header", () => {
   it("exact tab layout", () => {
-    expect(INSPECTION_TSV_HEADER).toBe("exp_id\tinstrument\tverdict\treason\treimpl_metric\tts\n");
-    expect(inspectionRow({ expId: "exp-003", instrument: "oboe", verdict: "not-reproduced", reason: "value:0.5vs0.9", reimplMetric: "0.5", ts: "T" }))
+    expect(INSPECTION_TSV_HEADER).toBe("exp_id\tagent\tverdict\treason\treimpl_metric\tts\n");
+    expect(inspectionRow({ expId: "exp-003", agent: "oboe", verdict: "not-reproduced", reason: "value:0.5vs0.9", reimplMetric: "0.5", ts: "T" }))
       .toBe("exp-003\toboe\tnot-reproduced\tvalue:0.5vs0.9\t0.5\tT\n");
   });
 });

@@ -11,7 +11,7 @@ export interface MonitorScanState {
   lastRescan: number;
 }
 
-export interface MonitorNotification { part: string; event: string; summary: string; ts: string; }
+export interface MonitorNotification { worker: string; event: string; summary: string; ts: string; }
 
 export interface MonitorScanResult { notifications: MonitorNotification[]; state: MonitorScanState; }
 
@@ -61,11 +61,11 @@ export function initScanState(
 
 /** One liveness scan. Pure given deps + state; never sleeps (the verb owns cadence). */
 export function monitorScan(
-  _outboxPath: string, part: string, prev: MonitorScanState, d: MonitorDeps,
+  _outboxPath: string, worker: string, prev: MonitorScanState, d: MonitorDeps,
 ): MonitorScanResult {
   const notifications: MonitorNotification[] = [];
   const emit = (event: string, summary: string): void => {
-    notifications.push({ part, event, summary, ts: d.nowIso });
+    notifications.push({ worker, event, summary, ts: d.nowIso });
   };
   const state: MonitorScanState = { ...prev, rescanEmitted: new Set(prev.rescanEmitted) };
 

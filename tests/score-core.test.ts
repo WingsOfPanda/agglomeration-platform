@@ -38,19 +38,19 @@ describe("scoreDocPath", () => {
 });
 
 describe("roster file", () => {
-  it("format then parse round-trips provider/instrument rows", () => {
-    const rows = [{ provider: "codex", instrument: "viola" }, { provider: "claude", instrument: "cello" }];
+  it("format then parse round-trips provider/agent rows", () => {
+    const rows = [{ provider: "codex", agent: "viola" }, { provider: "claude", agent: "cello" }];
     const text = formatRosterFile(rows, "2026-05-29T00:00:00Z");
     expect(text).toContain("by /ap:score");
     expect(parseRosterFile(text)).toEqual(rows);
   });
   it("parse skips #/blank lines and rows missing a field", () => {
-    expect(parseRosterFile("# h\ncodex\tviola\n\nbroken\n")).toEqual([{ provider: "codex", instrument: "viola" }]);
+    expect(parseRosterFile("# h\ncodex\tviola\n\nbroken\n")).toEqual([{ provider: "codex", agent: "viola" }]);
   });
 });
 
 describe("verifyScopeFiles", () => {
-  it("N=2: only the other instrument's _only_items.txt", () => {
+  it("N=2: only the other agent's _only_items.txt", () => {
     expect(verifyScopeFiles("viola", ["viola", "cello"])).toEqual(["cello_only_items.txt"]);
     expect(verifyScopeFiles("cello", ["viola", "cello"])).toEqual(["viola_only_items.txt"]);
   });

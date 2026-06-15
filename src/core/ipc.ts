@@ -1,25 +1,25 @@
 import { statSync, readFileSync, existsSync, openSync, readSync, closeSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { partDir, topicDir, pluginRoot } from "./paths.js";
+import { workerDir, topicDir, pluginRoot } from "./paths.js";
 import { atomicWrite } from "./atomic.js";
 import { isoUtc } from "./archive.js";
 import { readIfExists } from "./fsread.js";
 
-export function inboxPath(i: string, m: string, t: string) { return join(partDir(i, m, t), "inbox.md"); }
-export function outboxPath(i: string, m: string, t: string) { return join(partDir(i, m, t), "outbox.jsonl"); }
-export function identityPath(i: string, m: string, t: string) { return join(partDir(i, m, t), "identity.md"); }
-export function statusPath(i: string, m: string, t: string) { return join(partDir(i, m, t), "status.json"); }
-export function paneMetaPath(i: string, m: string, t: string) { return join(partDir(i, m, t), "pane.json"); }
+export function inboxPath(i: string, m: string, t: string) { return join(workerDir(i, m, t), "inbox.md"); }
+export function outboxPath(i: string, m: string, t: string) { return join(workerDir(i, m, t), "outbox.jsonl"); }
+export function identityPath(i: string, m: string, t: string) { return join(workerDir(i, m, t), "identity.md"); }
+export function statusPath(i: string, m: string, t: string) { return join(workerDir(i, m, t), "status.json"); }
+export function paneMetaPath(i: string, m: string, t: string) { return join(workerDir(i, m, t), "pane.json"); }
 
 const SENDER_RE = /^[a-zA-Z0-9_-]+$/;
 
 export function inboxWrite(i: string, m: string, t: string, task: string, opts?: { from?: string; noDoneInstruction?: boolean }): void {
-  const from = opts?.from ?? "maestro";
+  const from = opts?.from ?? "hub";
   if (!SENDER_RE.test(from)) throw new Error(`inboxWrite: invalid sender name '${from}' (allowed: [a-zA-Z0-9_-])`);
   const outbox = outboxPath(i, m, t);
   // When the task body already specifies its own done-event contract (e.g. the rehearsal experiment
   // template's `summary="experiment exp-NNN metric=… status=…"`), the caller passes noDoneInstruction
-  // to suppress this generic one — otherwise the part receives two conflicting done instructions and
+  // to suppress this generic one — otherwise the worker receives two conflicting done instructions and
   // the loop's exp-NNN derivation can read the wrong summary.
   const doneInstruction = opts?.noDoneInstruction
     ? ""
@@ -38,18 +38,18 @@ export function identityWrite(i: string, m: string, t: string): void {
       `Set CLAUDE_PLUGIN_ROOT to the ap plugin directory, or run ap from it.`,
     );
   }
-  const stateDir = partDir(i, m, t);
+  const stateDir = workerDir(i, m, t);
   const outbox = outboxPath(i, m, t);
   let body = readFileSync(tplPath, "utf8")
-    .replaceAll("{{instrument}}", i)
+    .replaceAll("{{agent}}", i)
     .replaceAll("{{model}}", m)
     .replaceAll("{{topic}}", t)
     .replaceAll("{{state_dir}}", stateDir);
   body += `\n\n---\n\n**First action (do this immediately, then wait):**\n\n` +
     `Append exactly ONE JSONL line to ${outbox}. The line MUST be:\n\n` +
-    '`{"event":"ready","ts":"<ISO-8601 UTC>","instrument":"' + i + '","model":"' + m + '"}`\n\n' +
+    '`{"event":"ready","ts":"<ISO-8601 UTC>","agent":"' + i + '","model":"' + m + '"}`\n\n' +
     `Generate the timestamp at the moment you emit. Use this shell command verbatim:\n\n` +
-    '`echo "{\\"event\\":\\"ready\\",\\"ts\\":\\"$(date -u +' + "'%Y-%m-%dT%H:%M:%SZ'" + ')\\",\\"instrument\\":\\"' + i + '\\",\\"model\\":\\"' + m + '\\"}" >> ' + outbox + '`\n\n' +
+    '`echo "{\\"event\\":\\"ready\\",\\"ts\\":\\"$(date -u +' + "'%Y-%m-%dT%H:%M:%SZ'" + ')\\",\\"agent\\":\\"' + i + '\\",\\"model\\":\\"' + m + '\\"}" >> ' + outbox + '`\n\n' +
     `Then stop and wait. I will send another instruction asking you to read your inbox.\n`;
   atomicWrite(identityPath(i, m, t), body);
 }
@@ -118,21 +118,21 @@ export function outboxDump(i: string, m: string, t: string): string {
 
 export function paneMetaWrite(i: string, m: string, t: string, paneId: string, opts?: { now?: Date }): void {
   const spawned = isoUtc(opts?.now);
-  atomicWrite(paneMetaPath(i, m, t), JSON.stringify({ pane_id: paneId, instrument: i, model: m, spawned_at: spawned }) + "\n");
+  atomicWrite(paneMetaPath(i, m, t), JSON.stringify({ pane_id: paneId, agent: i, model: m, spawned_at: spawned }) + "\n");
 }
 
-export interface PaneMeta { instrument: string; model: string; paneId: string; }
+export interface PaneMeta { agent: string; model: string; paneId: string; }
 
 export function paneMetaReadForDir(dir: string): PaneMeta {
   const p = join(dir, "pane.json");
   if (existsSync(p)) {
     try {
       const o = JSON.parse(readFileSync(p, "utf8"));
-      if (o.instrument && o.model) return { instrument: o.instrument, model: o.model, paneId: o.pane_id ?? "" };
+      if (o.agent && o.model) return { agent: o.agent, model: o.model, paneId: o.pane_id ?? "" };
     } catch { /* fall through */ }
   }
   const name = dir.replace(/\/+$/, "").split("/").pop() ?? "";
-  return { instrument: name.replace(/-[^-]*$/, ""), model: name.replace(/^.*-/, ""), paneId: "" };
+  return { agent: name.replace(/-[^-]*$/, ""), model: name.replace(/^.*-/, ""), paneId: "" };
 }
 
 export function paneMetaRead(i: string, m: string, t: string): string | null {
@@ -147,12 +147,12 @@ export function paneMetaModel(i: string, modelHint: string, t: string): string {
   return modelHint;
 }
 
-/** Resolve the model segment for an instrument's part on a topic (the on-disk
- *  <instrument>-<model> dir name), then the canonical model from pane.json. null if absent. */
-export function resolveModel(instrument: string, topic: string): string | null {
+/** Resolve the model segment for an agent's worker on a topic (the on-disk
+ *  <agent>-<model> dir name), then the canonical model from pane.json. null if absent. */
+export function resolveModel(agent: string, topic: string): string | null {
   const td = topicDir(topic);
   if (!existsSync(td)) return null;
-  const d = readdirSync(td, { withFileTypes: true }).find((e) => e.isDirectory() && e.name.startsWith(`${instrument}-`));
+  const d = readdirSync(td, { withFileTypes: true }).find((e) => e.isDirectory() && e.name.startsWith(`${agent}-`));
   if (!d) return null;
-  return paneMetaModel(instrument, d.name.slice(instrument.length + 1), topic);
+  return paneMetaModel(agent, d.name.slice(agent.length + 1), topic);
 }

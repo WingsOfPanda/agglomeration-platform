@@ -1,5 +1,5 @@
 // Score-walk pure logic for /ap:rehearsal. Faithful to deep-research-score.sh:
-// walk parts/*/experiments/*/result.json (ascending), validate+accumulate, build
+// walk workers/*/experiments/*/result.json (ascending), validate+accumulate, build
 // scoreboard + results.tsv, compute sidecar writes/removes + race-guarded phase clears.
 // Pure: FS access injected via ScoreFs; the verb (C5) applies the returned plan.
 import { join } from "node:path";
@@ -13,7 +13,7 @@ import { diffAuditKnobs, classifyLineage, type LineageRow } from "./rehearsalLin
 import { classifyInfeasible, parseVerdicts } from "./rehearsalInfeasible.js";
 import { parseInspections, inspectInfeasibleReason } from "./rehearsalInspect.js";
 import { parseHardConstraints } from "./rehearsalFinalize.js";
-import { partsDir, partStateDir, experimentsDir, experimentDir } from "./rehearsal.js";
+import { workersDir, workerStateDir, experimentsDir, experimentDir } from "./rehearsal.js";
 
 export interface ScoreFs {
   exists(path: string): boolean;
@@ -22,16 +22,16 @@ export interface ScoreFs {
 }
 
 export interface TsvRow {
-  expId: string; instrument: string; approach: string;
+  expId: string; agent: string; approach: string;
   metric: string; status: string; runtime: string; metricName: string;
 }
 
-const TSV_HEADER = "exp_id\tinstrument\tapproach\tmetric\tstatus\truntime_s\tmetric_name\n";
+const TSV_HEADER = "exp_id\tagent\tapproach\tmetric\tstatus\truntime_s\tmetric_name\n";
 
 /** results.tsv = frozen 7-col header + one row per experiment (walk order). */
 export function buildResultsTsv(rows: TsvRow[]): string {
   return TSV_HEADER + rows.map((r) =>
-    `${r.expId}\t${r.instrument}\t${r.approach}\t${r.metric}\t${r.status}\t${r.runtime}\t${r.metricName}\n`).join("");
+    `${r.expId}\t${r.agent}\t${r.approach}\t${r.metric}\t${r.status}\t${r.runtime}\t${r.metricName}\n`).join("");
 }
 
 export interface ScoreComputation {
@@ -68,13 +68,13 @@ export function computeScore(art: string, fs: ScoreFs, now: () => string): Score
   const sanityRows: SanityRow[] = [];
   const lineageRows: LineageRow[] = [];
 
-  // Walk like the bash `parts/*/experiments/*/` glob under nullglob: listDir
+  // Walk like the bash `workers/*/experiments/*/` glob under nullglob: listDir
   // returns [] for a non-existent dir, so no explicit dir-existence gate.
-  const parts = fs.listDir(partsDir(art));
-  for (const instrument of parts) {
-    const exps = fs.listDir(experimentsDir(art, instrument));
+  const workers = fs.listDir(workersDir(art));
+  for (const agent of workers) {
+    const exps = fs.listDir(experimentsDir(art, agent));
     for (const expId of exps) {
-      const branchDir = experimentDir(art, instrument, expId);
+      const branchDir = experimentDir(art, agent, expId);
       const resultPath = join(branchDir, "result.json");
       if (!fs.exists(resultPath)) continue;
       const sidecar = join(branchDir, "result-validation.txt");
@@ -91,10 +91,10 @@ export function computeScore(art: string, fs: ScoreFs, now: () => string): Score
       }
       if (fs.exists(sidecar)) staleSidecars.push(sidecar);
       const o = json as Record<string, unknown>;
-      const scoreRow: ScoreRow = { expId, instrument, metric: str(o.metric_value), status: str(o.status),
+      const scoreRow: ScoreRow = { expId, agent, metric: str(o.metric_value), status: str(o.status),
         runtime: str(o.runtime_s), approach: str(o.approach_label), metricName: str(o.metric_name) };
       rows.push(scoreRow);
-      tsvRows.push({ expId, instrument, approach: str(o.approach_label), metric: str(o.metric_value),
+      tsvRows.push({ expId, agent, approach: str(o.approach_label), metric: str(o.metric_value),
         status: str(o.status), runtime: str(o.runtime_s), metricName: str(o.metric_name) });
       const vblock = parseVerifyBlock(o);
       if (vblock && vblock.kind !== "none" && vblock.command) {
@@ -117,21 +117,21 @@ export function computeScore(art: string, fs: ScoreFs, now: () => string): Score
         hardConstraints: promptMd ? parseHardConstraints(promptMd) : [],
         audit: auditObj,
       });
-      for (const f of flags) sanityRows.push({ expId, instrument, flag: f.flag, detail: f.detail, ts: now() });
-      const infReason = classifyInfeasible(verdicts[`${instrument}/${expId}`], flags.map((f) => f.flag))
-        ?? inspectInfeasibleReason(inspections[`${instrument}/${expId}`]);
+      for (const f of flags) sanityRows.push({ expId, agent, flag: f.flag, detail: f.detail, ts: now() });
+      const infReason = classifyInfeasible(verdicts[`${agent}/${expId}`], flags.map((f) => f.flag))
+        ?? inspectInfeasibleReason(inspections[`${agent}/${expId}`]);
       if (infReason) scoreRow.infeasibleReason = infReason;
 
       const lineageTxt = fs.read(join(branchDir, "lineage.txt"));
       const parentId = lineageTxt ? (parseState(lineageTxt).parent_id ?? "") : "";
       let knobs: number | null = null;
       if (parentId) {
-        const parentAuditRaw = fs.read(join(experimentDir(art, instrument, parentId), "audit.json"));
+        const parentAuditRaw = fs.read(join(experimentDir(art, agent, parentId), "audit.json"));
         let parentAudit: Record<string, unknown> | null = null;
         if (parentAuditRaw) { try { parentAudit = JSON.parse(parentAuditRaw) as Record<string, unknown>; } catch { parentAudit = null; } }
         knobs = diffAuditKnobs(parentAudit, auditObj);
       }
-      lineageRows.push({ expId, instrument, parentId,
+      lineageRows.push({ expId, agent, parentId,
         knobsChanged: knobs === null ? "" : String(knobs),
         verdict: classifyLineage(parentId || undefined, knobs), ts: now() });
     }
@@ -148,13 +148,13 @@ export function computeScore(art: string, fs: ScoreFs, now: () => string): Score
   ).map((r) => ({ ...r, ts: coverageTs }));
 
   const phaseClears: { statePath: string; merged: string }[] = [];
-  for (const instrument of parts) {
-    const statePath = join(partStateDir(art, instrument), "state.txt");
+  for (const agent of workers) {
+    const statePath = join(workerStateDir(art, agent), "state.txt");
     const stateTxt = fs.read(statePath);
     if (stateTxt === null) continue;
     const cur = parseState(stateTxt).current_exp_id ?? "";
     if (!cur) continue;
-    if (!fs.exists(join(experimentDir(art, instrument, cur), "result.json"))) continue;
+    if (!fs.exists(join(experimentDir(art, agent, cur), "result.json"))) continue;
     phaseClears.push({ statePath, merged: mergeState(stateTxt, {
       last_event: "scored", last_event_ts: now(), phase: "idle", current_exp_id: "" }) });
   }

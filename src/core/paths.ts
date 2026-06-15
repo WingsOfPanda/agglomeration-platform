@@ -54,8 +54,8 @@ export function repoStateDir(opts?: { home?: string; cwd?: string }): string {
 export function topicDir(topic: string, opts?: { home?: string; cwd?: string }): string {
   return join(repoStateDir(opts), topic);
 }
-export function partDir(instrument: string, model: string, topic: string, opts?: { home?: string; cwd?: string }): string {
-  return join(topicDir(topic, opts), `${instrument}-${model}`);
+export function workerDir(agent: string, model: string, topic: string, opts?: { home?: string; cwd?: string }): string {
+  return join(topicDir(topic, opts), `${agent}-${model}`);
 }
 
 export function repoRoot(cwd: string = process.cwd()): string {

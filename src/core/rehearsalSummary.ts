@@ -4,13 +4,13 @@
 // gathers inputs (topic, status rows, scoreboard, completion, events, warnings,
 // halt) from disk; this module just renders. No I/O here.
 //
-// REBRAND: the source status table uses the worker noun; ap uses "| Part |".
+// REBRAND: the source status table uses the worker noun; ap uses "| Worker |".
 
 import type { CompletionSignals } from "./rehearsalComplete.js";
 import type { HaltFlag } from "./rehearsalState.js";
 
-export interface StatusRow { instrument: string; phase: string; current: string; lastTs: string; lastEvent: string; }
-export interface EventRow { ts: string; instrument: string; event: string; }
+export interface StatusRow { agent: string; phase: string; current: string; lastTs: string; lastEvent: string; }
+export interface EventRow { ts: string; agent: string; event: string; }
 export interface SummaryInput {
   topic: string; updatedIso: string; startedIso: string; budget: string;
   statusRows: StatusRow[];
@@ -50,16 +50,16 @@ export function renderSessionSummary(s: SummaryInput): string {
   out.push(`Time budget: ${s.budget}`, "");
 
   out.push("## Status", "");
-  out.push("| Part | Phase | Current | Last event |");
+  out.push("| Worker | Phase | Current | Last event |");
   out.push("|---|---|---|---|");
   for (const r of s.statusRows) {
-    out.push(`| ${r.instrument} | ${r.phase} | ${r.current || "—"} | ${r.lastTs} ${r.lastEvent} |`);
+    out.push(`| ${r.agent} | ${r.phase} | ${r.current || "—"} | ${r.lastTs} ${r.lastEvent} |`);
   }
   out.push("");
 
   out.push("## Scoreboard top 5", "");
   if (s.scoreboardMd) {
-    out.push("| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |");
+    out.push("| Rank | Experiment | Agent | Metric | Status | Runtime | Approach | metric_name |");
     out.push("|---|---|---|---|---|---|---|---|");
     const data = s.scoreboardMd.split("\n").filter((l) => SB_DATA_RE.test(l)).slice(0, 5);
     for (const l of data) out.push(l);
@@ -82,7 +82,7 @@ export function renderSessionSummary(s: SummaryInput): string {
 
   out.push("## Recent events", "");
   if (s.recentEvents.length > 0) {
-    for (const e of s.recentEvents) out.push(`- ${e.ts} ${e.instrument}/${e.event}`);
+    for (const e of s.recentEvents) out.push(`- ${e.ts} ${e.agent}/${e.event}`);
   } else {
     out.push("_(no events yet)_");
   }

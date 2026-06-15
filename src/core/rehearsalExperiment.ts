@@ -5,8 +5,8 @@ import { mergeState } from "./rehearsalState.js";
 
 /** ^exp-[0-9]+$ — 1+ digit experiment id (bash experiment-send.sh:61). */
 export const EXP_ID_RE = /^exp-[0-9]+$/;
-/** ^[a-z][a-z0-9-]*$ — instrument name (bash experiment-send.sh:64). */
-export const INSTRUMENT_RE = /^[a-z][a-z0-9-]*$/;
+/** ^[a-z][a-z0-9-]*$ — agent name (bash experiment-send.sh:64). */
+export const AGENT_RE = /^[a-z][a-z0-9-]*$/;
 
 export interface PromptFields {
   metricBlock: string; hardwareBlock: string; outboxPath: string; topicText: string;
@@ -79,29 +79,29 @@ export function hardwareDiffAlert(baseline: string | null, current: string): str
 }
 
 export interface PeerRow {
-  instrument: string; phase: string; currentExp: string;
+  agent: string; phase: string; currentExp: string;
   approach: string; metric: string; status: string; notes: string;
 }
 
 /** "## Peers" markdown section (one row per peer, self excluded by the caller). "" when no peers.
- *  Faithful to the bash format-peers-block helper; table header is the rebranded Part column. */
+ *  Faithful to the bash format-peers-block helper; table header is the rebranded Worker column. */
 export function formatPeersBlock(peers: PeerRow[]): string {
   if (peers.length === 0) return "";
   const lines = [
     "## Peers",
     "",
-    "Other parts are exploring this objective in parallel. Diverge from their approaches —",
+    "Other workers are exploring this objective in parallel. Diverge from their approaches —",
     "do not duplicate a pipeline a peer is already running. Use their results to decide where",
     "the unexplored, promising region of the design space is.",
     "",
-    "| Part | Phase | Current/last | Approach | Best metric | Notes |",
+    "| Worker | Phase | Current/last | Approach | Best metric | Notes |",
     "|---|---|---|---|---|---|",
   ];
   for (const p of peers) {
     const metric = p.metric === "" ? "" : (p.status ? `${p.metric} (${p.status})` : p.metric);
     const flat = p.notes.replace(/\s+/g, " ").trim();
     const notes = flat.length > 80 ? flat.slice(0, 77) + "..." : flat;
-    lines.push(`| ${p.instrument} | ${p.phase} | ${p.currentExp} | ${p.approach} | ${metric} | ${notes} |`);
+    lines.push(`| ${p.agent} | ${p.phase} | ${p.currentExp} | ${p.approach} | ${metric} | ${notes} |`);
   }
   return lines.join("\n");
 }

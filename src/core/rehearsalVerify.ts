@@ -1,5 +1,5 @@
 // Metric-trust (verify-by-re-execution) pure logic for /ap:rehearsal (research-validity A1).
-// The harness re-runs the part's declared scoring step OUTSIDE the part's pane and adjudicates a
+// The harness re-runs the worker's declared scoring step OUTSIDE the worker's pane and adjudicates a
 // verdict. Pure: FS access is injected; the verbs apply the returned plan/rows.
 import { createHash } from "node:crypto";
 
@@ -62,11 +62,11 @@ export function checkVerify(opts: {
 }
 
 export interface VerificationRow {
-  expId: string; instrument: string; verdict: Verdict; reason: string; recomputed: string; ts: string;
+  expId: string; agent: string; verdict: Verdict; reason: string; recomputed: string; ts: string;
 }
-export const VERIFICATION_TSV_HEADER = "exp_id\tinstrument\tverdict\treason\trecomputed\tts\n";
+export const VERIFICATION_TSV_HEADER = "exp_id\tagent\tverdict\treason\trecomputed\tts\n";
 export function verificationRow(r: VerificationRow): string {
-  return `${r.expId}\t${r.instrument}\t${r.verdict}\t${r.reason}\t${r.recomputed}\t${r.ts}\n`;
+  return `${r.expId}\t${r.agent}\t${r.verdict}\t${r.reason}\t${r.recomputed}\t${r.ts}\n`;
 }
 
 export interface VerifyManifest { command: string; hashes: Record<string, string>; }
@@ -96,7 +96,7 @@ export interface PlanInput {
 export function planVerify(p: PlanInput): VerifyPlan {
   const b = p.block;
   if (!b || b.kind === "none" || !b.command) {
-    return { run: false, verdict: "unavailable", reason: b ? "part-declined" : "no-contract" };
+    return { run: false, verdict: "unavailable", reason: b ? "worker-declined" : "no-contract" };
   }
   if (b.kind === "rerun" && !p.authorizeRerun) return { run: false, verdict: "pending", reason: "rerun-deferred" };
   if (p.manifest === null) return { run: false, verdict: "unavailable", reason: "no-manifest" };

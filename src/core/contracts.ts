@@ -8,7 +8,7 @@ export function contractsPath(): string {
   return existsSync(user) ? user : join(pluginRoot(), "config", "contracts.yaml");
 }
 
-export interface Instrument {
+export interface Agent {
   binary?: string;
   modes?: Record<string, string[]>;
   default_mode?: string;
@@ -25,36 +25,36 @@ function load(): Doc {
   try { return (parse(readFileSync(p, "utf8")) as Doc) ?? {}; } catch { return {}; }
 }
 
-export function listInstruments(): string[] {
+export function listAgents(): string[] {
   return Object.keys(load()).filter((k) => k !== "consult");
 }
-function inst(name: string): Instrument | undefined {
-  const d = load(); return name !== "consult" ? (d[name] as Instrument) : undefined;
+function inst(name: string): Agent | undefined {
+  const d = load(); return name !== "consult" ? (d[name] as Agent) : undefined;
 }
 
-export function instrumentBinary(name: string): string | undefined { return inst(name)?.binary || undefined; }
-export function instrumentDefaultMode(name: string): string | undefined { return inst(name)?.default_mode || undefined; }
-export function instrumentModeArgs(name: string, mode: string): string[] | undefined {
+export function agentBinary(name: string): string | undefined { return inst(name)?.binary || undefined; }
+export function agentDefaultMode(name: string): string | undefined { return inst(name)?.default_mode || undefined; }
+export function agentModeArgs(name: string, mode: string): string[] | undefined {
   const m = inst(name)?.modes?.[mode];
   return Array.isArray(m) ? m.map(String) : undefined;
 }
-export function instrumentReadyTimeout(name: string): number {
+export function agentReadyTimeout(name: string): number {
   const v = inst(name)?.ready_timeout_s;
   return typeof v === "number" ? v : 30;
 }
-export function instrumentBootstrapSleep(name: string): number {
+export function agentBootstrapSleep(name: string): number {
   const v = inst(name)?.bootstrap_sleep_s;
   if (typeof v === "number") return v;
   return name === "claude" ? 12 : 8;
 }
-export function instrumentTimeoutMultiplier(name: string): string {
+export function agentTimeoutMultiplier(name: string): string {
   const raw = inst(name)?.timeout_multiplier;
   const s = raw == null ? "" : String(raw);
   if (/^[0-9]+(\.[0-9]+)?$/.test(s) && Number(s) > 0) return s;
   return "1.0";
 }
-export function instrumentConsultValidated(name: string): boolean {
-  if (!name) throw new TypeError("instrumentConsultValidated: missing provider arg");
+export function agentConsultValidated(name: string): boolean {
+  if (!name) throw new TypeError("agentConsultValidated: missing provider arg");
   return inst(name)?.consult_validated === true;
 }
 

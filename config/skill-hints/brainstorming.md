@@ -7,7 +7,7 @@ lets you do that without deadlocking the run.
 AUTONOMY CONTRACT
 
 This score run is automated. The skill you invoke may try to ask design
-questions one at a time. You may ask questions back to the Maestro
+questions one at a time. You may ask questions back to the Hub
 via your outbox, but follow these rules:
 
 1. Ask ONE question at a time. Wait for the answer before asking the next.
@@ -31,20 +31,20 @@ via your outbox, but follow these rules:
    Example: instead of {"text":"He said \"hi\""} write
    {"text":"He said %22hi%22"}. For options like "Use Postgres, not MySQL",
    encode the comma: {"options":["Use Postgres%2C not MySQL"]}. To ask
-   about literal "%22" (the encoding itself), write "%2522". The Maestro
+   about literal "%22" (the encoding itself), write "%2522". The Hub
    decodes %xx before answering.
 
-4. Do not pre-classify questions as critical/non-critical. The Maestro
+4. Do not pre-classify questions as critical/non-critical. The Hub
    makes that call. Just ask plainly.
 
 5. Be concrete. "Should we use Postgres or DynamoDB?" is good.
    "What database?" is too open — answer it yourself with a default.
 
 6. Document each Q&A in your findings.md as:
-     [Q&A] question: <q> // answer: <a> (resolved by Maestro)
+     [Q&A] question: <q> // answer: <a> (resolved by Hub)
    This lets the findings reader see the design choices that shaped the
    findings.
 
-7. If the skill says "ask the user X", you ask the Maestro X via this
-   protocol. The Maestro will relay to the user only if the question is
-   critical. Otherwise the Maestro answers from topic context.
+7. If the skill says "ask the user X", you ask the Hub X via this
+   protocol. The Hub will relay to the user only if the question is
+   critical. Otherwise the Hub answers from topic context.

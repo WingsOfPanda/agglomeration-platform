@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { runForensics } from "../src/core/forensics.js";
 import { scoreArtDir } from "../src/core/score.js";
-import { partDir, globalRoot } from "../src/core/paths.js";
+import { workerDir, globalRoot } from "../src/core/paths.js";
 
 let env: { home: string; cleanup: () => void };
 beforeEach(() => { env = freshHome(); });
@@ -24,9 +24,9 @@ function walkForensicsMd(): string[] {
 }
 
 describe("runForensics", () => {
-  it("captures a part's outbox errors into a command-tagged file (rc 0)", () => {
+  it("captures a worker's outbox errors into a command-tagged file (rc 0)", () => {
     mkdirSync(scoreArtDir("fix-x"), { recursive: true });
-    const pd = partDir("cody", "codex", "fix-x");
+    const pd = workerDir("cody", "codex", "fix-x");
     mkdirSync(pd, { recursive: true });
     writeFileSync(join(pd, "outbox.jsonl"), JSON.stringify({ event: "error", message: "boom" }) + "\n");
     expect(runForensics("score", scoreArtDir, "fix-x")).toBe(0);

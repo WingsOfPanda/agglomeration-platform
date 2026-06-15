@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { scoreArtDir } from "../src/core/score.js";
-import { partDir } from "../src/core/paths.js";
+import { workerDir } from "../src/core/paths.js";
 import { offsetResetRun } from "../src/commands/score.js";
 
 let env: { home: string; cleanup: () => void };
@@ -20,7 +20,7 @@ describe("score offset-reset", () => {
     writeFileSync(join(art, "viola_only_items.txt"), "x\n");
     writeFileSync(join(art, "cello_only_items.txt"), "x\n");
     writeFileSync(join(art, "adjudicated-draft.md"), "x\n");
-    const pd = partDir("viola", "codex", "t"); mkdirSync(pd, { recursive: true });
+    const pd = workerDir("viola", "codex", "t"); mkdirSync(pd, { recursive: true });
     writeFileSync(join(pd, "findings.md"), "stale\n");
     writeFileSync(join(pd, "verify.md"), "keep\n");
 
@@ -31,12 +31,12 @@ describe("score offset-reset", () => {
     expect(existsSync(join(pd, "verify.md"))).toBe(true);
   });
 
-  it("--keep-findings: removes only state+question, keeps cascade+part files", async () => {
+  it("--keep-findings: removes only state+question, keeps cascade+worker files", async () => {
     const art = scoreArtDir("t"); mkdirSync(art, { recursive: true });
     writeFileSync(join(art, "verify-viola.txt"), "OFFSET=2\n");
     writeFileSync(join(art, "question-viola.txt"), "{}\n");
     writeFileSync(join(art, "adjudicated-draft.md"), "x\n");
-    const pd = partDir("viola", "codex", "t"); mkdirSync(pd, { recursive: true });
+    const pd = workerDir("viola", "codex", "t"); mkdirSync(pd, { recursive: true });
     writeFileSync(join(pd, "verify.md"), "keep\n");
     expect(await offsetResetRun(["t", "viola", "verify", "--keep-findings"])).toBe(0);
     expect(existsSync(join(art, "verify-viola.txt"))).toBe(false);

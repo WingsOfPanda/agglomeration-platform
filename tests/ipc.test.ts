@@ -3,20 +3,20 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as IPC from "../src/core/ipc.js";
-import { partDir } from "../src/core/paths.js";
+import { workerDir } from "../src/core/paths.js";
 
 beforeEach(() => { process.env.CLAUDE_PLUGIN_ROOT = process.cwd(); });
 afterEach(() => { delete process.env.AP_HOME; });
 function home() { const h = mkdtempSync(join(tmpdir(), "ipc-")); process.env.AP_HOME = h; return h; }
-function seedPart(i: string, m: string, t: string) { const d = partDir(i, m, t); mkdirSync(d, { recursive: true }); writeFileSync(join(d, "outbox.jsonl"), ""); return d; }
+function seedPart(i: string, m: string, t: string) { const d = workerDir(i, m, t); mkdirSync(d, { recursive: true }); writeFileSync(join(d, "outbox.jsonl"), ""); return d; }
 
 describe("ipc inbox", () => {
-  it("inboxWrite: From: maestro, END_OF_INSTRUCTION last line, body intact", () => {
+  it("inboxWrite: From: hub, END_OF_INSTRUCTION last line, body intact", () => {
     home(); seedPart("violin", "codex", "demo");
     IPC.inboxWrite("violin", "codex", "demo", "do the thing");
     const txt = readFileSync(IPC.inboxPath("violin", "codex", "demo"), "utf8");
     const lines = txt.split("\n");
-    expect(lines[0]).toBe("From: maestro");
+    expect(lines[0]).toBe("From: hub");
     expect(lines[1]).toBe("");
     expect(lines[2]).toBe("do the thing");
     expect(txt.trimEnd().split("\n").at(-1)).toBe("END_OF_INSTRUCTION");
@@ -32,16 +32,16 @@ describe("ipc inbox", () => {
 });
 
 describe("ipc identity", () => {
-  it("identityWrite substitutes tokens + appends instrument ready block", () => {
+  it("identityWrite substitutes tokens + appends agent ready block", () => {
     home(); const d = seedPart("violin", "codex", "demo");
     IPC.identityWrite("violin", "codex", "demo");
     const txt = readFileSync(join(d, "identity.md"), "utf8");
-    expect(txt).toContain("**violin**");        // {{instrument}}
+    expect(txt).toContain("**violin**");        // {{agent}}
     expect(txt).toContain("codex-class");        // {{model}}
     expect(txt).toContain("**demo**");           // {{topic}}
     expect(txt).toContain(d);                    // {{state_dir}}
     expect(txt).toContain('"event":"ready"');
-    expect(txt).toContain('\\"instrument\\":\\"violin\\"'); // ready block uses instrument, not commander
+    expect(txt).toContain('\\"agent\\":\\"violin\\"'); // ready block uses agent, not commander
     expect(txt).not.toContain("commander");
   });
 });
@@ -118,7 +118,7 @@ describe("ipc pane meta", () => {
   it("paneMeta round-trips hyphenated model via JSON, not dir parse", () => {
     home(); seedPart("violin", "claude-haiku", "demo");
     IPC.paneMetaWrite("violin", "claude-haiku", "demo", "%99");
-    const m = IPC.paneMetaReadForDir(partDir("violin", "claude-haiku", "demo"));
-    expect(m).toEqual({ instrument: "violin", model: "claude-haiku", paneId: "%99" });
+    const m = IPC.paneMetaReadForDir(workerDir("violin", "claude-haiku", "demo"));
+    expect(m).toEqual({ agent: "violin", model: "claude-haiku", paneId: "%99" });
   });
 });
