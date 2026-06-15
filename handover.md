@@ -1,6 +1,6 @@
 # Handover — agglomeration-platform
 
-**As of:** 2026-06-15 · `main` @ v0.3.0 · all green (typecheck · 1103 tests · lint · build).
+**As of:** 2026-06-15 · `main` @ v0.3.1 · all green (typecheck · 1108 tests · lint · build).
 
 This repo is the renamed **`agglomeration-platform`** (formerly `consort`). The rename +
 de-musicalization is **complete** (3 PRs: #61 brand, #62 role nouns + cast, #63 verbs + docs).
@@ -44,30 +44,25 @@ Dev now continues on the GPU box (`bl201` = `gpu` = 47.84.226.25) at
 
 ## What's left to do
 
-### 1. Publish-readiness (the next spec — highest priority)
+### Done — Publish-readiness (2026-06-15, PR #65 → v0.3.1)
 
-Make the plugin genuinely installable/usable for others. Brainstorm + spec this under
-`docs/superpowers/specs/` before implementing. Scope to decide:
+Shipped marketplace install-readiness. Decision: **marketplace-only** — kept `package.json`
+`"private": true` (no npm, no Codex). Added a `tests/manifest.test.ts` installability gate
+(manifest validity + version sync), a README `/ap:bridge` row + a getting-started path, fixed the
+stale `.gitignore` (`.consort/` → `.ap/`), and set the GitHub repo description. Clean-clone smoke
+confirmed the shipped tree runs without `node_modules`. Spec/plan:
+`docs/superpowers/specs/2026-06-15-publish-readiness-design.md`,
+`docs/superpowers/plans/2026-06-15-publish-readiness.md`. Deferred by design: the optional Codex
+dual-publish (`.codex-plugin/plugin.json` + codex marketplace).
 
-- **`package.json` `"private": true`** — remove it if publishing to npm (so `npx`/`@scope` resolves),
-  or keep it if distribution stays marketplace-only. Decide the distribution model first.
-- **Marketplace listing** — verify `/plugin marketplace add WingsOfPanda/agglomeration-platform` +
-  `/plugin install ap@agglomeration-platform` works end-to-end from a clean machine; confirm
-  `marketplace.json` / `plugin.json` are correct for discovery.
-- **Prune dev artifacts** — `target-user-analysis.{html,md}` (untracked) and any dogfood/scratch files
-  that shouldn't ship; decide what belongs in the published package.
-- **README polish** — install/usage/quickstart beyond the rename; a real "getting started" path.
-- (Optional) **Codex dual-publish** — `.codex-plugin/plugin.json` + the codex marketplace, if you
-  want the plugin available in the Codex CLI too.
-
-### 2. Fix the stale dogfood (Scenario B)
+### 1. Fix the stale dogfood (Scenario B)
 
 `scripts/dogfood-port-parity.sh` **Scenario B** tests `implement drop-worker` (was `perform
 drop-part`), a verb **removed in the multi-repo retirement** — so the dogfood permanently reports
 `FAILURES PRESENT` (5/17), masking real failures. Remove or rewrite Scenario B so the dogfood is a
 trustworthy gate again. Small, self-contained PR.
 
-### 3. (Optional / lower priority)
+### 2. (Optional / lower priority)
 
 - **`MIGRATION.md`** is still written in the historical `consort`/musical vocabulary (it carries a
   rebrand banner). Rewrite for the current identity, or leave it as a dated architecture record.
