@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { log } from "../core/log.js";
 import { haveCmd, inTmuxSession, tmuxVersionOk, tmuxVersionString } from "../core/deps.js";
+import { paneBorderArgs } from "../core/tmux.js";
 import { globalRoot, pluginRoot } from "../core/paths.js";
 import { atomicWrite } from "../core/atomic.js";
 import { contractsExist, listAgents, agentBinary, agentConsultValidated } from "../core/contracts.js";
@@ -84,7 +85,7 @@ function listSet(providers: string[]): number {
  *  tmux query lives in healthCheck. */
 export function paneBorderDiagnosis(pbs: string, pbf: string): { ok: boolean; lines: string[] } {
   const fix = [
-    "  fix: `ap` spawn sets this automatically, or add to ~/.tmux.conf:",
+    "  fix: `ap` spawn/check sets this automatically, or add to ~/.tmux.conf:",
     "    set -g pane-border-status top",
     "    set -g pane-border-format ' #{?@ap_label_fmt,#{@ap_label_fmt},#[fg=#{?@ap_color,#{@ap_color},default}#,bold]#{?@ap_label,#{@ap_label},#{pane_title}}#[default]} '",
   ];
@@ -101,6 +102,13 @@ function tmuxGlobalOption(name: string): string {
   try { return execFileSync("tmux", ["show-options", "-gv", name], { encoding: "utf8" }).trim(); } catch { return ""; }
 }
 
+/** Apply ap's pane-border globals synchronously (idempotent `set -g`), best-effort. Mirrors spawn's
+ *  async ensurePaneBorders() but via the sync tmux calls check already uses, so a fresh install
+ *  renders worker labels and check reports green instead of warning about an unset format. */
+function applyPaneBorders(): void {
+  for (const a of paneBorderArgs()) { try { execFileSync("tmux", a, { stdio: "ignore" }); } catch { /* diagnosed below */ } }
+}
+
 function healthCheck(): number {
   let fail = 0, warn = 0, ok = 0, total = 0;
   const root = globalRoot();
@@ -113,6 +121,7 @@ function healthCheck(): number {
 
   if (inTmuxSession()) {
     log.ok(`tmux session: ${process.env.TMUX} is set`);
+    applyPaneBorders(); // self-heal: apply the same globals spawn does, so fresh installs render labels + report green
     const diag = paneBorderDiagnosis(tmuxGlobalOption("pane-border-status"), tmuxGlobalOption("pane-border-format"));
     if (diag.ok) log.ok(`  ${diag.lines[0]}`);
     else { for (const l of diag.lines) log.warn(l); warn = 1; }
