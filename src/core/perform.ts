@@ -1,7 +1,7 @@
 // src/core/perform.ts
 // CORE paths / parse / target-resolution + provider-detection for /ap:perform.
 // Byte-faithful port of the prior bash plugin's deploy core helpers (cosmetic rebrand: _deploy/ ->
-// _perform/, worker-noun -> "part", deploy env prefix -> AP_PERFORM_*). Logic preserved verbatim.
+// _perform/, worker-noun -> "worker", deploy env prefix -> AP_PERFORM_*). Logic preserved verbatim.
 import { join, basename } from "node:path";
 import { readFileSync, existsSync } from "node:fs";
 import { topicDir } from "./paths.js";

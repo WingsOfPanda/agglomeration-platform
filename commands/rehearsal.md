@@ -1,20 +1,20 @@
 ---
-description: Advisor-driven autoresearch — lock a measurable metric, sweep SOTA, spawn 2-3 persistent codex parts, and adaptively dispatch experiments until a target/plateau/budget stop. Explore-only; promotion to real code is /ap:perform.
+description: Advisor-driven autoresearch — lock a measurable metric, sweep SOTA, spawn 2-3 persistent codex workers, and adaptively dispatch experiments until a target/plateau/budget stop. Explore-only; promotion to real code is /ap:perform.
 argument-hint: <objective-text> [--metric k=v,...] [--time-budget none|<N>h|<N>s] [--slug s] [--seed-from path]
 allowed-tools: Bash, Write, Read, Edit, AskUserQuestion, WebSearch, Skill
 ---
 
 # /ap:rehearsal
 
-Run an executable research session: you (the Maestro, the conductor) lock a metric with the user, sweep
-the SOTA, spawn 2-3 persistent **codex parts** (PhD-student executors) once, then adaptively dispatch
+Run an executable research session: you (the Hub, the conductor) lock a metric with the user, sweep
+the SOTA, spawn 2-3 persistent **codex workers** (PhD-student executors) once, then adaptively dispatch
 single-config **experiments** until a stop condition fires. **Explore-only** — never touch the user's real
 source. This directive covers Phases 0-4 (setup + spawn + the adaptive experiment loop) plus the wind-down
 (Phases 5-7: synthesis + teardown + handoff), now shipped.
 
-> **DANGER — read first.** Spawns codex **parts** under
-> `--dangerously-bypass-approvals-and-sandbox`; parts write + execute arbitrary
-> code in your repo. Sandboxing is **honor-system** (parts are told to stay inside
+> **DANGER — read first.** Spawns codex **workers** under
+> `--dangerously-bypass-approvals-and-sandbox`; workers write + execute arbitrary
+> code in your repo. Sandboxing is **honor-system** (workers are told to stay inside
 > their branch dir; not enforced). Net access is **permitted by default**. Do not
 > run on machines with sensitive credentials, production data, or shared state.
 > Use a scratch worktree if uncertain.
@@ -31,20 +31,20 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
 ## Task list (TaskCreate × 9 before Phase 0)
 
 Create the task list with `TaskCreate`. Update statuses at the phase boundaries
-below. Per-part rows are intentionally absent (N varies 2 or 3); the loop's
-Step 5 may add a per-dispatch `<instrument> exp-NNN on <approach-label>` sub-row.
+below. Per-worker rows are intentionally absent (N varies 2 or 3); the loop's
+Step 5 may add a per-dispatch `<agent> exp-NNN on <approach-label>` sub-row.
 
 | # | subject | activeForm |
 |---|---|---|
-| 0   | `0 Args + init [maestro]`                 | `Staging args` |
-| 1   | `1 Metric discussion [maestro + user]`    | `Locking the metric` |
-| 1.5 | `1.5 SOTA sweep [maestro]`                | `Sweeping SOTA` |
-| 2   | `2 Roster + time budget [maestro + user]` | `Sizing the roster` |
-| 3   | `3 Spawn parts [maestro]`                 | `Spawning parts` |
-| 4   | `4 Research loop [parts]`                 | `Running experiments` |
-| 5   | `5 Synthesis [maestro]`                   | `Writing landscape doc` |
-| 6   | `6 Teardown + archive [maestro]`          | `Tearing down` |
-| 7   | `7 Present [maestro]`                     | `Presenting` |
+| 0   | `0 Args + init [hub]`                 | `Staging args` |
+| 1   | `1 Metric discussion [hub + user]`    | `Locking the metric` |
+| 1.5 | `1.5 SOTA sweep [hub]`                | `Sweeping SOTA` |
+| 2   | `2 Roster + time budget [hub + user]` | `Sizing the roster` |
+| 3   | `3 Spawn workers [hub]`                 | `Spawning workers` |
+| 4   | `4 Research loop [workers]`                 | `Running experiments` |
+| 5   | `5 Synthesis [hub]`                   | `Writing landscape doc` |
+| 6   | `6 Teardown + archive [hub]`          | `Tearing down` |
+| 7   | `7 Present [hub]`                     | `Presenting` |
 
 ## Phase 0 — args-file + init
 1. Mint an args path: `$CS rehearsal --mint-args-file` → prints `<args-path>`.
@@ -83,15 +83,15 @@ Read `primary_metric` + `hard_constraints` from `$ART/metric.md`. Fire ONE **tri
 
 #### Security note
 
-Web access in this phase relies on the Maestro's `WebSearch` / Tavily / AnySearch
-tool availability and on part-side net access (permitted-by-default, honor-system —
+Web access in this phase relies on the Hub's `WebSearch` / Tavily / AnySearch
+tool availability and on worker-side net access (permitted-by-default, honor-system —
 not enforced). For a hard block, restrict at OS / firewall / network-namespace level
 before invoking `/ap:rehearsal`; the command exposes no opt-out flag.
 
 ## Phase 2 — Roster size + time budget
 1. **Pick N silently** (your call, explain in chat): **N=2** (default — single objective + tight
    constraint) or **N=3** (multiple sub-goals / broad survey / no clear single optimum). When unsure → 2.
-   Bias toward different pipelines per part; record the rationale for round 1's `session-summary.md`.
+   Bias toward different pipelines per worker; record the rationale for round 1's `session-summary.md`.
 2. **If `$ART/time-budget.txt` already exists** (`--time-budget` passed), skip. Otherwise **AskUserQuestion**
    (Header `Time budget`, unconditional): "Time limit on this research session?" Options: **No limit
    (recommended)** / **4 hours** / **12 hours** / **Other (custom hours)**. Do NOT auto-pick. Then write:
@@ -100,92 +100,92 @@ before invoking `/ap:rehearsal`; the command exposes no opt-out flag.
    date -u +%Y-%m-%dT%H:%M:%SZ > "$ART/session-start.txt"
    ```
 
-## Phase 3 — Batch-spawn persistent codex parts
-Spawn N parts in one call: `$CS rehearsal spawn-all <TOPIC> <N>`. It picks N distinct instruments, allocates
+## Phase 3 — Batch-spawn persistent codex workers
+Spawn N workers in one call: `$CS rehearsal spawn-all <TOPIC> <N>`. It picks N distinct agents, allocates
 panes off your pane (main-vertical), batch-spawns them as codex, and writes `$ART/spawn-results.tsv` +
-`$ART/parts.txt`. Branch on rc:
-- **rc 0** → all parts ready. Continue (Phase 4 lands next).
+`$ART/workers.txt`. Branch on rc:
+- **rc 0** → all workers ready. Continue (Phase 4 lands next).
 - **rc 3 (preflight/setup), first failure** → reset the partial spawn
   (`$CS rehearsal teardown <TOPIC> --panes-only` — kills the partial panes only and **preserves**
   state; a plain `teardown` would archive `_rehearsal` and the retry would fail) and retry
   `spawn-all` ONCE (cold-start tolerance).
 - **rc 3, after retry** → preflight is unrecoverable: teardown + archive + exit. Do **NOT** show a
-  degraded prompt (a pane-allocation failure that survives a retry will not be fixed by dropping parts).
+  degraded prompt (a pane-allocation failure that survives a retry will not be fixed by dropping workers).
 - **rc 1 or 2 (spawn-class), first failure** → reset the partial spawn
   (`$CS rehearsal teardown <TOPIC> --panes-only`, as above) and retry `spawn-all` ONCE.
 - **rc 1 or 2, after retry** → read the FRESH `$ART/spawn-results.tsv` (`spawn-all` clears any stale one
-  at start). If **< 2** parts have rc 0, abort (teardown + archive). Else **AskUserQuestion**: **Proceed
-  degraded (<k>/<N>)** / **Abort**. On **Proceed degraded**, for EACH instrument whose `spawn-results.tsv`
-  row has rc ≠ 0, run `$CS rehearsal drop-part <TOPIC> <instrument>` (prunes its `parts.txt` row and kills
-  its preflight pane) **before** Phase 4, so Phase 4 seeds state + a Monitor only for live parts.
+  at start). If **< 2** workers have rc 0, abort (teardown + archive). Else **AskUserQuestion**: **Proceed
+  degraded (<k>/<N>)** / **Abort**. On **Proceed degraded**, for EACH agent whose `spawn-results.tsv`
+  row has rc ≠ 0, run `$CS rehearsal drop-worker <TOPIC> <agent>` (prunes its `workers.txt` row and kills
+  its preflight pane) **before** Phase 4, so Phase 4 seeds state + a Monitor only for live workers.
 
 ## Phase 4 — Initial dispatch (runs ONCE, before the loop)
 
-After a successful `spawn-all`, set up per-part liveness + seed direction, then dispatch the first
+After a successful `spawn-all`, set up per-worker liveness + seed direction, then dispatch the first
 round. This phase runs **once**; its last step ENTERS THE LOOP (do NOT end the turn).
 
-1. **Seed per-part state.** `$ART/parts.txt` already exists (one instrument per line, from `spawn-all`).
-   For **each** instrument in `$ART/parts.txt`, create its experiments dir and write its initial
-   `state.txt` — one small `printf` per part:
+1. **Seed per-worker state.** `$ART/workers.txt` already exists (one agent per line, from `spawn-all`).
+   For **each** agent in `$ART/workers.txt`, create its experiments dir and write its initial
+   `state.txt` — one small `printf` per worker:
    ```bash
    while IFS= read -r INST; do
      [ -n "$INST" ] || continue
-     mkdir -p "$ART/parts/$INST/experiments"
-     printf 'exp_counter=0\nphase=idle\ncurrent_exp_id=\nlast_event=spawn\n' > "$ART/parts/$INST/state.txt"
-   done < "$ART/parts.txt"
+     mkdir -p "$ART/workers/$INST/experiments"
+     printf 'exp_counter=0\nphase=idle\ncurrent_exp_id=\nlast_event=spawn\n' > "$ART/workers/$INST/state.txt"
+   done < "$ART/workers.txt"
    ```
    The `phase` vocabulary (set throughout the loop): `idle` (between experiments — eligible for
    dispatch) | `working` (executing) | `stale` / `stuck` (Monitor liveness escalation) | `blocked`
    (emitted a `question` — awaiting user) | `failed` (errored, manual recovery) | `complete` /
-   `incomplete` (terminal) | `abandoned` (Maestro retired the lane via Lane-D; dispatch refuses with rc 2).
+   `incomplete` (terminal) | `abandoned` (Hub retired the lane via Lane-D; dispatch refuses with rc 2).
 
-2. **Start one persistent Monitor task per part.** Use the **Monitor TOOL** (NOT a Bash call) once per
-   instrument, with config:
-   - `command`: `node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs rehearsal monitor <TOPIC> <instrument>`
+2. **Start one persistent Monitor task per worker.** Use the **Monitor TOOL** (NOT a Bash call) once per
+   agent, with config:
+   - `command`: `node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs rehearsal monitor <TOPIC> <agent>`
    - `persistent`: `true`
-   - `description`: `rehearsal monitor for <instrument>`
+   - `description`: `rehearsal monitor for <agent>`
 
-   Each task watches that part's outbox for `done`/`error`/`question`/`heartbeat` events AND emits
+   Each task watches that worker's outbox for `done`/`error`/`question`/`heartbeat` events AND emits
    `stale`/`stuck` when the outbox mtime exceeds the probe/stuck thresholds. Capture each returned task
    ID and append it to `$ART/monitor-tasks.txt`, one per line (Step 2 of the loop `TaskStop`s every ID
    from this file at the hard cap).
 
 3. **Write the initial `session-summary.md`.** Compose `$ART/session-summary.md` (a mechanical
-   roster/metric header — roster instruments, the metric block, time budget) and append a
+   roster/metric header — roster agents, the metric block, time budget) and append a
    `## Current direction` section (1-3 sentence opening strategy note, incl. the diversity rationale
    from Phase 2) plus a `## Recent decisions` section (placeholder bullets, filled on first dispatch).
    Use the Write tool (atomic single-shot).
 
-4. **First dispatch round — PARALLEL, one Bash call per part in ONE message.** For each instrument,
+4. **First dispatch round — PARALLEL, one Bash call per worker in ONE message.** For each agent,
    compose a 1-2 sentence opening direction informed by `$ART/topic.txt`, `$ART/metric.md`, and
    `$ART/seed-from.txt` (if present), then dispatch:
    ```bash
-   $CS rehearsal experiment-send <TOPIC> <instrument> exp-001 "<approach-label>" "<direction>"
+   $CS rehearsal experiment-send <TOPIC> <agent> exp-001 "<approach-label>" "<direction>"
    ```
-   **Diversity:** assign a different pipeline / approach family per part (e.g. single-pass / typed-routing
+   **Diversity:** assign a different pipeline / approach family per worker (e.g. single-pass / typed-routing
    / hybrid) — identical pipelines produce no triangulation signal. (B1 now backs this mechanically — see
    the `Coverage:` line in the status brief and the `min_families` plateau gate.) The verb creates
-   `parts/<instrument>/experiments/exp-001/`, writes `prompt.md` from the experiment template, writes the
+   `workers/<agent>/experiments/exp-001/`, writes `prompt.md` from the experiment template, writes the
    inbox, sets `phase=working, current_exp_id=exp-001, exp_counter=1`, and nudges the pane.
 
 5. **Render the initial status brief:** `$CS rehearsal status-brief <TOPIC>` (no `--latest-*` flags on
-   the first render — approach labels come from each part's freshly-written `prompt.md`, metric shows
+   the first render — approach labels come from each worker's freshly-written `prompt.md`, metric shows
    `(running)`, scoreboard says `_(scoreboard absent)_`). **Print its stdout verbatim** to chat.
 
 6. **ENTER THE LOOP.** Do NOT end the turn — fall straight into the inline loop below.
 
 ## The inline loop (Steps 1-8 — repeat until Step 2 or Step 4 stops)
 
-You are the Maestro mid-session. Unlike the bash predecessor (which ended the turn at Step 8 and waited
+You are the Hub mid-session. Unlike the bash predecessor (which ended the turn at Step 8 and waited
 for a hook to re-enter), ap runs this loop **inline** — the same idiom `score`/`perform` use for
 their wait barriers, but **UNBOUNDED**. **Step 8 is the LOOP TAIL → go to Step 1; it is NOT a turn end.**
-The loop BLOCKS in-process for the next part-completion notification (the persistent Monitor tasks surface
+The loop BLOCKS in-process for the next worker-completion notification (the persistent Monitor tasks surface
 `done`/`error`/`question`/`heartbeat`/`stale`/`stuck`), then continues.
 
 ### Step 1 — Read state baseline
-Read (capped): `$ART/scoreboard.md`, each part's `$ART/parts/<instrument>/state.txt`, the existence of
+Read (capped): `$ART/scoreboard.md`, each worker's `$ART/workers/<agent>/state.txt`, the existence of
 `$ART/halt.flag`, and `$ART/time-budget.txt` + `$ART/session-start.txt` (for the elapsed-time check).
-Then **block on the next part `done`/`error`/`question` notification** — a Monitor task fires it (a
+Then **block on the next worker `done`/`error`/`question` notification** — a Monitor task fires it (a
 `stale`/`stuck`/`heartbeat` notification also wakes the loop; route it in Step 3 and keep going). When a
 notification arrives, continue to Step 2 with it queued.
 
@@ -199,22 +199,22 @@ the budget is `none`):
 4. Proceed to Phase 5 → 6 → 6b → 6c → 7 below. **EXIT THE LOOP** (this is a real stop).
 
 ### Step 3 — Process the queued notification(s)
-Initialize `RAN_SCORE=0`, `LAST_INSTRUMENT=`, `LAST_EXP=`. Route each queued notification by event type:
-- **`done` / `error`** → `$CS rehearsal score <TOPIC>` (re-scores every part, sets each scored part's
-  `phase=idle`). On rc 0 set `RAN_SCORE=1` and record `LAST_INSTRUMENT=<instrument>` / `LAST_EXP=<exp-id>`
-  from the event JSON (`part` field + the `summary`-derived `exp-NNN`). If the event's part has a
-  non-empty `probe_sent_ts` in its `state.txt`, clear it (the part recovered — the pending probe is stale).
-- **`question`** → surface the part's question to the user in chat; set that part's `phase=blocked`. Do
+Initialize `RAN_SCORE=0`, `LAST_AGENT=`, `LAST_EXP=`. Route each queued notification by event type:
+- **`done` / `error`** → `$CS rehearsal score <TOPIC>` (re-scores every worker, sets each scored worker's
+  `phase=idle`). On rc 0 set `RAN_SCORE=1` and record `LAST_AGENT=<agent>` / `LAST_EXP=<exp-id>`
+  from the event JSON (`worker` field + the `summary`-derived `exp-NNN`). If the event's worker has a
+  non-empty `probe_sent_ts` in its `state.txt`, clear it (the worker recovered — the pending probe is stale).
+- **`question`** → surface the worker's question to the user in chat; set that worker's `phase=blocked`. Do
   **NOT** auto-dispatch it — wait for user direction.
-- **`stale`** → send a probe: `$CS send --from maestro <instrument> <TOPIC> "status? brief update on the
-  current experiment please"`; set that part's `phase=stale, probe_sent_ts=<now UTC ISO>`. **Debounce:**
+- **`stale`** → send a probe: `$CS send --from hub <agent> <TOPIC> "status? brief update on the
+  current experiment please"`; set that worker's `phase=stale, probe_sent_ts=<now UTC ISO>`. **Debounce:**
   skip the probe if `probe_sent_ts` was already set within the stuck window.
-- **`stuck`** → Maestro judgment: either **abort** the pane (Ctrl-C via tmux, set `phase=failed`) OR
+- **`stuck`** → Hub judgment: either **abort** the pane (Ctrl-C via tmux, set `phase=failed`) OR
   **extend** (clear `probe_sent_ts` to give more time).
-- **`heartbeat`** → bump that part's `last_event_ts`; if `probe_sent_ts` is set, clear it (the part is
+- **`heartbeat`** → bump that worker's `last_event_ts`; if `probe_sent_ts` is set, clear it (the worker is
   responsive — the pending probe is no longer relevant). No further action.
 
-Then, **IF `RAN_SCORE`**: `$CS rehearsal status-brief <TOPIC> --latest-instrument <LAST_INSTRUMENT>
+Then, **IF `RAN_SCORE`**: `$CS rehearsal status-brief <TOPIC> --latest-agent <LAST_AGENT>
 --latest-exp <LAST_EXP>` and **print its stdout verbatim** — exactly **ONCE per loop iteration**, even if
 multiple `done` events queued (score per event, but render the brief once with the LAST values). Skip the
 brief entirely when `RAN_SCORE=0` (only heartbeat/question/stale/stuck fired — no new scored state).
@@ -238,14 +238,14 @@ brief entirely when `RAN_SCORE=0` (only heartbeat/question/stale/stuck fired —
    couldn't conclude (advisory only). C1 fires only on new-best leaders -- see Step 3.5b.
 
 3.5. **Verify the landed result (metric-trust gate).** After `score`/`status-brief`, for the
-     experiment that just landed (`<instrument>`/`<exp>`):
+     experiment that just landed (`<agent>`/`<exp>`):
 
-     a. `$CS rehearsal verify-plan <TOPIC> <instrument> <exp>` (add `--authorize-rerun` ONLY
+     a. `$CS rehearsal verify-plan <TOPIC> <agent> <exp>` (add `--authorize-rerun` ONLY
         when this result is a new leader or would change your next-round direction — a `rerun`
         is costly).
      b. If it printed `RUN_CMD=...`: run that command yourself via Bash, in the printed
         `RUN_CWD`, with a timeout, teeing stdout to a temp file `<exp-dir>/verify-stdout.log`.
-     c. `$CS rehearsal verify-check <TOPIC> <instrument> <exp> --stdout-file <exp-dir>/verify-stdout.log`
+     c. `$CS rehearsal verify-check <TOPIC> <agent> <exp> --stdout-file <exp-dir>/verify-stdout.log`
         (or `--run-failed` if the command errored / produced no `VERIFY_METRIC=` marker).
      d. The verdict now annotates the next `status-brief` top-3 (`verified` / `mismatch!` /
         `unavailable` / `pending`). Treat a `mismatch` as a result you do NOT yet trust — note it
@@ -264,31 +264,31 @@ brief entirely when `RAN_SCORE=0` (only heartbeat/question/stale/stuck fired —
         RE-DISPATCH the same idea with the failure feedback in the approach-brief (e.g. "previous attempt
         was INFEASIBLE: `audit-knob-drift mcts_sims=16 vs 200` -- set 200 and re-run"). If the cap is hit,
         record the idea INFEASIBLE-final in `## Recent decisions` ("couldn't be validly executed", NOT
-        refuted) and let the part move to a new idea. A REFUTED result (feasible `ok`, genuinely low)
+        refuted) and let the worker move to a new idea. A REFUTED result (feasible `ok`, genuinely low)
         steers normally -- it is real evidence the idea is weak.
 
 3.5b. **Independent re-implementation inspection (C1) -- new-best leaders only.** This is the strongest
-     anti-gaming gate: where the A1 verify (3.5a-c) re-RUNS the part's OWN scoring command, C1 has YOU
-     (the cross-family Claude Maestro) regenerate the experiment from the part's run-card ALONE and
-     re-derive the metric -- catching a part whose own scoring code is the gamed artifact. It is
+     anti-gaming gate: where the A1 verify (3.5a-c) re-RUNS the worker's OWN scoring command, C1 has YOU
+     (the cross-family Claude Hub) regenerate the experiment from the worker's run-card ALONE and
+     re-derive the metric -- catching a worker whose own scoring code is the gamed artifact. It is
      expensive, so fire it ONLY when the just-landed result is a NEW-BEST leader (rank 1 in the
      status-brief top-3 -- the same judgment that gates A1's `--authorize-rerun`), is A1-`verified`, is
-     NOT `[suspect]`, and the part is a `codex` part (skip if it is a `claude` part -- you would be
+     NOT `[suspect]`, and the worker is a `codex` worker (skip if it is a `claude` worker -- you would be
      same-family as the inspector).
 
-     a. `$CS rehearsal inspect-plan <TOPIC> <instrument> <exp> --authorize-inspect`. If it prints a
+     a. `$CS rehearsal inspect-plan <TOPIC> <agent> <exp> --authorize-inspect`. If it prints a
         terminal `VERDICT=inconclusive reason=...` (inspect-deferred / budget-exhausted /
         run-card-insufficient / same-family), STOP -- an inconclusive inspection never demotes; note it
         and move on. (Budget: `metric.md` `c1_budget`, default 2 per session.)
      b. If it printed `INSPECT_CWD=...` plus the run-card (`DATA_SPEC` / `METRIC_FORMULA` / `APPROACH` /
         `REPORTED_METRIC` / `INTEGRITY`): author FRESH, INDEPENDENT code in that scratch dir (do NOT read
-        the part's `code/`). Obtain the same data per `DATA_SPEC`, re-run the experiment end-to-end with a
+        the worker's `code/`). Obtain the same data per `DATA_SPEC`, re-run the experiment end-to-end with a
         timeout, compute the metric per `METRIC_FORMULA`, and print `VERIFY_METRIC=<n>` as the last stdout
         line; tee stdout to `<exp-dir>/c1/inspect-stdout.log`. **Explore-only: write ONLY under
         `<exp-dir>/c1/` -- never the user's repo, never `/ap:perform`.** Also cross-check the
         `INTEGRITY` claims against the split you reconstructed (e.g. does the data actually keep
         train/test disjoint?).
-     c. `$CS rehearsal inspect-check <TOPIC> <instrument> <exp> --stdout-file <exp-dir>/c1/inspect-stdout.log`
+     c. `$CS rehearsal inspect-check <TOPIC> <agent> <exp> --stdout-file <exp-dir>/c1/inspect-stdout.log`
         (add `--integrity-refuted` if a reconstructed-split check contradicts an attested claim; use
         `--run-failed` if your re-run errored).
      d. The verdict annotates the next status-brief top-3: `[reimpl-ok]` (independently reproduced --
@@ -302,7 +302,7 @@ brief entirely when `RAN_SCORE=0` (only heartbeat/question/stale/stuck fired —
 The `status-brief` you just printed already shows the `**Completion check:**` line (computed by the same
 core the CLI uses: `floor_met` / `target_met` / `K_so_far` / `K_required` / `plateau`). Apply the FROZEN
 decision policy below. If the decision is **STOP**, write `$ART/halt.flag` as a structured `key=value`
-file (one entry per line) — required keys `halted_by=maestro`, `halted_at=<UTC ISO>`, `reason=<one line>`,
+file (one entry per line) — required keys `halted_by=hub`, `halted_at=<UTC ISO>`, `reason=<one line>`,
 plus optional `target_met` / `floor_met` / `k_so_far` / `k_required` / `plateau` / `plateau_observed_n` /
 `final_leader` / `final_leader_metric` / `architectures_corroborated` — then **jump to Step 2**.
 
@@ -311,7 +311,7 @@ Decision policy (apply at Step 4):
   Hard rules (no judgment):
   - floor_met=no AND no hard cap -> keep going.
   - hard_cap=yes OR halt.flag present -> stop (go to Step 2).
-  Soft rules (Maestro judgment, default-stop, override allowed):
+  Soft rules (Hub judgment, default-stop, override allowed):
   - All of floor + target + K satisfied -> default stop. Override if variance looks
     suspicious or the user asked to keep exploring.
   - Floor met + plateau detected + target not met -> default stop. Override to pivot
@@ -321,32 +321,32 @@ Decision policy (apply at Step 4):
     plateau therefore already means "breadth reached and every explored family has stalled."
   If decision = stop, touch halt.flag with reason text, then jump to Step 2.
 
-NEVER STOP the loop at Step 5. If at least one part has phase=idle and no halt.flag exists,
+NEVER STOP the loop at Step 5. If at least one worker has phase=idle and no halt.flag exists,
 dispatch the next experiment -- do not pause to ask "should I continue?" or "is this a good
 stopping point?". Stop conditions are owned by Step 2 (halt.flag / time budget) and Step 4
 (completion check). If results look thin: rotate the approach mix, escalate via a question,
 or document the concern in session-summary.md Recent decisions -- and dispatch.
 
-Lane-D abandon (per part, at Step 5 -- ALL THREE must hold):
-  1. >= 3 completed (status=ok) experiments for this part;
-  2. NONE of this part's LAST 3 experiments scored >= min_acceptable;
+Lane-D abandon (per worker, at Step 5 -- ALL THREE must hold):
+  1. >= 3 completed (status=ok) experiments for this worker;
+  2. NONE of this worker's LAST 3 experiments scored >= min_acceptable;
      (count only FEASIBLE experiments -- the integer-ranked scoreboard rows; an INFEASIBLE run in the
      `x<rank>` group is NOT Lane-D evidence, because it was botched, not a weak idea.)
-  3. this part's best metric >= 5 x plateau_threshold BELOW the current overall leader.
+  3. this worker's best metric >= 5 x plateau_threshold BELOW the current overall leader.
   -> transition phase=abandoned + lane_abandon_reason + lane_abandon_ts; skip dispatch;
      surface in chat. (experiment-send refuses an abandoned lane with rc 2.)
 ```
 
-**Optional — consensus for asymmetric framing (advisory, §6).** When the soft-stop rules are close and the parts
+**Optional — consensus for asymmetric framing (advisory, §6).** When the soft-stop rules are close and the workers
 disagree, run `$CS rehearsal consensus <TOPIC>` → writes `$ART/consensus.md` (advisory; gates nothing). Its
-`## Contested` section shows where the parts' latest-ok `result.json` fields diverge; read it to frame the next
+`## Contested` section shows where the workers' latest-ok `result.json` fields diverge; read it to frame the next
 direction or a clarifying user question. On-demand only — never auto-run by `score` / `finalize` / the loop.
 
 ### Step 5 — Dispatch round
-For **each** part with `phase=idle` and no `$ART/halt.flag`:
+For **each** worker with `phase=idle` and no `$ART/halt.flag`:
 1. **Lane-D abandon check FIRST** (the frozen block above — all three criteria must hold). When all hold,
-   write that part's `state.txt` to `phase=abandoned` + `lane_abandon_reason=<short reason>` +
-   `lane_abandon_ts=<UTC ISO>`, skip dispatch for it, and surface the retirement in chat ("`<instrument>`
+   write that worker's `state.txt` to `phase=abandoned` + `lane_abandon_reason=<short reason>` +
+   `lane_abandon_ts=<UTC ISO>`, skip dispatch for it, and surface the retirement in chat ("`<agent>`
    lane retired: …"). The `phase=idle` filter then excludes it from all future rounds.
 2. **Otherwise dispatch.** Compose a ~50-token direction ("direction, not plan") from
    `$ART/session-summary.md` (Current direction + Recent decisions), the recent `$ART/scoreboard.md` rows,
@@ -363,14 +363,14 @@ For **each** part with `phase=idle` and no `$ART/halt.flag`:
      `family` column against the `Coverage:` line -- prefer an untried known family. Give the Draft a
      fresh `<approach-label>` (no `--parent`).
    - **Improve** = a single-variable change on a named parent. Use when a promising family is worth
-     refining. Pass `--parent <exp-id>` (a prior exp of the SAME part) and change exactly ONE variable
+     refining. Pass `--parent <exp-id>` (a prior exp of the SAME worker) and change exactly ONE variable
      vs it, named in the `<direction>` -- so the metric delta is attributable.
    Do NOT pre-rank un-run ideas: dispatch the diverse angles and let the real (verified) metric rank
    them post-hoc.
-   Read `exp_counter` from the part's `state.txt`, increment, format `exp-NNN`, then dispatch (add
+   Read `exp_counter` from the worker's `state.txt`, increment, format `exp-NNN`, then dispatch (add
    `--parent <exp-id>` for an Improve; omit it for a Draft):
    ```bash
-   $CS rehearsal experiment-send [--parent exp-id] <TOPIC> <instrument> exp-NNN "<approach-label>" "<direction>"
+   $CS rehearsal experiment-send [--parent exp-id] <TOPIC> <agent> exp-NNN "<approach-label>" "<direction>"
    ```
    The verb increments `exp_counter`, sets `phase=working, current_exp_id=exp-NNN`, and nudges the pane.
 
@@ -381,7 +381,7 @@ Step 2 and Step 4 only.
 If this iteration was triggered by a user message (not solely a notification):
 - **Halt intent** ("stop", "halt", "we're done", "call it") → write `$ART/halt.flag` with
   `halted_by=user`, `halted_at=<UTC ISO>`, `reason=user-halted via slash directive`; **jump to Step 2**.
-- **Direction-change intent** ("focus on Y for `<instrument>`", "stop exploring X") → record it in
+- **Direction-change intent** ("focus on Y for `<agent>`", "stop exploring X") → record it in
   `session-summary.md`'s Recent decisions section; factor it into the next Step 5 direction.
 - **Extension intent** ("extend by 2 hours") → add the seconds to `$ART/time-budget.txt` and refresh
   `$ART/session-start.txt` (`date -u +%Y-%m-%dT%H:%M:%SZ`).
@@ -402,7 +402,7 @@ Steps 1-8 until Step 2 (halt.flag / time budget) or Step 4 (completion-check sto
 
 ## Phase 5 — Synthesis (landscape doc)
 
-The loop has exited via Step 2 (`score` + `finalize` already ran). As Maestro, **Write** the landscape
+The loop has exited via Step 2 (`score` + `finalize` already ran). As Hub, **Write** the landscape
 doc `$ART/rehearsal-<date>-<slug>.md` (`<date>` = UTC `YYYY-MM-DD`, `<slug>` = `$TOPIC`) with the Write
 tool — atomic single-shot — drawing on `$ART/session-summary.md` (the rolling continuity record + Recent
 decisions) and the final `$ART/scoreboard.md`. Each section below is REQUIRED.
@@ -417,21 +417,21 @@ H1: `# Rehearsal: <slug-titled>` (the slug, title-cased). Then the header lines,
 
 <verbatim $ART/metric.md body>
 
-**Roster:** <comma-separated instrument names from $ART/parts.txt>
+**Roster:** <comma-separated agent names from $ART/workers.txt>
 **Time budget:** <none | N hours, from $ART/time-budget.txt>
 **Outcome:** stopped-by-user | converged-by-judgment | time-budget-exhausted
 ```
 
 Then the sections, IN ORDER:
 
-- `## Experiment log` — a table `| Exp | Instrument | Approach | Metric | Status | Runtime |`, one row per
-  experiment in chronological order (walk each part's `experiments/` dirs, lex-sorted).
-- `## Winner` — names `exp-NNN (instrument <instrument>)`, then `Approach:` (label), `Metric:` (value),
-  `Code path:` (`parts/<instrument>/experiments/<exp>/code/` — the absolute archive path is baked in at
+- `## Experiment log` — a table `| Exp | Agent | Approach | Metric | Status | Runtime |`, one row per
+  experiment in chronological order (walk each worker's `experiments/` dirs, lex-sorted).
+- `## Winner` — names `exp-NNN (agent <agent>)`, then `Approach:` (label), `Metric:` (value),
+  `Code path:` (`workers/<agent>/experiments/<exp>/code/` — the absolute archive path is baked in at
   Phase 6), `Runtime:`, and `Notes:` verbatim from that experiment's `result.json`.
-- `## Why we stopped` — one paragraph in Maestro's voice, citing the relevant `exp-NNN` rows from the
+- `## Why we stopped` — one paragraph in Hub's voice, citing the relevant `exp-NNN` rows from the
   scoreboard.
-- `## Branches preserved` — note that all dirs under each part's `parts/<instrument>/experiments/` are
+- `## Branches preserved` — note that all dirs under each worker's `workers/<agent>/experiments/` are
   kept in the archive (each holds `code/`, `result.json`, `stdout.log`, `stderr.log`, `prompt.md`).
 - `## Suggested next` —
   **Step 1** — `/ap:score <abs-art-dir>/score-handoff.md` (produce a deploy-schema design doc).
@@ -444,23 +444,23 @@ Then the sections, IN ORDER:
 1. **`TaskStop` every task ID** in `$ART/monitor-tasks.txt` (harness tool, one call per ID; idempotent —
    `finalize` already ran at the loop exit, so the monitors may already be down).
 2. **Forensics + reflection (best-effort).** `$CS rehearsal forensics <TOPIC>`. If it printed a path, use
-   the **Edit tool** to APPEND a `## Maestro reflection` section to that file — 3-5 short bullets
+   the **Edit tool** to APPEND a `## Hub reflection` section to that file — 3-5 short bullets
    interpreting the mechanical findings — BEFORE the teardown below moves the art dir.
-3. **Pane teardown.** `$CS coda --pairs <TOPIC> <instruments from $ART/parts.txt>` — one 9s graceful
-   **FINE** banner across all panes (not N × 9s).
+3. **Pane teardown.** `$CS coda --pairs <TOPIC> <agents from $ART/workers.txt>` — one 9s graceful
+   **DONE** banner across all panes (not N × 9s).
 4. **Archive.** `$CS rehearsal teardown <TOPIC>` — capture its stdout as `ARCHIVED_ART`; verify it is a
    real directory. **Rebind `$ART = ARCHIVED_ART`** for Phases 6b/6c (the teardown `mv` moved
-   `_rehearsal` into the archive, preserving every `parts/<instrument>/` subtree plus `session-summary.md`,
+   `_rehearsal` into the archive, preserving every `workers/<agent>/` subtree plus `session-summary.md`,
    `monitor-tasks.txt`, and the final scoreboard).
 5. **Bake absolute paths.** **Read** the landscape doc inside the archive, then **Edit** it to make the
-   `## Suggested next` paths absolute (the `score-handoff.md` location + the `parts/<instrument>/.../code/`
+   `## Suggested next` paths absolute (the `score-handoff.md` location + the `workers/<agent>/.../code/`
    winner path), now that `$ART` is the archive location.
 
 ## Phase 6b — Extract handoff data
 
 `$CS rehearsal handoff-extract "$ART"` — pass the **rebound archived art-dir** as the positional (this verb
 takes the art-dir path, NOT a topic; per-experiment `result.json` is resolved relative to it). It writes
-`$ART/handoff-data.kv` (mechanical fields: `mode`, `topic`, `landscape_doc`, `winner_instrument`,
+`$ART/handoff-data.kv` (mechanical fields: `mode`, `topic`, `landscape_doc`, `winner_agent`,
 `winner_exp`, `winner_approach`, `winner_metric`, `winner_checkpoint`, `winner_notes`, `winner_code_dir`,
 `runner_up_1..3`, `mandates_block_path`, `session_path`, `topic_txt_path`, `generated_ts`). A non-zero rc
 means required inputs were missing — note it and **SKIP Phase 6c** (warn, do not crash).
@@ -468,7 +468,7 @@ means required inputs were missing — note it and **SKIP Phase 6c** (warn, do n
 ## Phase 6c — Compose score-handoff.md
 
 Read `$ART/handoff-data.kv` (mechanical facts) AND the landscape doc (identified by `landscape_doc=`). As
-Maestro, **Write** `$ART/score-handoff.md` with the Write tool. Begin with a `# <topic>` H1, then a
+Hub, **Write** `$ART/score-handoff.md` with the Write tool. Begin with a `# <topic>` H1, then a
 `Source: <landscape doc path>` line and a `Generated: <UTC ISO>` line, then six sections IN ORDER:
 
 - `## Recommendation` — 1-3 paragraphs of English prose (no bullets). Names the winner. States what to
@@ -482,7 +482,7 @@ Maestro, **Write** `$ART/score-handoff.md` with the Write tool. Begin with a `# 
 - `## Open questions` — **CONDITIONAL.** Emit ONLY when research surfaced unresolved planning decisions
   that `score`'s drilldown will not naturally close (inspect the landscape doc + `winner_notes`). If
   research closed everything, **OMIT the WHOLE section** — no header, no `_(none)_` stub.
-- `## Evidence` — a table `| Rank | Instrument/Exp | Metric | Approach | Status |` (winner + runner-ups
+- `## Evidence` — a table `| Rank | Agent/Exp | Metric | Approach | Status |` (winner + runner-ups
   from the KV), then a one-line `Winner emergence:` (rounds run, key delta vs the top runner-up, stop
   reason if known from the landscape doc).
 - `## Appendix: artifacts` — **ALL ABSOLUTE PATHS.** Interpolate each KV value as `$ART/<value>` (where
@@ -506,13 +506,13 @@ Show the user:
 
 ## Intervention patterns
 
-If you observe a part hanging, producing a garbage `result.json`, or exceeding cost
+If you observe a worker hanging, producing a garbage `result.json`, or exceeding cost
 without a `cost_blown` status, you can send a clarifying prompt mid-loop via
-`$CS send --from maestro <instrument> <TOPIC> "<prompt>"`. Part panes remain
-attached; the Maestro regains control between every sub-step.
+`$CS send --from hub <agent> <TOPIC> "<prompt>"`. Worker panes remain
+attached; the Hub regains control between every sub-step.
 
 ## Budget overrides
 
 `AP_REHEARSAL_EXPERIMENT_TIMEOUT_OVERRIDE` (positive integer seconds) overrides the per-experiment
-wall-clock cap that `experiment-send` embeds in the part's prompt. Precedence: the `--timeout` flag >
+wall-clock cap that `experiment-send` embeds in the worker's prompt. Precedence: the `--timeout` flag >
 this env var > the `contracts.yaml` `experiment` default (1800s).

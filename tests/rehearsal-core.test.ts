@@ -3,7 +3,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  rehearsalArtDir, partsDir, partStateDir, experimentsDir, experimentDir,
+  rehearsalArtDir, workersDir, workerStateDir, experimentsDir, experimentDir,
 } from "../src/core/rehearsal.js";
 import { extractMetric, METRIC_VOCAB } from "../src/core/rehearsalMetric.js";
 import { formatMetricBlock, parseMetricMd } from "../src/core/rehearsalMetric.js";
@@ -15,13 +15,13 @@ import { buildStatusBrief } from "../src/core/rehearsalBrief.js";
 import type { CompletionSignals } from "../src/core/rehearsalComplete.js";
 
 describe("rehearsal art-dir paths", () => {
-  it("layers _rehearsal/parts/<instrument>/experiments/<exp-id>", () => {
+  it("layers _rehearsal/workers/<agent>/experiments/<exp-id>", () => {
     const art = rehearsalArtDir("add-oauth");
     expect(art.endsWith("/_rehearsal")).toBe(true);
-    expect(partsDir(art)).toBe(`${art}/parts`);
-    expect(partStateDir(art, "oboe")).toBe(`${art}/parts/oboe`);
-    expect(experimentsDir(art, "oboe")).toBe(`${art}/parts/oboe/experiments`);
-    expect(experimentDir(art, "oboe", "exp-001")).toBe(`${art}/parts/oboe/experiments/exp-001`);
+    expect(workersDir(art)).toBe(`${art}/workers`);
+    expect(workerStateDir(art, "golf")).toBe(`${art}/workers/golf`);
+    expect(experimentsDir(art, "golf")).toBe(`${art}/workers/golf/experiments`);
+    expect(experimentDir(art, "golf", "exp-001")).toBe(`${art}/workers/golf/experiments/exp-001`);
   });
 });
 
@@ -204,57 +204,57 @@ describe("renderScoreboardRow", () => {
 
 describe("buildScoreboard", () => {
   const rows: ScoreRow[] = [
-    { expId: "exp-001", instrument: "oboe",  metric: "0.90", status: "ok",      runtime: "10", approach: "a", metricName: "accuracy" },
-    { expId: "exp-002", instrument: "viola", metric: "0.95", status: "ok",      runtime: "20", approach: "b", metricName: "accuracy" },
-    { expId: "exp-003", instrument: "oboe",  metric: "0.95", status: "ok",      runtime: "5",  approach: "c", metricName: "accuracy" },
-    { expId: "exp-004", instrument: "viola", metric: "",     status: "fail",    runtime: "2",  approach: "d", metricName: "accuracy" },
-    { expId: "exp-005", instrument: "oboe",  metric: "",     status: "partial", runtime: "1",  approach: "e", metricName: "accuracy" },
+    { expId: "exp-001", agent: "golf",  metric: "0.90", status: "ok",      runtime: "10", approach: "a", metricName: "accuracy" },
+    { expId: "exp-002", agent: "alpha", metric: "0.95", status: "ok",      runtime: "20", approach: "b", metricName: "accuracy" },
+    { expId: "exp-003", agent: "golf",  metric: "0.95", status: "ok",      runtime: "5",  approach: "c", metricName: "accuracy" },
+    { expId: "exp-004", agent: "alpha", metric: "",     status: "fail",    runtime: "2",  approach: "d", metricName: "accuracy" },
+    { expId: "exp-005", agent: "golf",  metric: "",     status: "partial", runtime: "1",  approach: "e", metricName: "accuracy" },
   ];
   it("orders ok rows metric-desc, then runtime-asc, then exp-id; ranks continue into fails", () => {
     const sb = buildScoreboard(rows);
     const lines = sb.split("\n").filter((l) => /^\| /.test(l) && !/Rank|---/.test(l));
     // exp-003 (0.95,5s) and exp-002 (0.95,20s) tie on metric -> runtime asc puts exp-003 first.
-    expect(lines[0]).toContain("| 1 | exp-003 | oboe |");
-    expect(lines[1]).toContain("| 2 | exp-002 | viola |");
-    expect(lines[2]).toContain("| 3 | exp-001 | oboe |");
+    expect(lines[0]).toContain("| 1 | exp-003 | golf |");
+    expect(lines[1]).toContain("| 2 | exp-002 | alpha |");
+    expect(lines[2]).toContain("| 3 | exp-001 | golf |");
     // fails sorted by exp-id; partial gets ~ prefix; rank counter continues.
-    expect(lines[3]).toContain("| 4 | exp-004 | viola |");   // plain fail
-    expect(lines[4]).toContain("| ~5 | exp-005 | oboe |");   // partial
+    expect(lines[3]).toContain("| 4 | exp-004 | alpha |");   // plain fail
+    expect(lines[4]).toContain("| ~5 | exp-005 | golf |");   // partial
     expect(lines[3]).toContain("n/a | fail");
   });
   it("emits the schema header and 8-column table", () => {
     const sb = buildScoreboard(rows);
     expect(sb).toContain("<!-- scoreboard schema_version=2 -->");
-    expect(sb).toContain("| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |");
+    expect(sb).toContain("| Rank | Experiment | Agent | Metric | Status | Runtime | Approach | metric_name |");
   });
   it("orders ok rows metric-ASC for a minimize objective (lowest = best = rank 1)", () => {
     const minRows: ScoreRow[] = [
-      { expId: "exp-001", instrument: "oboe",  metric: "0.50", status: "ok", runtime: "10", approach: "a", metricName: "loss" },
-      { expId: "exp-002", instrument: "viola", metric: "0.20", status: "ok", runtime: "20", approach: "b", metricName: "loss" },
-      { expId: "exp-003", instrument: "oboe",  metric: "0.35", status: "ok", runtime: "5",  approach: "c", metricName: "loss" },
+      { expId: "exp-001", agent: "golf",  metric: "0.50", status: "ok", runtime: "10", approach: "a", metricName: "loss" },
+      { expId: "exp-002", agent: "alpha", metric: "0.20", status: "ok", runtime: "20", approach: "b", metricName: "loss" },
+      { expId: "exp-003", agent: "golf",  metric: "0.35", status: "ok", runtime: "5",  approach: "c", metricName: "loss" },
     ];
     const lines = buildScoreboard(minRows, "minimize").split("\n").filter((l) => /^\| /.test(l) && !/Rank|---/.test(l));
-    expect(lines[0]).toContain("| 1 | exp-002 | viola |"); // 0.20 lowest = best
-    expect(lines[1]).toContain("| 2 | exp-003 | oboe |");  // 0.35
-    expect(lines[2]).toContain("| 3 | exp-001 | oboe |");  // 0.50 highest = worst
+    expect(lines[0]).toContain("| 1 | exp-002 | alpha |"); // 0.20 lowest = best
+    expect(lines[1]).toContain("| 2 | exp-003 | golf |");  // 0.35
+    expect(lines[2]).toContain("| 3 | exp-001 | golf |");  // 0.50 highest = worst
   });
   it("treats omitted direction the same as explicit 'maximize' (descending, backward-compatible)", () => {
     expect(buildScoreboard(rows)).toBe(buildScoreboard(rows, "maximize"));
   });
   it("routes an ok+infeasible row to the xN group below the ranked rows", () => {
     const rows2: ScoreRow[] = [
-      { expId: "exp-001", instrument: "oboe",  metric: "0.90", status: "ok", runtime: "10", approach: "a", metricName: "accuracy" },
-      { expId: "exp-002", instrument: "viola", metric: "0.99", status: "ok", runtime: "20", approach: "b", metricName: "accuracy", infeasibleReason: "mismatch" },
+      { expId: "exp-001", agent: "golf",  metric: "0.90", status: "ok", runtime: "10", approach: "a", metricName: "accuracy" },
+      { expId: "exp-002", agent: "alpha", metric: "0.99", status: "ok", runtime: "20", approach: "b", metricName: "accuracy", infeasibleReason: "mismatch" },
     ];
     const lines = buildScoreboard(rows2).split("\n").filter((l) => /^\| /.test(l) && !/Rank|---/.test(l));
-    expect(lines[0]).toContain("| 1 | exp-001 | oboe |");
-    expect(lines[1]).toContain("| x2 | exp-002 | viola |");
+    expect(lines[0]).toContain("| 1 | exp-001 | golf |");
+    expect(lines[1]).toContain("| x2 | exp-002 | alpha |");
     expect(lines[1]).toContain("infeasible:mismatch");
   });
   it("checkCompletion ignores an infeasible row (no checkCompletion change)", () => {
     const sb = buildScoreboard([
-      row("exp-001", "oboe", "0.90"),
-      { expId: "exp-002", instrument: "oboe", metric: "0.99", status: "ok", runtime: "1", approach: "a", metricName: "accuracy", infeasibleReason: "under-run" },
+      row("exp-001", "golf", "0.90"),
+      { expId: "exp-002", agent: "golf", metric: "0.99", status: "ok", runtime: "1", approach: "a", metricName: "accuracy", infeasibleReason: "under-run" },
     ]);
     const c = checkCompletion(sb, metricMd);
     expect(c.targetMet).toBe(false); // infeasible 0.99 excluded -> target >= 0.95 not met
@@ -306,52 +306,52 @@ const metricMd = formatMetricBlock({
   K_corroboration: "2", plateau_window: "3", plateau_threshold: "0.01",
 });
 
-function row(expId: string, instrument: string, metric: string, status = "ok", runtime = "1"): ScoreRow {
-  return { expId, instrument, metric, status, runtime, approach: "a", metricName: "accuracy" };
+function row(expId: string, agent: string, metric: string, status = "ok", runtime = "1"): ScoreRow {
+  return { expId, agent, metric, status, runtime, approach: "a", metricName: "accuracy" };
 }
 
 describe("checkCompletion", () => {
   it("reports floor + target met", () => {
-    const sb = buildScoreboard([row("exp-001", "oboe", "0.92"), row("exp-002", "oboe", "0.96")]);
+    const sb = buildScoreboard([row("exp-001", "golf", "0.92"), row("exp-002", "golf", "0.96")]);
     const c = checkCompletion(sb, metricMd);
     expect(c.floorMet).toBe(true);
     expect(c.targetMet).toBe(true);
     expect(c.kRequired).toBe(2);
   });
   it("does not meet floor when all metrics are below min_acceptable", () => {
-    const sb = buildScoreboard([row("exp-001", "oboe", "0.80"), row("exp-002", "oboe", "0.85")]);
+    const sb = buildScoreboard([row("exp-001", "golf", "0.80"), row("exp-002", "golf", "0.85")]);
     expect(checkCompletion(sb, metricMd).floorMet).toBe(false);
   });
-  it("counts a per-part strictly-improving at-target streak", () => {
-    // oboe: 0.95, 0.96, 0.97 (all >= target, strictly improving) -> chain 3, capped at K=2.
+  it("counts a per-worker strictly-improving at-target streak", () => {
+    // golf: 0.95, 0.96, 0.97 (all >= target, strictly improving) -> chain 3, capped at K=2.
     const sb = buildScoreboard([
-      row("exp-001", "oboe", "0.95"), row("exp-002", "oboe", "0.96"), row("exp-003", "oboe", "0.97"),
+      row("exp-001", "golf", "0.95"), row("exp-002", "golf", "0.96"), row("exp-003", "golf", "0.97"),
     ]);
     expect(checkCompletion(sb, metricMd).kSoFar).toBe(2);
   });
   it("a non-improving (plateau) result breaks the streak", () => {
     const sb = buildScoreboard([
-      row("exp-001", "oboe", "0.95"), row("exp-002", "oboe", "0.95"), row("exp-003", "oboe", "0.96"),
+      row("exp-001", "golf", "0.95"), row("exp-002", "golf", "0.95"), row("exp-003", "golf", "0.96"),
     ]);
     // chains: [0.95] (Δ=0 breaks) then [0.96] -> longest = 1.
     expect(checkCompletion(sb, metricMd).kSoFar).toBe(1);
   });
   it("a mid-chain fail breaks the streak", () => {
     const sb = buildScoreboard([
-      row("exp-001", "oboe", "0.95"), row("exp-002", "oboe", "", "fail"), row("exp-003", "oboe", "0.96"),
+      row("exp-001", "golf", "0.95"), row("exp-002", "golf", "", "fail"), row("exp-003", "golf", "0.96"),
     ]);
     expect(checkCompletion(sb, metricMd).kSoFar).toBe(1);
   });
   it("flags plateau when the window is tight across >= min_families families", () => {
     const sb = buildScoreboard([
-      frow("exp-001", "oboe", "0.951", "single-pass"),
-      frow("exp-002", "oboe", "0.952", "single-pass"),
-      frow("exp-003", "viola", "0.953", "typed-routing"),
+      frow("exp-001", "golf", "0.951", "single-pass"),
+      frow("exp-002", "golf", "0.952", "single-pass"),
+      frow("exp-003", "alpha", "0.953", "typed-routing"),
     ]);
     expect(checkCompletion(sb, metricMd).plateau).toBe(true);
   });
   it("no plateau when fewer than plateau_window ok rows", () => {
-    const sb = buildScoreboard([row("exp-001", "oboe", "0.951"), row("exp-002", "oboe", "0.952")]);
+    const sb = buildScoreboard([row("exp-001", "golf", "0.951"), row("exp-002", "golf", "0.952")]);
     expect(checkCompletion(sb, metricMd).plateau).toBe(false);
   });
 
@@ -361,28 +361,28 @@ describe("checkCompletion", () => {
     min_acceptable: "<= 0.20", target: "<= 0.10",
     K_corroboration: "2", plateau_window: "3", plateau_threshold: "0.01",
   });
-  function lrow(expId: string, instrument: string, metric: string, status = "ok"): ScoreRow {
-    return { expId, instrument, metric, status, runtime: "1", approach: "a", metricName: "loss" };
+  function lrow(expId: string, agent: string, metric: string, status = "ok"): ScoreRow {
+    return { expId, agent, metric, status, runtime: "1", approach: "a", metricName: "loss" };
   }
   it("counts a strictly-DECREASING at-target streak for a minimize objective", () => {
-    // oboe loss: 0.10, 0.08, 0.06 (all <= target 0.10, strictly improving downward) -> chain 3, capped at K=2.
+    // golf loss: 0.10, 0.08, 0.06 (all <= target 0.10, strictly improving downward) -> chain 3, capped at K=2.
     const sb = buildScoreboard([
-      lrow("exp-001", "oboe", "0.10"), lrow("exp-002", "oboe", "0.08"), lrow("exp-003", "oboe", "0.06"),
+      lrow("exp-001", "golf", "0.10"), lrow("exp-002", "golf", "0.08"), lrow("exp-003", "golf", "0.06"),
     ], "minimize");
     expect(checkCompletion(sb, minMetricMd).kSoFar).toBe(2);
   });
   it("an increasing (worse) result breaks the minimize streak", () => {
     // 0.06 then 0.08: 0.08 is worse (higher) -> not improving, breaks; each is its own chain of 1.
     const sb = buildScoreboard([
-      lrow("exp-001", "oboe", "0.06"), lrow("exp-002", "oboe", "0.08"), lrow("exp-003", "oboe", "0.05"),
+      lrow("exp-001", "golf", "0.06"), lrow("exp-002", "golf", "0.08"), lrow("exp-003", "golf", "0.05"),
     ], "minimize");
     // chains: [0.06] (0.08 worse breaks) then [0.05] -> longest = 1.
     expect(checkCompletion(sb, minMetricMd).kSoFar).toBe(1);
   });
 
   // B1: approach-aware plateau. Helper that sets the approach family on a ScoreRow.
-  function frow(expId: string, instrument: string, metric: string, approach: string): ScoreRow {
-    return { expId, instrument, metric, status: "ok", runtime: "1", approach, metricName: "accuracy" };
+  function frow(expId: string, agent: string, metric: string, approach: string): ScoreRow {
+    return { expId, agent, metric, status: "ok", runtime: "1", approach, metricName: "accuracy" };
   }
   const covMetric = formatMetricBlock({
     primary_metric: "accuracy", direction: "maximize",
@@ -392,9 +392,9 @@ describe("checkCompletion", () => {
 
   it("does NOT plateau when a single family fills a flat window (the B1 bug fix)", () => {
     const sb = buildScoreboard([
-      frow("exp-001", "oboe", "0.951", "single-pass"),
-      frow("exp-002", "oboe", "0.952", "single-pass"),
-      frow("exp-003", "oboe", "0.953", "single-pass"),
+      frow("exp-001", "golf", "0.951", "single-pass"),
+      frow("exp-002", "golf", "0.952", "single-pass"),
+      frow("exp-003", "golf", "0.953", "single-pass"),
     ]);
     const c = checkCompletion(sb, covMetric);
     expect(c.plateau).toBe(false);
@@ -403,10 +403,10 @@ describe("checkCompletion", () => {
   });
   it("plateaus when two families are both stalled and the global window is flat", () => {
     const sb = buildScoreboard([
-      frow("exp-001", "oboe", "0.951", "single-pass"),
-      frow("exp-002", "oboe", "0.952", "single-pass"),
-      frow("exp-003", "viola", "0.953", "typed-routing"),
-      frow("exp-004", "viola", "0.952", "typed-routing"),
+      frow("exp-001", "golf", "0.951", "single-pass"),
+      frow("exp-002", "golf", "0.952", "single-pass"),
+      frow("exp-003", "alpha", "0.953", "typed-routing"),
+      frow("exp-004", "alpha", "0.952", "typed-routing"),
     ]);
     const c = checkCompletion(sb, covMetric);
     expect(c.familiesActive).toBe(2);
@@ -415,10 +415,10 @@ describe("checkCompletion", () => {
   });
   it("does NOT plateau when one family is still improving", () => {
     const sb = buildScoreboard([
-      frow("exp-001", "oboe", "0.952", "single-pass"),
-      frow("exp-002", "oboe", "0.952", "single-pass"),
-      frow("exp-003", "viola", "0.951", "typed-routing"),
-      frow("exp-004", "viola", "0.970", "typed-routing"),
+      frow("exp-001", "golf", "0.952", "single-pass"),
+      frow("exp-002", "golf", "0.952", "single-pass"),
+      frow("exp-003", "alpha", "0.951", "typed-routing"),
+      frow("exp-004", "alpha", "0.970", "typed-routing"),
     ]);
     const c = checkCompletion(sb, covMetric);
     expect(c.familiesImproving).toBe(1);
@@ -426,9 +426,9 @@ describe("checkCompletion", () => {
   });
   it("does NOT plateau when the global window is not flat (additive guard)", () => {
     const sb = buildScoreboard([
-      frow("exp-001", "oboe", "0.951", "single-pass"),
-      frow("exp-002", "oboe", "0.952", "single-pass"),
-      frow("exp-003", "viola", "0.99", "typed-routing"),
+      frow("exp-001", "golf", "0.951", "single-pass"),
+      frow("exp-002", "golf", "0.952", "single-pass"),
+      frow("exp-003", "alpha", "0.99", "typed-routing"),
     ]);
     expect(checkCompletion(sb, covMetric).plateau).toBe(false);
   });
@@ -459,38 +459,38 @@ describe("checkTimeBudget", () => {
 import { buildConsensus } from "../src/core/rehearsalConsensus.js";
 import {
   renderExperimentPrompt, buildSotaBlock, assembleHardwareBlock, hardwareDiffAlert,
-  formatPeersBlock, buildDispatchState, EXP_ID_RE, INSTRUMENT_RE, type PeerRow,
+  formatPeersBlock, buildDispatchState, EXP_ID_RE, AGENT_RE, type PeerRow,
 } from "../src/core/rehearsalExperiment.js";
 
 describe("buildConsensus", () => {
   const nowIso = "2026-05-30T12:00:00Z";
   it("agrees on identical fields and ε-close metric_value; contests divergence", () => {
     const md = buildConsensus({
-      oboe:  { branch_id: "b", approach_label: "cnn", metric_name: "accuracy", metric_value: 0.980, status: "ok", runtime_s: 10, notes: "n" },
-      viola: { branch_id: "b", approach_label: "mlp", metric_name: "accuracy", metric_value: 0.985, status: "ok", runtime_s: 12, notes: "n" },
+      golf:  { branch_id: "b", approach_label: "cnn", metric_name: "accuracy", metric_value: 0.980, status: "ok", runtime_s: 10, notes: "n" },
+      alpha: { branch_id: "b", approach_label: "mlp", metric_name: "accuracy", metric_value: 0.985, status: "ok", runtime_s: 12, notes: "n" },
     }, { topic: "mnist", nowIso, epsilon: 0.01 });
     expect(md).toContain("## Agreed");
-    expect(md).toContain("| metric_name | accuracy | oboe, viola |");
-    expect(md).toContain("| metric_value | 0.98 | oboe, viola |"); // 0.980 vs 0.985 within ε
+    expect(md).toContain("| metric_name | accuracy | alpha, golf |");
+    expect(md).toContain("| metric_value | 0.985 | alpha, golf |"); // 0.980 vs 0.985 within ε; alpha sorts first
     expect(md).toContain("## Contested");
-    expect(md).toMatch(/\| approach_label \| cnn \| mlp \|/);       // diverge -> contested
+    expect(md).toMatch(/\| approach_label \| mlp \| cnn \|/);       // diverge -> contested (alpha's col sorts first)
   });
-  it("buckets a field missing from every part as All-missing", () => {
+  it("buckets a field missing from every worker as All-missing", () => {
     const md = buildConsensus({
-      oboe:  { metric_name: "accuracy", metric_value: 0.9, status: "ok" },
-      viola: { metric_name: "accuracy", metric_value: 0.9, status: "ok" },
+      golf:  { metric_name: "accuracy", metric_value: 0.9, status: "ok" },
+      alpha: { metric_name: "accuracy", metric_value: 0.9, status: "ok" },
     }, { topic: "t", nowIso });
     expect(md).toContain("## All-missing");
     expect(md).toContain("- notes");
     expect(md).toContain("- branch_id");
   });
-  it("contests a field present in some parts but missing in others", () => {
+  it("contests a field present in some workers but missing in others", () => {
     const md = buildConsensus({
-      oboe:  { notes: "had a note", metric_name: "accuracy", metric_value: 0.9, status: "ok" },
-      viola: { metric_name: "accuracy", metric_value: 0.9, status: "ok" },
+      golf:  { notes: "had a note", metric_name: "accuracy", metric_value: 0.9, status: "ok" },
+      alpha: { metric_name: "accuracy", metric_value: 0.9, status: "ok" },
     }, { topic: "t", nowIso });
-    // notes present in oboe, missing in viola -> contested (— for the missing cell), not All-missing.
-    expect(md).toMatch(/\| notes \| had a note \| — \|/);
+    // notes present in golf, missing in alpha -> contested (— for the missing cell), not All-missing.
+    expect(md).toMatch(/\| notes \| — \| had a note \|/);
   });
   it("treats a degenerate numeric token as 0 (awk parity) -> Agreed, not Contested", () => {
     const out = buildConsensus(
@@ -555,9 +555,9 @@ describe("readHaltFlag", () => {
     expect(readHaltFlag("   ").format).toBe("missing");
   });
   it("structured when the first non-blank line is halted_by=", () => {
-    const h = readHaltFlag("halted_by=maestro\nhalted_at=t\nreason=target met\ntarget_met=yes");
+    const h = readHaltFlag("halted_by=hub\nhalted_at=t\nreason=target met\ntarget_met=yes");
     expect(h.format).toBe("structured");
-    expect(h.fields?.halted_by).toBe("maestro");
+    expect(h.fields?.halted_by).toBe("hub");
     expect(h.fields?.target_met).toBe("yes");
   });
   it("prose otherwise, collapsing newlines into the reason", () => {
@@ -568,15 +568,15 @@ describe("readHaltFlag", () => {
 });
 
 describe("rehearsalExperiment", () => {
-  it("EXP_ID_RE / INSTRUMENT_RE match the bash regexes", () => {
+  it("EXP_ID_RE / AGENT_RE match the bash regexes", () => {
     expect(EXP_ID_RE.test("exp-001")).toBe(true);
     expect(EXP_ID_RE.test("exp-7")).toBe(true);
     expect(EXP_ID_RE.test("exp-")).toBe(false);
     expect(EXP_ID_RE.test("exp001")).toBe(false);
-    expect(INSTRUMENT_RE.test("violin")).toBe(true);
-    expect(INSTRUMENT_RE.test("french-horn")).toBe(true);
-    expect(INSTRUMENT_RE.test("Violin")).toBe(false);
-    expect(INSTRUMENT_RE.test("1st")).toBe(false);
+    expect(AGENT_RE.test("bravo")).toBe(true);
+    expect(AGENT_RE.test("french-mike")).toBe(true);
+    expect(AGENT_RE.test("Bravo")).toBe(false);
+    expect(AGENT_RE.test("1st")).toBe(false);
   });
 
   it("renderExperimentPrompt substitutes all 14 tokens literally", () => {
@@ -633,12 +633,12 @@ describe("rehearsalExperiment", () => {
 
   it("formatPeersBlock empty for zero peers, else a ## Peers table", () => {
     expect(formatPeersBlock([])).toBe("");
-    const peers: PeerRow[] = [{ instrument: "viola", phase: "working", currentExp: "exp-003",
+    const peers: PeerRow[] = [{ agent: "alpha", phase: "working", currentExp: "exp-003",
       approach: "deep-net", metric: "0.91", status: "ok", notes: "n" }];
     const b = formatPeersBlock(peers);
     expect(b).toContain("## Peers");
-    expect(b).toContain("| Part | Phase | Current/last | Approach | Best metric | Notes |");
-    expect(b).toContain("| viola | working | exp-003 | deep-net | 0.91 (ok) | n |");
+    expect(b).toContain("| Worker | Phase | Current/last | Approach | Best metric | Notes |");
+    expect(b).toContain("| alpha | working | exp-003 | deep-net | 0.91 (ok) | n |");
     expect(b).not.toMatch(/trooper/i);
   });
 
@@ -700,36 +700,36 @@ describe("rehearsal experiment template", () => {
 });
 
 describe("rehearsalScore", () => {
-  it("buildResultsTsv header is the frozen 7-col shape with 'instrument' col1", () => {
-    expect(buildResultsTsv([])).toBe("exp_id\tinstrument\tapproach\tmetric\tstatus\truntime_s\tmetric_name\n");
+  it("buildResultsTsv header is the frozen 7-col shape with 'agent' col1", () => {
+    expect(buildResultsTsv([])).toBe("exp_id\tagent\tapproach\tmetric\tstatus\truntime_s\tmetric_name\n");
   });
 
   it("buildResultsTsv appends rows in given order (approach col3, metric col4)", () => {
     const tsv = buildResultsTsv([
-      { expId: "exp-001", instrument: "viola", approach: "base", metric: "0.9", status: "ok", runtime: "12", metricName: "accuracy" },
+      { expId: "exp-001", agent: "alpha", approach: "base", metric: "0.9", status: "ok", runtime: "12", metricName: "accuracy" },
     ]);
-    expect(tsv).toBe("exp_id\tinstrument\tapproach\tmetric\tstatus\truntime_s\tmetric_name\n" +
-      "exp-001\tviola\tbase\t0.9\tok\t12\taccuracy\n");
+    expect(tsv).toBe("exp_id\tagent\tapproach\tmetric\tstatus\truntime_s\tmetric_name\n" +
+      "exp-001\talpha\tbase\t0.9\tok\t12\taccuracy\n");
   });
 
   it("computeScore validates, sorts, race-guards phase clear", () => {
     const files: Record<string, string> = {
       "/a/metric.md": "**Primary metric:** accuracy\n",
-      "/a/parts/viola/state.txt": "phase=working\ncurrent_exp_id=exp-001\n",
-      "/a/parts/cello/state.txt": "phase=working\ncurrent_exp_id=exp-001\n",
-      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+      "/a/workers/alpha/state.txt": "phase=working\ncurrent_exp_id=exp-001\n",
+      "/a/workers/charlie/state.txt": "phase=working\ncurrent_exp_id=exp-001\n",
+      "/a/workers/alpha/experiments/exp-001/result.json": JSON.stringify({
         branch_id:"b",approach_label:"base",metric_name:"accuracy",metric_value:0.95,status:"ok",
         runtime_s:12,log_paths:[],checkpoint_path:null,notes:"" }),
-      "/a/parts/cello/experiments/exp-001/result.json": JSON.stringify({
+      "/a/workers/charlie/experiments/exp-001/result.json": JSON.stringify({
         branch_id:"b",approach_label:"deep",metric_name:"accuracy",metric_value:0.90,status:"ok",
         runtime_s:20,log_paths:[],checkpoint_path:null,notes:"" }),
     };
     const c = computeScore("/a", fakeFs(files), () => "2026-05-30T00:00:00Z");
-    expect(c.scoreboardMd).toContain("| 1 | exp-001 | viola |");
-    expect(c.scoreboardMd).toContain("| 2 | exp-001 | cello |");
-    expect(c.resultsTsv.split("\n")[1]).toContain("cello");   // walk order ascending: cello before viola
+    expect(c.scoreboardMd).toContain("| 1 | exp-001 | alpha |");
+    expect(c.scoreboardMd).toContain("| 2 | exp-001 | charlie |");
+    expect(c.resultsTsv.split("\n")[1]).toContain("alpha");   // walk order ascending: alpha before charlie
     expect(c.phaseClears.map((p) => p.statePath).sort()).toEqual([
-      "/a/parts/cello/state.txt", "/a/parts/viola/state.txt"]);
+      "/a/workers/alpha/state.txt", "/a/workers/charlie/state.txt"]);
     expect(c.phaseClears[0].merged).toMatch(/phase=idle/);
     expect(c.phaseClears[0].merged).toMatch(/current_exp_id=\n|current_exp_id=$/m);
   });
@@ -737,25 +737,25 @@ describe("rehearsalScore", () => {
   it("computeScore rejects a bad metric_name -> sidecar, omits from scoreboard+tsv, no throw", () => {
     const files: Record<string, string> = {
       "/a/metric.md": "**Primary metric:** accuracy\n",
-      "/a/parts/viola/state.txt": "current_exp_id=exp-001\n",
-      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+      "/a/workers/alpha/state.txt": "current_exp_id=exp-001\n",
+      "/a/workers/alpha/experiments/exp-001/result.json": JSON.stringify({
         branch_id:"b",approach_label:"x",metric_name:"loss",metric_value:0.1,status:"ok",
         runtime_s:1,log_paths:[],checkpoint_path:null,notes:"" }),
     };
     const c = computeScore("/a", fakeFs(files), () => "T");
     expect(c.sidecars).toHaveLength(1);
-    expect(c.sidecars[0].path).toBe("/a/parts/viola/experiments/exp-001/result-validation.txt");
+    expect(c.sidecars[0].path).toBe("/a/workers/alpha/experiments/exp-001/result-validation.txt");
     expect(c.sidecars[0].body).toMatch(/^FAILED at T: metric_name 'loss' != /);
     expect(c.scoreboardMd).not.toContain("exp-001");
     expect(c.resultsTsv.split("\n").filter(Boolean)).toHaveLength(1);   // header only
     expect(c.warnings).toHaveLength(1);
   });
 
-  it("computeScore does NOT clear phase for a part whose current_exp_id has no result.json (race guard)", () => {
+  it("computeScore does NOT clear phase for a worker whose current_exp_id has no result.json (race guard)", () => {
     const files: Record<string, string> = {
       "/a/metric.md": "**Primary metric:** accuracy\n",
-      "/a/parts/viola/state.txt": "phase=working\ncurrent_exp_id=exp-002\n",
-      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+      "/a/workers/alpha/state.txt": "phase=working\ncurrent_exp_id=exp-002\n",
+      "/a/workers/alpha/experiments/exp-001/result.json": JSON.stringify({
         branch_id:"b",approach_label:"x",metric_name:"accuracy",metric_value:0.9,status:"ok",
         runtime_s:1,log_paths:[],checkpoint_path:null,notes:"" }),
     };
@@ -766,21 +766,21 @@ describe("rehearsalScore", () => {
   it("computeScore removes a stale sidecar when a result becomes valid", () => {
     const files: Record<string, string> = {
       "/a/metric.md": "**Primary metric:** accuracy\n",
-      "/a/parts/viola/state.txt": "current_exp_id=exp-001\n",
-      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+      "/a/workers/alpha/state.txt": "current_exp_id=exp-001\n",
+      "/a/workers/alpha/experiments/exp-001/result.json": JSON.stringify({
         branch_id:"b",approach_label:"x",metric_name:"accuracy",metric_value:0.9,status:"ok",
         runtime_s:1,log_paths:[],checkpoint_path:null,notes:"" }),
-      "/a/parts/viola/experiments/exp-001/result-validation.txt": "FAILED at old: x\n",
+      "/a/workers/alpha/experiments/exp-001/result-validation.txt": "FAILED at old: x\n",
     };
     const c = computeScore("/a", fakeFs(files), () => "T");
-    expect(c.staleSidecars).toEqual(["/a/parts/viola/experiments/exp-001/result-validation.txt"]);
+    expect(c.staleSidecars).toEqual(["/a/workers/alpha/experiments/exp-001/result-validation.txt"]);
   });
 
   it("computeScore routes a non-ok (fail) result to the scoreboard FAIL group + tsv", () => {
     const files: Record<string, string> = {
       "/a/metric.md": "**Primary metric:** accuracy\n",
-      "/a/parts/viola/state.txt": "current_exp_id=exp-001\n",
-      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+      "/a/workers/alpha/state.txt": "current_exp_id=exp-001\n",
+      "/a/workers/alpha/experiments/exp-001/result.json": JSON.stringify({
         branch_id:"b",approach_label:"flop",metric_name:"accuracy",metric_value:null,status:"fail",
         runtime_s:5,log_paths:[],checkpoint_path:null,notes:"broke" }),
     };
@@ -791,7 +791,7 @@ describe("rehearsalScore", () => {
     expect(c.scoreboardMd).toContain("n/a");
     // tsv row: metric cell empty (str(null)=""), status=fail
     const row = c.resultsTsv.split("\n").find((l) => l.startsWith("exp-001"));
-    expect(row).toBe("exp-001\tviola\tflop\t\tfail\t5\taccuracy");
+    expect(row).toBe("exp-001\talpha\tflop\t\tfail\t5\taccuracy");
     // a fail's current_exp_id has a result.json on disk -> phase still cleared (race-guard is result-presence, not status)
     expect(c.phaseClears).toHaveLength(1);
   });
@@ -799,33 +799,33 @@ describe("rehearsalScore", () => {
   it("computeScore threads metric.md Direction: minimize -> lowest metric ranks first", () => {
     const files: Record<string, string> = {
       "/a/metric.md": "**Primary metric:** loss\n**Direction:** minimize\n",
-      "/a/parts/viola/state.txt": "current_exp_id=exp-001\n",
-      "/a/parts/cello/state.txt": "current_exp_id=exp-001\n",
-      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+      "/a/workers/alpha/state.txt": "current_exp_id=exp-001\n",
+      "/a/workers/charlie/state.txt": "current_exp_id=exp-001\n",
+      "/a/workers/alpha/experiments/exp-001/result.json": JSON.stringify({
         branch_id:"b",approach_label:"base",metric_name:"loss",metric_value:0.40,status:"ok",
         runtime_s:12,log_paths:[],checkpoint_path:null,notes:"" }),
-      "/a/parts/cello/experiments/exp-001/result.json": JSON.stringify({
+      "/a/workers/charlie/experiments/exp-001/result.json": JSON.stringify({
         branch_id:"b",approach_label:"deep",metric_name:"loss",metric_value:0.10,status:"ok",
         runtime_s:20,log_paths:[],checkpoint_path:null,notes:"" }),
     };
     const c = computeScore("/a", fakeFs(files), () => "T");
     const okLines = c.scoreboardMd.split("\n").filter((l) => /^\|\s+\d+\s+\|\s+exp-/.test(l));
-    expect(okLines[0]).toContain("| 1 | exp-001 | cello |"); // 0.10 lowest = best
-    expect(okLines[1]).toContain("| 2 | exp-001 | viola |"); // 0.40
+    expect(okLines[0]).toContain("| 1 | exp-001 | charlie |"); // 0.10 lowest = best
+    expect(okLines[1]).toContain("| 2 | exp-001 | alpha |"); // 0.40
   });
 
   it("computeScore snapshots verify-manifest.json once for a verify-bearing result", () => {
     const files: Record<string, string> = {
       "/a/metric.md": "**Primary metric:** accuracy\n",
-      "/a/parts/viola/state.txt": "current_exp_id=exp-001\n",
-      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+      "/a/workers/alpha/state.txt": "current_exp_id=exp-001\n",
+      "/a/workers/alpha/experiments/exp-001/result.json": JSON.stringify({
         branch_id:"b",approach_label:"x",metric_name:"accuracy",metric_value:0.9,status:"ok",
         runtime_s:1,log_paths:[],checkpoint_path:null,notes:"",
         verify:{ kind:"rescore", command:"python s.py", inputs:["./preds.json"], metric_from:"marker" } }),
-      "/a/parts/viola/experiments/exp-001/preds.json": "PREDS",
+      "/a/workers/alpha/experiments/exp-001/preds.json": "PREDS",
     };
     const c = computeScore("/a", fakeFs(files), () => "T");
-    const man = c.manifests.find((m) => m.path === "/a/parts/viola/experiments/exp-001/verify-manifest.json");
+    const man = c.manifests.find((m) => m.path === "/a/workers/alpha/experiments/exp-001/verify-manifest.json");
     expect(man).toBeDefined();
     expect(JSON.parse(man!.body)).toMatchObject({ command: "python s.py" });
     expect(JSON.parse(man!.body).hashes["./preds.json"]).toMatch(/^[0-9a-f]{64}$/);
@@ -833,33 +833,33 @@ describe("rehearsalScore", () => {
   it("computeScore writes no manifest when one already exists (idempotent)", () => {
     const files: Record<string, string> = {
       "/a/metric.md": "**Primary metric:** accuracy\n",
-      "/a/parts/viola/state.txt": "current_exp_id=exp-001\n",
-      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+      "/a/workers/alpha/state.txt": "current_exp_id=exp-001\n",
+      "/a/workers/alpha/experiments/exp-001/result.json": JSON.stringify({
         branch_id:"b",approach_label:"x",metric_name:"accuracy",metric_value:0.9,status:"ok",
         runtime_s:1,log_paths:[],checkpoint_path:null,notes:"",
         verify:{ kind:"rescore", command:"c", inputs:[], metric_from:"marker" } }),
-      "/a/parts/viola/experiments/exp-001/verify-manifest.json": "{\"command\":\"c\",\"hashes\":{}}\n",
+      "/a/workers/alpha/experiments/exp-001/verify-manifest.json": "{\"command\":\"c\",\"hashes\":{}}\n",
     };
     expect(computeScore("/a", fakeFs(files), () => "T").manifests).toHaveLength(0);
   });
   it("computeScore emits sanity rows (ceiling) for a verify-less suspect result", () => {
     const files: Record<string, string> = {
       "/a/metric.md": "**Primary metric:** accuracy\n**Direction:** maximize\n**ceiling:** 0.8\n",
-      "/a/parts/viola/state.txt": "current_exp_id=exp-001\n",
-      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+      "/a/workers/alpha/state.txt": "current_exp_id=exp-001\n",
+      "/a/workers/alpha/experiments/exp-001/result.json": JSON.stringify({
         branch_id:"b",approach_label:"x",metric_name:"accuracy",metric_value:0.95,status:"ok",
         runtime_s:50,log_paths:[],checkpoint_path:null,notes:"" }),
     };
     const c = computeScore("/a", fakeFs(files), () => "T");
     const ceil = c.sanityRows.find((r) => r.flag === "ceiling-exceeded");
-    expect(ceil).toMatchObject({ expId: "exp-001", instrument: "viola" });
+    expect(ceil).toMatchObject({ expId: "exp-001", agent: "alpha" });
     expect(c.sanityRows.some((r) => r.flag === "integrity-attestation-incomplete")).toBe(true);
   });
   it("computeScore emits no sanity rows for a clean result with complete integrity", () => {
     const files: Record<string, string> = {
       "/a/metric.md": "**Primary metric:** accuracy\n**Direction:** maximize\n",
-      "/a/parts/viola/state.txt": "current_exp_id=exp-001\n",
-      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+      "/a/workers/alpha/state.txt": "current_exp_id=exp-001\n",
+      "/a/workers/alpha/experiments/exp-001/result.json": JSON.stringify({
         branch_id:"b",approach_label:"x",metric_name:"accuracy",metric_value:0.95,status:"ok",
         runtime_s:50,log_paths:[],checkpoint_path:null,notes:"",
         integrity:{ split_before_fit:true, no_train_test_overlap:true, target_not_in_features:true, trained_steps:10, seed:1 } }),
@@ -869,13 +869,13 @@ describe("rehearsalScore", () => {
   it("computeScore emits audit-knob-drift from prompt.md vs audit.json", () => {
     const files: Record<string, string> = {
       "/a/metric.md": "**Primary metric:** accuracy\n",
-      "/a/parts/viola/state.txt": "current_exp_id=exp-001\n",
-      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+      "/a/workers/alpha/state.txt": "current_exp_id=exp-001\n",
+      "/a/workers/alpha/experiments/exp-001/result.json": JSON.stringify({
         branch_id:"b",approach_label:"x",metric_name:"accuracy",metric_value:0.5,status:"ok",
         runtime_s:50,log_paths:[],checkpoint_path:null,notes:"",
         integrity:{ split_before_fit:true, no_train_test_overlap:true, target_not_in_features:true, trained_steps:10, seed:1 } }),
-      "/a/parts/viola/experiments/exp-001/prompt.md": "**Hard constraints:**\nmcts_sims = 200\n\n",
-      "/a/parts/viola/experiments/exp-001/audit.json": JSON.stringify({ mcts_sims: 16 }),
+      "/a/workers/alpha/experiments/exp-001/prompt.md": "**Hard constraints:**\nmcts_sims = 200\n\n",
+      "/a/workers/alpha/experiments/exp-001/audit.json": JSON.stringify({ mcts_sims: 16 }),
     };
     const c = computeScore("/a", fakeFs(files), () => "T");
     expect(c.sanityRows.find((r) => r.flag === "audit-knob-drift")).toMatchObject({ detail: "mcts_sims=16 vs mandated 200" });
@@ -883,22 +883,22 @@ describe("rehearsalScore", () => {
   it("computeScore marks a row infeasible when verification.tsv verdict is mismatch", () => {
     const files: Record<string, string> = {
       "/a/metric.md": "**Primary metric:** accuracy\n**Direction:** maximize\n",
-      "/a/verification.tsv": "exp_id\tinstrument\tverdict\treason\trecomputed\tts\nexp-001\tviola\tmismatch\tvalue\t0.5\tT\n",
-      "/a/parts/viola/state.txt": "current_exp_id=exp-001\n",
-      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+      "/a/verification.tsv": "exp_id\tagent\tverdict\treason\trecomputed\tts\nexp-001\talpha\tmismatch\tvalue\t0.5\tT\n",
+      "/a/workers/alpha/state.txt": "current_exp_id=exp-001\n",
+      "/a/workers/alpha/experiments/exp-001/result.json": JSON.stringify({
         branch_id:"b",approach_label:"x",metric_name:"accuracy",metric_value:0.99,status:"ok",
         runtime_s:50,log_paths:[],checkpoint_path:null,notes:"",
         integrity:{ split_before_fit:true, no_train_test_overlap:true, target_not_in_features:true, trained_steps:10, seed:1 } }),
     };
     const c = computeScore("/a", fakeFs(files), () => "T");
-    expect(c.scoreboardMd).toMatch(/\| x\d+ \| exp-001 \| viola \|.*infeasible:mismatch/);
+    expect(c.scoreboardMd).toMatch(/\| x\d+ \| exp-001 \| alpha \|.*infeasible:mismatch/);
     expect(c.scoreboardMd).not.toMatch(/\| 1 \| exp-001 \|/);
   });
   it("computeScore marks a row infeasible from an A3 under-run flag (no verdict)", () => {
     const files: Record<string, string> = {
       "/a/metric.md": "**Primary metric:** accuracy\n**Direction:** maximize\n",
-      "/a/parts/viola/state.txt": "current_exp_id=exp-001\n",
-      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+      "/a/workers/alpha/state.txt": "current_exp_id=exp-001\n",
+      "/a/workers/alpha/experiments/exp-001/result.json": JSON.stringify({
         branch_id:"b",approach_label:"x",metric_name:"accuracy",metric_value:0.99,status:"ok",
         runtime_s:0,log_paths:[],checkpoint_path:null,notes:"",
         integrity:{ split_before_fit:true, no_train_test_overlap:true, target_not_in_features:true, trained_steps:10, seed:1 } }),
@@ -909,22 +909,22 @@ describe("rehearsalScore", () => {
   it("computeScore leaves a clean verified/unflagged result in the ranked group", () => {
     const files: Record<string, string> = {
       "/a/metric.md": "**Primary metric:** accuracy\n**Direction:** maximize\n",
-      "/a/verification.tsv": "exp_id\tinstrument\tverdict\treason\trecomputed\tts\nexp-001\tviola\tverified\t\t0.95\tT\n",
-      "/a/parts/viola/state.txt": "current_exp_id=exp-001\n",
-      "/a/parts/viola/experiments/exp-001/result.json": JSON.stringify({
+      "/a/verification.tsv": "exp_id\tagent\tverdict\treason\trecomputed\tts\nexp-001\talpha\tverified\t\t0.95\tT\n",
+      "/a/workers/alpha/state.txt": "current_exp_id=exp-001\n",
+      "/a/workers/alpha/experiments/exp-001/result.json": JSON.stringify({
         branch_id:"b",approach_label:"x",metric_name:"accuracy",metric_value:0.95,status:"ok",
         runtime_s:50,log_paths:[],checkpoint_path:null,notes:"",
         integrity:{ split_before_fit:true, no_train_test_overlap:true, target_not_in_features:true, trained_steps:10, seed:1 } }),
     };
     const c = computeScore("/a", fakeFs(files), () => "T");
-    expect(c.scoreboardMd).toMatch(/\| 1 \| exp-001 \| viola \|/);
+    expect(c.scoreboardMd).toMatch(/\| 1 \| exp-001 \| alpha \|/);
     expect(c.scoreboardMd).not.toMatch(/infeasible/);
   });
   it("routes a C1 not-reproduced result to the infeasible group (C1)", () => {
     const files: Record<string, string> = {
       "/a/metric.md": "**Primary metric:** accuracy\n**Direction:** maximize\n",
-      "/a/inspection.tsv": "exp_id\tinstrument\tverdict\treason\treimpl_metric\tts\nexp-001\toboe\tnot-reproduced\tvalue\t0.5\tT\n",
-      "/a/parts/oboe/experiments/exp-001/result.json": JSON.stringify({
+      "/a/inspection.tsv": "exp_id\tagent\tverdict\treason\treimpl_metric\tts\nexp-001\tgolf\tnot-reproduced\tvalue\t0.5\tT\n",
+      "/a/workers/golf/experiments/exp-001/result.json": JSON.stringify({
         branch_id:"b",approach_label:"x",metric_name:"accuracy",metric_value:0.99,status:"ok",
         runtime_s:5,log_paths:[],checkpoint_path:null,notes:"" }),
     };
@@ -935,26 +935,26 @@ describe("rehearsalScore", () => {
   it("an inconclusive C1 verdict does NOT demote — the row stays integer-ranked (C1)", () => {
     const files: Record<string, string> = {
       "/a/metric.md": "**Primary metric:** accuracy\n**Direction:** maximize\n",
-      "/a/inspection.tsv": "exp_id\tinstrument\tverdict\treason\treimpl_metric\tts\nexp-001\toboe\tinconclusive\treimpl-failed\t\tT\n",
-      "/a/parts/oboe/experiments/exp-001/result.json": JSON.stringify({
+      "/a/inspection.tsv": "exp_id\tagent\tverdict\treason\treimpl_metric\tts\nexp-001\tgolf\tinconclusive\treimpl-failed\t\tT\n",
+      "/a/workers/golf/experiments/exp-001/result.json": JSON.stringify({
         branch_id:"b",approach_label:"x",metric_name:"accuracy",metric_value:0.99,status:"ok",
         runtime_s:5,log_paths:[],checkpoint_path:null,notes:"" }),
     };
     const c = computeScore("/a", fakeFs(files), () => "T");
-    expect(c.scoreboardMd).toContain("| 1 | exp-001 | oboe |");  // stays the integer-rank leader
+    expect(c.scoreboardMd).toContain("| 1 | exp-001 | golf |");  // stays the integer-rank leader
     expect(c.scoreboardMd).not.toContain("x1");
     expect(c.scoreboardMd).not.toContain("reimpl");
   });
   it("emits per-family coverageRows over ok experiments (B1)", () => {
     const files: Record<string, string> = {
       "/a/metric.md": "**Primary metric:** accuracy\n**Direction:** maximize\n",
-      "/a/parts/oboe/experiments/exp-001/result.json": JSON.stringify({
+      "/a/workers/golf/experiments/exp-001/result.json": JSON.stringify({
         branch_id:"b",approach_label:"single-pass",metric_name:"accuracy",metric_value:0.90,status:"ok",
         runtime_s:5,log_paths:[],checkpoint_path:null,notes:"" }),
-      "/a/parts/oboe/experiments/exp-002/result.json": JSON.stringify({
+      "/a/workers/golf/experiments/exp-002/result.json": JSON.stringify({
         branch_id:"b",approach_label:"Single-Pass",metric_name:"accuracy",metric_value:0.96,status:"ok",
         runtime_s:5,log_paths:[],checkpoint_path:null,notes:"" }),
-      "/a/parts/viola/experiments/exp-003/result.json": JSON.stringify({
+      "/a/workers/alpha/experiments/exp-003/result.json": JSON.stringify({
         branch_id:"b",approach_label:"typed-routing",metric_name:"accuracy",metric_value:0.94,status:"ok",
         runtime_s:5,log_paths:[],checkpoint_path:null,notes:"" }),
     };
@@ -969,11 +969,11 @@ describe("rehearsalScore", () => {
     const files: Record<string, string> = {
       "/a/metric.md": "**Primary metric:** accuracy\n**Direction:** maximize\n",
       // typed-routing/exp-002 has a verify mismatch -> classifyInfeasible -> infeasibleReason set.
-      "/a/verification.tsv": "exp_id\tinstrument\tverdict\treason\trecomputed\tts\nexp-002\tviola\tmismatch\tx\t\tT\n",
-      "/a/parts/oboe/experiments/exp-001/result.json": JSON.stringify({
+      "/a/verification.tsv": "exp_id\tagent\tverdict\treason\trecomputed\tts\nexp-002\talpha\tmismatch\tx\t\tT\n",
+      "/a/workers/golf/experiments/exp-001/result.json": JSON.stringify({
         branch_id:"b",approach_label:"single-pass",metric_name:"accuracy",metric_value:0.96,status:"ok",
         runtime_s:5,log_paths:[],checkpoint_path:null,notes:"" }),
-      "/a/parts/viola/experiments/exp-002/result.json": JSON.stringify({
+      "/a/workers/alpha/experiments/exp-002/result.json": JSON.stringify({
         branch_id:"b",approach_label:"typed-routing",metric_name:"accuracy",metric_value:0.99,status:"ok",
         runtime_s:5,log_paths:[],checkpoint_path:null,notes:"" }),
     };
@@ -985,7 +985,7 @@ describe("rehearsalScore", () => {
   it("re-walks fresh each pass -> coverage counts do not accumulate across score passes (B1)", () => {
     const files: Record<string, string> = {
       "/a/metric.md": "**Primary metric:** accuracy\n**Direction:** maximize\n",
-      "/a/parts/oboe/experiments/exp-001/result.json": JSON.stringify({
+      "/a/workers/golf/experiments/exp-001/result.json": JSON.stringify({
         branch_id:"b",approach_label:"single-pass",metric_name:"accuracy",metric_value:0.90,status:"ok",
         runtime_s:5,log_paths:[],checkpoint_path:null,notes:"" }),
     };
@@ -1002,14 +1002,14 @@ describe("rehearsalScore", () => {
       runtime_s:5,log_paths:[],checkpoint_path:null,notes:"" });
     const files: Record<string, string> = {
       "/a/metric.md": "**Primary metric:** accuracy\n**Direction:** maximize\n",
-      "/a/parts/oboe/experiments/exp-001/result.json": okR("single-pass", 0.90),
-      "/a/parts/oboe/experiments/exp-001/audit.json": JSON.stringify({ lr: 0.1, depth: 4 }),
-      "/a/parts/oboe/experiments/exp-002/result.json": okR("single-pass", 0.93),
-      "/a/parts/oboe/experiments/exp-002/audit.json": JSON.stringify({ lr: 0.2, depth: 4 }),
-      "/a/parts/oboe/experiments/exp-002/lineage.txt": "parent_id=exp-001\n",
-      "/a/parts/oboe/experiments/exp-003/result.json": okR("single-pass", 0.95),
-      "/a/parts/oboe/experiments/exp-003/audit.json": JSON.stringify({ lr: 0.3, depth: 8 }),
-      "/a/parts/oboe/experiments/exp-003/lineage.txt": "parent_id=exp-002\n",
+      "/a/workers/golf/experiments/exp-001/result.json": okR("single-pass", 0.90),
+      "/a/workers/golf/experiments/exp-001/audit.json": JSON.stringify({ lr: 0.1, depth: 4 }),
+      "/a/workers/golf/experiments/exp-002/result.json": okR("single-pass", 0.93),
+      "/a/workers/golf/experiments/exp-002/audit.json": JSON.stringify({ lr: 0.2, depth: 4 }),
+      "/a/workers/golf/experiments/exp-002/lineage.txt": "parent_id=exp-001\n",
+      "/a/workers/golf/experiments/exp-003/result.json": okR("single-pass", 0.95),
+      "/a/workers/golf/experiments/exp-003/audit.json": JSON.stringify({ lr: 0.3, depth: 8 }),
+      "/a/workers/golf/experiments/exp-003/lineage.txt": "parent_id=exp-002\n",
     };
     const c = computeScore("/a", fakeFs(files), () => "T");
     const byExp = Object.fromEntries(c.lineageRows.map((r) => [r.expId, r.verdict]));
@@ -1049,21 +1049,21 @@ describe("rehearsalMonitor", () => {
     expect(initScanState(100, "", "junk", null).offset).toBe(100);
   });
 
-  it("byte-tail emits done/error/question/heartbeat for new lines, advances offset, uses 'part' key", () => {
+  it("byte-tail emits done/error/question/heartbeat for new lines, advances offset, uses 'worker' key", () => {
     const newText = '{"event":"progress","summary":"p"}\n{"event":"done","summary":"finished"}\n';
     const s: MonitorScanState = { offset: 0, rescanEmitted: new Set(), lastStaleTs: 0, lastStuckTs: 0, lastRescan: 0 };
-    const r = monitorScan("/o", "viola", s, mkDeps({ outboxText: newText, outboxFullText: newText,
+    const r = monitorScan("/o", "alpha", s, mkDeps({ outboxText: newText, outboxFullText: newText,
       outboxSize: Buffer.byteLength(newText), phase: "idle" }));
     const evs = r.notifications.map((n) => n.event);
     expect(evs).toContain("done");
     expect(evs).not.toContain("progress");
-    expect(r.notifications.find((n) => n.event === "done")!.part).toBe("viola");
+    expect(r.notifications.find((n) => n.event === "done")!.worker).toBe("alpha");
     expect(r.state.offset).toBe(Buffer.byteLength(newText));
   });
 
   it("stuck fires before stale, mutually exclusive, when working + mtime very old", () => {
     const s: MonitorScanState = { offset: 0, rescanEmitted: new Set(), lastStaleTs: 0, lastStuckTs: 0, lastRescan: 0 };
-    const r = monitorScan("/o", "viola", s, mkDeps({ now: 100000, outboxMtime: 100000 - 2000 }));
+    const r = monitorScan("/o", "alpha", s, mkDeps({ now: 100000, outboxMtime: 100000 - 2000 }));
     expect(r.notifications.map((n) => n.event)).toContain("stuck");
     expect(r.notifications.map((n) => n.event)).not.toContain("stale");
     expect(r.state.lastStuckTs).toBe(100000);
@@ -1071,13 +1071,13 @@ describe("rehearsalMonitor", () => {
 
   it("stale fires when delta in [probeS, stuckS)", () => {
     const s: MonitorScanState = { offset: 0, rescanEmitted: new Set(), lastStaleTs: 0, lastStuckTs: 0, lastRescan: 0 };
-    const r = monitorScan("/o", "viola", s, mkDeps({ now: 100000, outboxMtime: 100000 - 1000 }));
+    const r = monitorScan("/o", "alpha", s, mkDeps({ now: 100000, outboxMtime: 100000 - 1000 }));
     expect(r.notifications.map((n) => n.event)).toContain("stale");
   });
 
   it("no stale/stuck when phase != working", () => {
     const s: MonitorScanState = { offset: 0, rescanEmitted: new Set(), lastStaleTs: 0, lastStuckTs: 0, lastRescan: 0 };
-    const r = monitorScan("/o", "viola", s, mkDeps({ now: 100000, outboxMtime: 0, phase: "idle" }));
+    const r = monitorScan("/o", "alpha", s, mkDeps({ now: 100000, outboxMtime: 0, phase: "idle" }));
     expect(r.notifications).toHaveLength(0);
   });
 
@@ -1146,37 +1146,37 @@ describe("rehearsalMonitor", () => {
 
 describe("rehearsalBrief", () => {
   const SIG: CompletionSignals = { floorMet: true, targetMet: false, kSoFar: 1, kRequired: 2, plateau: false };
-  const part = (over: Partial<import("../src/core/rehearsalBrief.js").PartBrief> = {}) => ({
-    instrument: "viola", phase: "idle", currentOrLast: "exp-001", approach: "baseline", metric: "0.95 ok", ...over,
+  const worker = (over: Partial<import("../src/core/rehearsalBrief.js").WorkerBrief> = {}) => ({
+    agent: "alpha", phase: "idle", currentOrLast: "exp-001", approach: "baseline", metric: "0.95 ok", ...over,
   });
 
   it("header names the just-landed exp when latest is given", () => {
-    const out = buildStatusBrief({ parts: [], scoreboardMd: null, completion: SIG,
-      latest: { instrument: "viola", exp: "exp-003" } });
-    expect(out).toContain("## Experiment status — exp-003 (viola) just landed");
+    const out = buildStatusBrief({ workers: [], scoreboardMd: null, completion: SIG,
+      latest: { agent: "alpha", exp: "exp-003" } });
+    expect(out).toContain("## Experiment status — exp-003 (alpha) just landed");
   });
 
   it("header is bare when latest is absent", () => {
-    const out = buildStatusBrief({ parts: [], scoreboardMd: null, completion: SIG });
+    const out = buildStatusBrief({ workers: [], scoreboardMd: null, completion: SIG });
     expect(out).toContain("## Experiment status");
     expect(out).not.toContain("just landed");
   });
 
-  it("per-part table uses the rebranded | Part | header (NOT | Trooper |)", () => {
-    const out = buildStatusBrief({ parts: [part()], scoreboardMd: null, completion: SIG });
-    expect(out).toContain("| Part | Phase | Current/last | Approach | Metric |");
+  it("per-worker table uses the rebranded | Worker | header (NOT | Trooper |)", () => {
+    const out = buildStatusBrief({ workers: [worker()], scoreboardMd: null, completion: SIG });
+    expect(out).toContain("| Worker | Phase | Current/last | Approach | Metric |");
     expect(out).toContain("|---|---|---|---|---|");
     expect(out).not.toContain("| Trooper |");
   });
 
-  it("a working part shows (running) in the metric cell", () => {
-    const out = buildStatusBrief({ parts: [part({ phase: "working", metric: "(running)" })],
+  it("a working worker shows (running) in the metric cell", () => {
+    const out = buildStatusBrief({ workers: [worker({ phase: "working", metric: "(running)" })],
       scoreboardMd: null, completion: SIG });
-    expect(out).toContain("| viola | working | exp-001 | baseline | (running) |");
+    expect(out).toContain("| alpha | working | exp-001 | baseline | (running) |");
   });
 
   it("scoreboard null -> _(scoreboard absent)_", () => {
-    const out = buildStatusBrief({ parts: [], scoreboardMd: null, completion: SIG });
+    const out = buildStatusBrief({ workers: [], scoreboardMd: null, completion: SIG });
     expect(out).toContain("**Scoreboard top 3:**");
     expect(out).toContain("_(scoreboard absent)_");
   });
@@ -1184,58 +1184,58 @@ describe("rehearsalBrief", () => {
   it("scoreboard with no OK rows -> _(no scored experiments yet)_", () => {
     const sb = [
       "# Scoreboard", "",
-      "| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |",
+      "| Rank | Experiment | Agent | Metric | Status | Runtime | Approach | metric_name |",
       "|---|---|---|---|---|---|---|---|",
     ].join("\n") + "\n";
-    const out = buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG });
+    const out = buildStatusBrief({ workers: [], scoreboardMd: sb, completion: SIG });
     expect(out).toContain("_(no scored experiments yet)_");
   });
 
-  it("scoreboard with 2 OK rows -> two <rank>. <instrument>/<exp> — <metric> — <metric_name> lines", () => {
+  it("scoreboard with 2 OK rows -> two <rank>. <agent>/<exp> — <metric> — <metric_name> lines", () => {
     const sb = [
-      "| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |",
+      "| Rank | Experiment | Agent | Metric | Status | Runtime | Approach | metric_name |",
       "|---|---|---|---|---|---|---|---|",
-      "| 1 | exp-002 | viola | 0.9700 | ok | 12.00s | tuned | accuracy |",
-      "| 2 | exp-001 | cello | 0.9500 | ok | 10.00s | baseline | accuracy |",
+      "| 1 | exp-002 | alpha | 0.9700 | ok | 12.00s | tuned | accuracy |",
+      "| 2 | exp-001 | charlie | 0.9500 | ok | 10.00s | baseline | accuracy |",
     ].join("\n") + "\n";
-    const out = buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG });
-    expect(out).toContain("1. viola/exp-002 — 0.9700 — accuracy");
-    expect(out).toContain("2. cello/exp-001 — 0.9500 — accuracy");
+    const out = buildStatusBrief({ workers: [], scoreboardMd: sb, completion: SIG });
+    expect(out).toContain("1. alpha/exp-002 — 0.9700 — accuracy");
+    expect(out).toContain("2. charlie/exp-001 — 0.9500 — accuracy");
   });
 
   it("scoreboard top-3 caps at 3 rows", () => {
     const rows = [1, 2, 3, 4].map((n) => `| ${n} | exp-00${n} | inst${n} | 0.9${n}00 | ok | 1.00s | a | accuracy |`);
     const sb = [
-      "| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |",
+      "| Rank | Experiment | Agent | Metric | Status | Runtime | Approach | metric_name |",
       "|---|---|---|---|---|---|---|---|",
       ...rows,
     ].join("\n") + "\n";
-    const out = buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG });
+    const out = buildStatusBrief({ workers: [], scoreboardMd: sb, completion: SIG });
     expect(out).toContain("3. inst3/exp-003");
     expect(out).not.toContain("4. inst4/exp-004");
   });
 
   it("completion line renders yes/no booleans in field order", () => {
-    const out = buildStatusBrief({ parts: [], scoreboardMd: null, completion: SIG });
+    const out = buildStatusBrief({ workers: [], scoreboardMd: null, completion: SIG });
     expect(out).toContain("**Completion check:** floor_met=yes target_met=no K_so_far=1 K_required=2 plateau=no");
   });
 
   it("completion null -> the absent line (no misleading all-no row)", () => {
-    const out = buildStatusBrief({ parts: [], scoreboardMd: null, completion: null });
+    const out = buildStatusBrief({ workers: [], scoreboardMd: null, completion: null });
     expect(out).toContain("**Completion check:** _(scoreboard or metric absent)_");
     expect(out).not.toContain("floor_met=");
   });
 
   it("ends with a single trailing newline", () => {
-    const out = buildStatusBrief({ parts: [part()], scoreboardMd: null, completion: SIG });
+    const out = buildStatusBrief({ workers: [worker()], scoreboardMd: null, completion: SIG });
     expect(out.endsWith("\n")).toBe(true);
     expect(out.endsWith("\n\n")).toBe(false);
   });
 
   it("renders a Coverage line from coverage + completion floor (B1)", () => {
     const out = buildStatusBrief({
-      parts: [],
-      scoreboardMd: "| Rank | Exp | Instrument | Metric | Status | Runtime | Approach | Metric name |\n",
+      workers: [],
+      scoreboardMd: "| Rank | Exp | Agent | Metric | Status | Runtime | Approach | Metric name |\n",
       completion: { floorMet: true, targetMet: false, kSoFar: 1, kRequired: 2, plateau: false,
         familiesActive: 2, familiesImproving: 0, minFamilies: 2 },
       coverage: [
@@ -1247,7 +1247,7 @@ describe("rehearsalBrief", () => {
   });
   it("marks the floor short when families < min_families", () => {
     const out = buildStatusBrief({
-      parts: [], scoreboardMd: null,
+      workers: [], scoreboardMd: null,
       completion: { floorMet: true, targetMet: false, kSoFar: 0, kRequired: 2, plateau: false,
         familiesActive: 1, familiesImproving: 0, minFamilies: 3 },
       coverage: [{ family: "single-pass", count: 2, best: "0.96", ts: "T" }],
@@ -1255,70 +1255,70 @@ describe("rehearsalBrief", () => {
     expect(out).toContain("min_families=3 (short by 2)");
   });
   it("omits the Coverage line when no coverage data (back-compat)", () => {
-    const out = buildStatusBrief({ parts: [], scoreboardMd: null, completion: null });
+    const out = buildStatusBrief({ workers: [], scoreboardMd: null, completion: null });
     expect(out).not.toContain("**Coverage:**");
   });
 
   it("tags an improve-multi top-3 leader with [multi-change] (B2)", () => {
     const sb =
-      "| Rank | Exp | Instrument | Metric | Status | Runtime | Approach | Metric name |\n" +
+      "| Rank | Exp | Agent | Metric | Status | Runtime | Approach | Metric name |\n" +
       "|---|---|---|---|---|---|---|---|\n" +
-      "| 1 | exp-003 | oboe | 0.95 | ok | 5 | single-pass | accuracy |\n";
-    const out = buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG, multiChange: { "oboe/exp-003": true } });
-    expect(out).toContain("1. oboe/exp-003");
+      "| 1 | exp-003 | golf | 0.95 | ok | 5 | single-pass | accuracy |\n";
+    const out = buildStatusBrief({ workers: [], scoreboardMd: sb, completion: SIG, multiChange: { "golf/exp-003": true } });
+    expect(out).toContain("1. golf/exp-003");
     expect(out).toContain("[multi-change]");
   });
   it("does not tag when no multi-change data (back-compat)", () => {
     const sb =
-      "| Rank | Exp | Instrument | Metric | Status | Runtime | Approach | Metric name |\n" +
+      "| Rank | Exp | Agent | Metric | Status | Runtime | Approach | Metric name |\n" +
       "|---|---|---|---|---|---|---|---|\n" +
-      "| 1 | exp-003 | oboe | 0.95 | ok | 5 | single-pass | accuracy |\n";
-    const out = buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG });
+      "| 1 | exp-003 | golf | 0.95 | ok | 5 | single-pass | accuracy |\n";
+    const out = buildStatusBrief({ workers: [], scoreboardMd: sb, completion: SIG });
     expect(out).not.toContain("[multi-change]");
   });
   it("tags only the improve-multi row, not a non-multi sibling (B2 surfacing discipline)", () => {
     const sb =
-      "| Rank | Exp | Instrument | Metric | Status | Runtime | Approach | Metric name |\n" +
+      "| Rank | Exp | Agent | Metric | Status | Runtime | Approach | Metric name |\n" +
       "|---|---|---|---|---|---|---|---|\n" +
-      "| 1 | exp-003 | oboe | 0.95 | ok | 5 | single-pass | accuracy |\n" +
-      "| 2 | exp-002 | viola | 0.93 | ok | 5 | typed-routing | accuracy |\n";
+      "| 1 | exp-003 | golf | 0.95 | ok | 5 | single-pass | accuracy |\n" +
+      "| 2 | exp-002 | alpha | 0.93 | ok | 5 | typed-routing | accuracy |\n";
     // only exp-003 is improve-multi; exp-002 (improve-single/unverified) is NOT in the map.
-    const out = buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG, multiChange: { "oboe/exp-003": true } });
-    const l3 = out.split("\n").find((l) => l.includes("oboe/exp-003")) ?? "";
-    const l2 = out.split("\n").find((l) => l.includes("viola/exp-002")) ?? "";
+    const out = buildStatusBrief({ workers: [], scoreboardMd: sb, completion: SIG, multiChange: { "golf/exp-003": true } });
+    const l3 = out.split("\n").find((l) => l.includes("golf/exp-003")) ?? "";
+    const l2 = out.split("\n").find((l) => l.includes("alpha/exp-002")) ?? "";
     expect(l3).toContain("[multi-change]");
     expect(l2).not.toContain("[multi-change]");
   });
   it("tags top-3 rows with [reimpl-*] from inspections (C1)", () => {
     const sb =
-      "| Rank | Exp | Instrument | Metric | Status | Runtime | Approach | Metric name |\n" +
+      "| Rank | Exp | Agent | Metric | Status | Runtime | Approach | Metric name |\n" +
       "|---|---|---|---|---|---|---|---|\n" +
-      "| 1 | exp-003 | oboe | 0.95 | ok | 5 | x | accuracy |\n";
-    expect(buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG, inspections: { "oboe/exp-003": "reproduced" } })).toContain("[reimpl-ok]");
-    expect(buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG, inspections: { "oboe/exp-003": "not-reproduced" } })).toContain("[reimpl-mismatch!]");
-    expect(buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG, inspections: { "oboe/exp-003": "inconclusive" } })).toContain("[reimpl-inconclusive]");
-    expect(buildStatusBrief({ parts: [], scoreboardMd: sb, completion: SIG })).not.toContain("[reimpl");
+      "| 1 | exp-003 | golf | 0.95 | ok | 5 | x | accuracy |\n";
+    expect(buildStatusBrief({ workers: [], scoreboardMd: sb, completion: SIG, inspections: { "golf/exp-003": "reproduced" } })).toContain("[reimpl-ok]");
+    expect(buildStatusBrief({ workers: [], scoreboardMd: sb, completion: SIG, inspections: { "golf/exp-003": "not-reproduced" } })).toContain("[reimpl-mismatch!]");
+    expect(buildStatusBrief({ workers: [], scoreboardMd: sb, completion: SIG, inspections: { "golf/exp-003": "inconclusive" } })).toContain("[reimpl-inconclusive]");
+    expect(buildStatusBrief({ workers: [], scoreboardMd: sb, completion: SIG })).not.toContain("[reimpl");
   });
 });
 
 describe("buildStatusBrief verify annotation", () => {
   const sb = [
     "<!-- scoreboard schema_version=2 -->", "# Scoreboard", "",
-    "| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |",
+    "| Rank | Experiment | Agent | Metric | Status | Runtime | Approach | metric_name |",
     "|---|---|---|---|---|---|---|---|",
-    "| 1 | exp-002 | viola | 0.9600 | ok | 1.00s | b | accuracy |",
-    "| 2 | exp-001 | oboe | 0.9000 | ok | 1.00s | a | accuracy |",
+    "| 1 | exp-002 | alpha | 0.9600 | ok | 1.00s | b | accuracy |",
+    "| 2 | exp-001 | golf | 0.9000 | ok | 1.00s | a | accuracy |",
   ].join("\n") + "\n";
   it("annotates each top row with its verdict from the verification map", () => {
     const out = buildStatusBrief({
-      parts: [], scoreboardMd: sb, completion: null,
-      verdicts: { "viola/exp-002": "verified", "oboe/exp-001": "mismatch" },
+      workers: [], scoreboardMd: sb, completion: null,
+      verdicts: { "alpha/exp-002": "verified", "golf/exp-001": "mismatch" },
     });
     expect(out).toMatch(/exp-002 — 0\.9600 — accuracy \[verified\]/);
     expect(out).toMatch(/exp-001 — 0\.9000 — accuracy \[mismatch!\]/);
   });
   it("omits the annotation when no verdicts map is given (back-compat)", () => {
-    const out = buildStatusBrief({ parts: [], scoreboardMd: sb, completion: null });
+    const out = buildStatusBrief({ workers: [], scoreboardMd: sb, completion: null });
     expect(out).toContain("exp-002 — 0.9600 — accuracy");
     expect(out).not.toContain("[");
   });
@@ -1327,22 +1327,22 @@ describe("buildStatusBrief verify annotation", () => {
 describe("buildStatusBrief suspect annotation", () => {
   const sb = [
     "<!-- scoreboard schema_version=2 -->", "# Scoreboard", "",
-    "| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |",
+    "| Rank | Experiment | Agent | Metric | Status | Runtime | Approach | metric_name |",
     "|---|---|---|---|---|---|---|---|",
-    "| 1 | exp-002 | viola | 0.9600 | ok | 1.00s | b | accuracy |",
+    "| 1 | exp-002 | alpha | 0.9600 | ok | 1.00s | b | accuracy |",
   ].join("\n") + "\n";
   it("annotates a top row with its suspect flags", () => {
-    const out = buildStatusBrief({ parts: [], scoreboardMd: sb, completion: null,
-      suspects: { "viola/exp-002": ["ceiling-exceeded", "under-run"] } });
+    const out = buildStatusBrief({ workers: [], scoreboardMd: sb, completion: null,
+      suspects: { "alpha/exp-002": ["ceiling-exceeded", "under-run"] } });
     expect(out).toMatch(/exp-002 — 0\.9600 — accuracy \[suspect: ceiling-exceeded,under-run\]/);
   });
   it("no suspect annotation when map omitted (back-compat)", () => {
-    const out = buildStatusBrief({ parts: [], scoreboardMd: sb, completion: null });
+    const out = buildStatusBrief({ workers: [], scoreboardMd: sb, completion: null });
     expect(out).not.toContain("suspect");
   });
   it("verdict and suspect annotations coexist", () => {
-    const out = buildStatusBrief({ parts: [], scoreboardMd: sb, completion: null,
-      verdicts: { "viola/exp-002": "verified" }, suspects: { "viola/exp-002": ["ceiling-exceeded"] } });
+    const out = buildStatusBrief({ workers: [], scoreboardMd: sb, completion: null,
+      verdicts: { "alpha/exp-002": "verified" }, suspects: { "alpha/exp-002": ["ceiling-exceeded"] } });
     expect(out).toMatch(/\[verified\] \[suspect: ceiling-exceeded\]/);
   });
 });

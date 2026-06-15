@@ -1,12 +1,12 @@
 ---
-description: Gracefully end parts (FINE banner) and archive their state
-argument-hint: <topic> | <instrument> <topic> | --all --yes
+description: Gracefully end workers (DONE banner) and archive their state
+argument-hint: <topic> | <agent> <topic> | --all --yes
 allowed-tools: Bash, Write
 ---
 
 # /ap:coda
 
-Gracefully end parts (FINE banner) and archive their state.
+Gracefully end workers (DONE banner) and archive their state.
 
 ## Steps
 

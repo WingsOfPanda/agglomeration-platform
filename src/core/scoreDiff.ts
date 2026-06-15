@@ -49,22 +49,22 @@ function mdSection(header: string, lines: string[] | undefined): string {
   return header + "\n" + (lines && lines.length ? lines.map((l) => `- ${l}`).join("\n") + "\n" : "");
 }
 
-/** Port of consult_diff (lib/consult.sh:149). N>=2 parts → bucket files + diff.md. */
-export function diffFindings(parts: DiffPart[]): DiffResult {
-  const n = parts.length;
-  if (n < 2) throw new Error(`diffFindings: need >=2 parts, got ${n}`);
-  const names = parts.map((p) => p.name);
+/** Port of consult_diff (lib/consult.sh:149). N>=2 workers → bucket files + diff.md. */
+export function diffFindings(workers: DiffPart[]): DiffResult {
+  const n = workers.length;
+  if (n < 2) throw new Error(`diffFindings: need >=2 workers, got ${n}`);
+  const names = workers.map((p) => p.name);
 
-  // Flat parallel arrays (one entry per claim across all parts), with per-part windows.
+  // Flat parallel arrays (one entry per claim across all workers), with per-worker windows.
   const owner: number[] = [], cite: string[] = [], text: string[] = [], flag: boolean[] = [];
   const start: number[] = [], end: number[] = [];
   for (let idx = 0; idx < n; idx++) {
     start[idx] = owner.length;
-    for (const c of parseClaims(parts[idx].findings)) { owner.push(idx); cite.push(c.cite); text.push(c.text); flag.push(false); }
+    for (const c of parseClaims(workers[idx].findings)) { owner.push(idx); cite.push(c.cite); text.push(c.text); flag.push(false); }
     end[idx] = owner.length;
   }
 
-  // Membership growth: first-match-wins against later parts' unbucketed claims.
+  // Membership growth: first-match-wins against later workers' unbucketed claims.
   const buckets = new Map<string, string[]>();
   const add = (key: string, line: string): void => { if (!buckets.has(key)) buckets.set(key, []); buckets.get(key)!.push(line); };
   for (let i = 0; i < n; i++) {

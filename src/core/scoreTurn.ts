@@ -1,4 +1,4 @@
-// src/core/scoreTurn.ts — multi-part research-phase turn helpers for score.
+// src/core/scoreTurn.ts — multi-worker research-phase turn helpers for score.
 // Built on the ipc primitives + the classifyTurn *semantics* from turn.ts
 // (reused, not bent). The verify-phase composer + state machine land in Phase D.
 import type { OutboxEvent } from "./ipc.js";
@@ -52,7 +52,7 @@ const RESEARCH_BLOCKERS =
   "- If a referenced path, file, command, env var, or assumption is wrong or missing, do NOT guess\n" +
   "  or silently work around it. Append a question event to your outbox and stop:\n" +
   '  {"event":"question","message":"<what you need and why>","ts":"<iso>"}\n' +
-  "  The Maestro will reply via your inbox, then re-engage you.\n";
+  "  The Hub will reply via your inbox, then re-engage you.\n";
 
 /** Research-phase prompt body (port of config/prompt-templates/consult/research.md, rebranded).
  *  NOTE: must NOT include END_OF_INSTRUCTION or the done-event line — inboxWrite() appends the
@@ -110,23 +110,23 @@ export function verifyState(ev: OutboxEvent | null, verifyText: string | null): 
 
 export type GateStatus = "terminal" | "question" | "pending";
 
-/** Per-part readiness for the research/verify wait gate. `key` is the status-line prefix
- *  (`FS` for research, `VS` for verify, `AS` for prelude's adversary). A part is `terminal` once its `.done` marker exists and
+/** Per-worker readiness for the research/verify wait gate. `key` is the status-line prefix
+ *  (`FS` for research, `VS` for verify, `AS` for prelude's adversary). A worker is `terminal` once its `.done` marker exists and
  *  its LAST `<key>=` line is a non-`question` value; `question` while its last `<key>=` line is
  *  `question` (transient — awaiting a relay+re-arm); otherwise `pending` (still running). Pure:
  *  callers pass the pre-read `.done` existence and `.txt` text so this stays IPC-free and testable. */
 export function gateState(
-  parts: Array<{ instrument: string; doneExists: boolean; stateText: string | null }>,
+  workers: Array<{ agent: string; doneExists: boolean; stateText: string | null }>,
   key: "FS" | "VS" | "AS",
-): Array<{ instrument: string; status: GateStatus }> {
-  return parts.map((p) => {
+): Array<{ agent: string; status: GateStatus }> {
+  return workers.map((p) => {
     const matches = (p.stateText ?? "").split("\n").filter((l) => l.startsWith(`${key}=`));
     const last = matches.length ? matches[matches.length - 1].slice(key.length + 1).trim() : null;
     const status: GateStatus =
       last === "question" ? "question"
         : p.doneExists && last !== null ? "terminal"
           : "pending";
-    return { instrument: p.instrument, status };
+    return { agent: p.agent, status };
   });
 }
 

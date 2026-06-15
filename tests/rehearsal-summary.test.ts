@@ -18,10 +18,10 @@ function baseInput(over: Partial<SummaryInput> = {}): SummaryInput {
     floorMet: true, targetMet: false, kSoFar: 1, kRequired: 3, plateau: false,
   };
   const statusRows: StatusRow[] = [
-    { instrument: "oboe", phase: "running", current: "exp-002", lastTs: "2026-05-30T11:00:00Z", lastEvent: "progress" },
+    { agent: "golf", phase: "running", current: "exp-002", lastTs: "2026-05-30T11:00:00Z", lastEvent: "progress" },
   ];
   const recentEvents: EventRow[] = [
-    { ts: "2026-05-30T11:00:00Z", instrument: "oboe", event: "progress" },
+    { ts: "2026-05-30T11:00:00Z", agent: "golf", event: "progress" },
   ];
   const halt: HaltFlag = { format: "missing" };
   return {
@@ -45,20 +45,20 @@ describe("renderHaltSection", () => {
   it("structured: strips format= line, fences the rest, appends Finalized", () => {
     const halt: HaltFlag = {
       format: "structured",
-      fields: { halted_by: "maestro", halted_at: "t", reason: "converged", format: "structured" },
+      fields: { halted_by: "hub", halted_at: "t", reason: "converged", format: "structured" },
     };
     expect(renderHaltSection(halt, FIN)).toBe(
-      "\n## Halt\n\n```\nhalted_by=maestro\nhalted_at=t\nreason=converged\n```\nFinalized: 2026-05-30T12:00:00Z\n",
+      "\n## Halt\n\n```\nhalted_by=hub\nhalted_at=t\nreason=converged\n```\nFinalized: 2026-05-30T12:00:00Z\n",
     );
   });
 
   it("structured: preserves field insertion order (format= removed wherever it sits)", () => {
     const halt: HaltFlag = {
       format: "structured",
-      fields: { format: "structured", halted_by: "maestro", reason: "x" },
+      fields: { format: "structured", halted_by: "hub", reason: "x" },
     };
     expect(renderHaltSection(halt, FIN)).toBe(
-      "\n## Halt\n\n```\nhalted_by=maestro\nreason=x\n```\nFinalized: 2026-05-30T12:00:00Z\n",
+      "\n## Halt\n\n```\nhalted_by=hub\nreason=x\n```\nFinalized: 2026-05-30T12:00:00Z\n",
     );
   });
 
@@ -86,20 +86,20 @@ describe("renderHaltSection", () => {
 });
 
 describe("renderSessionSummary", () => {
-  it("full render: title, Part header, scoreboard top-5 only, completion, events, warnings, halt — in order", () => {
+  it("full render: title, Worker header, scoreboard top-5 only, completion, events, warnings, halt — in order", () => {
     const scoreboardMd = [
-      "| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |",
+      "| Rank | Experiment | Agent | Metric | Status | Runtime | Approach | metric_name |",
       "|---|---|---|---|---|---|---|---|",
-      "| 1 | exp-001 | oboe | 0.91 | ok | 1.0s | a | acc |",
-      "| 2 | exp-002 | oboe | 0.90 | ok | 1.0s | b | acc |",
-      "| 3 | exp-003 | oboe | 0.89 | ok | 1.0s | c | acc |",
-      "| 4 | exp-004 | oboe | 0.88 | ok | 1.0s | d | acc |",
-      "| 5 | exp-005 | oboe | 0.87 | ok | 1.0s | e | acc |",
-      "| 6 | exp-006 | oboe | 0.86 | ok | 1.0s | f | acc |",
+      "| 1 | exp-001 | golf | 0.91 | ok | 1.0s | a | acc |",
+      "| 2 | exp-002 | golf | 0.90 | ok | 1.0s | b | acc |",
+      "| 3 | exp-003 | golf | 0.89 | ok | 1.0s | c | acc |",
+      "| 4 | exp-004 | golf | 0.88 | ok | 1.0s | d | acc |",
+      "| 5 | exp-005 | golf | 0.87 | ok | 1.0s | e | acc |",
+      "| 6 | exp-006 | golf | 0.86 | ok | 1.0s | f | acc |",
     ].join("\n");
     const halt: HaltFlag = {
       format: "structured",
-      fields: { halted_by: "maestro", halted_at: "t", reason: "converged", format: "structured" },
+      fields: { halted_by: "hub", halted_at: "t", reason: "converged", format: "structured" },
     };
     const out = renderSessionSummary(baseInput({
       scoreboardMd,
@@ -114,14 +114,14 @@ describe("renderSessionSummary", () => {
     expect(out).toContain("Started: 2026-05-30T09:00:00Z");
     expect(out).toContain("Time budget: none");
 
-    // Status table: rebrand to | Part | (NOT Trooper)
-    expect(out).toContain("| Part | Phase | Current | Last event |");
+    // Status table: rebrand to | Worker | (NOT Trooper)
+    expect(out).toContain("| Worker | Phase | Current | Last event |");
     expect(out).not.toContain("Trooper");
-    expect(out).toContain("| oboe | running | exp-002 | 2026-05-30T11:00:00Z progress |");
+    expect(out).toContain("| golf | running | exp-002 | 2026-05-30T11:00:00Z progress |");
 
     // Scoreboard: header + first 5 data rows only (6th excluded)
-    expect(out).toContain("| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |");
-    expect(out).toContain("| 5 | exp-005 | oboe | 0.87 | ok | 1.0s | e | acc |");
+    expect(out).toContain("| Rank | Experiment | Agent | Metric | Status | Runtime | Approach | metric_name |");
+    expect(out).toContain("| 5 | exp-005 | golf | 0.87 | ok | 1.0s | e | acc |");
     expect(out).not.toContain("exp-006");
 
     // Completion bullets
@@ -132,7 +132,7 @@ describe("renderSessionSummary", () => {
     expect(out).toContain("- Hard cap: YES");
 
     // Recent events
-    expect(out).toContain("- 2026-05-30T11:00:00Z oboe/progress");
+    expect(out).toContain("- 2026-05-30T11:00:00Z golf/progress");
 
     // Warnings (verb pre-formats the bullet lines)
     expect(out).toContain("## Warnings");
@@ -141,7 +141,7 @@ describe("renderSessionSummary", () => {
 
     // Halt
     expect(out).toContain("## Halt");
-    expect(out).toContain("```\nhalted_by=maestro\nhalted_at=t\nreason=converged\n```");
+    expect(out).toContain("```\nhalted_by=hub\nhalted_at=t\nreason=converged\n```");
     expect(out).toContain("Finalized: 2026-05-30T12:00:00Z");
 
     // Ordering
@@ -162,9 +162,9 @@ describe("renderSessionSummary", () => {
 
   it("empty current cell renders em-dash", () => {
     const out = renderSessionSummary(baseInput({
-      statusRows: [{ instrument: "oboe", phase: "idle", current: "", lastTs: "t", lastEvent: "done" }],
+      statusRows: [{ agent: "golf", phase: "idle", current: "", lastTs: "t", lastEvent: "done" }],
     }));
-    expect(out).toContain("| oboe | idle | — | t done |");
+    expect(out).toContain("| golf | idle | — | t done |");
   });
 
   it("scoreboardMd null → _(scoreboard empty)_", () => {

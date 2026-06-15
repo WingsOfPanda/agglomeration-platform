@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync, mkdirSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
-import { globalRoot, repoHash, partDir } from "./paths.js";
+import { globalRoot, repoHash, workerDir } from "./paths.js";
 import { atomicWrite } from "./atomic.js";
 import { isoUtc } from "./archive.js";
 import { log } from "./log.js";
@@ -11,13 +11,13 @@ export const NO_EVENT_SENTINEL = "no error event before timeout";
 export const FAILURE_FILENAME = "failure-reason.txt";
 
 export interface CaptureFailureInput {
-  instrument: string; model: string; topic: string; paneId: string;
+  agent: string; model: string; topic: string; paneId: string;
   reason: FailureReason; eventLine?: string; readyTimeout?: string | number;
 }
 export type CaptureFailureResult = { ok: true; path: string } | { ok: false; code: 1 | 2 };
 
 export interface ForensicsDeps {
-  partDir(i: string, m: string, t: string): string;
+  workerDir(i: string, m: string, t: string): string;
   capturePane(paneId: string, lines: number): Promise<string>;
   atomicWriteSync(dest: string, content: string): void;
   isWritableDir(dir: string): boolean;
@@ -25,12 +25,12 @@ export interface ForensicsDeps {
 }
 
 export function renderFailureReport(f: {
-  timestamp: string; instrument: string; model: string; topic: string;
+  timestamp: string; agent: string; model: string; topic: string;
   paneId: string; reason: FailureReason; readyTimeout: string; scrollback: string; eventLine?: string;
 }): string {
   const meta =
     `timestamp:     ${f.timestamp}\n` +
-    `instrument:    ${f.instrument}\n` +
+    `agent:    ${f.agent}\n` +
     `model:         ${f.model}\n` +
     `topic:         ${f.topic}\n` +
     `pane_id:       ${f.paneId}\n` +
@@ -43,15 +43,15 @@ export function renderFailureReport(f: {
 }
 
 export async function captureFailure(input: CaptureFailureInput, deps: ForensicsDeps): Promise<CaptureFailureResult> {
-  if (!input.instrument || !input.model || !input.topic) return { ok: false, code: 1 };
+  if (!input.agent || !input.model || !input.topic) return { ok: false, code: 1 };
   if (input.reason !== "timeout" && input.reason !== "error_event") return { ok: false, code: 2 };
-  const dir = deps.partDir(input.instrument, input.model, input.topic);
+  const dir = deps.workerDir(input.agent, input.model, input.topic);
   if (!deps.isWritableDir(dir)) return { ok: false, code: 1 };
   const scrollback = await deps.capturePane(input.paneId, SCROLLBACK_LINES).catch(() => "");
   const dest = `${dir}/${FAILURE_FILENAME}`;
   const doc = renderFailureReport({
     timestamp: (deps.now ?? (() => isoUtc()))(),
-    instrument: input.instrument, model: input.model, topic: input.topic,
+    agent: input.agent, model: input.model, topic: input.topic,
     paneId: input.paneId, reason: input.reason,
     readyTimeout: input.readyTimeout == null ? "unknown" : String(input.readyTimeout),
     scrollback, eventLine: input.eventLine,
@@ -68,22 +68,22 @@ export function scrapeAuditLog(text: string): Finding[] {
 }
 /** outbox.jsonl: JSON.parse each line (skip non-JSON). Keep event error|question (source=outbox);
  *  also keep any event whose `note` is FLAG:-prefixed (source=part_note, FLAG: stripped). */
-export function scrapeOutbox(text: string, part: string): Finding[] {
+export function scrapeOutbox(text: string, worker: string): Finding[] {
   const out: Finding[] = [];
   for (const l of text.split("\n")) {
     if (!l.trim()) continue;
     try {
       const o = JSON.parse(l);
-      if (o.event === "error" || o.event === "question") out.push({ source: "outbox", key: l.trim(), context: `part=${part}` });
-      else if (typeof o.note === "string" && /^\s*FLAG:/i.test(o.note)) out.push({ source: "part_note", key: o.note.replace(/^\s*FLAG:\s*/i, "").trim(), context: `part=${part}` });
+      if (o.event === "error" || o.event === "question") out.push({ source: "outbox", key: l.trim(), context: `worker=${worker}` });
+      else if (typeof o.note === "string" && /^\s*FLAG:/i.test(o.note)) out.push({ source: "part_note", key: o.note.replace(/^\s*FLAG:\s*/i, "").trim(), context: `worker=${worker}` });
     }
     catch { /* skip non-JSON */ }
   }
   return out;
 }
 /** status.json: state==='error'. */
-export function scrapeStatus(text: string, part: string): Finding[] {
-  try { if (JSON.parse(text).state === "error") return [{ source: "status", key: "state=error", context: `part=${part}` }]; } catch { /* */ }
+export function scrapeStatus(text: string, worker: string): Finding[] {
+  try { if (JSON.parse(text).state === "error") return [{ source: "status", key: "state=error", context: `worker=${worker}` }]; } catch { /* */ }
   return [];
 }
 /** spawn-results.tsv: rows with rc != 0 (skip blank/#). */
@@ -92,7 +92,7 @@ export function scrapeSpawnResults(text: string): Finding[] {
   for (const l of text.split("\n")) {
     if (!l.trim() || l.startsWith("#")) continue;
     const [inst, , rc, reason] = l.split("\t");
-    if (inst && rc && rc !== "0") out.push({ source: "spawn_results", key: `rc=${rc} reason=${reason ?? ""}`.trim(), context: `part=${inst}` });
+    if (inst && rc && rc !== "0") out.push({ source: "spawn_results", key: `rc=${rc} reason=${reason ?? ""}`.trim(), context: `worker=${inst}` });
   }
   return out;
 }
@@ -101,16 +101,16 @@ export function scrapeLogs(text: string, basename: string): Finding[] {
   return text.split("\n").filter((l) => l.includes("[error]") || l.includes("log_error")).map((l) => ({ source: "session_log", key: l.trim(), context: basename }));
 }
 
-/** Best-effort walk of an _score art dir + its sibling part dirs → deduped Finding[]. Each read is
- *  individually guarded; any failure contributes nothing (never throws). Outbox/status part label =
- *  the part dir's basename. */
+/** Best-effort walk of an _score art dir + its sibling worker dirs → deduped Finding[]. Each read is
+ *  individually guarded; any failure contributes nothing (never throws). Outbox/status worker label =
+ *  the worker dir's basename. */
 export function scrapeArtDir(artDir: string): Finding[] {
   const out: Finding[] = [];
   const read = (p: string): string | null => { try { return readFileSync(p, "utf8"); } catch { return null; } };
   const a = read(join(artDir, "design-doc", "audit.log")); if (a !== null) out.push(...scrapeAuditLog(a));
   const sr = read(join(artDir, "spawn-results.tsv")); if (sr !== null) out.push(...scrapeSpawnResults(sr));
   try { for (const f of readdirSync(artDir)) { if (f.endsWith(".log") || f === "session-summary.md") { const t = read(join(artDir, f)); if (t !== null) out.push(...scrapeLogs(t, f)); } } } catch { /* */ }
-  // sibling part dirs live under the TOPIC dir (parent of _score): <topic>/<inst>-<model>/
+  // sibling worker dirs live under the TOPIC dir (parent of _score): <topic>/<inst>-<model>/
   const topicDir = dirname(artDir);
   try {
     for (const d of readdirSync(topicDir, { withFileTypes: true })) {
@@ -200,15 +200,15 @@ export function bootstrapFailureArgs(
 
 /** Approach A: write a spawn/bootstrap-failure finding straight to the playback feed
  *  (globalRoot()/forensics/<date>/<time>-spawn-<topic>.md, command:spawn), reusing renderArtForensics
- *  so /ap:playback consumes it unchanged. Teardown-independent — works before the part dir exists
+ *  so /ap:playback consumes it unchanged. Teardown-independent — works before the worker dir exists
  *  and when teardown never runs. Best-effort: returns the written path, or "" on zero-effect / any
  *  error. Never throws. */
 export function captureSpawnFailure(opts: {
-  instrument: string; model: string; topic: string;
+  agent: string; model: string; topic: string;
   reason: string; detail: string; failureReportPath?: string; now?: Date;
 }): string {
   try {
-    const ctx = `part=${opts.instrument}-${opts.model}`;
+    const ctx = `worker=${opts.agent}-${opts.model}`;
     const findings: Finding[] = [
       { source: "spawn_failure", key: `reason=${opts.reason} ${opts.detail}`.replace(/\s+/g, " ").trim(), context: ctx },
     ];
@@ -216,24 +216,24 @@ export function captureSpawnFailure(opts: {
     return writeForensicsFeed({
       now: opts.now ?? new Date(),
       fileNameFor: (time) => `${time}-spawn-${opts.topic}.md`,
-      command: "spawn", topicSlug: opts.topic, artDir: partDir(opts.instrument, opts.model, opts.topic), findings,
+      command: "spawn", topicSlug: opts.topic, artDir: workerDir(opts.agent, opts.model, opts.topic), findings,
     });
   } catch { return ""; }
 }
 
-/** Record a Maestro suspicion straight to the playback feed
- *  (globalRoot()/forensics/<date>/<time>-<command>-flag-<topic>.md, source=maestro_flag), reusing
+/** Record a Hub suspicion straight to the playback feed
+ *  (globalRoot()/forensics/<date>/<time>-<command>-flag-<topic>.md, source=hub_flag), reusing
  *  renderArtForensics so /ap:playback consumes it unchanged. Teardown-independent (lands even on
  *  abort/handoff). Best-effort: returns the written path, or "" on empty note / any error. Never throws. */
-export function recordMaestroFlag(opts: { command: string; topic: string; note: string; now?: Date }): string {
+export function recordHubFlag(opts: { command: string; topic: string; note: string; now?: Date }): string {
   try {
     const note = opts.note.trim();
     if (!note) return "";
-    const finding: Finding = { source: "maestro_flag", key: note, context: `from=maestro command=${opts.command}` };
+    const finding: Finding = { source: "hub_flag", key: note, context: `from=hub command=${opts.command}` };
     return writeForensicsFeed({
       now: opts.now ?? new Date(),
       fileNameFor: (time) => `${time}-${opts.command}-flag-${opts.topic}.md`,
-      command: opts.command, topicSlug: opts.topic, artDir: "(maestro-flag)", findings: [finding],
+      command: opts.command, topicSlug: opts.topic, artDir: "(hub-flag)", findings: [finding],
     });
   } catch { return ""; }
 }
@@ -242,7 +242,7 @@ export function recordMaestroFlag(opts: { command: string; topic: string; note: 
  *  topic/empty note, else rc 0 (best-effort; mirrors runForensics). Feeds /ap:playback. */
 export function runFlag(command: string, topic: string | undefined, note: string): number {
   if (!topic || !note.trim()) { log.error(`usage: ${command} flag <topic> <observation>`); return 2; }
-  const path = recordMaestroFlag({ command, topic, note });
+  const path = recordHubFlag({ command, topic, note });
   if (path) { log.ok(`${command} flag: recorded ${path}`); process.stdout.write(path + "\n"); }
   else log.info(`${command} flag: nothing recorded`);
   return 0;

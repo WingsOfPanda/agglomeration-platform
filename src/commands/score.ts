@@ -15,10 +15,10 @@ import {
 import { assembleDoc, SECTIONS_SINGLE, synthesizeSeeds } from "../core/scoreDoc.js";
 import { auditDoc } from "../core/audit.js";
 import { readProviderList } from "../core/providers.js";
-import { activeProvidersPath, partDir, repoRoot, topicDir } from "../core/paths.js";
-import { pickInstruments } from "../core/instruments.js";
+import { activeProvidersPath, workerDir, repoRoot, topicDir } from "../core/paths.js";
+import { pickAgents } from "../core/agents.js";
 import { outboxOffset, outboxPath, outboxWaitSince, type OutboxEvent } from "../core/ipc.js";
-import { instrumentConsultValidated, consultTimeout, instrumentTimeoutMultiplier } from "../core/contracts.js";
+import { agentConsultValidated, consultTimeout, agentTimeoutMultiplier } from "../core/contracts.js";
 import { composeResearchPrompt, researchState, parseLatestOffset, scaledTimeout, composeVerifyPrompt, verifyState, composeDrilldownPrompt, drilldownState, gateState } from "../core/scoreTurn.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { diffFindings, type DiffPart } from "../core/scoreDiff.js";
@@ -61,12 +61,12 @@ export async function run(args: string[]): Promise<number> {
 export interface ScoreInitDeps {
   activeProviders(): string[];
   isValidated(provider: string): boolean;
-  pickInstruments(topic: string, n: number): string[];
+  pickAgents(topic: string, n: number): string[];
 }
 const liveInitDeps: ScoreInitDeps = {
   activeProviders: () => readProviderList(activeProvidersPath()),
-  isValidated: instrumentConsultValidated,
-  pickInstruments,
+  isValidated: agentConsultValidated,
+  pickAgents,
 };
 
 async function initRun(tokens: string[]): Promise<number> { return initWith(tokens, liveInitDeps); }
@@ -88,9 +88,9 @@ export async function initWith(tokens: string[], d: ScoreInitDeps): Promise<numb
   const art = scoreArtDir(topic);
   if (existsSync(art)) { log.error(`score init: topic already in flight: ${art}`); log.error("  run /ap:coda or pick a different topic"); return 2; }
 
-  const instruments = d.pickInstruments(topic, roster.length);
-  if (instruments.length < roster.length) { log.error(`score init: instrument pool exhausted (need ${roster.length}, got ${instruments.length})`); return 1; }
-  const rows: RosterRow[] = roster.map((provider, i) => ({ provider, instrument: instruments[i] }));
+  const agents = d.pickAgents(topic, roster.length);
+  if (agents.length < roster.length) { log.error(`score init: agent pool exhausted (need ${roster.length}, got ${agents.length})`); return 1; }
+  const rows: RosterRow[] = roster.map((provider, i) => ({ provider, agent: agents[i] }));
 
   mkdirSync(scoreDraftDir(topic), { recursive: true }); // creates _score/design-doc/.draft
   atomicWrite(join(art, "topic.txt"), topicText);
@@ -101,7 +101,7 @@ export async function initWith(tokens: string[], d: ScoreInitDeps): Promise<numb
   log.ok(`score init: topic=${topic} N=${rows.length} ensemble=${ensemble ? "yes" : "no"}`);
   process.stdout.write(
     `TOPIC=${topic}\nN=${rows.length}\nENSEMBLE=${ensemble ? "yes" : "no"}\nART=${art}\n` +
-    rows.map((r) => `PART=${r.instrument}:${r.provider}`).join("\n") + "\n",
+    rows.map((r) => `PART=${r.agent}:${r.provider}`).join("\n") + "\n",
   );
   return 0;
 }
@@ -172,7 +172,7 @@ export async function spawnAllWith(topic: string, d: SpawnAllDeps): Promise<numb
   const rosterPath = join(art, "roster.txt");
   if (!existsSync(rosterPath)) { log.error(`score spawn-all: roster.txt missing at ${rosterPath} (run score init)`); return 2; }
   const rows = parseRosterFile(readFileSync(rosterPath, "utf8"));
-  if (rows.length < 2) { log.error(`score spawn-all: need >=2 parts in roster.txt, got ${rows.length}`); return 2; }
+  if (rows.length < 2) { log.error(`score spawn-all: need >=2 workers in roster.txt, got ${rows.length}`); return 2; }
 
   const pf = await d.preflight([topic, String(rows.length), "--roster", spawnRosterArg(rows), "--art-dir", art]);
   if (pf !== 0) { log.error(`score spawn-all: preflight failed (rc=${pf})`); return 2; }
@@ -180,25 +180,25 @@ export async function spawnAllWith(topic: string, d: SpawnAllDeps): Promise<numb
   const panesPath = join(art, "preflight-panes.txt");
   if (!existsSync(panesPath)) { log.error(`score spawn-all: preflight wrote no ${panesPath}`); return 2; }
   const panes = parsePanesFile(readFileSync(panesPath, "utf8"));
-  const orphans = rows.filter((r) => !panes.has(r.instrument));
-  if (orphans.length) { log.error(`score spawn-all: parts missing a preflight pane: ${orphans.map((r) => r.instrument).join(", ")}`); return 2; }
+  const orphans = rows.filter((r) => !panes.has(r.agent));
+  if (orphans.length) { log.error(`score spawn-all: workers missing a preflight pane: ${orphans.map((r) => r.agent).join(", ")}`); return 2; }
 
   const cwd = d.repoRoot();
   const results: SpawnResult[] = await Promise.all(rows.map(async (r) => {
-    const rc = await d.spawn([r.instrument, r.provider, topic, "--target-pane", panes.get(r.instrument)!, "--cwd", cwd, "--preflight-art-dir", art]);
-    return { instrument: r.instrument, provider: r.provider, rc };
+    const rc = await d.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent)!, "--cwd", cwd, "--preflight-art-dir", art]);
+    return { agent: r.agent, provider: r.provider, rc };
   }));
   atomicWrite(join(art, "spawn-results.tsv"), spawnResultsTsv(results));
 
   const rc = spawnTally(results.map((r) => r.rc));
   const nOk = results.filter((r) => r.rc === 0).length;
-  if (rc === 0) log.ok(`score spawn-all: ${nOk}/${rows.length} parts ready`);
-  else log.warn(`score spawn-all: ${nOk}/${rows.length} parts ready (rc=${rc})`);
+  if (rc === 0) log.ok(`score spawn-all: ${nOk}/${rows.length} workers ready`);
+  else log.warn(`score spawn-all: ${nOk}/${rows.length} workers ready (rc=${rc})`);
   return rc;
 }
 
 export interface SendDeps {
-  offsetFor(instrument: string, model: string, topic: string): number;
+  offsetFor(agent: string, model: string, topic: string): number;
   send(args: string[]): Promise<number>;
 }
 const liveResearchSendDeps: SendDeps = {
@@ -207,71 +207,71 @@ const liveResearchSendDeps: SendDeps = {
 };
 
 async function researchSendRun(rest: string[]): Promise<number> {
-  const [topic, instrument, provider] = rest;
-  if (!topic || !instrument || !provider) { log.error("usage: score research-send <topic> <instrument> <provider>"); return 2; }
-  return researchSendWith(topic, instrument, provider, liveResearchSendDeps);
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: score research-send <topic> <agent> <provider>"); return 2; }
+  return researchSendWith(topic, agent, provider, liveResearchSendDeps);
 }
 
-export async function researchSendWith(topic: string, instrument: string, provider: string, d: SendDeps): Promise<number> {
+export async function researchSendWith(topic: string, agent: string, provider: string, d: SendDeps): Promise<number> {
   const art = scoreArtDir(topic);
-  const stateFile = join(art, `research-${instrument}.txt`);
+  const stateFile = join(art, `research-${agent}.txt`);
   if (existsSync(stateFile)) { log.error(`score research-send: ${stateFile} exists; rm to retry`); return 1; }
 
   const topicText = readIf(join(art, "topic.txt")).trim();
   if (!topicText) { log.error(`score research-send: topic.txt missing/empty at ${art} (run score init)`); return 1; }
 
-  const findingsPath = join(partDir(instrument, provider, topic), "findings.md");
-  const promptFile = join(art, `${instrument}_research_prompt.md`);
+  const findingsPath = join(workerDir(agent, provider, topic), "findings.md");
+  const promptFile = join(art, `${agent}_research_prompt.md`);
   atomicWrite(promptFile, skillHintAppend(join(art, "skill.txt"), composeResearchPrompt(topicText, findingsPath)));
 
-  const offset = d.offsetFor(instrument, provider, topic);
+  const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}\n`);
 
-  const rc = await d.send(["--from", "maestro", instrument, topic, `@${promptFile}`]);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
   if (rc !== 0) { log.error(`score research-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`); return 1; }
-  log.ok(`score research-send: ${instrument} offset=${offset}`);
+  log.ok(`score research-send: ${agent} offset=${offset}`);
   return 0;
 }
 
 export interface WaitDeps {
-  wait(instrument: string, model: string, topic: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null>;
+  wait(agent: string, model: string, topic: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null>;
   multiplier(provider: string): string;
 }
 const liveResearchWaitDeps: WaitDeps = {
   wait: (i, m, t, off, ev, to) => outboxWaitSince(i, m, t, off, ev, to),
-  multiplier: instrumentTimeoutMultiplier,
+  multiplier: agentTimeoutMultiplier,
 };
 
 async function researchWaitRun(rest: string[]): Promise<number> {
-  const [topic, instrument, provider] = rest;
-  if (!topic || !instrument || !provider) { log.error("usage: score research-wait <topic> <instrument> <provider>"); return 2; }
-  return researchWaitWith(topic, instrument, provider, liveResearchWaitDeps);
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: score research-wait <topic> <agent> <provider>"); return 2; }
+  return researchWaitWith(topic, agent, provider, liveResearchWaitDeps);
 }
 
-export async function researchWaitWith(topic: string, instrument: string, provider: string, d: WaitDeps): Promise<number> {
+export async function researchWaitWith(topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> {
   const art = scoreArtDir(topic);
-  const stateFile = join(art, `research-${instrument}.txt`);
+  const stateFile = join(art, `research-${agent}.txt`);
   if (!existsSync(stateFile)) { log.error(`score research-wait: ${stateFile} missing (run score research-send first)`); return 1; }
   const offset = parseLatestOffset(readFileSync(stateFile, "utf8"));
   if (offset === null) { log.error(`score research-wait: OFFSET not set in ${stateFile}`); return 1; }
 
   const timeout = scaledTimeout(consultTimeout("research"), d.multiplier(provider));
-  log.info(`score research-wait: ${instrument} offset=${offset} timeout=${timeout}s`);
-  const ev = await d.wait(instrument, provider, topic, offset, ["done", "error", "question"], timeout);
+  log.info(`score research-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, ["done", "error", "question"], timeout);
 
-  const findingsPath = join(partDir(instrument, provider, topic), "findings.md");
+  const findingsPath = join(workerDir(agent, provider, topic), "findings.md");
   const findingsText = readIfExistsOrNull(findingsPath);
   const fs = researchState(ev, findingsText);
 
   if (fs === "question" && ev) {
-    atomicWrite(join(art, `question-${instrument}.txt`), JSON.stringify(ev) + "\n");
-    const bumped = outboxOffset(outboxPath(instrument, provider, topic));
+    atomicWrite(join(art, `question-${agent}.txt`), JSON.stringify(ev) + "\n");
+    const bumped = outboxOffset(outboxPath(agent, provider, topic));
     appendFileSync(stateFile, `OFFSET=${bumped}\nFS=question\n`);
   } else {
     appendFileSync(stateFile, `FS=${fs}\n`);
   }
-  writeFileSync(join(art, `research-${instrument}.done`), "");
-  log.ok(`score research-wait: ${instrument} FS=${fs}`);
+  writeFileSync(join(art, `research-${agent}.done`), "");
+  log.ok(`score research-wait: ${agent} FS=${fs}`);
   return 0;
 }
 
@@ -285,16 +285,16 @@ export async function diffRun(rest: string[]): Promise<number> {
   const rosterPath = join(art, "roster.txt");
   if (!existsSync(rosterPath)) { log.error("score diff: roster.txt missing — run score init first"); return 1; }
   const rows = parseRosterFile(readFileSync(rosterPath, "utf8"));
-  if (rows.length < 2) { log.error(`score diff: need >=2 parts in roster.txt, got ${rows.length}`); return 1; }
+  if (rows.length < 2) { log.error(`score diff: need >=2 workers in roster.txt, got ${rows.length}`); return 1; }
 
-  const parts: DiffPart[] = [];
+  const workers: DiffPart[] = [];
   for (const r of rows) {
-    const f = join(partDir(r.instrument, r.provider, topic), "findings.md");
-    if (!existsSync(f)) { log.error(`score diff: ${r.instrument} findings.md missing: ${f}`); return 1; }
-    parts.push({ name: r.instrument, findings: readFileSync(f, "utf8") });
+    const f = join(workerDir(r.agent, r.provider, topic), "findings.md");
+    if (!existsSync(f)) { log.error(`score diff: ${r.agent} findings.md missing: ${f}`); return 1; }
+    workers.push({ name: r.agent, findings: readFileSync(f, "utf8") });
   }
 
-  const result = diffFindings(parts);
+  const result = diffFindings(workers);
   for (const file of result.files) atomicWrite(join(art, file.filename), file.content);
   atomicWrite(join(art, "diff.md"), result.diffMd);
 
@@ -302,91 +302,91 @@ export async function diffRun(rest: string[]): Promise<number> {
     .filter((f) => f.filename.endsWith("_only_items.txt") || f.filename === "consensus.txt")
     .map((f) => `${f.filename.replace(/\.txt$/, "")}=${f.content.split("\n").filter(Boolean).length}`)
     .join(" ");
-  log.ok(`score diff: wrote ${join(art, "diff.md")} (${rows.length} parts) ${summary}`);
+  log.ok(`score diff: wrote ${join(art, "diff.md")} (${rows.length} workers) ${summary}`);
   return 0;
 }
 
 // ---- Phase D: cross-verify -> adjudicate -> synthesize ----
 
 async function verifySendRun(rest: string[]): Promise<number> {
-  const [topic, instrument, provider] = rest;
-  if (!topic || !instrument || !provider) { log.error("usage: score verify-send <topic> <instrument> <provider>"); return 2; }
-  return verifySendWith(topic, instrument, provider, liveResearchSendDeps);
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: score verify-send <topic> <agent> <provider>"); return 2; }
+  return verifySendWith(topic, agent, provider, liveResearchSendDeps);
 }
 
-export async function verifySendWith(topic: string, instrument: string, provider: string, d: SendDeps): Promise<number> {
+export async function verifySendWith(topic: string, agent: string, provider: string, d: SendDeps): Promise<number> {
   const art = scoreArtDir(topic);
   if (!existsSync(art)) { log.error(`score verify-send: ${art} not found`); return 1; }
-  const stateFile = join(art, `verify-${instrument}.txt`);
+  const stateFile = join(art, `verify-${agent}.txt`);
   if (existsSync(stateFile)) { log.error(`score verify-send: ${stateFile} exists; rm to retry`); return 1; }
 
   const rosterPath = join(art, "roster.txt");
   if (!existsSync(rosterPath)) { log.error("score verify-send: roster.txt missing — run score init first"); return 1; }
-  const instruments = parseRosterFile(readFileSync(rosterPath, "utf8")).map((r) => r.instrument);
-  if (instruments.length < 2) { log.error(`score verify-send: need >=2 parts, got ${instruments.length}`); return 1; }
-  if (!instruments.includes(instrument)) { log.error(`score verify-send: ${instrument} not in roster.txt`); return 1; }
+  const agents = parseRosterFile(readFileSync(rosterPath, "utf8")).map((r) => r.agent);
+  if (agents.length < 2) { log.error(`score verify-send: need >=2 workers, got ${agents.length}`); return 1; }
+  if (!agents.includes(agent)) { log.error(`score verify-send: ${agent} not in roster.txt`); return 1; }
 
-  const parts: string[] = [];
-  for (const f of verifyScopeFiles(instrument, instruments)) {
+  const workers: string[] = [];
+  for (const f of verifyScopeFiles(agent, agents)) {
     const p = join(art, f);
     if (!existsSync(p)) { log.error(`score verify-send: expected bucket missing: ${p} (run score diff first)`); return 1; }
     const c = readFileSync(p, "utf8");
-    if (c.split("\n").some((l) => l.length > 0)) parts.push(c.replace(/\n+$/, ""));
+    if (c.split("\n").some((l) => l.length > 0)) workers.push(c.replace(/\n+$/, ""));
   }
-  const items = parts.join("\n");
-  atomicWrite(join(art, `verify-claims-${instrument}.txt`), items ? items + "\n" : "");
+  const items = workers.join("\n");
+  atomicWrite(join(art, `verify-claims-${agent}.txt`), items ? items + "\n" : "");
 
-  if (!items) { atomicWrite(stateFile, "VS=skipped\n"); log.ok(`score verify-send: ${instrument} VS=skipped (no claims to verify)`); return 0; }
+  if (!items) { atomicWrite(stateFile, "VS=skipped\n"); log.ok(`score verify-send: ${agent} VS=skipped (no claims to verify)`); return 0; }
 
-  const verifyPath = join(partDir(instrument, provider, topic), "verify.md");
-  const promptFile = join(art, `${instrument}_verify_prompt.md`);
+  const verifyPath = join(workerDir(agent, provider, topic), "verify.md");
+  const promptFile = join(art, `${agent}_verify_prompt.md`);
   atomicWrite(promptFile, skillHintAppend(join(art, "skill.txt"), composeVerifyPrompt(items, verifyPath)));
 
-  const offset = d.offsetFor(instrument, provider, topic);
+  const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}\n`);
-  const rc = await d.send(["--from", "maestro", instrument, topic, `@${promptFile}`]);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
   if (rc !== 0) { log.error(`score verify-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`); return 1; }
-  log.ok(`score verify-send: ${instrument} offset=${offset}`);
+  log.ok(`score verify-send: ${agent} offset=${offset}`);
   return 0;
 }
 
 async function verifyWaitRun(rest: string[]): Promise<number> {
-  const [topic, instrument, provider] = rest;
-  if (!topic || !instrument || !provider) { log.error("usage: score verify-wait <topic> <instrument> <provider>"); return 2; }
-  return verifyWaitWith(topic, instrument, provider, liveResearchWaitDeps);
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: score verify-wait <topic> <agent> <provider>"); return 2; }
+  return verifyWaitWith(topic, agent, provider, liveResearchWaitDeps);
 }
 
-export async function verifyWaitWith(topic: string, instrument: string, provider: string, d: WaitDeps): Promise<number> {
+export async function verifyWaitWith(topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> {
   const art = scoreArtDir(topic);
-  const stateFile = join(art, `verify-${instrument}.txt`);
+  const stateFile = join(art, `verify-${agent}.txt`);
   if (!existsSync(stateFile)) { log.error(`score verify-wait: ${stateFile} missing (run score verify-send first)`); return 1; }
   const text = readFileSync(stateFile, "utf8");
 
   if (lastTag(text, "VS") === "skipped") { // empty-scope short-circuit
-    writeFileSync(join(art, `verify-${instrument}.done`), "");
-    log.ok(`score verify-wait: ${instrument} VS=skipped (already)`);
+    writeFileSync(join(art, `verify-${agent}.done`), "");
+    log.ok(`score verify-wait: ${agent} VS=skipped (already)`);
     return 0;
   }
   const offset = parseLatestOffset(text);
   if (offset === null) { log.error(`score verify-wait: OFFSET not set in ${stateFile}`); return 1; }
 
   const timeout = scaledTimeout(consultTimeout("verify"), d.multiplier(provider));
-  log.info(`score verify-wait: ${instrument} offset=${offset} timeout=${timeout}s`);
-  const ev = await d.wait(instrument, provider, topic, offset, ["done", "error", "question"], timeout);
+  log.info(`score verify-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, ["done", "error", "question"], timeout);
 
-  const verifyPath = join(partDir(instrument, provider, topic), "verify.md");
+  const verifyPath = join(workerDir(agent, provider, topic), "verify.md");
   const verifyText = readIfExistsOrNull(verifyPath);
   const vs = verifyState(ev, verifyText);
 
   if (vs === "question" && ev) {
-    atomicWrite(join(art, `question-${instrument}.txt`), JSON.stringify(ev) + "\n");
-    const bumped = outboxOffset(outboxPath(instrument, provider, topic));
+    atomicWrite(join(art, `question-${agent}.txt`), JSON.stringify(ev) + "\n");
+    const bumped = outboxOffset(outboxPath(agent, provider, topic));
     appendFileSync(stateFile, `OFFSET=${bumped}\nVS=question\n`);
   } else {
     appendFileSync(stateFile, `VS=${vs}\n`);
   }
-  writeFileSync(join(art, `verify-${instrument}.done`), "");
-  log.ok(`score verify-wait: ${instrument} VS=${vs}`);
+  writeFileSync(join(art, `verify-${agent}.done`), "");
+  log.ok(`score verify-wait: ${agent} VS=${vs}`);
   return 0;
 }
 
@@ -398,24 +398,24 @@ export async function adjudicateRun(rest: string[]): Promise<number> {
   const rosterPath = join(art, "roster.txt");
   if (!existsSync(rosterPath)) { log.error("score adjudicate: roster.txt missing"); return 1; }
   const rows = parseRosterFile(readFileSync(rosterPath, "utf8"));
-  if (rows.length < 2) { log.error(`score adjudicate: need >=2 parts, got ${rows.length}`); return 1; }
+  if (rows.length < 2) { log.error(`score adjudicate: need >=2 workers, got ${rows.length}`); return 1; }
 
-  const instruments = rows.map((r) => r.instrument);
+  const agents = rows.map((r) => r.agent);
   const verify: Record<string, string> = {};
   const vs: Record<string, string> = {};
   for (const r of rows) {
-    verify[r.instrument] = readIf(join(partDir(r.instrument, r.provider, topic), "verify.md"));
-    vs[r.instrument] = lastTag(readIf(join(art, `verify-${r.instrument}.txt`)), "VS") ?? "skipped";
+    verify[r.agent] = readIf(join(workerDir(r.agent, r.provider, topic), "verify.md"));
+    vs[r.agent] = lastTag(readIf(join(art, `verify-${r.agent}.txt`)), "VS") ?? "skipped";
   }
   const buckets: Record<string, string> = {};
   const addBucket = (f: string): void => { buckets[f] = readIf(join(art, f)); };
-  for (const c of instruments) addBucket(`${c}_only_items.txt`);
-  if (instruments.length >= 3) {
+  for (const c of agents) addBucket(`${c}_only_items.txt`);
+  if (agents.length >= 3) {
     addBucket("consensus.txt");
-    for (let i = 0; i < instruments.length; i++) for (let j = i + 1; j < instruments.length; j++) addBucket(`${instruments[i]}+${instruments[j]}_only.txt`);
+    for (let i = 0; i < agents.length; i++) for (let j = i + 1; j < agents.length; j++) addBucket(`${agents[i]}+${agents[j]}_only.txt`);
   }
 
-  const input: AdjudicateInput = { parts: rows.map((r) => ({ instrument: r.instrument, provider: r.provider })), verify, vs, buckets };
+  const input: AdjudicateInput = { workers: rows.map((r) => ({ agent: r.agent, provider: r.provider })), verify, vs, buckets };
   atomicWrite(join(art, "adjudicated-draft.md"), adjudicate(input));
   log.ok(`score adjudicate: wrote ${join(art, "adjudicated-draft.md")}`);
   log.info("  cp adjudicated-draft.md -> adjudicated.md, then resolve every '- PENDING:' line");
@@ -455,22 +455,22 @@ export async function waitGateRun(rest: string[]): Promise<number> {
   const rosterPath = join(art, "roster.txt");
   if (!existsSync(rosterPath)) { log.error(`score wait-gate: roster.txt missing at ${art}`); return 2; }
   const rows = parseRosterFile(readFileSync(rosterPath, "utf8"));
-  if (rows.length === 0) { log.error("score wait-gate: roster.txt has no parts"); return 2; }
+  if (rows.length === 0) { log.error("score wait-gate: roster.txt has no workers"); return 2; }
   const key = phase === "research" ? "FS" : "VS";
-  const parts = rows.map((r) => {
-    const stateFile = join(art, `${phase}-${r.instrument}.txt`);
+  const workers = rows.map((r) => {
+    const stateFile = join(art, `${phase}-${r.agent}.txt`);
     return {
-      instrument: r.instrument,
-      doneExists: existsSync(join(art, `${phase}-${r.instrument}.done`)),
+      agent: r.agent,
+      doneExists: existsSync(join(art, `${phase}-${r.agent}.done`)),
       stateText: readIfExistsOrNull(stateFile),
     };
   });
-  const states = gateState(parts, key);
-  for (const s of states) process.stdout.write(`${s.instrument}\t${s.status}\n`);
+  const states = gateState(workers, key);
+  for (const s of states) process.stdout.write(`${s.agent}\t${s.status}\n`);
   return states.every((s) => s.status === "terminal") ? 0 : 1;
 }
 
-// ---- Phase F: drilldown (optional, parts still live) ----
+// ---- Phase F: drilldown (optional, workers still live) ----
 
 interface DrilldownDeps extends SendDeps, WaitDeps {}
 interface DrilldownTestHooks { writeProbe?: (outPath: string) => void; }
@@ -494,27 +494,27 @@ export async function drilldownWith(rest: string[], d: DrilldownDeps, hooks: Dri
 
   const scratch = join(ddDir, "_scratch");
   mkdirSync(scratch, { recursive: true });
-  const parts = [{ inst: i1, model: m1 }, ...(i2 ? [{ inst: i2, model: m2 }] : [])];
+  const workers = [{ inst: i1, model: m1 }, ...(i2 ? [{ inst: i2, model: m2 }] : [])];
 
-  // Resolve all out-paths BEFORE dispatch so parallel parts (distinct by instrument in the filename)
+  // Resolve all out-paths BEFORE dispatch so parallel workers (distinct by agent in the filename)
   // never target the same file.
-  const jobs = parts.map((p) => ({ ...p, outPath: resolveDrilldownPath(scratch, section, p.inst) }));
+  const jobs = workers.map((p) => ({ ...p, outPath: resolveDrilldownPath(scratch, section, p.inst) }));
   const timeout = (provider: string): number => scaledTimeout(DRILLDOWN_TIMEOUT(), d.multiplier(provider));
 
   const results = await Promise.all(jobs.map(async (j) => {
     const promptFile = join(scratch, `.${j.inst}-drill-prompt.md`);
     atomicWrite(promptFile, composeDrilldownPrompt({ section, designDocPath: designDoc, focus, outPath: j.outPath }));
     const offset = d.offsetFor(j.inst, j.model, topic);          // BEFORE send
-    const rc = await d.send(["--from", "maestro", j.inst, topic, `@${promptFile}`]);
+    const rc = await d.send(["--from", "hub", j.inst, topic, `@${promptFile}`]);
     if (rc !== 0) return "missing" as const;
-    hooks.writeProbe?.(j.outPath);                                // test-only: simulate the part's write
+    hooks.writeProbe?.(j.outPath);                                // test-only: simulate the worker's write
     const ev = await d.wait(j.inst, j.model, topic, offset, ["done", "error"], timeout(j.model));
     const fileText = readIfExistsOrNull(j.outPath);
     return drilldownState(ev, fileText);
   }));
 
   const ok = results.filter((r) => r === "ok").length;
-  log.ok(`score drilldown: ${ok}/${jobs.length} parts produced notes`);
+  log.ok(`score drilldown: ${ok}/${jobs.length} workers produced notes`);
   return ok > 0 ? 0 : 1;
 }
 
@@ -523,25 +523,25 @@ export async function drilldownWith(rest: string[], d: DrilldownDeps, hooks: Dri
 export async function offsetResetRun(rest: string[]): Promise<number> {
   const keepFindings = rest.includes("--keep-findings");
   const pos = rest.filter((t) => !t.startsWith("--"));
-  const [topic, instrument, phase] = pos;
-  if (!topic || !instrument || !phase) { log.error("usage: score offset-reset <topic> <instrument> <phase> [--keep-findings]"); return 2; }
+  const [topic, agent, phase] = pos;
+  if (!topic || !agent || !phase) { log.error("usage: score offset-reset <topic> <agent> <phase> [--keep-findings]"); return 2; }
   if (phase !== "research" && phase !== "verify") { log.error(`score offset-reset: phase must be research|verify (got ${phase})`); return 2; }
   const art = scoreArtDir(topic);
   if (!existsSync(art)) { log.error(`score offset-reset: art dir missing: ${art}`); return 1; }
 
-  for (const f of [`${phase}-${instrument}.txt`, `${phase}-${instrument}.done`, `question-${instrument}.txt`])
+  for (const f of [`${phase}-${agent}.txt`, `${phase}-${agent}.done`, `question-${agent}.txt`])
     rmSync(join(art, f), { force: true });
 
   const c = cascadeTargets(phase as ResetPhase, keepFindings);
   if (!keepFindings) {
     const td = topicDir(topic);
     if (existsSync(td)) for (const name of readdirSync(td))
-      if (name.startsWith(`${instrument}-`)) rmSync(join(td, name, c.partFile), { force: true });
+      if (name.startsWith(`${agent}-`)) rmSync(join(td, name, c.workerFile), { force: true });
     for (const f of c.artFiles) rmSync(join(art, f), { force: true });
     const names = readdirSync(art);
     for (const g of c.artGlobs) { const re = new RegExp("^" + g.replace(/[.]/g, "\\.").replace(/\*/g, ".*") + "$"); for (const n of names) if (re.test(n)) rmSync(join(art, n), { force: true }); }
   }
-  log.ok(`score offset-reset: ${phase}/${instrument}${keepFindings ? " (kept findings)" : ""}`);
+  log.ok(`score offset-reset: ${phase}/${agent}${keepFindings ? " (kept findings)" : ""}`);
   return 0;
 }
 

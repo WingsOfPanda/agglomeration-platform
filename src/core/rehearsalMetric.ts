@@ -96,8 +96,8 @@ export function parseMetricMd(text: string): MetricThresholds {
   let minFamilies = 2;
   let c1Epsilon: number | undefined; let c1Budget: number | undefined;
   const opVal = (s: string): [string, string] => {
-    const parts = s.trim().split(/\s+/);
-    return [parts[0] ?? "", parts.slice(1).join(" ")];
+    const workers = s.trim().split(/\s+/);
+    return [workers[0] ?? "", workers.slice(1).join(" ")];
   };
   for (const line of text.split("\n")) {
     let m: RegExpMatchArray | null;
@@ -150,7 +150,7 @@ export function formatSotaBlock(input: SotaInput): string {
   }
   let out = lines.join("\n") + "\n";
   if (rendered === 0) {
-    out += "\n_Note: sweep returned no usable references; part-side web search remains available._\n";
+    out += "\n_Note: sweep returned no usable references; worker-side web search remains available._\n";
   }
   return out;
 }

@@ -1,14 +1,14 @@
 ---
-description: Use when a task requires changes in a DIFFERENT git repository than the one you're working in — rather than cd-ing away, open one persistent claude/codex part inside that other repo (repo B) and co-develop with it over open-ended rounds, relaying questions both ways with the user, finishing as a PR there.
+description: Use when a task requires changes in a DIFFERENT git repository than the one you're working in — rather than cd-ing away, open one persistent claude/codex worker inside that other repo (repo B) and co-develop with it over open-ended rounds, relaying questions both ways with the user, finishing as a PR there.
 argument-hint: --repo <abs-repo-path> <opening task> [--provider codex|claude|agy|opencode] [--in-place]
 allowed-tools: Bash, Write, Read, Edit, AskUserQuestion
 ---
 
 # /ap:duet
 
-Open ONE persistent part in the repo named by `--repo` (repo B) and collaborate with it over as many
-rounds as the work needs. You (the conductor) stay in your own repo (repo A); the part edits repo B.
-Use **judgment** on the part's questions: answer the ones you can confidently handle from context;
+Open ONE persistent worker in the repo named by `--repo` (repo B) and collaborate with it over as many
+rounds as the work needs. You (the conductor) stay in your own repo (repo A); the worker edits repo B.
+Use **judgment** on the worker's questions: answer the ones you can confidently handle from context;
 pull in the human via AskUserQuestion only for real decisions (taste, scope, ambiguous trade-offs).
 
 Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
@@ -26,7 +26,7 @@ straight to the playback feed (survives teardown and aborts) and costs nothing. 
 2. Init: `$CS duet init --args-file <args-path>`. On success it prints (stdout is clean; logs go to stderr):
    ```
    SLUG=<slug>
-   INSTRUMENT=<instrument>
+   AGENT=<agent>
    PROVIDER=<provider>
    MODE=<branch|in-place>
    TARGET=<repo-B-abs-path>
@@ -38,11 +38,11 @@ straight to the playback feed (survives teardown and aborts) and costs nothing. 
 
 1. If `MODE=branch`: `$CS duet branch <SLUG>`. On **rc 1** (not a git repo, or repo B already on another
    `feat/duet-*` branch) → abort: `$CS duet summary <SLUG> --aborted setup branch "<reason>"`, print the
-   SUMMARY, stop. (No part spawned, so no `coda`.) If `MODE=in-place`: skip branch entirely.
-2. Spawn the part **in repo B** (NO initial prompt — the brief is round 1):
-   `$CS spawn <INSTRUMENT> <PROVIDER> <SLUG> --cwd <TARGET>`. On **rc 1** (bootstrap failed) → abort:
-   `$CS duet summary <SLUG> --aborted setup spawn-failed "part failed bootstrap"`, print SUMMARY, stop.
-   Do **not** run `coda` — `spawn` already FAILED-archived the part.
+   SUMMARY, stop. (No worker spawned, so no `coda`.) If `MODE=in-place`: skip branch entirely.
+2. Spawn the worker **in repo B** (NO initial prompt — the brief is round 1):
+   `$CS spawn <AGENT> <PROVIDER> <SLUG> --cwd <TARGET>`. On **rc 1** (bootstrap failed) → abort:
+   `$CS duet summary <SLUG> --aborted setup spawn-failed "worker failed bootstrap"`, print SUMMARY, stop.
+   Do **not** run `coda` — `spawn` already FAILED-archived the worker.
 3. Dispatch round 1: `$CS duet round-send <SLUG> 1`, then await it in the background:
    ```
    Bash(command='$CS duet round-wait <SLUG> 1', run_in_background: true, description='duet await round 1')
@@ -53,7 +53,7 @@ straight to the playback feed (survives teardown and aborts) and costs nothing. 
 For the current `<ROUND>` (starting at 1), on each completion notification read the **last** `TS=` line
 from `<SLUG state>/_duet/execute/round-<ROUND>.txt` and branch:
 
-- **`TS=ok`** → the part finished this round. Review its work: read its outbox and run
+- **`TS=ok`** → the worker finished this round. Review its work: read its outbox and run
   `git -C <TARGET> diff` to see the changes. Then decide:
   - **More to do** → choose the next round number `<N>` = `<ROUND>+1`. **Write**
     `<SLUG state>/_duet/execute/followup-<N>.md` with your refinement/next instruction, then
@@ -68,10 +68,10 @@ from `<SLUG state>/_duet/execute/round-<ROUND>.txt` and branch:
     their answer: `$CS duet relay <SLUG> <ROUND> "<human's answer>"`, then re-arm the wait.
   The re-arm resumes past the handled question automatically (round-wait appended a bumped `OFFSET=`).
 - **`TS=failed` or `TS=timeout`** → tell the human; offer to (a) re-arm the same round once more, or
-  (b) abort: `$CS duet summary <SLUG> --aborted round round-wait "part round failed (TS=<ts>)"`, then
-  `$CS coda <INSTRUMENT> <SLUG>`, print SUMMARY, stop.
+  (b) abort: `$CS duet summary <SLUG> --aborted round round-wait "worker round failed (TS=<ts>)"`, then
+  `$CS coda <AGENT> <SLUG>`, print SUMMARY, stop.
 
-At any round you may also need a call the part didn't ask for — use AskUserQuestion directly, then
+At any round you may also need a call the worker didn't ask for — use AskUserQuestion directly, then
 continue.
 
 ## Stage 3 — Verify + finish
@@ -95,18 +95,18 @@ continue.
 ## Stage 4 — Teardown + SUMMARY
 
 1. **Forensics + reflection (BEFORE teardown):** `FORENSICS=$($CS duet forensics <SLUG>)`. If non-empty,
-   tell the user "forensics captured: $FORENSICS", **Read** it and **append** a `## Maestro reflection`
-   section (idempotent: skip if the file already contains the exact header `## Maestro reflection`).
-2. Tear down + archive the part:
+   tell the user "forensics captured: $FORENSICS", **Read** it and **append** a `## Hub reflection`
+   section (idempotent: skip if the file already contains the exact header `## Hub reflection`).
+2. Tear down + archive the worker:
    ```bash
-   ARCHIVED=$($CS coda <INSTRUMENT> <SLUG> 2>&1 | sed -n 's/.*archived [^:]*: //p' | tail -1)
+   ARCHIVED=$($CS coda <AGENT> <SLUG> 2>&1 | sed -n 's/.*archived [^:]*: //p' | tail -1)
    [ -n "$ARCHIVED" ] && printf '%s\n' "$ARCHIVED" > <SLUG state>/_duet/archived-path.txt
    ```
 3. `$CS duet summary <SLUG>` — writes `SUMMARY.md`. Then print it: `cat <SLUG state>/_duet/SUMMARY.md`.
 
 ## Notes
 
-- One part, one repo (repo B), open-ended rounds. This is NOT the retired multi-repo subsystem — no
+- One worker, one repo (repo B), open-ended rounds. This is NOT the retired multi-repo subsystem — no
   discovery, no `--targets`, no DAG.
-- State lives under YOUR (conductor) repo hash; the part just works in repo B via `--cwd`.
+- State lives under YOUR (conductor) repo hash; the worker just works in repo B via `--cwd`.
 - `<SLUG state>` = `<repo-A>/.ap/state/<hash>/<SLUG>` (the conductor's state tree).

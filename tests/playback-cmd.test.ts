@@ -37,7 +37,7 @@ describe("playback survey", () => {
     // A pre-archived file under .reviewed/ must NOT be listed by default.
     const reviewed = join(h.home, "forensics", ".reviewed", "2026-05-29");
     mkdirSync(reviewed, { recursive: true });
-    writeFileSync(join(reviewed, "10-00-00-score-old.md"), forensicsDoc("score", "old", [["status", "state=error", "part=a"]]));
+    writeFileSync(join(reviewed, "10-00-00-score-old.md"), forensicsDoc("score", "old", [["status", "state=error", "worker=a"]]));
     // A seeded ledger so the TRENDS block has content.
     writeFileSync(join(h.home, "forensics", ".trends.json"),
       '{"counts":{"audit_log||ISSUE=todo_marker":{"count":3,"firstSeen":"2026-05-01","lastSeen":"2026-05-30"}}}');
@@ -51,10 +51,10 @@ describe("playback survey", () => {
   });
 
   it("--command filters; --all includes .reviewed/", async () => {
-    writeFileSync(join(froot, "11-00-00-perform-x.md"), forensicsDoc("perform", "x", [["status", "state=error", "part=a"]]));
+    writeFileSync(join(froot, "11-00-00-perform-x.md"), forensicsDoc("perform", "x", [["status", "state=error", "worker=a"]]));
     const reviewed = join(h.home, "forensics", ".reviewed", "2026-05-29");
     mkdirSync(reviewed, { recursive: true });
-    writeFileSync(join(reviewed, "10-00-00-score-y.md"), forensicsDoc("score", "y", [["status", "state=error", "part=b"]]));
+    writeFileSync(join(reviewed, "10-00-00-score-y.md"), forensicsDoc("score", "y", [["status", "state=error", "worker=b"]]));
     await surveyWith({ all: true, command: "score" });
     const t = out.text();
     expect(t).toContain("score\ty");                       // --all surfaced the archived file
@@ -69,8 +69,8 @@ describe("playback survey", () => {
     const { utimesSync } = await import("node:fs");
     const oldF = join(froot, "09-00-00-perform-old.md");
     const newF = join(froot, "12-00-00-perform-new.md");
-    writeFileSync(oldF, forensicsDoc("perform", "old", [["status", "state=error", "part=a"]]));
-    writeFileSync(newF, forensicsDoc("perform", "new", [["status", "state=error", "part=b"]]));
+    writeFileSync(oldF, forensicsDoc("perform", "old", [["status", "state=error", "worker=a"]]));
+    writeFileSync(newF, forensicsDoc("perform", "new", [["status", "state=error", "worker=b"]]));
     const now = Date.now();
     utimesSync(oldF, new Date(now - 3 * 86_400_000), new Date(now - 3 * 86_400_000));
     utimesSync(newF, new Date(now), new Date(now));
@@ -89,7 +89,7 @@ describe("playback archive", () => {
 
   it("accrues the trend and moves files to .reviewed/", async () => {
     const f = join(froot, "11-00-00-perform-x.md");
-    writeFileSync(f, forensicsDoc("perform", "x", [["audit_log", "ISSUE=todo_marker", "audit.log"], ["status", "state=error", "part=a"]]));
+    writeFileSync(f, forensicsDoc("perform", "x", [["audit_log", "ISSUE=todo_marker", "audit.log"], ["status", "state=error", "worker=a"]]));
     const rc = await archiveWith([f], { now: new Date("2026-05-30T00:00:00Z") });
     expect(rc).toBe(0);
     // file moved
@@ -115,7 +115,7 @@ describe("playback archive", () => {
     const reviewed = join(h.home, "forensics", ".reviewed", "2026-05-29");
     mkdirSync(reviewed, { recursive: true });
     const r = join(reviewed, "10-00-00-score-y.md");
-    writeFileSync(r, forensicsDoc("score", "y", [["status", "state=error", "part=b"]]));
+    writeFileSync(r, forensicsDoc("score", "y", [["status", "state=error", "worker=b"]]));
     expect(await archiveWith([r])).toBe(0);
     // not re-moved, ledger empty (skip-before-accrue)
     expect(existsSync(r)).toBe(true);

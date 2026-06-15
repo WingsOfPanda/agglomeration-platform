@@ -23,7 +23,7 @@ Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
 2. **Healthy short-circuit.** If there are **zero** file rows before `TRENDS`, print
    `no new forensics since last playback; ap has been healthy` and stop (nothing to archive).
 3. **Read the findings.** For each surfaced path, `Read` (or one batched `cat` with `---SEP---`
-   separators) the file's `## Mechanical findings` + `## Maestro reflection` sections.
+   separators) the file's `## Mechanical findings` + `## Hub reflection` sections.
 4. **Cluster.** Group findings whose `source` + meaningful `key`/`context` token match (e.g. all
    `audit_log ISSUE=unresolved_placeholder`; all `outbox` timeout events; all `spawn_failure
    reason=<reason>` events). Rank clusters by count, descending.

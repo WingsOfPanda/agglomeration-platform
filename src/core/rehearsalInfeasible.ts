@@ -14,12 +14,12 @@ export function classifyInfeasible(verdict: string | undefined, flags: string[])
   return null;
 }
 
-/** Parse verification.tsv into instrument/exp -> latest verdict (last write wins). */
+/** Parse verification.tsv into agent/exp -> latest verdict (last write wins). */
 export function parseVerdicts(tsv: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const line of tsv.split("\n")) {
     if (!line || line.startsWith("exp_id\t")) continue;
-    const c = line.split("\t");          // exp_id, instrument, verdict, ...
+    const c = line.split("\t");          // exp_id, agent, verdict, ...
     if (c[0] && c[1] && c[2]) out[`${c[1]}/${c[0]}`] = c[2];
   }
   return out;

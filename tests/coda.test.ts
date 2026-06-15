@@ -22,9 +22,9 @@ function deps(alive: Record<string, boolean>) {
 
 describe("coda batch", () => {
   it("sleeps ONCE for a 3-pane batch and killNow each; archive all", async () => {
-    const { calls, d } = deps({ "%violin": true, "%viola": true, "%cello": true });
+    const { calls, d } = deps({ "%bravo": true, "%alpha": true, "%charlie": true });
     await teardownBatch("demo", [
-      { instrument: "violin", model: "codex" }, { instrument: "viola", model: "codex" }, { instrument: "cello", model: "codex" },
+      { agent: "bravo", model: "codex" }, { agent: "alpha", model: "codex" }, { agent: "charlie", model: "codex" },
     ], d as any);
     expect(calls.graceful).toBe(3);
     expect(calls.sleep).toBe(1);              // ONE wait for the whole batch
@@ -33,7 +33,7 @@ describe("coda batch", () => {
   });
   it("no alive panes → no graceful, no sleep, but still archives every pair", async () => {
     const { calls, d } = deps({});
-    await teardownBatch("demo", [{ instrument: "violin", model: "codex" }], d as any);
+    await teardownBatch("demo", [{ agent: "bravo", model: "codex" }], d as any);
     expect(calls.graceful).toBe(0);
     expect(calls.sleep).toBe(0);
     expect(calls.archive).toBe(1);

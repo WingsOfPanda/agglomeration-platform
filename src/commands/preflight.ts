@@ -22,8 +22,8 @@ export async function run(args: string[]): Promise<number> {
   if (!Number.isInteger(n) || n < 2 || n > 4) { log.error(`N must be 2..4; got: '${args[1]}'`); return 2; }
 
   const roster: PreflightEntry[] = rosterArg.split(",").filter(Boolean).map((pair) => {
-    const [instrument, model] = pair.split(":");
-    return { instrument, model };
+    const [agent, model] = pair.split(":");
+    return { agent, model };
   });
   if (roster.length !== n) { log.error(`roster has ${roster.length} entries, expected ${n}`); return 1; }
 
@@ -33,7 +33,7 @@ export async function run(args: string[]): Promise<number> {
   try {
     const out = await preflightLayout(topic, roster, { writePanes: (tsv) => atomicWrite(panesFile, tsv) });
     log.ok(`preflight: ${out.length} panes allocated for topic ${topic}`);
-    for (const o of out) process.stdout.write(`  ${o.instrument}\t${o.pane}\n`);
+    for (const o of out) process.stdout.write(`  ${o.agent}\t${o.pane}\n`);
     return 0;
   } catch (e: any) {
     log.error(`preflight failed: ${e?.message ?? e}`);

@@ -7,7 +7,7 @@ afterEach(() => { if (ORIG === undefined) delete process.env.CLAUDE_PLUGIN_ROOT;
 describe("identityWrite", () => {
   it("throws a clear error naming the resolved root when the template is missing", () => {
     process.env.CLAUDE_PLUGIN_ROOT = "/nonexistent-plugin-root-xyz";
-    expect(() => identityWrite("trumpet", "codex", "some-topic")).toThrow(/identity template not found/);
-    expect(() => identityWrite("trumpet", "codex", "some-topic")).toThrow(/CLAUDE_PLUGIN_ROOT/);
+    expect(() => identityWrite("lima", "codex", "some-topic")).toThrow(/identity template not found/);
+    expect(() => identityWrite("lima", "codex", "some-topic")).toThrow(/CLAUDE_PLUGIN_ROOT/);
   });
 });

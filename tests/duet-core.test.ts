@@ -56,7 +56,7 @@ describe("renderDuetSummary", () => {
   it("emits a command: duet frontmatter and the cross-repo facts", () => {
     const md = renderDuetSummary({
       topic: "t", status: "ok", started: "s", ended: "e", duration: 5,
-      provider: "codex", instrument: "viola", repo: "/abs/repoB", mode: "branch",
+      provider: "codex", agent: "alpha", repo: "/abs/repoB", mode: "branch",
       branch: "feat/duet-t", rounds: 4, verify: "PASS", diffStats: "1 file",
       archived: "/arch", finishResult: "pr\tpr-opened",
     });

@@ -38,7 +38,7 @@ describe("bootstrapFailureArgs", () => {
 describe("captureSpawnFailure", () => {
   it("writes a command:spawn forensics file playback can parse", () => {
     const path = captureSpawnFailure({
-      instrument: "trumpet", model: "codex", topic: "plan-x",
+      agent: "lima", model: "codex", topic: "plan-x",
       reason: "config_error", detail: "identity template not found",
       failureReportPath: "/p/failure-reason.txt",
     });
@@ -53,18 +53,18 @@ describe("captureSpawnFailure", () => {
     const findings = parseMechanicalFindings(md);
     expect(findings.some((f) => f.source === "spawn_failure" && /reason=config_error/.test(f.key))).toBe(true);
     expect(findings.some((f) => /failure_report=\/p\/failure-reason\.txt/.test(f.key))).toBe(true);
-    expect(md).toContain("part=trumpet-codex");
+    expect(md).toContain("worker=lima-codex");
   });
 
   it("emits a single finding when no failure report is given", () => {
     const path = captureSpawnFailure({
-      instrument: "viol", model: "claude", topic: "t", reason: "timeout", detail: NO_EVENT_SENTINEL,
+      agent: "zulu", model: "claude", topic: "t", reason: "timeout", detail: NO_EVENT_SENTINEL,
     });
     expect(parseForensicsFrontmatter(readFileSync(path, "utf8")).nFindings).toBe(1);
   });
 
   it("is best-effort: returns '' and writes nothing when the forensics dir can't be created", () => {
     writeFileSync(join(globalRoot(), "forensics"), "x"); // a FILE where the dir would go -> mkdirSync throws
-    expect(captureSpawnFailure({ instrument: "a", model: "b", topic: "t", reason: "spawn_error", detail: "x" })).toBe("");
+    expect(captureSpawnFailure({ agent: "a", model: "b", topic: "t", reason: "spawn_error", detail: "x" })).toBe("");
   });
 });

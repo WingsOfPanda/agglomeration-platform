@@ -5,17 +5,17 @@
 
 export interface LineageRow {
   expId: string;
-  instrument: string;
+  agent: string;
   parentId: string;
   knobsChanged: string;   // "" for draft / unavailable; the integer count otherwise
   verdict: string;        // draft | improve-single | improve-multi | improve-unverified
   ts: string;
 }
 
-export const LINEAGE_TSV_HEADER = "exp_id\tinstrument\tparent_id\tknobs_changed\tverdict\tts\n";
+export const LINEAGE_TSV_HEADER = "exp_id\tagent\tparent_id\tknobs_changed\tverdict\tts\n";
 
 export function lineageRow(r: LineageRow): string {
-  return `${r.expId}\t${r.instrument}\t${r.parentId}\t${r.knobsChanged}\t${r.verdict}\t${r.ts}\n`;
+  return `${r.expId}\t${r.agent}\t${r.parentId}\t${r.knobsChanged}\t${r.verdict}\t${r.ts}\n`;
 }
 
 /** Count mandated knobs that differ (numeric-tolerant) over the union of keys — mirrors the A3

@@ -39,7 +39,7 @@ async function main(): Promise<number> {
   const rest = argv.slice(1);
 
   if (!sub) { process.stderr.write("ap: missing subcommand\n"); return 2; }
-  if (sub === "_banner") return banner(rest[0] ?? "part", rest[1] ?? "");
+  if (sub === "_banner") return banner(rest[0] ?? "worker", rest[1] ?? "");
 
   // --mint-args-file: the command directives' step 1
   if (rest.includes("--mint-args-file")) { process.stdout.write(runArgsFile(sub) + "\n"); return 0; }

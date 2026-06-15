@@ -3,7 +3,7 @@
 // NOT carry their own done-event line or END_OF_INSTRUCTION: prelude sends them via `send` →
 // `inboxWrite`, which appends exactly one done instruction + one END_OF_INSTRUCTION (same contract
 // as score's composeResearchPrompt/composeVerifyPrompt). Embedding a second here produced a
-// duplicate END_OF_INSTRUCTION in the inbox, which desynced codex parts' terminal `done` event.
+// duplicate END_OF_INSTRUCTION in the inbox, which desynced codex workers' terminal `done` event.
 
 /** The {{LIT_GUIDANCE}} block for the research prompt, keyed on the lit-track classification. */
 export function litGuidance(track: "ON" | "OFF"): string {
@@ -47,7 +47,7 @@ export function composePreludeResearchPrompt(topic: string, writeTo: string, lit
     "",
     "  ## Independent Discovery",
     "  Files / URLs / papers you opened during research that go beyond what the",
-    "  Maestro's identity prompt suggested. Cite at least 3 sources you found on",
+    "  Hub's identity prompt suggested. Cite at least 3 sources you found on",
     "  your own — this is an anti-correlated-blind-spots guard.",
     "",
     "  ## Open questions",
@@ -55,7 +55,7 @@ export function composePreludeResearchPrompt(topic: string, writeTo: string, lit
     "  - <question 2>",
     "",
     "  ## Notes",
-    "  <any free-form additions; not parsed by the Maestro>",
+    "  <any free-form additions; not parsed by the Hub>",
     "",
     "Citation format options:",
     "  - <file path>:<line>          e.g. src/auth/store.py:42",
@@ -65,7 +65,7 @@ export function composePreludeResearchPrompt(topic: string, writeTo: string, lit
     "  - runtime: <command>          e.g. runtime: pytest tests/test_x.py",
     "",
     "Every Approach AND every Tradeoff bullet MUST have a citation in [brackets].",
-    "Bullets without citations will be silently dropped by the Maestro's synthesis —",
+    "Bullets without citations will be silently dropped by the Hub's synthesis —",
     "and if NO approach has a citation, your findings will be flagged as malformed.",
     "",
     "Research methods: use any tool available in your environment. When local",
@@ -76,18 +76,18 @@ export function composePreludeResearchPrompt(topic: string, writeTo: string, lit
     "local-only investigation and note the gap as an [unverified] claim.",
     "",
     "Important: this is NOT a recommendation phase. Do not pick a \"best\" approach.",
-    "Surface the landscape; the Maestro will synthesize the tradeoff matrix and a",
+    "Surface the landscape; the Hub will synthesize the tradeoff matrix and a",
     "separate adversary round will challenge the synthesis before the final landscape",
     "doc is written.",
   ].join("\n");
 }
 
 /** Adversary-phase prompt (port of meditate/adversary.md). Inlines the draft to challenge. */
-export function composeAdversaryPrompt(landscapeDraft: string, instrument: string, outPath: string): string {
+export function composeAdversaryPrompt(landscapeDraft: string, agent: string, outPath: string): string {
   return [
     "You are now playing adversary against a synthesized landscape doc that",
     "was built from your earlier research findings (and the findings of your",
-    "fellow parts). Your job is to break confidence in the synthesis — not",
+    "fellow workers). Your job is to break confidence in the synthesis — not",
     "to validate it.",
     "",
     "Default to skepticism. Assume the synthesis can fail in subtle, high-cost,",
@@ -103,7 +103,7 @@ export function composeAdversaryPrompt(landscapeDraft: string, instrument: strin
     "- Tradeoff matrix rows where the \"Best fit\" assignment is wrong or weakly justified",
     "- Citations that don't actually support the claim attached to them",
     "  (open the cited file/URL and verify the claim is grounded)",
-    "- Convergent findings across parts that may share a correlated blind spot",
+    "- Convergent findings across workers that may share a correlated blind spot",
     "  (e.g., all read the same paper, all missed the same recent development)",
     "- Frames the synthesis adopted that exclude valid alternative frames",
     "  (e.g., assumed online inference when batch is also valid)",
@@ -112,7 +112,7 @@ export function composeAdversaryPrompt(landscapeDraft: string, instrument: strin
     "",
     `Output requirements — write to ${outPath}:`,
     "",
-    `  # Adversary critique: ${instrument}'s pass`,
+    `  # Adversary critique: ${agent}'s pass`,
     "",
     "  ## Verdict",
     "  <one line: needs-attention | minor-revisions | accept>",

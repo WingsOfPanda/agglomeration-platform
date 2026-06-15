@@ -4,7 +4,7 @@
 
 export type ResultStatus = "ok" | "fail" | "timeout" | "cost_blown";
 
-/** FROZEN flat schema written by a codex part at the end of an experiment. */
+/** FROZEN flat schema written by a codex worker at the end of an experiment. */
 export interface ResultJson {
   branch_id: string;
   approach_label: string;
@@ -85,7 +85,7 @@ export function renderScoreboardRow(
 }
 
 export interface ScoreRow {
-  expId: string; instrument: string; metric: string;
+  expId: string; agent: string; metric: string;
   status: string; runtime: string; approach: string; metricName: string;
   /** A2: trigger reason (mismatch / under-run / log-contradiction / audit-knob-drift) when infeasible;
    *  set => the row is routed to the non-ranked `xN` group instead of the ranked leader set. */
@@ -120,21 +120,21 @@ export function buildScoreboard(rows: ScoreRow[], direction?: "maximize" | "mini
     "<!-- scoreboard schema_version=2 -->",
     "# Scoreboard",
     "",
-    "| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |",
+    "| Rank | Experiment | Agent | Metric | Status | Runtime | Approach | metric_name |",
     "|---|---|---|---|---|---|---|---|",
   ];
   let rank = 1;
   for (const r of ranked) {
-    lines.push(`| ${rank} | ${r.expId} | ${r.instrument} | ${renderScoreboardRow(r.metric, r.runtime, r.metricName, r.status, r.approach)} |`);
+    lines.push(`| ${rank} | ${r.expId} | ${r.agent} | ${renderScoreboardRow(r.metric, r.runtime, r.metricName, r.status, r.approach)} |`);
     rank++;
   }
   for (const r of infeasible) {
-    lines.push(`| x${rank} | ${r.expId} | ${r.instrument} | ${renderScoreboardRow(r.metric, r.runtime, r.metricName, `infeasible:${r.infeasibleReason}`, r.approach)} |`);
+    lines.push(`| x${rank} | ${r.expId} | ${r.agent} | ${renderScoreboardRow(r.metric, r.runtime, r.metricName, `infeasible:${r.infeasibleReason}`, r.approach)} |`);
     rank++;
   }
   for (const r of fail) {
     const rankCell = r.status === "partial" ? `~${rank}` : `${rank}`;
-    lines.push(`| ${rankCell} | ${r.expId} | ${r.instrument} | ${renderScoreboardRow("n/a", r.runtime, r.metricName, r.status, r.approach)} |`);
+    lines.push(`| ${rankCell} | ${r.expId} | ${r.agent} | ${renderScoreboardRow("n/a", r.runtime, r.metricName, r.status, r.approach)} |`);
     rank++;
   }
   return lines.join("\n") + "\n";

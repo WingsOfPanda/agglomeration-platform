@@ -1,68 +1,63 @@
 // Morandi 256-color palette (values carried over verbatim from the prior bash lib/colors.sh),
-// re-keyed to instruments grouped by orchestral section for harmony.
-type Section = "strings" | "woodwinds" | "brass" | "percussion" | "keys" | "early" | "tutti";
+// keyed to NATO-phonetic agents grouped into color clusters. Each cluster has a distinct
+// color family so concurrently-spawned agents are visually grouped on their pane borders.
+type Cluster = "azure" | "sage" | "amber" | "slate" | "ivory" | "violet" | "neutral";
 
-interface Entry { section: Section; primary: string; secondary: string; }
+interface Entry { cluster: Cluster; primary: string; secondary: string; }
 
 const PALETTE: Record<string, Entry> = {
-  // strings — cool dusty blues/slate
-  violin:     { section: "strings", primary: "colour110", secondary: "colour187" },
-  viola:      { section: "strings", primary: "colour109", secondary: "colour187" },
-  cello:      { section: "strings", primary: "colour67",  secondary: "colour187" },
-  contrabass: { section: "strings", primary: "colour60",  secondary: "colour250" },
-  harp:       { section: "strings", primary: "colour103", secondary: "colour187" },
-  // woodwinds — sage/olive earth tones
-  flute:      { section: "woodwinds", primary: "colour108", secondary: "colour144" },
-  piccolo:    { section: "woodwinds", primary: "colour144", secondary: "colour247" },
-  oboe:       { section: "woodwinds", primary: "colour100", secondary: "colour137" },
-  clarinet:   { section: "woodwinds", primary: "colour101", secondary: "colour241" },
-  bassoon:    { section: "woodwinds", primary: "colour95",  secondary: "colour241" },
-  recorder:   { section: "woodwinds", primary: "colour152", secondary: "colour187" },
-  // brass — terracotta/warm
-  horn:       { section: "brass", primary: "colour137", secondary: "colour187" },
-  trumpet:    { section: "brass", primary: "colour173", secondary: "colour144" },
-  trombone:   { section: "brass", primary: "colour180", secondary: "colour247" },
-  tuba:       { section: "brass", primary: "colour131", secondary: "colour110" },
-  cornet:     { section: "brass", primary: "colour223", secondary: "colour174" },
-  // percussion — neutral greys
-  timpani:    { section: "percussion", primary: "colour102", secondary: "colour247" },
-  celesta:    { section: "percussion", primary: "colour245", secondary: "colour187" },
-  vibraphone: { section: "percussion", primary: "colour243", secondary: "colour250" },
-  marimba:    { section: "percussion", primary: "colour96",  secondary: "colour250" },
-  xylophone:  { section: "percussion", primary: "colour250", secondary: "colour241" },
-  glockenspiel: { section: "percussion", primary: "colour247", secondary: "colour250" },
-  // keys — cream/beige
-  piano:      { section: "keys", primary: "colour187", secondary: "colour250" },
-  organ:      { section: "keys", primary: "colour181", secondary: "colour250" },
-  harpsichord: { section: "keys", primary: "colour146", secondary: "colour250" },
-  // early — mauve/plum
-  lute:       { section: "early", primary: "colour139", secondary: "colour241" },
-  theorbo:    { section: "early", primary: "colour97",  secondary: "colour187" },
-  viol:       { section: "early", primary: "colour132", secondary: "colour137" },
-  sackbut:    { section: "early", primary: "colour138", secondary: "colour241" },
-  shawm:      { section: "early", primary: "colour174", secondary: "colour250" },
-  crumhorn:   { section: "early", primary: "colour182", secondary: "colour250" },
-  cittern:    { section: "early", primary: "colour218", secondary: "colour250" },
+  // azure — cool dusty blues/slate
+  alpha:    { cluster: "azure", primary: "colour109", secondary: "colour187" },
+  bravo:    { cluster: "azure", primary: "colour110", secondary: "colour187" },
+  charlie:  { cluster: "azure", primary: "colour67",  secondary: "colour187" },
+  delta:    { cluster: "azure", primary: "colour103", secondary: "colour187" },
+  echo:     { cluster: "azure", primary: "colour60",  secondary: "colour250" },
+  // sage — sage/olive earth tones
+  foxtrot:  { cluster: "sage", primary: "colour108", secondary: "colour144" },
+  golf:     { cluster: "sage", primary: "colour100", secondary: "colour137" },
+  hotel:    { cluster: "sage", primary: "colour95",  secondary: "colour241" },
+  india:    { cluster: "sage", primary: "colour101", secondary: "colour241" },
+  juliet:   { cluster: "sage", primary: "colour144", secondary: "colour247" },
+  kilo:     { cluster: "sage", primary: "colour152", secondary: "colour187" },
+  // amber — terracotta/warm
+  lima:     { cluster: "amber", primary: "colour173", secondary: "colour144" },
+  mike:     { cluster: "amber", primary: "colour137", secondary: "colour187" },
+  november: { cluster: "amber", primary: "colour180", secondary: "colour247" },
+  oscar:    { cluster: "amber", primary: "colour131", secondary: "colour110" },
+  papa:     { cluster: "amber", primary: "colour223", secondary: "colour174" },
+  // slate — neutral greys
+  quebec:   { cluster: "slate", primary: "colour102", secondary: "colour247" },
+  romeo:    { cluster: "slate", primary: "colour245", secondary: "colour187" },
+  sierra:   { cluster: "slate", primary: "colour243", secondary: "colour250" },
+  tango:    { cluster: "slate", primary: "colour96",  secondary: "colour250" },
+  uniform:  { cluster: "slate", primary: "colour250", secondary: "colour241" },
+  // ivory — cream/beige
+  victor:   { cluster: "ivory", primary: "colour187", secondary: "colour250" },
+  whiskey:  { cluster: "ivory", primary: "colour181", secondary: "colour250" },
+  xray:     { cluster: "ivory", primary: "colour146", secondary: "colour250" },
+  // violet — mauve/plum
+  yankee:   { cluster: "violet", primary: "colour139", secondary: "colour241" },
+  zulu:     { cluster: "violet", primary: "colour132", secondary: "colour137" },
 };
 
-const FALLBACK: Entry = { section: "tutti", primary: "white", secondary: "default" };
-function entry(instrument: string): Entry { return PALETTE[instrument.toLowerCase()] ?? FALLBACK; }
-function isOrchestral(instrument: string): boolean { return instrument.toLowerCase() in PALETTE; }
+const FALLBACK: Entry = { cluster: "neutral", primary: "white", secondary: "default" };
+function entry(agent: string): Entry { return PALETTE[agent.toLowerCase()] ?? FALLBACK; }
+function isClustered(agent: string): boolean { return agent.toLowerCase() in PALETTE; }
 
-export function sectionFor(instrument: string): Section { return entry(instrument).section; }
-export function colorFor(instrument: string): string { return entry(instrument).primary; }
+export function clusterFor(agent: string): Cluster { return entry(agent).cluster; }
+export function colorFor(agent: string): string { return entry(agent).primary; }
 
-export function labelFor(instrument: string, model: string, topic: string): string {
-  const sec = sectionFor(instrument);
-  const head = isOrchestral(instrument) ? `${sec}-${instrument}` : sec;
+export function labelFor(agent: string, model: string, topic: string): string {
+  const sec = clusterFor(agent);
+  const head = isClustered(agent) ? `${sec}-${agent}` : sec;
   return `${head}:${model}:${topic}`;
 }
 
-export function labelFmt(instrument: string, model: string, topic: string): string {
-  const e = entry(instrument);
-  const head = isOrchestral(instrument)
-    ? `#[fg=${e.primary},bold]${e.section}-${instrument}#[default]`
-    : `#[fg=${e.primary},bold]${e.section}#[default]`;
+export function labelFmt(agent: string, model: string, topic: string): string {
+  const e = entry(agent);
+  const head = isClustered(agent)
+    ? `#[fg=${e.primary},bold]${e.cluster}-${agent}#[default]`
+    : `#[fg=${e.primary},bold]${e.cluster}#[default]`;
   return `${head}:#[fg=${e.secondary},bold]${model}#[default]:${topic}`;
 }
 
@@ -79,8 +74,8 @@ export function renderBannerHead(label: string, color: string): string {
   return [
     "",
     `  ${c}${RULE}${r}`,
-    `  ${b}${c}${label || "part"}${r}`,
-    `  ${c}FINE — pane closing${r}`,
+    `  ${b}${c}${label || "worker"}${r}`,
+    `  ${c}DONE — pane closing${r}`,
     `  ${c}${RULE}${r}`,
     "",
   ].join("\n");
