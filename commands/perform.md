@@ -7,7 +7,7 @@ allowed-tools: Bash, Write, Read, Edit, AskUserQuestion, Skill, TodoWrite, mcp__
 # /ap:perform
 
 Run a worker-implements / Hub-verifies pipeline on `$ARGUMENTS` — the consumer of the
-deploy-schema design doc that `/ap:score` produces. The `tutti` worker stays attached for the
+deploy-schema design doc that `/ap:score` produces. The `lead` worker stays attached for the
 whole run; `tmux select-pane` to watch.
 
 Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
@@ -98,7 +98,7 @@ as specified there and, on *Fall back to codex*, set `PROVIDER=codex` for this s
 worker in the resolved target cwd:
 
 ```bash
-$CS spawn tutti "$PROVIDER" "$TOPIC" --cwd "$(cat "$ART/target_cwd.txt")"
+$CS spawn lead "$PROVIDER" "$TOPIC" --cwd "$(cat "$ART/target_cwd.txt")"
 ```
 
 On spawn failure (non-zero): `$CS perform archive <TOPIC>` and stop (nothing to tear down — the worker
@@ -112,21 +112,21 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
    message** (the worker's `status.json` state is not `idle`, so the send is refused),
    **AskUserQuestion** ("Wait 60s and retry / Force-retry / Abort"):
    - *Wait 60s and retry* — `sleep 60`, then re-run `$CS perform turn-send <TOPIC> <ROUND>`.
-   - *Force-retry* — `$CS perform reset-status <TOPIC> tutti` (atomically resets the worker to `idle`),
+   - *Force-retry* — `$CS perform reset-status <TOPIC> lead` (atomically resets the worker to `idle`),
      then re-run `$CS perform turn-send <TOPIC> <ROUND>`.
    - *Abort* — `$CS coda <TOPIC>` then `$CS perform archive <TOPIC>`; stop.
-   (The single-repo worker is the `tutti` agent.) Any other non-zero rc → surface and stop.
+   (The single-repo worker is the `lead` agent.) Any other non-zero rc → surface and stop.
 2. Wait in the background so your pane stays interactive:
    ```
    Bash(command='$CS perform turn-wait "$TOPIC" "$ROUND"', run_in_background: true,
-        description="hub await tutti round=$ROUND")
+        description="hub await lead round=$ROUND")
    ```
    The default turn budget is 4 hours (`AP_PERFORM_TURN_TIMEOUT_S=14400`); override the env var
    for unusually large or small tasks.
-3. On completion, read `TS=` from `$ART/turn-tutti-<ROUND>.txt` (the **last** `TS=` line). Branch:
+3. On completion, read `TS=` from `$ART/turn-lead-<ROUND>.txt` (the **last** `TS=` line). Branch:
    - **`TS=ok`** → Stage 2.
    - **`TS=failed` / `TS=timeout`** → auto-retry **once**: if `RETRY==0`, set `RETRY=1`,
-     `rm -f $ART/turn-tutti-<ROUND>.txt $ART/turn-tutti-<ROUND>.done $ART/tutti_turn_prompt_<ROUND>.md`,
+     `rm -f $ART/turn-lead-<ROUND>.txt $ART/turn-lead-<ROUND>.done $ART/lead_turn_prompt_<ROUND>.md`,
      and loop back to step 1 (same round). If `RETRY==1` (a second failure), **AskUserQuestion**
      ("Hand-off (preserve the pane + write RESUME.md) / Abort (teardown + archive) / Try-again"):
      - *Hand-off* — write `$ART/RESUME.md` (topic dir, branch, last verdict, manual-takeover steps);
@@ -134,7 +134,7 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
      - *Abort* — `$CS coda <TOPIC>` then `$CS perform archive <TOPIC>`; stop.
      - *Try-again* — `RETRY=0`; loop back to step 1.
    - **`TS=question`** → the worker halted with a question. Read the payload file
-     `$ART/question-tutti-<ROUND>.txt` (KV: `TEXT=` percent-encoded, `CLAIM_KIND=`, `CLAIM_VALUE=`,
+     `$ART/question-lead-<ROUND>.txt` (KV: `TEXT=` percent-encoded, `CLAIM_KIND=`, `CLAIM_VALUE=`,
      `ROUTE=verify|escalate|objection`). Decode `TEXT` with the same scheme `score` uses
      (`%0A`→newline, etc.).
      - **`ROUTE=verify`** — verify the claim against ground truth: run the matching check for
@@ -142,11 +142,11 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
        --verify <value>`, `env`→is the var set, `cmd`→`command -v <value>`, `test`→`timeout 30 bash -c
        <value>`). Compose the reply: `From: hub` then `Verdict: FOUND|NOT FOUND|UNVERIFIABLE` +
        the claim kind/value + the evidence + `Resume implementation.`. Write it to a temp file and
-       deliver: `$CS send --from hub tutti "$TOPIC" @<reply-file>`.
+       deliver: `$CS send --from hub lead "$TOPIC" @<reply-file>`.
      - **`ROUTE=escalate`** (or an unverifiable claim) — **AskUserQuestion** with the decoded `TEXT`
        as the question; write the user's answer to a temp file and deliver it the same way.
      - **`ROUTE=objection`** — the worker believes the plan is wrong. Read the latest `OBJECTIONS=`
-       line from `$ART/turn-tutti-<ROUND>.txt`.
+       line from `$ART/turn-lead-<ROUND>.txt`.
        - If `OBJECTIONS >= 3` (the cap of 2 is exceeded): **force-escalate** — handle exactly like
          `ROUTE=escalate` above (AskUserQuestion with the decoded `TEXT`; deliver the answer). Do
          NOT offer Revise/Override again.
@@ -155,7 +155,7 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
          planned) / Abort"):
          - *Revise* — **Edit** `$ART/design.md` and/or `$ART/plan.md` to address the objection, then
            write a reply to a temp file (`From: hub`, then "Plan updated — re-read the plan and
-           continue.") and deliver it: `$CS send --from hub tutti "$TOPIC" @<reply-file>`.
+           continue.") and deliver it: `$CS send --from hub lead "$TOPIC" @<reply-file>`.
          - *Override* — write a reply (`From: hub`, then "Proceeding as planned: <your reason>.
            Resume implementation.") and deliver it the same way.
          - *Abort* — `$CS coda <TOPIC>` then `$CS perform archive <TOPIC>`; stop.

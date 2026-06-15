@@ -38,7 +38,7 @@ describe("bootstrapFailureArgs", () => {
 describe("captureSpawnFailure", () => {
   it("writes a command:spawn forensics file playback can parse", () => {
     const path = captureSpawnFailure({
-      agent: "trumpet", model: "codex", topic: "plan-x",
+      agent: "lima", model: "codex", topic: "plan-x",
       reason: "config_error", detail: "identity template not found",
       failureReportPath: "/p/failure-reason.txt",
     });
@@ -53,12 +53,12 @@ describe("captureSpawnFailure", () => {
     const findings = parseMechanicalFindings(md);
     expect(findings.some((f) => f.source === "spawn_failure" && /reason=config_error/.test(f.key))).toBe(true);
     expect(findings.some((f) => /failure_report=\/p\/failure-reason\.txt/.test(f.key))).toBe(true);
-    expect(md).toContain("worker=trumpet-codex");
+    expect(md).toContain("worker=lima-codex");
   });
 
   it("emits a single finding when no failure report is given", () => {
     const path = captureSpawnFailure({
-      agent: "viol", model: "claude", topic: "t", reason: "timeout", detail: NO_EVENT_SENTINEL,
+      agent: "zulu", model: "claude", topic: "t", reason: "timeout", detail: NO_EVENT_SENTINEL,
     });
     expect(parseForensicsFrontmatter(readFileSync(path, "utf8")).nFindings).toBe(1);
   });

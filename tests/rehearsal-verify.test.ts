@@ -52,8 +52,8 @@ describe("recomputedFromOutput", () => {
 
 describe("verificationRow", () => {
   it("renders a 6-col tsv row", () => {
-    expect(verificationRow({ expId: "exp-001", agent: "viola", verdict: "verified", reason: "", recomputed: "0.93", ts: "T" }))
-      .toBe("exp-001\tviola\tverified\t\t0.93\tT\n");
+    expect(verificationRow({ expId: "exp-001", agent: "alpha", verdict: "verified", reason: "", recomputed: "0.93", ts: "T" }))
+      .toBe("exp-001\talpha\tverified\t\t0.93\tT\n");
   });
 });
 

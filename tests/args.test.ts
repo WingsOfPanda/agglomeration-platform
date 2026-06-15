@@ -6,7 +6,7 @@ import { tokenizeArgsLine, applyArgsFile, kvParse, ArgsFileError, KvError } from
 
 describe("args", () => {
   it("tokenize preserves quoted phrases + literal metachars", () => {
-    expect(tokenizeArgsLine('violin codex demo "hello world"')).toEqual(["violin", "codex", "demo", "hello world"]);
+    expect(tokenizeArgsLine('bravo codex demo "hello world"')).toEqual(["bravo", "codex", "demo", "hello world"]);
     expect(tokenizeArgsLine('a "; touch /tmp/x; #"')).toEqual(["a", "; touch /tmp/x; #"]);
   });
   it("applyArgsFile passthrough + empty", () => {
@@ -15,8 +15,8 @@ describe("args", () => {
   });
   it("applyArgsFile loads + consumes + appends", () => {
     const f = join(mkdtempSync(join(tmpdir(), "af-")), "args");
-    writeFileSync(f, 'violin codex auth-review "hello world"');
-    expect(applyArgsFile(["--args-file", f, "extra1"])).toEqual(["violin", "codex", "auth-review", "hello world", "extra1"]);
+    writeFileSync(f, 'bravo codex auth-review "hello world"');
+    expect(applyArgsFile(["--args-file", f, "extra1"])).toEqual(["bravo", "codex", "auth-review", "hello world", "extra1"]);
     expect(existsSync(f)).toBe(false); // consumed
   });
   it("applyArgsFile: no path throws code 2", () => {

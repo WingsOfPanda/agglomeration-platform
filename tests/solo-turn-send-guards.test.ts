@@ -24,17 +24,17 @@ const deps = { offsetFor: () => 0, send: async () => 0 };
 
 describe("solo turn-send guards", () => {
   it("L7: fails when the worker outbox is absent ('was it spawned?')", async () => {
-    stageSolo("topic-a", "violin", "claude"); // no outbox.jsonl
+    stageSolo("topic-a", "bravo", "claude"); // no outbox.jsonl
     expect(await turnSendWith("topic-a", 1, deps)).toBe(1);
   });
   it("M2: fails when the worker is not idle (previous turn in flight)", async () => {
-    const { pd } = stageSolo("topic-b", "violin", "claude");
+    const { pd } = stageSolo("topic-b", "bravo", "claude");
     writeFileSync(join(pd, "outbox.jsonl"), "");
     writeFileSync(join(pd, "status.json"), JSON.stringify({ state: "working" }) + "\n");
     expect(await turnSendWith("topic-b", 1, deps)).toBe(1);
   });
   it("proceeds (rc 0) when outbox exists and the worker is idle", async () => {
-    const { pd } = stageSolo("topic-c", "violin", "claude");
+    const { pd } = stageSolo("topic-c", "bravo", "claude");
     writeFileSync(join(pd, "outbox.jsonl"), "");
     writeFileSync(join(pd, "status.json"), JSON.stringify({ state: "idle" }) + "\n");
     writeFileSync(join(soloArtDir("topic-c"), "task-brief.md"), "do x");

@@ -18,10 +18,10 @@ function baseInput(over: Partial<SummaryInput> = {}): SummaryInput {
     floorMet: true, targetMet: false, kSoFar: 1, kRequired: 3, plateau: false,
   };
   const statusRows: StatusRow[] = [
-    { agent: "oboe", phase: "running", current: "exp-002", lastTs: "2026-05-30T11:00:00Z", lastEvent: "progress" },
+    { agent: "golf", phase: "running", current: "exp-002", lastTs: "2026-05-30T11:00:00Z", lastEvent: "progress" },
   ];
   const recentEvents: EventRow[] = [
-    { ts: "2026-05-30T11:00:00Z", agent: "oboe", event: "progress" },
+    { ts: "2026-05-30T11:00:00Z", agent: "golf", event: "progress" },
   ];
   const halt: HaltFlag = { format: "missing" };
   return {
@@ -90,12 +90,12 @@ describe("renderSessionSummary", () => {
     const scoreboardMd = [
       "| Rank | Experiment | Agent | Metric | Status | Runtime | Approach | metric_name |",
       "|---|---|---|---|---|---|---|---|",
-      "| 1 | exp-001 | oboe | 0.91 | ok | 1.0s | a | acc |",
-      "| 2 | exp-002 | oboe | 0.90 | ok | 1.0s | b | acc |",
-      "| 3 | exp-003 | oboe | 0.89 | ok | 1.0s | c | acc |",
-      "| 4 | exp-004 | oboe | 0.88 | ok | 1.0s | d | acc |",
-      "| 5 | exp-005 | oboe | 0.87 | ok | 1.0s | e | acc |",
-      "| 6 | exp-006 | oboe | 0.86 | ok | 1.0s | f | acc |",
+      "| 1 | exp-001 | golf | 0.91 | ok | 1.0s | a | acc |",
+      "| 2 | exp-002 | golf | 0.90 | ok | 1.0s | b | acc |",
+      "| 3 | exp-003 | golf | 0.89 | ok | 1.0s | c | acc |",
+      "| 4 | exp-004 | golf | 0.88 | ok | 1.0s | d | acc |",
+      "| 5 | exp-005 | golf | 0.87 | ok | 1.0s | e | acc |",
+      "| 6 | exp-006 | golf | 0.86 | ok | 1.0s | f | acc |",
     ].join("\n");
     const halt: HaltFlag = {
       format: "structured",
@@ -117,11 +117,11 @@ describe("renderSessionSummary", () => {
     // Status table: rebrand to | Worker | (NOT Trooper)
     expect(out).toContain("| Worker | Phase | Current | Last event |");
     expect(out).not.toContain("Trooper");
-    expect(out).toContain("| oboe | running | exp-002 | 2026-05-30T11:00:00Z progress |");
+    expect(out).toContain("| golf | running | exp-002 | 2026-05-30T11:00:00Z progress |");
 
     // Scoreboard: header + first 5 data rows only (6th excluded)
     expect(out).toContain("| Rank | Experiment | Agent | Metric | Status | Runtime | Approach | metric_name |");
-    expect(out).toContain("| 5 | exp-005 | oboe | 0.87 | ok | 1.0s | e | acc |");
+    expect(out).toContain("| 5 | exp-005 | golf | 0.87 | ok | 1.0s | e | acc |");
     expect(out).not.toContain("exp-006");
 
     // Completion bullets
@@ -132,7 +132,7 @@ describe("renderSessionSummary", () => {
     expect(out).toContain("- Hard cap: YES");
 
     // Recent events
-    expect(out).toContain("- 2026-05-30T11:00:00Z oboe/progress");
+    expect(out).toContain("- 2026-05-30T11:00:00Z golf/progress");
 
     // Warnings (verb pre-formats the bullet lines)
     expect(out).toContain("## Warnings");
@@ -162,9 +162,9 @@ describe("renderSessionSummary", () => {
 
   it("empty current cell renders em-dash", () => {
     const out = renderSessionSummary(baseInput({
-      statusRows: [{ agent: "oboe", phase: "idle", current: "", lastTs: "t", lastEvent: "done" }],
+      statusRows: [{ agent: "golf", phase: "idle", current: "", lastTs: "t", lastEvent: "done" }],
     }));
-    expect(out).toContain("| oboe | idle | — | t done |");
+    expect(out).toContain("| golf | idle | — | t done |");
   });
 
   it("scoreboardMd null → _(scoreboard empty)_", () => {

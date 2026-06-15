@@ -26,7 +26,7 @@ describe("dispatcher (requires npm run build first)", () => {
     expect(path).toContain("/_args/");
   });
   it("_banner renders DONE and exits 0 (fast countdown via AP_BANNER_FAST)", () => {
-    const r = run(["_banner", "strings-violin:codex:demo", "colour110"], { AP_BANNER_FAST: "1" });
+    const r = run(["_banner", "azure-bravo:codex:demo", "colour110"], { AP_BANNER_FAST: "1" });
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("DONE — pane closing");
   });

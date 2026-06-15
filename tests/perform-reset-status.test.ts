@@ -14,11 +14,11 @@ describe("perform reset-status", () => {
   afterEach(() => { h.cleanup(); });
 
   it("atomically writes idle state for the resolved worker", async () => {
-    const pd = workerDir("viola", "codex", "svc");
+    const pd = workerDir("alpha", "codex", "svc");
     mkdirSync(pd, { recursive: true });
-    writeFileSync(join(pd, "pane.json"), JSON.stringify({ agent: "viola", model: "codex" }) + "\n");
+    writeFileSync(join(pd, "pane.json"), JSON.stringify({ agent: "alpha", model: "codex" }) + "\n");
     writeFileSync(join(pd, "status.json"), '{"state":"working"}\n');
-    const rc = await run(["reset-status", "svc", "viola"]);
+    const rc = await run(["reset-status", "svc", "alpha"]);
     expect(rc).toBe(0);
     expect(readFileSync(join(pd, "status.json"), "utf8")).toContain('"state":"idle"');
   });

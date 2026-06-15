@@ -18,10 +18,10 @@ const deps = (scroll = "") => ({
 
 describe("forensics", () => {
   it("timeout, no event_line → file with sentinel", async () => {
-    home(); mkdirSync(workerDir("violin", "codex", "demo"), { recursive: true });
-    const r = await F.captureFailure({ agent: "violin", model: "codex", topic: "demo", paneId: "%999", reason: "timeout" }, deps("line A\nline B"));
+    home(); mkdirSync(workerDir("bravo", "codex", "demo"), { recursive: true });
+    const r = await F.captureFailure({ agent: "bravo", model: "codex", topic: "demo", paneId: "%999", reason: "timeout" }, deps("line A\nline B"));
     expect(r.ok).toBe(true);
-    const txt = readFileSync(join(workerDir("violin", "codex", "demo"), "failure-reason.txt"), "utf8");
+    const txt = readFileSync(join(workerDir("bravo", "codex", "demo"), "failure-reason.txt"), "utf8");
     expect(txt).toContain("# Spawn bootstrap failure");
     expect(txt).toContain("fail_reason:   timeout");
     expect(txt).toContain("ready_timeout: unknown");
@@ -30,11 +30,11 @@ describe("forensics", () => {
     expect(txt).toContain("line A\nline B");
   });
   it("error_event with event_line stored verbatim", async () => {
-    home(); mkdirSync(workerDir("violin", "codex", "demo"), { recursive: true });
+    home(); mkdirSync(workerDir("bravo", "codex", "demo"), { recursive: true });
     const evt = '{"event":"error","reason":"codex_bootstrap_failed","ts":"2026-05-21T10:00:00Z"}';
-    const r = await F.captureFailure({ agent: "violin", model: "codex", topic: "demo", paneId: "%9", reason: "error_event", eventLine: evt }, deps());
+    const r = await F.captureFailure({ agent: "bravo", model: "codex", topic: "demo", paneId: "%9", reason: "error_event", eventLine: evt }, deps());
     expect(r.ok).toBe(true);
-    const txt = readFileSync(join(workerDir("violin", "codex", "demo"), "failure-reason.txt"), "utf8");
+    const txt = readFileSync(join(workerDir("bravo", "codex", "demo"), "failure-reason.txt"), "utf8");
     expect(txt).toContain("fail_reason:   error_event");
     expect(txt).toContain(evt);
   });
@@ -44,8 +44,8 @@ describe("forensics", () => {
     expect(r).toEqual({ ok: false, code: 1 });
   });
   it("invalid reason → code 2", async () => {
-    home(); mkdirSync(workerDir("violin", "codex", "demo"), { recursive: true });
-    const r = await F.captureFailure({ agent: "violin", model: "codex", topic: "demo", paneId: "%1", reason: "kaboom" as any }, deps());
+    home(); mkdirSync(workerDir("bravo", "codex", "demo"), { recursive: true });
+    const r = await F.captureFailure({ agent: "bravo", model: "codex", topic: "demo", paneId: "%1", reason: "kaboom" as any }, deps());
     expect(r).toEqual({ ok: false, code: 2 });
   });
 });
@@ -58,9 +58,9 @@ describe("forensics scrapers", () => {
   });
   it("outbox → error/question events via JSON.parse, labelled by worker; skips non-JSON + done", () => {
     const ob = '{"event":"done","summary":"ok"}\nnot json\n{"event":"error","reason":"boom"}\n{"event":"question","message":"?"}\n';
-    const f = scrapeOutbox(ob, "viola");
+    const f = scrapeOutbox(ob, "alpha");
     expect(f.map((x) => x.source)).toEqual(["outbox", "outbox"]);
-    expect(f.every((x) => x.context === "worker=viola")).toBe(true);
+    expect(f.every((x) => x.context === "worker=alpha")).toBe(true);
     expect(f[0].key).toContain('"event":"error"');
   });
   it("scrapeOutbox captures FLAG:-prefixed notes as part_note, ignores routine notes", () => {
@@ -71,7 +71,7 @@ describe("forensics scrapers", () => {
       '{"event":"error","message":"boom"}',
       '{"event":"question","message":"which?"}',
     ].join("\n");
-    const f = scrapeOutbox(lines, "violin");
+    const f = scrapeOutbox(lines, "bravo");
     expect(f.filter((x) => x.source === "part_note").map((x) => x.key)).toEqual([
       "the harness skipped 3 cases",
       "leftover temp file",
@@ -80,13 +80,13 @@ describe("forensics scrapers", () => {
     expect(f).toHaveLength(4);
   });
   it("scrapeOutbox FLAG: marker is case-insensitive and tolerates leading space", () => {
-    const f = scrapeOutbox('{"event":"progress","note":"  flag: lowercase works"}', "oboe");
-    expect(f).toEqual([{ source: "part_note", key: "lowercase works", context: "worker=oboe" }]);
+    const f = scrapeOutbox('{"event":"progress","note":"  flag: lowercase works"}', "golf");
+    expect(f).toEqual([{ source: "part_note", key: "lowercase works", context: "worker=golf" }]);
   });
   it("status.json state=error; spawn-results rc!=0; logs [error]/log_error", () => {
-    expect(scrapeStatus('{"state":"error","updated":"x"}', "cello")).toEqual([{ source: "status", key: "state=error", context: "worker=cello" }]);
-    expect(scrapeStatus('{"state":"ready"}', "cello")).toEqual([]);
-    expect(scrapeSpawnResults("viola\tcodex\t0\t\ncello\tclaude\t1\tspawn-failed\n").map((x) => x.context)).toEqual(["worker=cello"]);
+    expect(scrapeStatus('{"state":"error","updated":"x"}', "charlie")).toEqual([{ source: "status", key: "state=error", context: "worker=charlie" }]);
+    expect(scrapeStatus('{"state":"ready"}', "charlie")).toEqual([]);
+    expect(scrapeSpawnResults("alpha\tcodex\t0\t\ncharlie\tclaude\t1\tspawn-failed\n").map((x) => x.context)).toEqual(["worker=charlie"]);
     expect(scrapeLogs("all good\n[error] boom\nplain\n", "dispatch.log").length).toBe(1);
   });
 });
@@ -96,13 +96,13 @@ describe("scrapeArtDir + render", () => {
     const topicDir = mkdtempSync(join(tmpdir(), "fz-"));
     const art = join(topicDir, "_score"); mkdirSync(join(art, "design-doc"), { recursive: true });
     writeFileSync(join(art, "design-doc", "audit.log"), "VERDICT=FAIL\nISSUE=no_goal_section\n");
-    writeFileSync(join(art, "spawn-results.tsv"), "viola\tcodex\t1\tspawn-failed\n");
-    const worker = join(topicDir, "viola-codex"); mkdirSync(worker, { recursive: true });
+    writeFileSync(join(art, "spawn-results.tsv"), "alpha\tcodex\t1\tspawn-failed\n");
+    const worker = join(topicDir, "alpha-codex"); mkdirSync(worker, { recursive: true });
     writeFileSync(join(worker, "outbox.jsonl"), '{"event":"error","reason":"x"}\n');
     writeFileSync(join(worker, "status.json"), '{"state":"error"}');
     const f = scrapeArtDir(art);
     expect(f.some((x) => x.source === "audit_log")).toBe(true);
-    expect(f.some((x) => x.source === "outbox" && x.context === "worker=viola-codex")).toBe(true);
+    expect(f.some((x) => x.source === "outbox" && x.context === "worker=alpha-codex")).toBe(true);
     expect(f.some((x) => x.source === "status")).toBe(true);
     expect(f.some((x) => x.source === "spawn_results")).toBe(true);
   });

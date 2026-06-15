@@ -39,24 +39,24 @@ describe("scoreDocPath", () => {
 
 describe("roster file", () => {
   it("format then parse round-trips provider/agent rows", () => {
-    const rows = [{ provider: "codex", agent: "viola" }, { provider: "claude", agent: "cello" }];
+    const rows = [{ provider: "codex", agent: "alpha" }, { provider: "claude", agent: "charlie" }];
     const text = formatRosterFile(rows, "2026-05-29T00:00:00Z");
     expect(text).toContain("by /ap:score");
     expect(parseRosterFile(text)).toEqual(rows);
   });
   it("parse skips #/blank lines and rows missing a field", () => {
-    expect(parseRosterFile("# h\ncodex\tviola\n\nbroken\n")).toEqual([{ provider: "codex", agent: "viola" }]);
+    expect(parseRosterFile("# h\ncodex\talpha\n\nbroken\n")).toEqual([{ provider: "codex", agent: "alpha" }]);
   });
 });
 
 describe("verifyScopeFiles", () => {
   it("N=2: only the other agent's _only_items.txt", () => {
-    expect(verifyScopeFiles("viola", ["viola", "cello"])).toEqual(["cello_only_items.txt"]);
-    expect(verifyScopeFiles("cello", ["viola", "cello"])).toEqual(["viola_only_items.txt"]);
+    expect(verifyScopeFiles("alpha", ["alpha", "charlie"])).toEqual(["charlie_only_items.txt"]);
+    expect(verifyScopeFiles("charlie", ["alpha", "charlie"])).toEqual(["alpha_only_items.txt"]);
   });
   it("N=3: other singles + pairs not containing target (skip consensus + own)", () => {
-    expect(verifyScopeFiles("viola", ["viola", "cello", "harp"]))
-      .toEqual(["cello_only_items.txt", "harp_only_items.txt", "cello+harp_only.txt"]);
+    expect(verifyScopeFiles("alpha", ["alpha", "charlie", "delta"]))
+      .toEqual(["charlie_only_items.txt", "delta_only_items.txt", "charlie+delta_only.txt"]);
   });
 });
 
@@ -71,12 +71,12 @@ describe("lastTag", () => {
 describe("drilldown paths", () => {
   it("resolveDrilldownPath: plain, then -2/-3 collisions (no compounding)", () => {
     const sc = mkdtempSync(join(tmpdir(), "dd-")); mkdirSync(sc, { recursive: true });
-    const p1 = resolveDrilldownPath(sc, "the section", "viola");
-    expect(p1.endsWith(join(sc, "drilldown-the-section-viola.md").slice(-40)) || p1.endsWith("drilldown-the-section-viola.md")).toBe(true);
+    const p1 = resolveDrilldownPath(sc, "the section", "alpha");
+    expect(p1.endsWith(join(sc, "drilldown-the-section-alpha.md").slice(-40)) || p1.endsWith("drilldown-the-section-alpha.md")).toBe(true);
     writeFileSync(p1, "x");
-    const p2 = resolveDrilldownPath(sc, "the section", "viola"); expect(p2.endsWith("drilldown-the-section-viola-2.md")).toBe(true);
+    const p2 = resolveDrilldownPath(sc, "the section", "alpha"); expect(p2.endsWith("drilldown-the-section-alpha-2.md")).toBe(true);
     writeFileSync(p2, "x");
-    const p3 = resolveDrilldownPath(sc, "the section", "viola"); expect(p3.endsWith("drilldown-the-section-viola-3.md")).toBe(true);
+    const p3 = resolveDrilldownPath(sc, "the section", "alpha"); expect(p3.endsWith("drilldown-the-section-alpha-3.md")).toBe(true);
   });
 });
 

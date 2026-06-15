@@ -72,9 +72,9 @@ describe("detectTestCommand (precedence)", () => {
 
 const okFacts = {
   topic: "auth", status: "ok" as const, started: "2026-05-29T06:00:00Z",
-  ended: "2026-05-29T06:05:00Z", duration: 300, provider: "codex", agent: "violin",
+  ended: "2026-05-29T06:05:00Z", duration: 300, provider: "codex", agent: "bravo",
   branch: "feat/solo-auth", verify: "PASS (npm test)", diffStats: " 2 files changed, 9 insertions(+)",
-  archived: "/arch/violin-codex-...", targetCwd: "/proj", branchBase: "abc123",
+  archived: "/arch/bravo-codex-...", targetCwd: "/proj", branchBase: "abc123",
 };
 
 describe("renderSummary", () => {

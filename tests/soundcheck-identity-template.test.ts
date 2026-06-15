@@ -9,7 +9,7 @@ function stageRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "sc-root-"));
   mkdirSync(join(root, "config", "prompt-templates"), { recursive: true });
   writeFileSync(join(root, "config", "contracts.yaml"), "codex:\n  binary: codex\n");
-  writeFileSync(join(root, "config", "agents.yaml"), "violin:\n");
+  writeFileSync(join(root, "config", "agents.yaml"), "bravo:\n");
   return root;
 }
 

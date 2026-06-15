@@ -4,17 +4,17 @@ import { spawnRosterArg, spawnResultsTsv, spawnTally, parsePanesFile } from "../
 
 describe("spawnRosterArg", () => {
   it("formats <agent>:<provider> pairs (model = provider), preserving order", () => {
-    expect(spawnRosterArg([{ provider: "codex", agent: "viola" }, { provider: "claude", agent: "cello" }]))
-      .toBe("viola:codex,cello:claude");
+    expect(spawnRosterArg([{ provider: "codex", agent: "alpha" }, { provider: "claude", agent: "charlie" }]))
+      .toBe("alpha:codex,charlie:claude");
   });
 });
 
 describe("spawnResultsTsv", () => {
   it("one TSV row per worker; reason empty on rc 0, spawn-failed otherwise; trailing newline", () => {
     expect(spawnResultsTsv([
-      { agent: "viola", provider: "codex", rc: 0 },
-      { agent: "cello", provider: "claude", rc: 1 },
-    ])).toBe("viola\tcodex\t0\t\ncello\tclaude\t1\tspawn-failed\n");
+      { agent: "alpha", provider: "codex", rc: 0 },
+      { agent: "charlie", provider: "claude", rc: 1 },
+    ])).toBe("alpha\tcodex\t0\t\ncharlie\tclaude\t1\tspawn-failed\n");
   });
   it("empty input → empty string", () => { expect(spawnResultsTsv([])).toBe(""); });
 });
@@ -29,9 +29,9 @@ describe("spawnTally", () => {
 
 describe("parsePanesFile", () => {
   it("parses TSV agent→pane, skipping #/blank lines", () => {
-    const m = parsePanesFile("# header\nviola\t%3\n\ncello\t%7\n");
-    expect(m.get("viola")).toBe("%3");
-    expect(m.get("cello")).toBe("%7");
+    const m = parsePanesFile("# header\nalpha\t%3\n\ncharlie\t%7\n");
+    expect(m.get("alpha")).toBe("%3");
+    expect(m.get("charlie")).toBe("%7");
     expect(m.size).toBe(2);
   });
 });

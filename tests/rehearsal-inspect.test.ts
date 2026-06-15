@@ -39,19 +39,19 @@ describe("inspectInfeasibleReason", () => {
 describe("parseInspections", () => {
   it("keys agent/exp, last-write-wins, header skipped", () => {
     const tsv = INSPECTION_TSV_HEADER +
-      "exp-001\toboe\treproduced\t\t0.9\tT\n" +
-      "exp-002\toboe\tnot-reproduced\tvalue\t0.5\tT\n" +
-      "exp-002\toboe\tinconclusive\treimpl-failed\t\tT2\n";
+      "exp-001\tgolf\treproduced\t\t0.9\tT\n" +
+      "exp-002\tgolf\tnot-reproduced\tvalue\t0.5\tT\n" +
+      "exp-002\tgolf\tinconclusive\treimpl-failed\t\tT2\n";
     const m = parseInspections(tsv);
-    expect(m["oboe/exp-001"]).toBe("reproduced");
-    expect(m["oboe/exp-002"]).toBe("inconclusive");
+    expect(m["golf/exp-001"]).toBe("reproduced");
+    expect(m["golf/exp-002"]).toBe("inconclusive");
   });
 });
 
 describe("inspectionRow + header", () => {
   it("exact tab layout", () => {
     expect(INSPECTION_TSV_HEADER).toBe("exp_id\tagent\tverdict\treason\treimpl_metric\tts\n");
-    expect(inspectionRow({ expId: "exp-003", agent: "oboe", verdict: "not-reproduced", reason: "value:0.5vs0.9", reimplMetric: "0.5", ts: "T" }))
-      .toBe("exp-003\toboe\tnot-reproduced\tvalue:0.5vs0.9\t0.5\tT\n");
+    expect(inspectionRow({ expId: "exp-003", agent: "golf", verdict: "not-reproduced", reason: "value:0.5vs0.9", reimplMetric: "0.5", ts: "T" }))
+      .toBe("exp-003\tgolf\tnot-reproduced\tvalue:0.5vs0.9\t0.5\tT\n");
   });
 });

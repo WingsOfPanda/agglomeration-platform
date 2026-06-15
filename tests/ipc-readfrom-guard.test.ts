@@ -11,8 +11,8 @@ afterEach(() => { env.cleanup(); });
 describe("readFrom guard (M4)", () => {
   it("degrades to a timeout (null) instead of throwing when the outbox path is unreadable", async () => {
     // make the outbox path a DIRECTORY so openSync(path,'r') throws EISDIR
-    mkdirSync(workerDir("violin", "claude", "t"), { recursive: true });
-    mkdirSync(outboxPath("violin", "claude", "t")); // outbox.jsonl as a dir
-    await expect(outboxWaitSince("violin", "claude", "t", 0, ["done"], 1)).resolves.toBeNull();
+    mkdirSync(workerDir("bravo", "claude", "t"), { recursive: true });
+    mkdirSync(outboxPath("bravo", "claude", "t")); // outbox.jsonl as a dir
+    await expect(outboxWaitSince("bravo", "claude", "t", 0, ["done"], 1)).resolves.toBeNull();
   });
 });
