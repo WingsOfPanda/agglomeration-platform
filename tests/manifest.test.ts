@@ -30,12 +30,14 @@ describe("plugin manifests (installability gate)", () => {
   });
 
   it("version is in sync across package.json, marketplace, and plugin manifests", () => {
-    expect(marketplace.plugins[0].version).toBe(pkg.version);
+    for (const p of marketplace.plugins) {
+      expect(p.version, `marketplace ${p.name} version`).toBe(pkg.version);
+    }
     expect(plugin.version).toBe(pkg.version);
   });
 
   it("plugin name is consistent (ap)", () => {
     expect(plugin.name).toBe("ap");
-    expect(marketplace.plugins[0].name).toBe("ap");
+    expect(marketplace.plugins.some((p: any) => p.name === "ap")).toBe(true);
   });
 });
