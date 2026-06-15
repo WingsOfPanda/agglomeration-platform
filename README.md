@@ -37,6 +37,16 @@ To update later: `/plugin marketplace update`, then re-install/upgrade.
   `/ap:check` to detect what's available and pick your active set.
 - No build step: `dist/ap.cjs` is committed.
 
+### Getting started
+
+1. Install (above), then open a Claude Code session in the repo you want to work in.
+2. Run **`/ap:check`** — it detects which model CLIs (`codex` / `claude` / `agy` / `opencode`) are on
+   your `PATH` and lets you pick the active provider set.
+3. For a fast, unattended change, run **`/ap:quick "<describe the change>"`** — one worker implements
+   it on its own branch while you watch the pane; the hub briefs, verifies, and finishes.
+4. For research-driven work, follow **`/ap:explore` → `/ap:design` → `/ap:implement`**.
+5. **`/ap:list`** shows active workers; **`/ap:stop`** tears them down with a `DONE` banner.
+
 ---
 
 ## Commands
@@ -52,10 +62,11 @@ To update later: `/plugin marketplace update`, then re-install/upgrade.
 | **`/ap:implement`** | Implement a deploy-schema design doc — audit + route, spawn one worker to plan / implement / self-verify, the hub cross-verifies and runs a bounded fix-loop, then finish + teardown. This is the promotion-to-real-code path. |
 | **`/ap:review`** | Review accumulated forensics from `quick`/`design`/`implement`/`explore`/`autoresearch` — surface problems recorded since you last looked, cluster recurring patterns with their lifetime trend, suggest next actions, then archive what was reviewed. |
 | **`/ap:stop`** | Gracefully end workers (a `DONE` banner) and archive their state. |
+| **`/ap:bridge`** | Cross-repo work — open one persistent worker inside a *different* git repo (repo B) and co-develop with it over open-ended rounds, finishing as a PR there, while the hub stays in repo A. |
 
 A typical research-to-code flow: **`explore` → `design` → `implement`** (explore → design → build),
 with **`autoresearch`** as the heavyweight research loop and **`quick`** for fast unattended changes.
-`check` / `list` / `review` / `stop` are the operational glue.
+`check` / `list` / `review` / `stop` are the operational glue, and `bridge` reaches into a second repo.
 
 ---
 
