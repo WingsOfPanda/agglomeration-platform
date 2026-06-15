@@ -12,18 +12,18 @@ export function readProviderList(path: string): string[] {
   try { return parseProviderList(readFileSync(path, "utf8")); } catch { return []; }
 }
 
-export type RosterDecision = "skip" | "auto" | "prompt";
+export type ListDecision = "skip" | "auto" | "prompt";
 
-export interface RosterPlan {
+export interface ListPlan {
   detected: string[];   // validated, detected (menu is built from this)
   prior: string[];      // prior selection reconciled against `detected`
   dropped: string[];    // human-readable notes for prior entries no longer present
-  decision: RosterDecision;
+  decision: ListDecision;
   auto?: string;        // present only when decision === "auto"
 }
 
 /** Pure: reconcile the prior selection against the validated-detected set; compute the prompt decision. */
-export function planRoster(input: { detectedValidated: string[]; prior: string[] }): RosterPlan {
+export function planList(input: { detectedValidated: string[]; prior: string[] }): ListPlan {
   const detected = [...input.detectedValidated];
   const prior = input.prior.filter((p) => detected.includes(p));
   const dropped = input.prior.filter((p) => !detected.includes(p)).map((p) => `${p} (no longer detected)`);
@@ -34,7 +34,7 @@ export function planRoster(input: { detectedValidated: string[]; prior: string[]
 
 /** Render a providers-*.txt body: two header lines (timestamp + subtitle), then one provider per line. */
 export function formatProviderFile(providers: string[], isoStamp: string, subtitle: string): string {
-  return `# generated ${isoStamp} by /ap:soundcheck\n# ${subtitle}\n${providers.join("\n")}${providers.length ? "\n" : ""}`;
+  return `# generated ${isoStamp} by /ap:check\n# ${subtitle}\n${providers.join("\n")}${providers.length ? "\n" : ""}`;
 }
 
 /** The providers-active.txt body. */

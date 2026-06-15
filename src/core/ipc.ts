@@ -17,7 +17,7 @@ export function inboxWrite(i: string, m: string, t: string, task: string, opts?:
   const from = opts?.from ?? "hub";
   if (!SENDER_RE.test(from)) throw new Error(`inboxWrite: invalid sender name '${from}' (allowed: [a-zA-Z0-9_-])`);
   const outbox = outboxPath(i, m, t);
-  // When the task body already specifies its own done-event contract (e.g. the rehearsal experiment
+  // When the task body already specifies its own done-event contract (e.g. the autoresearch experiment
   // template's `summary="experiment exp-NNN metric=… status=…"`), the caller passes noDoneInstruction
   // to suppress this generic one — otherwise the worker receives two conflicting done instructions and
   // the loop's exp-NNN derivation can read the wrong summary.

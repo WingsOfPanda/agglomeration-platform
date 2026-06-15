@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { paneListedFor } from "../src/core/score.js";
+import { paneListedFor } from "../src/core/design.js";
 
 const TSV = "bravo\t%5\ncharlie\t%6\n";
 describe("paneListedFor (L10)", () => {

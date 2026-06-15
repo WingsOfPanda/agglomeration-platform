@@ -14,10 +14,10 @@ function fakeRunner(map: Record<string, { code?: number; stdout?: string }>, log
     },
   };
 }
-const BRANCH_EXISTS = { "git show-ref --verify --quiet refs/heads/feat/duet-x": { code: 0 } };
+const BRANCH_EXISTS = { "git show-ref --verify --quiet refs/heads/feat/bridge-x": { code: 0 } };
 
 describe("finishBranchPrMerge", () => {
-  const opts = { branch: "feat/duet-x", base: "main", hasGh: true, title: "duet: feat/duet-x", body: "b" };
+  const opts = { branch: "feat/bridge-x", base: "main", hasGh: true, title: "bridge: feat/bridge-x", body: "b" };
 
   it("happy path (remote + gh): push → pr create → checkout base → pr merge → pull --ff-only", () => {
     const log: string[] = [];
@@ -25,10 +25,10 @@ describe("finishBranchPrMerge", () => {
     const res = finishBranchPrMerge(r, opts);
     expect(res).toEqual({ action: "pr-merge", outcome: "pr-merged-pulled" });
     const seq = log.join(" | ");
-    expect(seq).toMatch(/git push -q -u origin feat\/duet-x/);
-    expect(seq).toMatch(/gh pr create .*--base main --head feat\/duet-x/);
+    expect(seq).toMatch(/git push -q -u origin feat\/bridge-x/);
+    expect(seq).toMatch(/gh pr create .*--base main --head feat\/bridge-x/);
     expect(seq).toMatch(/git checkout -q main/);
-    expect(seq).toMatch(/gh pr merge feat\/duet-x --merge --delete-branch/);
+    expect(seq).toMatch(/gh pr merge feat\/bridge-x --merge --delete-branch/);
     expect(seq).toMatch(/git pull --ff-only origin main/);
   });
 
@@ -38,7 +38,7 @@ describe("finishBranchPrMerge", () => {
     const res = finishBranchPrMerge(r, opts);
     expect(res).toEqual({ action: "local-merge", outcome: "local-merged-no-remote" });
     expect(log.join(" | ")).not.toMatch(/gh /);
-    expect(log.join(" | ")).toMatch(/git merge --no-edit -q feat\/duet-x/);
+    expect(log.join(" | ")).toMatch(/git merge --no-edit -q feat\/bridge-x/);
   });
 
   it("no gh → push only, base not merged", () => {
@@ -60,7 +60,7 @@ describe("finishBranchPrMerge", () => {
   });
 
   it("no branch (ref missing) → none", () => {
-    const r = fakeRunner({ "git show-ref --verify --quiet refs/heads/feat/duet-x": { code: 1 }, "git remote": { stdout: "origin\n" } });
+    const r = fakeRunner({ "git show-ref --verify --quiet refs/heads/feat/bridge-x": { code: 1 }, "git remote": { stdout: "origin\n" } });
     const res = finishBranchPrMerge(r, opts);
     expect(res).toEqual({ action: "none", outcome: "no-branch" });
   });

@@ -3,7 +3,7 @@ import { writeFileSync, readdirSync, readFileSync, existsSync, type Dirent } fro
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { captureSpawnFailure, bootstrapFailureArgs, NO_EVENT_SENTINEL } from "../src/core/forensics.js";
-import { parseForensicsFrontmatter, parseMechanicalFindings } from "../src/core/playback.js";
+import { parseForensicsFrontmatter, parseMechanicalFindings } from "../src/core/review.js";
 import { globalRoot } from "../src/core/paths.js";
 
 let env: { home: string; cleanup: () => void };
@@ -36,7 +36,7 @@ describe("bootstrapFailureArgs", () => {
 });
 
 describe("captureSpawnFailure", () => {
-  it("writes a command:spawn forensics file playback can parse", () => {
+  it("writes a command:spawn forensics file review can parse", () => {
     const path = captureSpawnFailure({
       agent: "lima", model: "codex", topic: "plan-x",
       reason: "config_error", detail: "identity template not found",

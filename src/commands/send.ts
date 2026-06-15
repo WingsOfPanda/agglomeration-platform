@@ -15,7 +15,7 @@ export async function run(args: string[]): Promise<number> {
   if (!model) { log.error(`no worker '${agent}' on topic '${topic}' (state dir absent)`); log.error(`  spawn first: ap spawn ${agent} <model> ${topic}`); return 1; }
   const pane = paneMetaRead(agent, model, topic);
   if (!pane) { log.error(`pane.json missing for ${agent}-${model} on ${topic}`); return 1; }
-  if (!(await paneAlive(pane))) { log.error(`${agent}'s pane ${pane} is gone (orphan); run ap coda ${agent} ${topic}`); return 1; }
+  if (!(await paneAlive(pane))) { log.error(`${agent}'s pane ${pane} is gone (orphan); run ap stop ${agent} ${topic}`); return 1; }
 
   if (msg.startsWith("@")) {
     const f = msg.slice(1);

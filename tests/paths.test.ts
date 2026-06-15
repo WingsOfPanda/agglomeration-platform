@@ -33,22 +33,22 @@ describe("paths", () => {
   });
   it("runDir: unique, .gitignore, .last, sweep", () => {
     process.env.AP_HOME = mkdtempSync(join(tmpdir(), "rd-"));
-    const a = P.runDir("score");
-    const b = P.runDir("score");
+    const a = P.runDir("design");
+    const b = P.runDir("design");
     expect(a).not.toBe(b);
     expect(readFileSync(join(process.env.AP_HOME, "_run", ".gitignore"), "utf8")).toBe("*\n");
     expect(P.runDirLast()).toBe(b); // no trailing newline
     // stale sweep
-    const stale = join(process.env.AP_HOME, "_run", "score.STALE");
+    const stale = join(process.env.AP_HOME, "_run", "design.STALE");
     mkdirSync(stale);
     const old = (Date.now() - 100000_000) / 1000;
     utimesSync(stale, old, old);
-    P.runDir("score");
+    P.runDir("design");
     expect(existsSync(stale)).toBe(false);
   });
   it("runArgsFile records path with no newline", () => {
     process.env.AP_HOME = mkdtempSync(join(tmpdir(), "ra-"));
-    const f = P.runArgsFile("score");
+    const f = P.runArgsFile("design");
     expect(f).toContain("/_args/");
     const recorded = readFileSync(join(P.runDirLast(), "args-path.txt"), "utf8");
     expect(recorded).toBe(f); // exact, no newline
