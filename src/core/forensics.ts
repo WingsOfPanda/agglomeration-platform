@@ -178,7 +178,7 @@ export function captureArtDir(opts: { artDir: string; command: string; now?: Dat
 }
 
 /** Shared body for each command's `forensics` wind-down verb: usage-guard the topic, capture, report.
- *  Best-effort — rc 0 unless the topic arg is missing (rc 2). Feeds /consort:playback. */
+ *  Best-effort — rc 0 unless the topic arg is missing (rc 2). Feeds /ap:playback. */
 export function runForensics(command: string, artDirFor: (topic: string) => string, topic: string | undefined): number {
   if (!topic) { log.error(`usage: ${command} forensics <topic>`); return 2; }
   const path = captureArtDir({ artDir: artDirFor(topic), command });
@@ -200,7 +200,7 @@ export function bootstrapFailureArgs(
 
 /** Approach A: write a spawn/bootstrap-failure finding straight to the playback feed
  *  (globalRoot()/forensics/<date>/<time>-spawn-<topic>.md, command:spawn), reusing renderArtForensics
- *  so /consort:playback consumes it unchanged. Teardown-independent — works before the part dir exists
+ *  so /ap:playback consumes it unchanged. Teardown-independent — works before the part dir exists
  *  and when teardown never runs. Best-effort: returns the written path, or "" on zero-effect / any
  *  error. Never throws. */
 export function captureSpawnFailure(opts: {
@@ -223,7 +223,7 @@ export function captureSpawnFailure(opts: {
 
 /** Record a Maestro suspicion straight to the playback feed
  *  (globalRoot()/forensics/<date>/<time>-<command>-flag-<topic>.md, source=maestro_flag), reusing
- *  renderArtForensics so /consort:playback consumes it unchanged. Teardown-independent (lands even on
+ *  renderArtForensics so /ap:playback consumes it unchanged. Teardown-independent (lands even on
  *  abort/handoff). Best-effort: returns the written path, or "" on empty note / any error. Never throws. */
 export function recordMaestroFlag(opts: { command: string; topic: string; note: string; now?: Date }): string {
   try {
@@ -239,7 +239,7 @@ export function recordMaestroFlag(opts: { command: string; topic: string; note: 
 }
 
 /** Shared `<command> flag <topic> <note>` verb: usage-guard, record, report. rc 2 on missing
- *  topic/empty note, else rc 0 (best-effort; mirrors runForensics). Feeds /consort:playback. */
+ *  topic/empty note, else rc 0 (best-effort; mirrors runForensics). Feeds /ap:playback. */
 export function runFlag(command: string, topic: string | undefined, note: string): number {
   if (!topic || !note.trim()) { log.error(`usage: ${command} flag <topic> <observation>`); return 2; }
   const path = recordMaestroFlag({ command, topic, note });

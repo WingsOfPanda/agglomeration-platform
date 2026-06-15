@@ -1,4 +1,4 @@
-// Score-walk pure logic for /consort:rehearsal. Faithful to deep-research-score.sh:
+// Score-walk pure logic for /ap:rehearsal. Faithful to deep-research-score.sh:
 // walk parts/*/experiments/*/result.json (ascending), validate+accumulate, build
 // scoreboard + results.tsv, compute sidecar writes/removes + race-guarded phase clears.
 // Pure: FS access injected via ScoreFs; the verb (C5) applies the returned plan.

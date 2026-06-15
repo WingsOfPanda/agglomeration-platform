@@ -1,4 +1,4 @@
-// Completion + time-budget math for /consort:rehearsal. Faithful to
+// Completion + time-budget math for /ap:rehearsal. Faithful to
 // deep-research.sh (check_completion, check_time_budget). Pure functions.
 
 import { parseMetricMd } from "./rehearsalMetric.js";

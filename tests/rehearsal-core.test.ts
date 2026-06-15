@@ -1,4 +1,4 @@
-// tests/rehearsal-core.test.ts — pure logic for /consort:rehearsal (Phase A).
+// tests/rehearsal-core.test.ts — pure logic for /ap:rehearsal (Phase A).
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

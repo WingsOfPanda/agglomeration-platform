@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as K from "../src/core/contracts.js";
 
-afterEach(() => { delete process.env.CONSORT_HOME; });
+afterEach(() => { delete process.env.AP_HOME; });
 function withContracts(yaml: string) {
   const h = mkdtempSync(join(tmpdir(), "ct-"));
-  process.env.CONSORT_HOME = h;
+  process.env.AP_HOME = h;
   writeFileSync(join(h, "contracts.yaml"), yaml);
   return h;
 }

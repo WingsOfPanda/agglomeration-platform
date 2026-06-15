@@ -266,7 +266,7 @@ describe("rehearsal drop-part", () => {
 });
 
 describe("rehearsal experiment timeout env override", () => {
-  const KEY = "CONSORT_REHEARSAL_EXPERIMENT_TIMEOUT_OVERRIDE";
+  const KEY = "AP_REHEARSAL_EXPERIMENT_TIMEOUT_OVERRIDE";
   const orig = process.env[KEY];
   afterEach(() => { if (orig === undefined) delete process.env[KEY]; else process.env[KEY] = orig; });
   it("honors a positive-integer override", () => {
@@ -290,7 +290,7 @@ describe("rehearsal experiment-send", () => {
   // resolveModel (in ipc.ts) looks up the part via topicDir(topic) with NO cwd opt,
   // so it hashes process.cwd(). Scaffold under the same cwd so the part dir + art dir
   // (which thread opts) and resolveModel's lookup all land on one repoHash. home is set
-  // via CONSORT_HOME (freshHome) so the state root agrees regardless.
+  // via AP_HOME (freshHome) so the state root agrees regardless.
   const opts = (h: { home: string }) => ({ home: h.home, cwd: process.cwd() });
 
   /** Scaffold an in-flight topic: art dir + metric.md + topic.txt + part state.txt (idle) +

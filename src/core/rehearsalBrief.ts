@@ -1,4 +1,4 @@
-// Status-brief renderer for /consort:rehearsal. Faithful to deep-research.sh's
+// Status-brief renderer for /ap:rehearsal. Faithful to deep-research.sh's
 // render_status_brief: a compact chat-shaped update emitted after every
 // done/error — header, per-part table, scoreboard top-3, completion line. Pure:
 // the verb gathers per-part data + reads files; this renders. The completion

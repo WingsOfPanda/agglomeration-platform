@@ -1,4 +1,4 @@
-// Lineage advisory for /consort:rehearsal (B2 operators & ideation quality). Pure: no FS/clock.
+// Lineage advisory for /ap:rehearsal (B2 operators & ideation quality). Pure: no FS/clock.
 // Records the Draft/Improve edge per experiment; the audit-knob diff vs a named parent classifies
 // whether an Improve's metric delta is cleanly attributable. Flag-don't-block (A3 philosophy);
 // only "improve-multi" is surfaced by the status brief.

@@ -1,6 +1,6 @@
 // src/core/performQuestions.ts — perform-side QUESTION-CLAIM verifier (Phase A).
 // Byte-faithful port of the prior bash plugin's deploy-questions lib (question payload extractor)
-// + the part-question lib (claim verify dispatcher + reply formatter), rebranded for consort.
+// + the part-question lib (claim verify dispatcher + reply formatter), rebranded for ap.
 // Side effects (git ref resolution, command lookup, diagnostic test runs) shell through an injected
 // Runner so unit tests stay pure. Filesystem (path) + environment (env) checks read ambient state.
 import { existsSync, accessSync, constants, statSync } from "node:fs";
@@ -162,7 +162,7 @@ export function validateQuestionLine(ev: OutboxEvent): boolean {
 }
 
 /** Conductor-side extractor (port of deploy_question_extract_to_payload, deploy-questions.sh:15):
- *  a question OutboxEvent -> the KV payload file body. consort uses the frozen `message` field for
+ *  a question OutboxEvent -> the KV payload file body. ap uses the frozen `message` field for
  *  the reason text (the prior plugin used `text`); `claim:{kind,value}` is the perform discriminator.
  *  Only the newline is percent-encoded at extract time (%0A) — parseQuestionPayload's full table
  *  decodes it. Returns null when there is no usable message. */

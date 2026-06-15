@@ -146,7 +146,7 @@ var init_args = __esm({
 
 // src/core/paths.ts
 function globalRoot(home) {
-  return home ?? process.env.CONSORT_HOME ?? (0, import_node_path.join)((0, import_node_os.homedir)(), ".consort");
+  return home ?? process.env.AP_HOME ?? (0, import_node_path.join)((0, import_node_os.homedir)(), ".ap");
 }
 function pluginRoot() {
   if (process.env.CLAUDE_PLUGIN_ROOT) return process.env.CLAUDE_PLUGIN_ROOT;
@@ -159,8 +159,8 @@ function pluginRoot() {
 }
 function stateRoot(opts) {
   if (opts?.home) return opts.home;
-  if (process.env.CONSORT_HOME) return process.env.CONSORT_HOME;
-  return (0, import_node_path.join)(opts?.cwd ?? process.cwd(), ".consort");
+  if (process.env.AP_HOME) return process.env.AP_HOME;
+  return (0, import_node_path.join)(opts?.cwd ?? process.cwd(), ".ap");
 }
 function ensureGitignore(dir) {
   const gi = (0, import_node_path.join)(dir, ".gitignore");
@@ -553,7 +553,7 @@ function identityWrite(i2, m, t) {
   const tplPath = (0, import_node_path3.join)(root, "config", "prompt-templates", "identity.md");
   if (!(0, import_node_fs6.existsSync)(tplPath)) {
     throw new Error(
-      `identityWrite: identity template not found at ${tplPath} (resolved pluginRoot=${root}). Set CLAUDE_PLUGIN_ROOT to the consort plugin directory, or run consort from it.`
+      `identityWrite: identity template not found at ${tplPath} (resolved pluginRoot=${root}). Set CLAUDE_PLUGIN_ROOT to the ap plugin directory, or run ap from it.`
     );
   }
   const stateDir = partDir(i2, m, t);
@@ -794,7 +794,7 @@ function renderSummary(f) {
     `- ${f.abortedReason ?? "unknown"}`,
     "",
     "## RESUME instructions",
-    `- Read RESUME.md for the state pointer; re-run /consort:solo to retry.`,
+    `- Read RESUME.md for the state pointer; re-run /ap:solo to retry.`,
     ""
   ].join("\n");
 }
@@ -808,7 +808,7 @@ function renderResume(f) {
     `- Branch: ${f.branch}`,
     "",
     "## Manual resume",
-    `- Inspect ${f.artDir}/execute/ for the part's partial work, then re-run /consort:solo.`,
+    `- Inspect ${f.artDir}/execute/ for the part's partial work, then re-run /ap:solo.`,
     ""
   ].join("\n");
 }
@@ -847,7 +847,7 @@ function scoreDocPath(topic, dateUtc, opts) {
 }
 function formatRosterFile(rows, isoStamp) {
   const body = rows.map((r) => `${r.provider}	${r.instrument}`).join("\n");
-  return `# generated ${isoStamp} by /consort:score
+  return `# generated ${isoStamp} by /ap:score
 ${body}${rows.length ? "\n" : ""}`;
 }
 function nonCommentLines(text) {
@@ -919,7 +919,7 @@ function resolveDrilldownPath(scratchDir, section, instrument) {
   return (0, import_node_path5.join)(scratchDir, `${cand}.md`);
 }
 function scoreExportDocPath(repoRoot2, basename4) {
-  return (0, import_node_path5.join)(repoRoot2, "docs", "consort", "specs", basename4);
+  return (0, import_node_path5.join)(repoRoot2, "docs", "ap", "specs", basename4);
 }
 function exportDocTo(topic, destRoot, opts) {
   const ddir = (0, import_node_path5.join)(scoreArtDir(topic, opts), "design-doc");
@@ -928,7 +928,7 @@ function exportDocTo(topic, destRoot, opts) {
   if (hits.length === 0) return null;
   const basename4 = hits[hits.length - 1];
   const dest = scoreExportDocPath(destRoot, basename4);
-  (0, import_node_fs8.mkdirSync)((0, import_node_path5.join)(destRoot, "docs", "consort", "specs"), { recursive: true });
+  (0, import_node_fs8.mkdirSync)((0, import_node_path5.join)(destRoot, "docs", "ap", "specs"), { recursive: true });
   atomicWrite(dest, (0, import_node_fs8.readFileSync)((0, import_node_path5.join)(ddir, basename4), "utf8"));
   return dest;
 }
@@ -8344,7 +8344,7 @@ function formatCollisionError(instrument, model, topic, sessionId) {
   if ((0, import_node_fs9.existsSync)(sidFile)) owner = (0, import_node_fs9.readFileSync)(sidFile, "utf8").split("\n")[0] ?? "";
   const me = sessionId ?? process.env.CLAUDE_CODE_SESSION_ID ?? "unknown";
   if (owner && owner !== me) lines.push(`  owned by another Claude Code session (id=${owner.slice(0, 8)}\u2026, mine=${me.slice(0, 8)}\u2026)`);
-  lines.push(`  or run: /consort:coda ${instrument} ${topic}`);
+  lines.push(`  or run: /ap:coda ${instrument} ${topic}`);
   return lines.join("\n");
 }
 var import_node_fs9, import_node_path6, import_yaml;
@@ -16697,13 +16697,13 @@ function paneBorderArgs() {
       "set-option",
       "-g",
       "pane-border-format",
-      " #{?@cs_label_fmt,#{@cs_label_fmt},#[fg=#{?@cs_color,#{@cs_color},default}#,bold]#{?@cs_label,#{@cs_label},#{pane_title}}#[default]} "
+      " #{?@ap_label_fmt,#{@ap_label_fmt},#[fg=#{?@ap_color,#{@ap_color},default}#,bold]#{?@ap_label,#{@ap_label},#{pane_title}}#[default]} "
     ],
     [
       "set-hook",
       "-g",
       "after-select-pane",
-      'set-option -g pane-active-border-style "fg=#{?@cs_color,#{@cs_color},green}"'
+      'set-option -g pane-active-border-style "fg=#{?@ap_color,#{@ap_color},green}"'
     ]
   ];
 }
@@ -16771,27 +16771,27 @@ async function conductorPane() {
 }
 function paneLabelSetArgs(pane, instrument, model, topic) {
   return [
-    setOptionArgs(pane, "@cs_label", labelFor(instrument, model, topic)),
-    setOptionArgs(pane, "@cs_color", colorFor(instrument)),
-    setOptionArgs(pane, "@cs_label_fmt", labelFmt(instrument, model, topic))
+    setOptionArgs(pane, "@ap_label", labelFor(instrument, model, topic)),
+    setOptionArgs(pane, "@ap_color", colorFor(instrument)),
+    setOptionArgs(pane, "@ap_label_fmt", labelFmt(instrument, model, topic))
   ];
 }
 async function paneLabelSet(pane, instrument, model, topic) {
   for (const args of paneLabelSetArgs(pane, instrument, model, topic)) await execa("tmux", args);
 }
 function gracefulRespawnCommand(snap, pluginRoot2, label, color) {
-  return `cat '${snap}'; node '${pluginRoot2}/dist/consort.cjs' _banner '${label}' '${color}'; rm -f '${snap}'`;
+  return `cat '${snap}'; node '${pluginRoot2}/dist/ap.cjs' _banner '${label}' '${color}'; rm -f '${snap}'`;
 }
 async function paneLabel(pane) {
   try {
-    return (await execa("tmux", ["display-message", "-p", "-t", pane, "#{@cs_label}"])).stdout;
+    return (await execa("tmux", ["display-message", "-p", "-t", pane, "#{@ap_label}"])).stdout;
   } catch {
     return "";
   }
 }
 async function paneColor(pane) {
   try {
-    return (await execa("tmux", ["display-message", "-p", "-t", pane, "#{@cs_color}"])).stdout;
+    return (await execa("tmux", ["display-message", "-p", "-t", pane, "#{@ap_color}"])).stdout;
   } catch {
     return "";
   }
@@ -17276,7 +17276,7 @@ ${ob}
       initial = initial.replace(/^"|"$/g, "");
       inboxWrite(instrument, model, topic, initial);
       await paneSend(pane, `Read ${inboxPath(instrument, model, topic)} and execute the task. Reply when done.`);
-      log.info(`use: consort collect ${instrument} ${topic}  (to wait for {done})`);
+      log.info(`use: ap collect ${instrument} ${topic}  (to wait for {done})`);
     }
     process.stdout.write(`
   part:    ${labelFor(instrument, model, topic)}
@@ -17339,7 +17339,7 @@ async function run2(args) {
   const model = resolveModel(instrument, topic);
   if (!model) {
     log.error(`no part '${instrument}' on topic '${topic}' (state dir absent)`);
-    log.error(`  spawn first: consort spawn ${instrument} <model> ${topic}`);
+    log.error(`  spawn first: ap spawn ${instrument} <model> ${topic}`);
     return 1;
   }
   const pane = paneMetaRead(instrument, model, topic);
@@ -17348,7 +17348,7 @@ async function run2(args) {
     return 1;
   }
   if (!await paneAlive(pane)) {
-    log.error(`${instrument}'s pane ${pane} is gone (orphan); run consort coda ${instrument} ${topic}`);
+    log.error(`${instrument}'s pane ${pane} is gone (orphan); run ap coda ${instrument} ${topic}`);
     return 1;
   }
   if (msg.startsWith("@")) {
@@ -17367,7 +17367,7 @@ async function run2(args) {
   part:    ${instrument}-${model} on ${topic}
   pane:    ${pane}
   inbox:   ${inbox}
-  status:  queued \u2014 use: consort collect ${instrument} ${topic}  (to wait for {done})
+  status:  queued \u2014 use: ap collect ${instrument} ${topic}  (to wait for {done})
 `);
   return 0;
 }
@@ -17517,7 +17517,7 @@ var init_roster = __esm({
     init_paths();
     init_ipc();
     init_tmux();
-    staleThresholdS = () => Number(process.env.CONSORT_STALE_THRESHOLD_S || "180");
+    staleThresholdS = () => Number(process.env.AP_STALE_THRESHOLD_S || "180");
   }
 });
 
@@ -17702,7 +17702,7 @@ function planRoster(input) {
   return { detected, prior, dropped, decision: "prompt" };
 }
 function formatProviderFile(providers, isoStamp, subtitle) {
-  return `# generated ${isoStamp} by /consort:soundcheck
+  return `# generated ${isoStamp} by /ap:soundcheck
 # ${subtitle}
 ${providers.join("\n")}${providers.length ? "\n" : ""}`;
 }
@@ -17789,17 +17789,17 @@ function rosterSet(providers) {
 }
 function paneBorderDiagnosis(pbs, pbf) {
   const fix = [
-    "  fix: `consort` spawn sets this automatically, or add to ~/.tmux.conf:",
+    "  fix: `ap` spawn sets this automatically, or add to ~/.tmux.conf:",
     "    set -g pane-border-status top",
-    "    set -g pane-border-format ' #{?@cs_label_fmt,#{@cs_label_fmt},#[fg=#{?@cs_color,#{@cs_color},default}#,bold]#{?@cs_label,#{@cs_label},#{pane_title}}#[default]} '"
+    "    set -g pane-border-format ' #{?@ap_label_fmt,#{@ap_label_fmt},#[fg=#{?@ap_color,#{@ap_color},default}#,bold]#{?@ap_label,#{@ap_label},#{pane_title}}#[default]} '"
   ];
   if (pbs !== "top" && pbs !== "bottom") {
     return { ok: false, lines: [`pane-border-status is '${pbs || "off"}'; part labels won't render on pane borders`, ...fix] };
   }
-  if (!pbf.includes("@cs_label")) {
-    return { ok: false, lines: ["pane-border-format doesn't read @cs_label; consort part names won't show on pane borders", ...fix] };
+  if (!pbf.includes("@ap_label")) {
+    return { ok: false, lines: ["pane-border-format doesn't read @ap_label; ap part names won't show on pane borders", ...fix] };
   }
-  return { ok: true, lines: [`pane-border: status=${pbs}, format @cs_label-aware (part names visible)`] };
+  return { ok: true, lines: [`pane-border: status=${pbs}, format @ap_label-aware (part names visible)`] };
 }
 function tmuxGlobalOption(name) {
   try {
@@ -17820,7 +17820,7 @@ function healthCheck() {
     log.error("tmux: not on PATH (install: https://github.com/tmux/tmux)");
     fail = 1;
   } else if (!tmuxVersionOk(ver)) {
-    log.error(`tmux: ${ver} \u2014 consort requires >= 3.0`);
+    log.error(`tmux: ${ver} \u2014 ap requires >= 3.0`);
     fail = 1;
   } else log.ok(`tmux: ${ver}`);
   if (inTmuxSession()) {
@@ -17832,7 +17832,7 @@ function healthCheck() {
       warn = 1;
     }
   } else {
-    log.warn("tmux session: not set \u2014 `tmux new -s consort` before spawning");
+    log.warn("tmux session: not set \u2014 `tmux new -s ap` before spawning");
     warn = 1;
   }
   if ((0, import_node_fs23.existsSync)(root)) log.ok(`state dir: ${root} (writable)`);
@@ -18191,7 +18191,7 @@ function classifyTurn(ev) {
 }
 function composeFixPrompt(issuesText, round) {
   return [
-    `You are entering ROUND ${round} of /consort:solo (fix loop), still on the same branch.`,
+    `You are entering ROUND ${round} of /ap:solo (fix loop), still on the same branch.`,
     "",
     "This is one autonomous turn: fix each issue below, commit per fix, re-run the tests, then report.",
     "",
@@ -18552,7 +18552,7 @@ async function initWith(tokens, d) {
   const art = soloArtDir(slug);
   if ((0, import_node_fs25.existsSync)(art)) {
     log.error(`solo init: topic already in flight: ${art}`);
-    log.error("  run /consort:coda or pick a different topic");
+    log.error("  run /ap:coda or pick a different topic");
     return 2;
   }
   const instrument = d.pickRandomInstrument(slug);
@@ -18848,7 +18848,7 @@ var init_solo2 = __esm({
     init_send2();
     init_fsread();
     liveInitDeps = { haveCmd, instrumentBinary, pickRandomInstrument };
-    SOLO_TURN_TIMEOUT = Number(process.env.CONSORT_SOLO_TURN_TIMEOUT) || 14400;
+    SOLO_TURN_TIMEOUT = Number(process.env.AP_SOLO_TURN_TIMEOUT) || 14400;
   }
 });
 
@@ -19104,7 +19104,7 @@ function classifyTopic(topic) {
 function skillHintAppend(skillTxtPath, basePrompt) {
   let skill = "none";
   if ((0, import_node_fs26.existsSync)(skillTxtPath)) skill = (0, import_node_fs26.readFileSync)(skillTxtPath, "utf8").replace(/\s/g, "");
-  if (process.env.CONSORT_SCORE_SKILL_OVERRIDE === "none") skill = "none";
+  if (process.env.AP_SCORE_SKILL_OVERRIDE === "none") skill = "none";
   if (skill !== "brainstorming" && skill !== "systematic-debugging") return basePrompt;
   const hintFile = (0, import_node_path21.join)(pluginRoot(), "config", "skill-hints", `${skill}.md`);
   if (!(0, import_node_fs26.existsSync)(hintFile)) return basePrompt;
@@ -19256,7 +19256,7 @@ async function initWith2(tokens, d) {
   let roster = d.activeProviders().filter((p) => d.isValidated(p));
   if (roster.length < 2) {
     log.error(`score init: needs >=2 consult-validated providers; got ${roster.length}`);
-    log.error("  just ask Claude directly (this session) \u2014 no /consort:score orchestration needed");
+    log.error("  just ask Claude directly (this session) \u2014 no /ap:score orchestration needed");
     return 1;
   }
   if (roster.length > 3) {
@@ -19266,7 +19266,7 @@ async function initWith2(tokens, d) {
   const art = scoreArtDir(topic);
   if ((0, import_node_fs28.existsSync)(art)) {
     log.error(`score init: topic already in flight: ${art}`);
-    log.error("  run /consort:coda or pick a different topic");
+    log.error("  run /ap:coda or pick a different topic");
     return 2;
   }
   const instruments = d.pickInstruments(topic, roster.length);
@@ -19859,13 +19859,13 @@ var init_score2 = __esm({
       wait: (i2, m, t, off, ev, to) => outboxWaitSince(i2, m, t, off, ev, to),
       multiplier: instrumentTimeoutMultiplier
     };
-    DRILLDOWN_TIMEOUT = () => Number(process.env.CONSORT_DRILLDOWN_TIMEOUT_S) || consultTimeout("research");
+    DRILLDOWN_TIMEOUT = () => Number(process.env.AP_DRILLDOWN_TIMEOUT_S) || consultTimeout("research");
   }
 });
 
 // src/core/perform.ts
 function performArtDir(topic, opts) {
-  const override = process.env.CONSORT_PERFORM_ART_DIR_OVERRIDE;
+  const override = process.env.AP_PERFORM_ART_DIR_OVERRIDE;
   if (override) return override;
   return (0, import_node_path24.join)(topicDir(topic, opts), "_perform");
 }
@@ -20060,7 +20060,7 @@ function composeRound1Prompt2(args) {
   const round = args.round ?? 1;
   const testLog = `${(0, import_node_path25.dirname)(verifyPath)}/test-output-${round}.log`;
   return [
-    `You are entering ROUND ${round} of /consort:perform.`,
+    `You are entering ROUND ${round} of /ap:perform.`,
     "",
     "This is a single-turn workflow: you will write the implementation plan,",
     "implement it, run the test suite, and write the verify report \u2014 all in",
@@ -20104,7 +20104,7 @@ function composeRound1Prompt2(args) {
 function composeFixPrompt2(round, bundleText, verifyPath, testCmd) {
   const testLog = `${(0, import_node_path25.dirname)(verifyPath)}/test-output-${round}.log`;
   return [
-    `You are entering ROUND ${round} of /consort:perform (fix loop).`,
+    `You are entering ROUND ${round} of /ap:perform (fix loop).`,
     "",
     "This is a single-turn workflow: address each issue below, re-run the test",
     "suite, and write the verify report \u2014 all in one autonomous run.",
@@ -20400,7 +20400,7 @@ async function initWith3(tokens, d) {
   }
   const art = performArtDir(topic);
   if ((0, import_node_fs30.existsSync)(art)) {
-    log.error(`perform init: topic already in flight: ${art} (run /consort:coda or pick a different --topic)`);
+    log.error(`perform init: topic already in flight: ${art} (run /ap:coda or pick a different --topic)`);
     return 2;
   }
   const targetCwd = d.repoRoot();
@@ -20852,7 +20852,7 @@ var init_perform2 = __esm({
     init_send2();
     init_solo();
     PART = "tutti";
-    PERFORM_TURN_TIMEOUT = () => Number(process.env.CONSORT_PERFORM_TURN_TIMEOUT_S) || 14400;
+    PERFORM_TURN_TIMEOUT = () => Number(process.env.AP_PERFORM_TURN_TIMEOUT_S) || 14400;
     liveInitDeps3 = { repoRoot };
     liveSendDeps = { offsetFor: (i2, m, t) => outboxOffset(outboxPath(i2, m, t)), send: run2 };
     liveWaitDeps = { wait: outboxWaitSince, multiplier: instrumentTimeoutMultiplier, now: () => Math.floor(Date.now() / 1e3) };
@@ -22591,7 +22591,7 @@ async function initWith4(args, deps) {
     return 3;
   }
   if (!deps.haveCmd(binary)) {
-    log.error("rehearsal init: codex binary not on PATH; install codex and run /consort:soundcheck");
+    log.error("rehearsal init: codex binary not on PATH; install codex and run /ap:soundcheck");
     return 3;
   }
   let slug;
@@ -23174,7 +23174,7 @@ async function experimentSendWith(args, deps) {
   return 0;
 }
 function experimentTimeoutDefault() {
-  const env = process.env.CONSORT_REHEARSAL_EXPERIMENT_TIMEOUT_OVERRIDE;
+  const env = process.env.AP_REHEARSAL_EXPERIMENT_TIMEOUT_OVERRIDE;
   return env && /^[1-9][0-9]*$/.test(env) ? Number(env) : consultTimeout("experiment");
 }
 function liveProbeHardware() {
@@ -23245,9 +23245,9 @@ async function monitorRun(args, opts) {
   const rescanFile = (0, import_node_path30.join)(stateDir, "liveness-rescan-emitted.txt");
   const stateTxt = (0, import_node_path30.join)(stateDir, "state.txt");
   const thresholds = {
-    probeS: Number(process.env.CONSORT_PROBE_S ?? 900),
-    stuckS: Number(process.env.CONSORT_STUCK_S ?? 1800),
-    rescanEveryS: Number(process.env.CONSORT_RESCAN_EVERY_S ?? 30)
+    probeS: Number(process.env.AP_PROBE_S ?? 900),
+    stuckS: Number(process.env.AP_STUCK_S ?? 1800),
+    rescanEveryS: Number(process.env.AP_RESCAN_EVERY_S ?? 30)
   };
   const persist = (state2) => {
     (0, import_node_fs33.writeFileSync)(cursorFile, String(state2.offset));
@@ -24235,7 +24235,7 @@ var init_rehearsal2 = __esm({
           return { ok: false, stderr: err.stderr ?? err.message ?? "" };
         }
       },
-      dryRun: process.env.CONSORT_DRY_RUN === "1"
+      dryRun: process.env.AP_DRY_RUN === "1"
     };
     liveScoreDeps = {
       computeScore,
@@ -24264,12 +24264,12 @@ var init_rehearsal2 = __esm({
     GIB = 1073741824;
     liveFinalizeDeps = {
       now: () => isoUtc(),
-      keepIntermediate: process.env.CONSORT_REHEARSAL_KEEP_INTERMEDIATE ? true : void 0,
-      sizeWarnGb: Number(process.env.CONSORT_REHEARSAL_SIZE_WARN_GB) || 2
+      keepIntermediate: process.env.AP_REHEARSAL_KEEP_INTERMEDIATE ? true : void 0,
+      sizeWarnGb: Number(process.env.AP_REHEARSAL_SIZE_WARN_GB) || 2
     };
     liveRefineDeps = {
       send: (a2) => run2(a2),
-      dryRun: process.env.CONSORT_DRY_RUN === "1"
+      dryRun: process.env.AP_DRY_RUN === "1"
     };
     liveHandoffDeps = { now: () => isoUtc() };
     liveTeardownDeps = {
@@ -24754,7 +24754,7 @@ async function initWith5(tokens, d) {
   let roster = d.activeProviders().filter((p) => d.isValidated(p));
   if (roster.length < 2) {
     log.error(`prelude init: needs >=2 consult-validated providers; got ${roster.length}`);
-    log.error("  just ask Claude directly (this session) \u2014 no /consort:prelude orchestration needed");
+    log.error("  just ask Claude directly (this session) \u2014 no /ap:prelude orchestration needed");
     return 1;
   }
   if (roster.length > 3) {
@@ -24764,7 +24764,7 @@ async function initWith5(tokens, d) {
   const art = preludeArtDir(topic);
   if ((0, import_node_fs35.existsSync)(art)) {
     log.error(`prelude init: topic already in flight: ${art}`);
-    log.error("  run /consort:coda or pick a different topic");
+    log.error("  run /ap:coda or pick a different topic");
     return 2;
   }
   const instruments = d.pickInstruments(topic, roster.length);
@@ -25312,7 +25312,7 @@ function renderDuetResume(f) {
     "",
     "## Restore",
     `- ${restore}`,
-    "- Forensic pointer only: /consort:duet cannot auto-resume an in-flight slug \u2014 run /consort:coda to clear it, then re-run.",
+    "- Forensic pointer only: /ap:duet cannot auto-resume an in-flight slug \u2014 run /ap:coda to clear it, then re-run.",
     ""
   ].join("\n");
 }
@@ -25485,7 +25485,7 @@ async function initWith6(tokens, d) {
   const art = duetArtDir(slug);
   if ((0, import_node_fs36.existsSync)(art)) {
     log.error(`duet init: topic already in flight: ${art}`);
-    log.error("  run /consort:coda or pick a different task");
+    log.error("  run /ap:coda or pick a different task");
     return 2;
   }
   const instrument = d.pickRandomInstrument(slug);
@@ -25835,11 +25835,11 @@ var init_duet2 = __esm({
       isGitRepo: (dir) => runnerAt(dir).run("git", ["rev-parse", "--is-inside-work-tree"]).code === 0,
       headSha: (dir) => runnerAt(dir).run("git", ["rev-parse", "HEAD"]).stdout.trim()
     };
-    DUET_TURN_TIMEOUT = Number(process.env.CONSORT_DUET_TURN_TIMEOUT) || 14400;
+    DUET_TURN_TIMEOUT = Number(process.env.AP_DUET_TURN_TIMEOUT) || 14400;
   }
 });
 
-// src/consort.ts
+// src/ap.ts
 init_args();
 init_paths();
 init_colors();
@@ -25859,7 +25859,7 @@ async function dispatch(fn, args) {
   }
 }
 
-// src/consort.ts
+// src/ap.ts
 async function loadHandlers() {
   const [spawn2, send, collect, roster, coda, soundcheck, preflight, hook, solo, score, perform, playback, rehearsal, prelude, duet] = await Promise.all([
     Promise.resolve().then(() => (init_spawn(), spawn_exports)),
@@ -25900,7 +25900,7 @@ async function banner(label, color) {
   process.stdout.write(renderBannerHead(label, color) + "\n");
   const c3 = ansiFromColor(color);
   const r = "\x1B[0m";
-  const fast = Boolean(process.env.CONSORT_BANNER_FAST);
+  const fast = Boolean(process.env.AP_BANNER_FAST);
   for (let i2 = 8; i2 >= 1; i2--) {
     process.stdout.write(`  ${c3}Closing in ${i2} second${i2 === 1 ? "" : "s"}...${r}\r`);
     if (!fast) await new Promise((res) => setTimeout(res, 1e3));
@@ -25914,7 +25914,7 @@ async function main() {
   const sub = argv[0];
   const rest = argv.slice(1);
   if (!sub) {
-    process.stderr.write("consort: missing subcommand\n");
+    process.stderr.write("ap: missing subcommand\n");
     return 2;
   }
   if (sub === "_banner") return banner(rest[0] ?? "part", rest[1] ?? "");
@@ -25933,7 +25933,7 @@ async function main() {
   const handlers = await loadHandlers();
   const fn = handlers[sub];
   if (!fn) {
-    process.stderr.write(`consort: unknown subcommand '${sub}'
+    process.stderr.write(`ap: unknown subcommand '${sub}'
 `);
     return 2;
   }

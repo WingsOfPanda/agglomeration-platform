@@ -1,4 +1,4 @@
-// src/core/preludeHandoff.ts — handoff-data.kv extraction for /consort:prelude (port of the
+// src/core/preludeHandoff.ts — handoff-data.kv extraction for /ap:prelude (port of the
 // extract-handoff-data helper in meditate.sh). RECONCILED reads: confidence_signals from
 // adversary-skip.txt, adversary_findings_paths from adversary-*.md (the bash read filenames the
 // directive never wrote). Key set + order is FROZEN.

@@ -1,4 +1,4 @@
-// Pure handoff logic for /consort:rehearsal. Faithful to deep-research-handoff-extract.sh
+// Pure handoff logic for /ap:rehearsal. Faithful to deep-research-handoff-extract.sh
 // + the extract-handoff-data helper. Winner source = scoreboard.md first-ok row.
 
 export interface ScoreboardRow { rank: string; expId: string; instrument: string; metric: string; status: string; }

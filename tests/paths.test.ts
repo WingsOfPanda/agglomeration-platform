@@ -5,14 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as P from "../src/core/paths.js";
 
-afterEach(() => { delete process.env.CONSORT_HOME; });
+afterEach(() => { delete process.env.AP_HOME; });
 
 describe("paths", () => {
   it("stateRoot: default vs env-verbatim", () => {
-    delete process.env.CONSORT_HOME;
-    expect(P.stateRoot({ cwd: "/proj" })).toBe("/proj/.consort");
-    process.env.CONSORT_HOME = "/tmp/xx/cs-test";
-    expect(P.stateRoot()).toBe("/tmp/xx/cs-test"); // verbatim, no /.consort suffix
+    delete process.env.AP_HOME;
+    expect(P.stateRoot({ cwd: "/proj" })).toBe("/proj/.ap");
+    process.env.AP_HOME = "/tmp/xx/cs-test";
+    expect(P.stateRoot()).toBe("/tmp/xx/cs-test"); // verbatim, no /.ap suffix
   });
   it("repoHash: 64 lowercase hex, matches node crypto, deterministic", () => {
     const dir = mkdtempSync(join(tmpdir(), "rh-"));
@@ -21,7 +21,7 @@ describe("paths", () => {
     expect(P.repoHash(dir)).toMatch(/^[0-9a-f]{64}$/);
   });
   it("path composition", () => {
-    process.env.CONSORT_HOME = "/R";
+    process.env.AP_HOME = "/R";
     const h = P.repoHash(process.cwd());
     expect(P.repoStateDir()).toBe(`/R/state/${h}`);
     expect(P.topicDir("foo")).toBe(`/R/state/${h}/foo`);
@@ -32,14 +32,14 @@ describe("paths", () => {
     expect(P.isArtifactDir("/a/b/violin-codex")).toBe(false);
   });
   it("runDir: unique, .gitignore, .last, sweep", () => {
-    process.env.CONSORT_HOME = mkdtempSync(join(tmpdir(), "rd-"));
+    process.env.AP_HOME = mkdtempSync(join(tmpdir(), "rd-"));
     const a = P.runDir("score");
     const b = P.runDir("score");
     expect(a).not.toBe(b);
-    expect(readFileSync(join(process.env.CONSORT_HOME, "_run", ".gitignore"), "utf8")).toBe("*\n");
+    expect(readFileSync(join(process.env.AP_HOME, "_run", ".gitignore"), "utf8")).toBe("*\n");
     expect(P.runDirLast()).toBe(b); // no trailing newline
     // stale sweep
-    const stale = join(process.env.CONSORT_HOME, "_run", "score.STALE");
+    const stale = join(process.env.AP_HOME, "_run", "score.STALE");
     mkdirSync(stale);
     const old = (Date.now() - 100000_000) / 1000;
     utimesSync(stale, old, old);
@@ -47,19 +47,19 @@ describe("paths", () => {
     expect(existsSync(stale)).toBe(false);
   });
   it("runArgsFile records path with no newline", () => {
-    process.env.CONSORT_HOME = mkdtempSync(join(tmpdir(), "ra-"));
+    process.env.AP_HOME = mkdtempSync(join(tmpdir(), "ra-"));
     const f = P.runArgsFile("score");
     expect(f).toContain("/_args/");
     const recorded = readFileSync(join(P.runDirLast(), "args-path.txt"), "utf8");
     expect(recorded).toBe(f); // exact, no newline
   });
   it("runDirLast throws when absent", () => {
-    process.env.CONSORT_HOME = mkdtempSync(join(tmpdir(), "rl-"));
+    process.env.AP_HOME = mkdtempSync(join(tmpdir(), "rl-"));
     expect(() => P.runDirLast()).toThrow();
   });
   it("activeProvidersPath: prefers active when present, else available", () => {
     const home = mkdtempSync(join(tmpdir(), "ap-"));
-    process.env.CONSORT_HOME = home;
+    process.env.AP_HOME = home;
     // no curated active file yet → resolver returns the medic-detected available path
     expect(P.activeProvidersPath()).toBe(join(home, "providers-available.txt"));
     // once the user-curated active file exists → resolver prefers it

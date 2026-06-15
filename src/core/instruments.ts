@@ -82,6 +82,6 @@ export function formatCollisionError(instrument: string, model: string, topic: s
   if (existsSync(sidFile)) owner = readFileSync(sidFile, "utf8").split("\n")[0] ?? "";
   const me = sessionId ?? process.env.CLAUDE_CODE_SESSION_ID ?? "unknown";
   if (owner && owner !== me) lines.push(`  owned by another Claude Code session (id=${owner.slice(0, 8)}…, mine=${me.slice(0, 8)}…)`);
-  lines.push(`  or run: /consort:coda ${instrument} ${topic}`);
+  lines.push(`  or run: /ap:coda ${instrument} ${topic}`);
   return lines.join("\n");
 }

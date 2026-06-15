@@ -39,7 +39,7 @@ export interface RosterRow { provider: string; instrument: string; }
 /** roster.txt body: a generated-comment header + one `<provider>\t<instrument>` row per part. */
 export function formatRosterFile(rows: RosterRow[], isoStamp: string): string {
   const body = rows.map((r) => `${r.provider}\t${r.instrument}`).join("\n");
-  return `# generated ${isoStamp} by /consort:score\n${body}${rows.length ? "\n" : ""}`;
+  return `# generated ${isoStamp} by /ap:score\n${body}${rows.length ? "\n" : ""}`;
 }
 
 /** Split text into trimmed, non-blank, non-`#`-comment lines. */
@@ -143,13 +143,13 @@ export function resolveDrilldownPath(scratchDir: string, section: string, instru
   return join(scratchDir, `${cand}.md`);
 }
 
-/** Canonical export location for a finished design doc: <repoRoot>/docs/consort/specs/<basename>. */
+/** Canonical export location for a finished design doc: <repoRoot>/docs/ap/specs/<basename>. */
 export function scoreExportDocPath(repoRoot: string, basename: string): string {
-  return join(repoRoot, "docs", "consort", "specs", basename);
+  return join(repoRoot, "docs", "ap", "specs", basename);
 }
 
 /** Copy the single assembled `*-<topic>-design.md` out of `_score/design-doc/` into
- *  `<destRoot>/docs/consort/specs/`. Returns the dest path, or null if no assembled doc exists
+ *  `<destRoot>/docs/ap/specs/`. Returns the dest path, or null if no assembled doc exists
  *  (assemble must have run first). Overwrites on re-run (latest assembled doc wins). */
 export function exportDocTo(topic: string, destRoot: string, opts?: { home?: string; cwd?: string }): string | null {
   const ddir = join(scoreArtDir(topic, opts), "design-doc");
@@ -158,7 +158,7 @@ export function exportDocTo(topic: string, destRoot: string, opts?: { home?: str
   if (hits.length === 0) return null;
   const basename = hits[hits.length - 1];
   const dest = scoreExportDocPath(destRoot, basename);
-  mkdirSync(join(destRoot, "docs", "consort", "specs"), { recursive: true });
+  mkdirSync(join(destRoot, "docs", "ap", "specs"), { recursive: true });
   atomicWrite(dest, readFileSync(join(ddir, basename), "utf8"));
   return dest;
 }

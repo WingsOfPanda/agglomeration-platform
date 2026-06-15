@@ -1,4 +1,4 @@
-// Result-contract logic for /consort:rehearsal. Faithful to deep-research.sh
+// Result-contract logic for /ap:rehearsal. Faithful to deep-research.sh
 // (validate_result_json{,_v033}, scoreboard_render_row, normalize_result) and
 // deep-research-score.sh (scoreboard build + sort). FROZEN wire schema.
 
@@ -100,7 +100,7 @@ function expNum(expId: string): number {
 /** Build the full scoreboard.md. OK rows sorted best-metric-first (metric-desc for a maximize
  *  objective, metric-asc for minimize) / runtime-asc / exp-id; fail+partial grouped below sorted by
  *  exp-id; rank counter continuous; partial -> ~ rank. `direction` from metric.md (undefined =>
- *  maximize, byte-identical to the pre-fix descending sort; a deliberate consort divergence — roadmap C0).
+ *  maximize, byte-identical to the pre-fix descending sort; a deliberate ap divergence — roadmap C0).
  *  A2: ok rows whose `infeasibleReason` is set are routed to a separate `x<rank>` group between the
  *  ranked rows and the fail group (visible but out of the integer-ranked leader set, so
  *  checkCompletion/status-brief — which match only integer ranks — exclude them automatically). */

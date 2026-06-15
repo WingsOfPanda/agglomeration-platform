@@ -1,4 +1,4 @@
-// src/core/playback.ts — pure logic for /consort:playback (forensics review + cross-window trend).
+// src/core/playback.ts — pure logic for /ap:playback (forensics review + cross-window trend).
 // The review half of the forensics system; the capture half lives in core/forensics.ts. Port of the
 // prior plugin's review-forensics.sh / forensics.sh. parseMechanicalFindings is the exact inverse of
 // forensics.renderArtForensics's `- **<source>** <key> _(source: <context>)_` bullet.

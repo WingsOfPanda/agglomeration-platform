@@ -20,16 +20,16 @@ describe("opencode permission check (JSON.parse, not grep)", () => {
 });
 
 describe("soundcheck ensures global config root", () => {
-  it("ensures globalRoot and copies config when CONSORT_HOME dir does not pre-exist", async () => {
+  it("ensures globalRoot and copies config when AP_HOME dir does not pre-exist", async () => {
     const home = join(mkdtempSync(join(tmpdir(), "sc-")), "nested-not-yet"); // does NOT exist
-    const prev = process.env.CONSORT_HOME; process.env.CONSORT_HOME = home;
+    const prev = process.env.AP_HOME; process.env.AP_HOME = home;
     process.env.CLAUDE_PLUGIN_ROOT = process.cwd();
     try {
       await soundcheck([]);                 // must not throw; must create home + copy config
       expect(exists(join(home, "contracts.yaml"))).toBe(true);
       expect(exists(join(home, "instruments.yaml"))).toBe(true);
     } finally {
-      if (prev === undefined) delete process.env.CONSORT_HOME; else process.env.CONSORT_HOME = prev;
+      if (prev === undefined) delete process.env.AP_HOME; else process.env.AP_HOME = prev;
     }
   });
 });

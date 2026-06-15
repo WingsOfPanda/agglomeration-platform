@@ -1,4 +1,4 @@
-// Metric-trust (verify-by-re-execution) pure logic for /consort:rehearsal (research-validity A1).
+// Metric-trust (verify-by-re-execution) pure logic for /ap:rehearsal (research-validity A1).
 // The harness re-runs the part's declared scoring step OUTSIDE the part's pane and adjudicates a
 // verdict. Pure: FS access is injected; the verbs apply the returned plan/rows.
 import { createHash } from "node:crypto";

@@ -34,7 +34,7 @@ export function planRoster(input: { detectedValidated: string[]; prior: string[]
 
 /** Render a providers-*.txt body: two header lines (timestamp + subtitle), then one provider per line. */
 export function formatProviderFile(providers: string[], isoStamp: string, subtitle: string): string {
-  return `# generated ${isoStamp} by /consort:soundcheck\n# ${subtitle}\n${providers.join("\n")}${providers.length ? "\n" : ""}`;
+  return `# generated ${isoStamp} by /ap:soundcheck\n# ${subtitle}\n${providers.join("\n")}${providers.length ? "\n" : ""}`;
 }
 
 /** The providers-active.txt body. */
