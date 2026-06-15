@@ -62,33 +62,33 @@ describe("archive", () => {
   });
 });
 
-describe("archiveTopic supports the score suite", () => {
-  it("moves _score/ into the archive", () => {
-    process.env.AP_HOME = mkdtempSync(join(tmpdir(), "arch-score-"));
-    const topic = "score-demo";
-    const art = join(topicDir(topic), "_score");
+describe("archiveTopic supports the design suite", () => {
+  it("moves _design/ into the archive", () => {
+    process.env.AP_HOME = mkdtempSync(join(tmpdir(), "arch-design-"));
+    const topic = "design-demo";
+    const art = join(topicDir(topic), "_design");
     mkdirSync(art, { recursive: true });
     writeFileSync(join(art, "topic.txt"), "x");
-    A.archiveTopic(topic, "score");
+    A.archiveTopic(topic, "design");
     const dest = join(globalRoot(), "archive", repoHash(), topic);
-    const moved = existsSync(dest) ? readdirSync(dest).some((n) => n.startsWith("_score-")) : false;
+    const moved = existsSync(dest) ? readdirSync(dest).some((n) => n.startsWith("_design-")) : false;
     expect(moved).toBe(true);
   });
 });
 
-describe("archiveTopic supports the rehearsal suite", () => {
-  it("moves _rehearsal/ into the archive and returns the dest path", () => {
-    process.env.AP_HOME = mkdtempSync(join(tmpdir(), "arch-rehearsal-"));
-    const topic = "rehearsal-demo";
+describe("archiveTopic supports the autoresearch suite", () => {
+  it("moves _autoresearch/ into the archive and returns the dest path", () => {
+    process.env.AP_HOME = mkdtempSync(join(tmpdir(), "arch-autoresearch-"));
+    const topic = "autoresearch-demo";
     const td = topicDir(topic);
-    const art = join(td, "_rehearsal");
+    const art = join(td, "_autoresearch");
     mkdirSync(art, { recursive: true });
     writeFileSync(join(art, "x.txt"), "x");
-    const dest = A.archiveTopic(topic, "rehearsal");
-    expect(dest).toMatch(/\/archive\/.+\/_rehearsal-\d{8}T\d{6}Z$/);
+    const dest = A.archiveTopic(topic, "autoresearch");
+    expect(dest).toMatch(/\/archive\/.+\/_autoresearch-\d{8}T\d{6}Z$/);
     expect(existsSync(join(dest!, "x.txt"))).toBe(true);
     // art subdir is moved out of the topic dir (topic dir itself is left empty,
-    // matching the score-suite behavior: rmdir-if-empty is best-effort)
+    // matching the design-suite behavior: rmdir-if-empty is best-effort)
     expect(existsSync(art)).toBe(false);
     expect(existsSync(td) ? readdirSync(td) : []).toEqual([]);
   });

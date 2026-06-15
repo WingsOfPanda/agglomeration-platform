@@ -5,18 +5,18 @@ import { renderBannerHead, ansiFromColor } from "./core/colors.js";
 import { dispatch, type Handler } from "./core/dispatch.js";
 
 async function loadHandlers(): Promise<Record<string, Handler>> {
-  const [spawn, send, collect, roster, coda, soundcheck, preflight, hook, solo, score, perform, playback, rehearsal, prelude, duet] = await Promise.all([
+  const [spawn, send, collect, list, stop, check, preflight, hook, quick, design, implement, review, autoresearch, explore, bridge] = await Promise.all([
     import("./commands/spawn.js"), import("./commands/send.js"), import("./commands/collect.js"),
-    import("./commands/roster.js"), import("./commands/coda.js"), import("./commands/soundcheck.js"),
-    import("./commands/preflight.js"), import("./commands/hook.js"), import("./commands/solo.js"),
-    import("./commands/score.js"), import("./commands/perform.js"), import("./commands/playback.js"),
-    import("./commands/rehearsal.js"), import("./commands/prelude.js"), import("./commands/duet.js"),
+    import("./commands/list.js"), import("./commands/stop.js"), import("./commands/check.js"),
+    import("./commands/preflight.js"), import("./commands/hook.js"), import("./commands/quick.js"),
+    import("./commands/design.js"), import("./commands/implement.js"), import("./commands/review.js"),
+    import("./commands/autoresearch.js"), import("./commands/explore.js"), import("./commands/bridge.js"),
   ]);
   return {
-    spawn: spawn.run, send: send.run, collect: collect.run, roster: roster.run,
-    coda: coda.run, soundcheck: soundcheck.run, preflight: preflight.run, hook: hook.run,
-    solo: solo.run, score: score.run, perform: perform.run, playback: playback.run,
-    rehearsal: rehearsal.run, prelude: prelude.run, duet: duet.run,
+    spawn: spawn.run, send: send.run, collect: collect.run, list: list.run,
+    stop: stop.run, check: check.run, preflight: preflight.run, hook: hook.run,
+    quick: quick.run, design: design.run, implement: implement.run, review: review.run,
+    autoresearch: autoresearch.run, explore: explore.run, bridge: bridge.run,
   };
 }
 

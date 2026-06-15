@@ -38,5 +38,5 @@ describe("auditDoc", () => {
     const i = auditDoc(doc).issues;
     expect(i.indexOf("unresolved_placeholder")).toBeLessThan(i.indexOf("tbd_marker"));
   });
-  it("SLUG_REGEX accepts dotted/hyphen/underscore", () => { expect(SLUG_REGEX.test("a.b-c_d")).toBe(true); });
+  it("SLUG_REGEX accepts dotted/hyphen/underdesign", () => { expect(SLUG_REGEX.test("a.b-c_d")).toBe(true); });
 });

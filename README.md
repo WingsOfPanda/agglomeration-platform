@@ -1,17 +1,18 @@
 # agglomeration-platform
 
-**Multi-model tmux orchestration for Claude Code.** A *conductor* — a Claude Code session running
+**Multi-model tmux orchestration for Claude Code.** A **hub** — a Claude Code session running
 `/ap:*` slash commands — spawns and steers real interactive model TUIs (`codex` / `claude` /
 `agy` / `opencode`) as **tmux panes you can attach to and watch**. Coordination is file-based IPC
 (inbox / outbox / status / pane), so the external model binaries behave exactly as they do on their
-own — agglomeration-platform just conducts them.
+own — agglomeration-platform just orchestrates them.
 
-The metaphor is orchestral: the conductor is the **Maestro**, each model TUI is an **instrument**, a
-worker is a **part**, and instruments are grouped into **sections** (strings / woodwinds / brass /
-percussion / keys / early). The commands are named for musical acts — `score`, `prelude`,
-`rehearsal`, `perform`, `solo`, `playback`.
+The platform agglomerates agents: the orchestrating session is the **hub**, each model TUI is an
+**agent**, a spawned agent working a task is a **worker**, and agents are grouped into color-coded
+**clusters** (azure / sage / amber / slate / ivory / violet) so concurrent panes stay visually
+distinguishable. The commands are plain verbs — `design`, `explore`, `autoresearch`, `implement`,
+`quick`, `review`.
 
-> agglomeration-platform is a TypeScript rewrite of the Bash plugin **clone-wars**. The packaging changed (one
+> agglomeration-platform is a TypeScript rewrite of an earlier Bash plugin. The packaging changed (one
 > committed `dist/ap.cjs`, zero-build install); the wire protocol, state layout, and tmux
 > mechanics are byte-compatible so the model binaries are drop-in.
 
@@ -30,10 +31,10 @@ To update later: `/plugin marketplace update`, then re-install/upgrade.
 
 ### Requirements
 
-- **Claude Code** (the conductor runs as a Claude Code session).
-- **tmux** — every part is a real tmux pane; agglomeration-platform is the only subprocess surface.
+- **Claude Code** (the hub runs as a Claude Code session).
+- **tmux** — every worker is a real tmux pane; agglomeration-platform is the only subprocess surface.
 - **At least one model CLI on `PATH`** — `codex`, `claude`, `agy`, or `opencode`. Run
-  `/ap:soundcheck` to detect what's available and pick your active set.
+  `/ap:check` to detect what's available and pick your active set.
 - No build step: `dist/ap.cjs` is committed.
 
 ---
@@ -42,35 +43,35 @@ To update later: `/plugin marketplace update`, then re-install/upgrade.
 
 | Command | What it does |
 |---|---|
-| **`/ap:soundcheck`** | Health check (tmux / pane-border / state / config / providers) + an interactive roster picker that selects the active provider set for `/ap:score`. |
-| **`/ap:roster`** | Show active parts (panes + state), optionally scoped to a topic. |
-| **`/ap:solo`** | Light pipeline — one part implements a clear single-repo change unattended on its own branch; the conductor briefs, verifies, and finishes. No research, no design doc, no gates. |
-| **`/ap:prelude`** | Deep multi-aspect exploration — SOTA surveys, multi-angle thinking, an adversary-tested landscape doc that feeds `/ap:score`. |
-| **`/ap:score`** | Cross-verified multi-model research synthesized into a deploy-audit-passing design doc — a Maestro fast-path, or escalate to a 2–3 part ensemble. |
-| **`/ap:rehearsal`** | Advisor-driven autoresearch — lock a measurable metric, sweep SOTA, spawn 2–3 persistent `codex` parts, and adaptively dispatch experiments until a target / plateau / budget stop. **Explore-only** (see below). |
-| **`/ap:perform`** | Implement a deploy-schema design doc — audit + route, spawn one part to plan / implement / self-verify, the Maestro cross-verifies and runs a bounded fix-loop, then per-target finish + teardown. This is the promotion-to-real-code path. |
-| **`/ap:playback`** | Review accumulated forensics from `solo`/`score`/`perform`/`prelude`/`rehearsal` — surface problems recorded since you last looked, cluster recurring patterns with their lifetime trend, suggest next actions, then archive what was reviewed. |
-| **`/ap:coda`** | Gracefully end parts (a `FINE` banner) and archive their state. |
+| **`/ap:check`** | Health check (tmux / pane-border / state / config / providers) + an interactive roster picker that selects the active provider set for `/ap:design`. |
+| **`/ap:list`** | Show active workers (panes + state), optionally scoped to a topic. |
+| **`/ap:quick`** | Light pipeline — one worker implements a clear single-repo change unattended on its own branch; the hub briefs, verifies, and finishes. No research, no design doc, no gates. |
+| **`/ap:explore`** | Deep multi-aspect exploration — SOTA surveys, multi-angle thinking, an adversary-tested landscape doc that feeds `/ap:design`. |
+| **`/ap:design`** | Cross-verified multi-model research synthesized into a deploy-audit-passing design doc — a hub fast-path, or escalate to a 2–3 worker ensemble. |
+| **`/ap:autoresearch`** | Advisor-driven autoresearch — lock a measurable metric, sweep SOTA, spawn 2–3 persistent `codex` workers, and adaptively dispatch experiments until a target / plateau / budget stop. **Explore-only** (see below). |
+| **`/ap:implement`** | Implement a deploy-schema design doc — audit + route, spawn one worker to plan / implement / self-verify, the hub cross-verifies and runs a bounded fix-loop, then finish + teardown. This is the promotion-to-real-code path. |
+| **`/ap:review`** | Review accumulated forensics from `quick`/`design`/`implement`/`explore`/`autoresearch` — surface problems recorded since you last looked, cluster recurring patterns with their lifetime trend, suggest next actions, then archive what was reviewed. |
+| **`/ap:stop`** | Gracefully end workers (a `DONE` banner) and archive their state. |
 
-A typical research-to-code flow: **`prelude` → `score` → `perform`** (explore → design → implement),
-with **`rehearsal`** as the heavyweight autoresearch loop and **`solo`** for quick unattended changes.
-`soundcheck` / `roster` / `playback` / `coda` are the operational glue.
+A typical research-to-code flow: **`explore` → `design` → `implement`** (explore → design → build),
+with **`autoresearch`** as the heavyweight research loop and **`quick`** for fast unattended changes.
+`check` / `list` / `review` / `stop` are the operational glue.
 
 ---
 
-## `/ap:rehearsal` — the autoresearch loop
+## `/ap:autoresearch` — the autoresearch loop
 
-`rehearsal` is the most substantial command: an AIDE-style loop where the Maestro locks a measurable
-metric, sweeps the state of the art, spawns 2–3 persistent `codex` "parts" as tmux panes, and
+`autoresearch` is the most substantial command: an AIDE-style loop where the hub locks a measurable
+metric, sweeps the state of the art, spawns 2–3 persistent `codex` workers as tmux panes, and
 adaptively dispatches single-config experiment ideas until a stop condition (target met, plateau, or
 time budget). It is **explore-only** — it never touches your real repo; promotion to real code is
-`/ap:perform`.
+`/ap:implement`.
 
-It ships a **research-validity layer** that treats a part's self-reported metric as *a claim, not
-evidence*, and hardens the loop against both buggy and deliberately-gaming parts:
+It ships a **research-validity layer** that treats a worker's self-reported metric as *a claim, not
+evidence*, and hardens the loop against both buggy and deliberately-gaming workers:
 
-- **Metric trust (verify):** the trusted Maestro re-runs each result's scoring step *outside* the
-  part's pane and adjudicates a verdict.
+- **Metric trust (verify):** the trusted hub re-runs each result's scoring step *outside* the
+  worker's pane and adjudicates a verdict.
 - **Sanity & integrity gates:** mechanical task-agnostic checks (ceiling / under-run /
   log-contradiction / config-knob drift) + a recorded integrity attestation.
 - **INFEASIBLE vs REFUTED:** a botched run (couldn't be validly executed) is classified INFEASIBLE
@@ -79,9 +80,9 @@ evidence*, and hardens the loop against both buggy and deliberately-gaming parts
   can't quietly converge on one approach family.
 - **Operators & attribution:** typed Draft / Improve moves with a single-change-vs-parent lineage
   advisory, so a metric delta is attributable.
-- **Independent re-implementation inspector:** for a new-best leader, the cross-family Maestro
-  regenerates the experiment from the part's run-card *alone* and re-derives the metric — catching a
-  part whose own scoring code is the gamed artifact. A confident non-reproduction demotes the leader.
+- **Independent re-implementation inspector:** for a new-best leader, the cross-family hub
+  regenerates the experiment from the worker's run-card *alone* and re-derives the metric — catching a
+  worker whose own scoring code is the gamed artifact. A confident non-reproduction demotes the leader.
 
 These are gated, additive, and surfaced in the live status brief; design docs live under
 `docs/superpowers/specs/`.
@@ -93,7 +94,7 @@ These are gated, additive, and surfaced in the live status brief; design docs li
 - **One bundle, dispatched by subcommand.** `dist/ap.cjs` (built from `src/ap.ts`) routes
   `ap <verb>` to `src/commands/<verb>`. Core logic lives in `src/core/*`, one file per
   responsibility. `dist/` is committed for zero-build install.
-- **tmux is the only subprocess surface** (via `execa`). Parts are real panes you can attach to.
+- **tmux is the only subprocess surface** (via `execa`). Workers are real panes you can attach to.
 - **File-based IPC.** Coordination happens through `inbox` / `outbox` / `status` / `pane` files under
   a per-machine state root (`AP_HOME`, default `~/.ap/`), keyed by a hash of the working
   directory. Writes are atomic (tmp-in-same-dir + rename).

@@ -94,7 +94,7 @@ describe("forensics scrapers", () => {
 describe("scrapeArtDir + render", () => {
   it("collects findings across the art dir + sibling worker dirs, deduped", () => {
     const topicDir = mkdtempSync(join(tmpdir(), "fz-"));
-    const art = join(topicDir, "_score"); mkdirSync(join(art, "design-doc"), { recursive: true });
+    const art = join(topicDir, "_design"); mkdirSync(join(art, "design-doc"), { recursive: true });
     writeFileSync(join(art, "design-doc", "audit.log"), "VERDICT=FAIL\nISSUE=no_goal_section\n");
     writeFileSync(join(art, "spawn-results.tsv"), "alpha\tcodex\t1\tspawn-failed\n");
     const worker = join(topicDir, "alpha-codex"); mkdirSync(worker, { recursive: true });
@@ -107,9 +107,9 @@ describe("scrapeArtDir + render", () => {
     expect(f.some((x) => x.source === "spawn_results")).toBe(true);
   });
   it("render emits frontmatter + bullets", () => {
-    const md = renderArtForensics({ command: "score", topicSlug: "t", repoHash: "abc", artDir: "/a", invokedAt: "2026-05-29T00:00:00Z" },
+    const md = renderArtForensics({ command: "design", topicSlug: "t", repoHash: "abc", artDir: "/a", invokedAt: "2026-05-29T00:00:00Z" },
       [{ source: "audit_log", key: "ISSUE=no_goal_section", context: "audit.log" }]);
-    expect(md).toContain("command: score");
+    expect(md).toContain("command: design");
     expect(md).toContain("n_findings_mechanical: 1");
     expect(md).toContain("## Mechanical findings");
     expect(md).toContain("- **audit_log** ISSUE=no_goal_section _(source: audit.log)_");
@@ -123,17 +123,17 @@ describe("captureArtDir", () => {
 
   it("zero findings → '' and no file", () => {
     const home = mkdtempSync(join(tmpdir(), "fh-")); process.env.AP_HOME = home;
-    const art = join(mkdtempSync(join(tmpdir(), "fa-")), "clean", "_score"); mkdirSync(art, { recursive: true });
-    expect(captureArtDir({ artDir: art, command: "score", now: new Date("2026-05-29T12:00:00Z") })).toBe("");
+    const art = join(mkdtempSync(join(tmpdir(), "fa-")), "clean", "_design"); mkdirSync(art, { recursive: true });
+    expect(captureArtDir({ artDir: art, command: "design", now: new Date("2026-05-29T12:00:00Z") })).toBe("");
   });
   it("findings → writes under <home>/forensics/<date>/, returns the path", () => {
     const home = mkdtempSync(join(tmpdir(), "fh-")); process.env.AP_HOME = home;
-    const topicDir = join(mkdtempSync(join(tmpdir(), "ft-")), "mytopic"); const art = join(topicDir, "_score");
+    const topicDir = join(mkdtempSync(join(tmpdir(), "ft-")), "mytopic"); const art = join(topicDir, "_design");
     mkdirSync(join(art, "design-doc"), { recursive: true });
     writeFileSync(join(art, "design-doc", "audit.log"), "ISSUE=no_goal_section\n");
-    const p = captureArtDir({ artDir: art, command: "score", now: new Date("2026-05-29T12:34:56Z") });
+    const p = captureArtDir({ artDir: art, command: "design", now: new Date("2026-05-29T12:34:56Z") });
     expect(p).toContain(join(home, "forensics", "2026-05-29"));
-    expect(p).toMatch(/12-34-56-score-mytopic\.md$/);
+    expect(p).toMatch(/12-34-56-design-mytopic\.md$/);
     expect(existsSync(p)).toBe(true);
     expect(rfs(p, "utf8")).toContain("ISSUE=no_goal_section");
   });
