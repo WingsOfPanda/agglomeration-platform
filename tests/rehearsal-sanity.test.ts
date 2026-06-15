@@ -61,7 +61,7 @@ describe("sanityFlags", () => {
 
 describe("sanityRow", () => {
   it("renders a 5-col tsv row", () => {
-    expect(sanityRow({ expId: "exp-001", instrument: "viola", flag: "under-run", detail: "runtime=0 floor=1", ts: "T" }))
-      .toBe("exp-001\tviola\tunder-run\truntime=0 floor=1\tT\n");
+    expect(sanityRow({ expId: "exp-001", agent: "alpha", flag: "under-run", detail: "runtime=0 floor=1", ts: "T" }))
+      .toBe("exp-001\talpha\tunder-run\truntime=0 floor=1\tT\n");
   });
 });

@@ -9,7 +9,7 @@ AUTONOMY CONTRACT
 
 This score run is automated. The skill you invoke may try to ask
 clarifying questions one at a time. You may ask questions back to the
-Maestro via your outbox, but follow these rules:
+Hub via your outbox, but follow these rules:
 
 1. Ask ONE question at a time. Wait for the answer before asking the next.
 
@@ -26,15 +26,15 @@ Maestro via your outbox, but follow these rules:
    JSON escapes (\", \\, \n, \uXXXX) and non-ASCII bytes (UTF-8, emoji)
    are rejected.
 
-4. Do not pre-classify questions as critical/non-critical. The Maestro
+4. Do not pre-classify questions as critical/non-critical. The Hub
    makes that call. Just ask plainly.
 
 5. Be concrete. "Is the error from the Postgres driver or our wrapper?"
    is good. "What's wrong?" is too open — investigate first.
 
 6. Document each Q&A in your findings.md as:
-     [Q&A] question: <q> // answer: <a> (resolved by Maestro)
+     [Q&A] question: <q> // answer: <a> (resolved by Hub)
 
-7. If the skill says "ask the user X", you ask the Maestro X via this
-   protocol. The Maestro will relay to the user only if the question is
-   critical. Otherwise the Maestro answers from topic context.
+7. If the skill says "ask the user X", you ask the Hub X via this
+   protocol. The Hub will relay to the user only if the question is
+   critical. Otherwise the Hub answers from topic context.

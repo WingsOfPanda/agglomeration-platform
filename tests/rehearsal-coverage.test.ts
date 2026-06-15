@@ -9,7 +9,7 @@ describe("normalizeFamily", () => {
     expect(normalizeFamily("(single pass)")).toBe("single pass");
     expect(normalizeFamily("typed   routing")).toBe("typed routing");
   });
-  it("keeps internal-punctuation variants distinct (Maestro intent)", () => {
+  it("keeps internal-punctuation variants distinct (Hub intent)", () => {
     expect(normalizeFamily("single-pass")).not.toBe(normalizeFamily("single pass"));
   });
   it("returns empty string for blank/punctuation-only labels", () => {

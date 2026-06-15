@@ -4,10 +4,10 @@
 
 export interface SanityFlag { flag: string; detail: string; }
 
-export interface SanityRow { expId: string; instrument: string; flag: string; detail: string; ts: string; }
-export const SANITY_TSV_HEADER = "exp_id\tinstrument\tflag\tdetail\tts\n";
+export interface SanityRow { expId: string; agent: string; flag: string; detail: string; ts: string; }
+export const SANITY_TSV_HEADER = "exp_id\tagent\tflag\tdetail\tts\n";
 export function sanityRow(r: SanityRow): string {
-  return `${r.expId}\t${r.instrument}\t${r.flag}\t${r.detail}\t${r.ts}\n`;
+  return `${r.expId}\t${r.agent}\t${r.flag}\t${r.detail}\t${r.ts}\n`;
 }
 
 const INTEGRITY_KEYS = ["split_before_fit", "no_train_test_overlap", "target_not_in_features", "trained_steps", "seed"] as const;

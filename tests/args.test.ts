@@ -6,7 +6,7 @@ import { tokenizeArgsLine, applyArgsFile, kvParse, ArgsFileError, KvError } from
 
 describe("args", () => {
   it("tokenize preserves quoted phrases + literal metachars", () => {
-    expect(tokenizeArgsLine('violin codex demo "hello world"')).toEqual(["violin", "codex", "demo", "hello world"]);
+    expect(tokenizeArgsLine('bravo codex demo "hello world"')).toEqual(["bravo", "codex", "demo", "hello world"]);
     expect(tokenizeArgsLine('a "; touch /tmp/x; #"')).toEqual(["a", "; touch /tmp/x; #"]);
   });
   it("applyArgsFile passthrough + empty", () => {
@@ -15,8 +15,8 @@ describe("args", () => {
   });
   it("applyArgsFile loads + consumes + appends", () => {
     const f = join(mkdtempSync(join(tmpdir(), "af-")), "args");
-    writeFileSync(f, 'violin codex auth-review "hello world"');
-    expect(applyArgsFile(["--args-file", f, "extra1"])).toEqual(["violin", "codex", "auth-review", "hello world", "extra1"]);
+    writeFileSync(f, 'bravo codex auth-review "hello world"');
+    expect(applyArgsFile(["--args-file", f, "extra1"])).toEqual(["bravo", "codex", "auth-review", "hello world", "extra1"]);
     expect(existsSync(f)).toBe(false); // consumed
   });
   it("applyArgsFile: no path throws code 2", () => {
@@ -67,8 +67,8 @@ describe("applyArgsFile verbatim-tail (prose mode)", () => {
   const opts = (flags: string[]) => ({ valueFlags: new Set(flags) });
 
   it("preserves apostrophes and quotes in the body (no shell-tokenizing)", () => {
-    expect(applyArgsFile(["--args-file", af('fix the part\'s "UI" today')], opts([])))
-      .toEqual(['fix the part\'s "UI" today']);
+    expect(applyArgsFile(["--args-file", af('fix the worker\'s "UI" today')], opts([])))
+      .toEqual(['fix the worker\'s "UI" today']);
   });
   it("preserves internal newlines / paragraphs verbatim", () => {
     expect(applyArgsFile(["--args-file", af("para one\n\npara two\nmore")], opts([])))
@@ -90,8 +90,8 @@ describe("applyArgsFile verbatim-tail (prose mode)", () => {
     expect(existsSync(f)).toBe(false);
   });
   it("no-opts path is unchanged (still shell-tokenizes, glues the unterminated quote)", () => {
-    expect(applyArgsFile(["--args-file", af("fix the part's thing")]))
-      .toEqual(["fix", "the", "parts thing"]);
+    expect(applyArgsFile(["--args-file", af("fix the worker's thing")]))
+      .toEqual(["fix", "the", "workers thing"]);
   });
   it("a value-flag with no following value pushes only the flag (no empty token)", () => {
     expect(applyArgsFile(["--args-file", af("--targets")], opts(["--targets"]))).toEqual(["--targets"]);

@@ -1,4 +1,4 @@
-// Per-part state.txt + halt.flag parsing for /ap:rehearsal. Faithful to
+// Per-worker state.txt + halt.flag parsing for /ap:rehearsal. Faithful to
 // deep-research.sh (state read/write/reconcile, halt_flag_read). Pure;
 // disk reads/writes happen in the CLI (Phases C/D). JSON.parse, not shell.
 

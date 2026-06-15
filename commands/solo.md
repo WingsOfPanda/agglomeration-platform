@@ -1,14 +1,14 @@
 ---
-description: Light pipeline — one part implements a clear single-repo change unattended on its own branch; the conductor briefs, verifies, and finishes by default. No research, no design doc, no gates.
+description: Light pipeline — one worker implements a clear single-repo change unattended on its own branch; the conductor briefs, verifies, and finishes by default. No research, no design doc, no gates.
 argument-hint: <topic-text> [--provider codex|claude|agy|opencode] [--no-finish]
 allowed-tools: Bash, Write, Read, Edit
 ---
 
 # /ap:solo
 
-The light, autonomous path for a small, clearly-specified single-repo change. One part (a
+The light, autonomous path for a small, clearly-specified single-repo change. One worker (a
 non-conductor model, default **codex**) implements the change on its own `feat/solo-<topic>`
-branch in this repository. The conductor writes a short brief, spawns the part, runs one
+branch in this repository. The conductor writes a short brief, spawns the worker, runs one
 implementation turn, does one light verify pass, then finishes and tears down. **Finishing is
 the default** (restoring the predecessor `strike` parity): a local repo keeps the branch and
 restores the start-branch checkout; a repo **with a remote** pushes the branch and opens a PR.
@@ -33,7 +33,7 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
    capture each value (logs go to stderr, so stdout is clean):
    ```
    SLUG=<slug>
-   INSTRUMENT=<instrument>
+   AGENT=<agent>
    PROVIDER=<provider>
    FINISH=<yes|no>
    TARGET=<abs-repo-root>
@@ -62,11 +62,11 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
 1. Branch the target: `$CS solo branch <SLUG>` (snapshots HEAD, commits any WIP on the current
    branch, creates/resumes `feat/solo-<SLUG>`). On **rc 1** (target is not a git repo) → abort:
    `$CS solo summary <SLUG> --aborted build not-a-git-repo "target is not a git repository"`,
-   print the SUMMARY, and stop. No part was spawned, so do **not** run `coda`.
-2. Spawn the part: `$CS spawn <INSTRUMENT> <PROVIDER> <SLUG> --cwd <TARGET>`. On **rc 1**
-   (bootstrap failed) → abort: `$CS solo summary <SLUG> --aborted build spawn-failed "part failed
+   print the SUMMARY, and stop. No worker was spawned, so do **not** run `coda`.
+2. Spawn the worker: `$CS spawn <AGENT> <PROVIDER> <SLUG> --cwd <TARGET>`. On **rc 1**
+   (bootstrap failed) → abort: `$CS solo summary <SLUG> --aborted build spawn-failed "worker failed
    bootstrap"`, print the SUMMARY, and stop. Do **not** run `coda` — `spawn` already
-   FAILED-archived the part.
+   FAILED-archived the worker.
 3. Dispatch round 1: `$CS solo turn-send <SLUG> 1`.
 4. Await it in the background:
    ```
@@ -79,14 +79,14 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
    `TS=question` then `TS=ok`; the last line is the current outcome.)
    - **`TS=ok`** → Stage 2.
    - **`TS=question`** → read `execute/question-1.txt`, **Write** a best-judgment reply to a temp
-     file, then `$CS send --from maestro <INSTRUMENT> <SLUG> @<reply-file>`, and re-arm the
+     file, then `$CS send --from hub <AGENT> <SLUG> @<reply-file>`, and re-arm the
      background `solo turn-wait <SLUG> 1`. Never ask the user. (Re-arm on each question.)
      The re-arm resumes past the handled question automatically — `turn-wait` appends a bumped
      `OFFSET=` line on a question, so you never hand-edit `OFFSET=`.
    - **`TS=failed` or `TS=timeout`** → retry once: delete `execute/turn-1.txt`, re-run
      `$CS solo turn-send <SLUG> 1`, re-arm the background wait. On a **second** failure → abort:
-     `$CS solo summary <SLUG> --aborted build part-turn-failed "part turn failed twice (TS=<ts>)"`,
-     then `$CS coda <INSTRUMENT> <SLUG>`, print the SUMMARY, and stop.
+     `$CS solo summary <SLUG> --aborted build worker-turn-failed "worker turn failed twice (TS=<ts>)"`,
+     then `$CS coda <AGENT> <SLUG>`, print the SUMMARY, and stop.
 
 ## Stage 2 — Verify + finish
 
@@ -110,19 +110,19 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
 ## Stage 3 — Teardown + SUMMARY
 
 1. **Forensics + reflection (best-effort, BEFORE teardown).** `FORENSICS=$($CS solo forensics <SLUG>)`
-   — scrapes the part's outbox/status/logs for mechanical signals and writes a `command:solo` file under
+   — scrapes the worker's outbox/status/logs for mechanical signals and writes a `command:solo` file under
    `~/.ap/forensics/<date>/` (prints its path only if signals were found, else empty — never blocks).
-   Run this **before** `coda`, because `coda` archives the part dir and moves its `outbox.jsonl` /
+   Run this **before** `coda`, because `coda` archives the worker dir and moves its `outbox.jsonl` /
    `status.json` out of reach. If `FORENSICS` is non-empty: tell the user "forensics captured: $FORENSICS",
-   then **Read** it and **append** a `## Maestro reflection` section (3–5 interpretive bullets: what's
+   then **Read** it and **append** a `## Hub reflection` section (3–5 interpretive bullets: what's
    surprising, repeat-vs-first-time patterns, the suggested next action) via the Write/Edit tool.
-   **Idempotent:** skip the append if the file already contains the exact header `## Maestro reflection`.
+   **Idempotent:** skip the append if the file already contains the exact header `## Hub reflection`.
    The file lives OUTSIDE the topic state, so it survives teardown and `/ap:playback` later surveys it.
-2. Tear down + archive the part with `coda` (graceful FINE banner → kill pane → archive the part
+2. Tear down + archive the worker with `coda` (graceful DONE banner → kill pane → archive the worker
    dir), capturing the archived path it reports into `archived-path.txt` for the summary. Run this
    single command (do not invoke `coda` separately):
    ```bash
-   ARCHIVED=$($CS coda <INSTRUMENT> <SLUG> 2>&1 | sed -n 's/.*archived [^:]*: //p' | tail -1)
+   ARCHIVED=$($CS coda <AGENT> <SLUG> 2>&1 | sed -n 's/.*archived [^:]*: //p' | tail -1)
    [ -n "$ARCHIVED" ] && printf '%s\n' "$ARCHIVED" > <SLUG state>/_solo/archived-path.txt
    ```
 3. `$CS solo summary <SLUG>` — writes `SUMMARY.md` (reads `archived-path.txt` for the "Archived
@@ -130,7 +130,7 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
 
 ## Notes
 
-- One part, one branch, one implementation turn, one light verify pass, autonomous finish by default.
+- One worker, one branch, one implementation turn, one light verify pass, autonomous finish by default.
   No research, no design doc, no interactive gates.
 - Autonomous finish is the **default** here (matching the predecessor `strike` command): the
   branch is always pushed + a PR opened when the repo has a remote, otherwise kept local with the
@@ -138,4 +138,4 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
   re-flag it.)
 - On abort, `SUMMARY.md` + `RESUME.md` point at the partial state under `_solo/`; re-run
   `/ap:solo` with revised framing to retry.
-- For research, a reviewable design doc, or multiple parts → `/ap:score` + `/ap:perform`.
+- For research, a reviewable design doc, or multiple workers → `/ap:score` + `/ap:perform`.

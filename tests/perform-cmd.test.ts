@@ -226,10 +226,10 @@ describe("perform archive (real archiveTopic under AP_HOME)", () => {
 
   it("moves _perform under the archive root, rc 0", async () => {
     const art = seedArt(); // <topicDir>/_perform
-    // seed a sibling part dir with a status.json so finalizeArchived has something to touch.
-    const partDir = join(performTopicDir(TOPIC), "tutti-codex");
-    mkdirSync(partDir, { recursive: true });
-    writeFileSync(join(partDir, "status.json"), '{"state":"done"}');
+    // seed a sibling worker dir with a status.json so finalizeArchived has something to touch.
+    const workerDir = join(performTopicDir(TOPIC), "lead-codex");
+    mkdirSync(workerDir, { recursive: true });
+    writeFileSync(join(workerDir, "status.json"), '{"state":"done"}');
     writeFileSync(join(art, "topic.txt"), TOPIC);
     const { rc } = await capture(() => archiveRun([TOPIC]));
     expect(rc).toBe(0);

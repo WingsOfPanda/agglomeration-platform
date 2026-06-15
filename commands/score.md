@@ -1,5 +1,5 @@
 ---
-description: Cross-verified multi-model research synthesized into a deploy-audit-passing design doc — Maestro fast-path or escalate to a 2-3 part ensemble
+description: Cross-verified multi-model research synthesized into a deploy-audit-passing design doc — Hub fast-path or escalate to a 2-3 worker ensemble
 argument-hint: [--ensemble] <topic — what to research / design>
 allowed-tools: Bash, Write, Read, Edit, AskUserQuestion, WebSearch, Skill, TodoWrite
 ---
@@ -39,7 +39,7 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
    N=<2|3>
    ENSEMBLE=<yes|no>
    ART=<abs path to the _score art dir>
-   PART=<instrument>:<provider>   (one per part)
+   PART=<agent>:<provider>   (one per worker)
    ```
    Non-zero aborts: rc 1 = empty topic OR fewer than 2 validated providers (redirect: just ask
    Claude directly — no orchestration needed); rc 2 = topic already in flight. Capture `TOPIC`/`N`/
@@ -63,11 +63,11 @@ Decide fast-path vs escalation, in order:
 3. None fire → **fast-path**, Path label = `fast`.
 
 > **Routing → next stage.** After Stage 1 decides:
-> - **fast-path** (`Path: fast`) → **Stage 2** (Maestro solo, unchanged).
+> - **fast-path** (`Path: fast`) → **Stage 2** (Hub solo, unchanged).
 > - **escalate** (`escalated-from-flag` / `escalated-from-signals`) → **Stage 3** (the ensemble
 >   pipeline below — research → diff → cross-verify → adjudicate → design walk).
 
-## Stage 2 — fast-path (Maestro solo)
+## Stage 2 — fast-path (Hub solo)
 
 You have already researched the topic in Stage 1 (or research it now if you arrived via the flag).
 Draft the **6 deploy-schema sections** to `$ART/design-doc/.draft/<section>.md` using the **Write
@@ -104,21 +104,21 @@ Then assemble + audit: `$CS score assemble <TOPIC>`.
 > adjudicate; the design walk (Stage 10) then produces the doc.
 
 Spawn the ensemble in one call: `$CS score spawn-all <TOPIC>`. It preflights N panes, spawns every
-part in parallel (`--target-pane`, `--cwd <repo>`), and writes `$ART/spawn-results.tsv` (TSV
-`<instrument>\t<provider>\t<rc>\t<reason>`). Branch on its rc:
+worker in parallel (`--target-pane`, `--cwd <repo>`), and writes `$ART/spawn-results.tsv` (TSV
+`<agent>\t<provider>\t<rc>\t<reason>`). Branch on its rc:
 
-- **rc 0** — all N parts ready → Stage 4.
+- **rc 0** — all N workers ready → Stage 4.
 - **rc 1** (partial) — read `$ART/spawn-results.tsv`; the rows with `rc==0` are the survivors. If
-  **≥2 survive**, **rewrite `$ART/roster.txt`** to only the survivor rows (TSV `<provider>\t<instrument>`,
+  **≥2 survive**, **rewrite `$ART/roster.txt`** to only the survivor rows (TSV `<provider>\t<agent>`,
   one per line) and proceed degraded to Stage 4. If **<2 survive**, abort: run `/ap:coda
-  <instrument> <TOPIC>` for any ready part, tell the user the ensemble could not reach 2 parts, and stop.
+  <agent> <TOPIC>` for any ready worker, tell the user the ensemble could not reach 2 workers, and stop.
 - **rc 2** (all failed) — retry once: `rm -f $ART/preflight-panes.txt $ART/spawn-results.tsv` and re-run
   `$CS score spawn-all <TOPIC>`. If it still returns rc 2, abort (redirect: "just ask Claude directly")
   and stop.
 
-## Stage 4 — research dispatch (per part)
+## Stage 4 — research dispatch (per worker)
 
-Read the (possibly rewritten) roster and send a research turn to each part:
+Read the (possibly rewritten) roster and send a research turn to each worker:
 
 ```bash
 grep -v '^#' "$ART/roster.txt" | while IFS=$'\t' read -r PROV INST; do
@@ -127,56 +127,56 @@ done
 ```
 
 Each `research-send` composes the findings prompt, captures the pre-send outbox `OFFSET=` into
-`$ART/research-<instrument>.txt`, and nudges the part. (rc 1 = state file already exists — `rm` it to redo.)
+`$ART/research-<agent>.txt`, and nudges the worker. (rc 1 = state file already exists — `rm` it to redo.)
 
-## Stage 5 — research wait + question relay (per part)
+## Stage 5 — research wait + question relay (per worker)
 
-For **each** part, await its research turn **in the background** (one call per part):
+For **each** worker, await its research turn **in the background** (one call per worker):
 
 ```
 Bash(command='$CS score research-wait <TOPIC> <INST> <PROV>', run_in_background: true,
      description='score research-wait <INST>')
 ```
 
-On each completion notification, read that part's **last** `FS=` line —
+On each completion notification, read that worker's **last** `FS=` line —
 `FS=$(grep '^FS=' "$ART/research-<INST>.txt" | tail -1 | cut -d= -f2)` (`research-wait` *appends* one
 `FS=` line per wait, so after a question→re-arm cycle the file holds e.g. `FS=question` then `FS=ok`;
 the last line is the current outcome). Branch:
 
-- **`FS=ok` / `FS=empty` / `FS=malformed`** — terminal; the part's `findings.md` exists.
+- **`FS=ok` / `FS=empty` / `FS=malformed`** — terminal; the worker's `findings.md` exists.
 - **`FS=question`** — run the **classify + relay** (the score escalation; distinct from solo's never-ask):
   1. Read `$ART/question-<INST>.txt` (the captured question JSON — `message`, optional `options`) and
-     the part's `findings.md`.
+     the worker's `findings.md`.
   2. **Classify** the question against the findings: is it a **critical** decision only the user can
      make (high-stakes, irreversibility, a subjective product/architecture tradeoff)? → use
      **AskUserQuestion** to get the answer. Otherwise it is **non-critical** → answer it yourself from
-     the topic + findings (Maestro self-answers).
-  3. **Write** the reply to a temp file **beginning with a line `ANSWER: <your answer>`** (the part's
-     skill-hint reads the line starting `ANSWER: `), then `$CS send --from maestro <INST> <TOPIC> @<reply-file>`.
+     the topic + findings (Hub self-answers).
+  3. **Write** the reply to a temp file **beginning with a line `ANSWER: <your answer>`** (the worker's
+     skill-hint reads the line starting `ANSWER: `), then `$CS send --from hub <INST> <TOPIC> @<reply-file>`.
   4. `rm -f $ART/research-<INST>.done` and **re-arm** the background `$CS score research-wait <TOPIC>
      <INST> <PROV>`. (The wait resumes past the question — it never re-sends the research prompt.)
-- **`FS=failed` / `FS=timeout`** — the part produced no usable findings; drop it.
+- **`FS=failed` / `FS=timeout`** — the worker produced no usable findings; drop it.
 
-You launched **N** background waits — expect **N** completion notifications, one per part. On each,
-read that part's last `FS=` line and handle it (relaying any `FS=question` via the loop above, which
-re-arms that part). **Do not proceed until `$CS score wait-gate <TOPIC> research` exits 0** — it
-prints `<INST>\t<terminal|question|pending>` for every part and returns 0 only when all are
-`terminal`. rc 1 means at least one part is still `pending` (researching) or `question` (needs a
+You launched **N** background waits — expect **N** completion notifications, one per worker. On each,
+read that worker's last `FS=` line and handle it (relaying any `FS=question` via the loop above, which
+re-arms that worker). **Do not proceed until `$CS score wait-gate <TOPIC> research` exits 0** — it
+prints `<INST>\t<terminal|question|pending>` for every worker and returns 0 only when all are
+`terminal`. rc 1 means at least one worker is still `pending` (researching) or `question` (needs a
 relay): keep handling notifications / relay, then re-run the gate. Only on rc 0 proceed. Then build the **diff
-roster** = parts whose `findings.md` exists (`FS` ∈ {ok, empty, malformed}). If **<2** parts have
-findings → abort (run `/ap:coda <instrument> <TOPIC>` for each ready part, tell the user the
-ensemble could not produce 2 sets of findings, stop). If some parts were dropped, **rewrite
+roster** = workers whose `findings.md` exists (`FS` ∈ {ok, empty, malformed}). If **<2** workers have
+findings → abort (run `/ap:coda <agent> <TOPIC>` for each ready worker, tell the user the
+ensemble could not produce 2 sets of findings, stop). If some workers were dropped, **rewrite
 `$ART/roster.txt`** to the diff roster before Stage 6.
 
 ## Stage 6 — N-way diff
 
-`$CS score diff <TOPIC>` — N-way Venn bucketing over the parts' `findings.md`. It writes `$ART/diff.md`
+`$CS score diff <TOPIC>` — N-way Venn bucketing over the workers' `findings.md`. It writes `$ART/diff.md`
 plus the bucket files (`<inst>_only_items.txt` for N=2; `consensus.txt` + `<a>+<b>_only.txt` + singles
 for N=3). rc 1 = `diff.md` already exists (`rm` to retry) or a `findings.md` is missing.
 
-## Stage 7 — cross-verify dispatch (per part)
+## Stage 7 — cross-verify dispatch (per worker)
 
-Read the diff roster (`$ART/roster.txt`) and dispatch each part's verify turn:
+Read the diff roster (`$ART/roster.txt`) and dispatch each worker's verify turn:
 
 ```bash
 grep -v '^#' "$ART/roster.txt" | while IFS=$'\t' read -r PROV INST; do
@@ -184,25 +184,25 @@ grep -v '^#' "$ART/roster.txt" | while IFS=$'\t' read -r PROV INST; do
 done
 ```
 
-`verify-send` computes each part's scope (the bucket files where it is NOT a member), writes
+`verify-send` computes each worker's scope (the bucket files where it is NOT a member), writes
 `verify-claims-<inst>.txt`, and either sends the verify prompt (`OFFSET=` captured) or writes
-`VS=skipped` when there's nothing for that part to verify (no send).
+`VS=skipped` when there's nothing for that worker to verify (no send).
 
-## Stage 8 — cross-verify wait + question relay (per part)
+## Stage 8 — cross-verify wait + question relay (per worker)
 
-For each part, background `$CS score verify-wait <TOPIC> <INST> <PROV>`. On each completion, read the
+For each worker, background `$CS score verify-wait <TOPIC> <INST> <PROV>`. On each completion, read the
 **last** `VS=` line (`grep '^VS=' "$ART/verify-<INST>.txt" | tail -1 | cut -d= -f2`):
 - **`VS=ok` / `VS=skipped` / `VS=missing`** — terminal.
-- **`VS=question`** — same classify+relay as Stage 5 (read `$ART/question-<INST>.txt` + the part's
+- **`VS=question`** — same classify+relay as Stage 5 (read `$ART/question-<INST>.txt` + the worker's
   `verify.md`; AskUserQuestion if critical else self-answer; write the reply file **beginning with a
-  line `ANSWER: <your answer>`**, then `$CS send --from maestro <INST> <TOPIC> @<reply>`; `rm -f
+  line `ANSWER: <your answer>`**, then `$CS send --from hub <INST> <TOPIC> @<reply>`; `rm -f
   $ART/verify-<INST>.done`; re-arm the background `verify-wait`).
-- **`VS=failed` / `VS=timeout`** — record; the rival's claims this part would have verified surface
+- **`VS=failed` / `VS=timeout`** — record; the rival's claims this worker would have verified surface
   unresolved (N=2: a `## Not-verified` section; N≥3: they fall through the `UNCERTAIN` tier into
-  PENDING/Contested) — either way Maestro resolves them in Stage 9.
-Expect **N** completion notifications (one per part); handle each, relaying any `VS=question`. **Do
+  PENDING/Contested) — either way Hub resolves them in Stage 9.
+Expect **N** completion notifications (one per worker); handle each, relaying any `VS=question`. **Do
 not proceed until `$CS score wait-gate <TOPIC> verify` exits 0** — it prints
-`<INST>\t<terminal|question|pending>` per part; rc 1 means some part is still `pending`/`question`,
+`<INST>\t<terminal|question|pending>` per worker; rc 1 means some worker is still `pending`/`question`,
 so keep handling / relay and re-run. Only on rc 0 continue.
 
 ## Stage 9 — adjudicate + resolve PENDING
@@ -224,7 +224,7 @@ so keep handling / relay and re-run. Only on rc 0 continue.
    already settled — skip those on re-entry.
 3. **Walk the 6 sections in order** (problem, goal, architecture, components, testing, success-criteria).
    For each: **Read** `$ART/design-doc/.draft/<section>.md` (the seed) + `$ART/adjudicated.md` + the
-   parts' `findings.md`; **draft** the section and **Write** it to that `.draft/<section>.md` path;
+   workers' `findings.md`; **draft** the section and **Write** it to that `.draft/<section>.md` path;
    present it in chat; then **AskUserQuestion**: Approve / Revise / Skip.
    - **Approve** → keep, next section.
    - **Revise** → take free-form direction via a follow-up, re-draft, re-present (cap 4 revises; after
@@ -248,18 +248,18 @@ so keep handling / relay and re-run. Only on rc 0 continue.
   Re-assemble after each fix; loop until rc 0 (bound to a few attempts per section, then surface the
   remaining ISSUEs and stop).
 
-## Stage 12 — drilldown (optional; parts still live)
+## Stage 12 — drilldown (optional; workers still live)
 
-(Fast-path: no parts → skip Stages 12–14 entirely; go to Stage 15.) Derive the design-doc path
+(Fast-path: no workers → skip Stages 12–14 entirely; go to Stage 15.) Derive the design-doc path
 (`$ART/design-doc/<date>-<TOPIC>-design.md`, also printed by `assemble`; missing → tell the user and
-skip drilldown). **AskUserQuestion**: "Any aspect to drill deeper before tearing down? (parts still
+skip drilldown). **AskUserQuestion**: "Any aspect to drill deeper before tearing down? (workers still
 live)" — **Yes, drill** / **No, proceed to teardown**. While Yes, per round:
 1. Free-form: **drill subject** (a section/topic) → SECTION; **focus angle** (e.g. "the tradeoffs feel
    hand-wavy") → FOCUS.
-2. **AskUserQuestion which part(s)** — an N-aware option set from `$ART/roster.txt`: N=2 → the 2 parts +
-   "both (parallel)"; N=3 → the 3 parts + 3 pairs + "all three (parallel)".
-3. Dispatch (the CLI caps at 2 parts per call):
-   - one or two parts → one call: `$CS score drilldown <TOPIC> "<SECTION>" "$ART/drilldowns" "<FOCUS>"
+2. **AskUserQuestion which worker(s)** — an N-aware option set from `$ART/roster.txt`: N=2 → the 2 workers +
+   "both (parallel)"; N=3 → the 3 workers + 3 pairs + "all three (parallel)".
+3. Dispatch (the CLI caps at 2 workers per call):
+   - one or two workers → one call: `$CS score drilldown <TOPIC> "<SECTION>" "$ART/drilldowns" "<FOCUS>"
      <DESIGN_DOC> <i1> <m1> [<i2> <m2>]`.
    - **all three** → **two parallel** `$CS score drilldown …` Bash calls in one message (a K=2 call +
      a K=1 call) sharing `<TOPIC>` + `"$ART/drilldowns"`. Success if ≥1 call returns rc 0.
@@ -270,26 +270,26 @@ live)" — **Yes, drill** / **No, proceed to teardown**. While Yes, per round:
 The drill files stay in `_score/drilldowns/_scratch/` (out of `design-doc/`) and ride along into the
 archive (Stage 14). Re-drilling the same section auto-suffixes `-2`, `-3`, ….
 
-## Stage 13a — forensics capture + Maestro reflection
+## Stage 13a — forensics capture + Hub reflection
 
 `FORENSICS=$($CS score forensics <TOPIC>)` (best-effort; prints a path only if mechanical signals were
 found, else empty — never blocks). If `FORENSICS` is non-empty: tell the user "forensics captured:
-$FORENSICS", then **Read** it and **append** a `## Maestro reflection` section (3–5 interpretive bullets:
+$FORENSICS", then **Read** it and **append** a `## Hub reflection` section (3–5 interpretive bullets:
 what's surprising, repeat-vs-first-time patterns, the suggested next action — a memory worth saving, a
 spec topic, a patch, or a one-off) via the Write/Edit tool. **Idempotent:** skip the append if the file
-already contains the exact header `## Maestro reflection`. The forensics file lives under
+already contains the exact header `## Hub reflection`. The forensics file lives under
 `~/.ap/forensics/<date>/` — OUTSIDE the topic state — so it survives teardown + archive.
 
-## Stage 13b — teardown (FINE banner)
+## Stage 13b — teardown (DONE banner)
 
-Tear down all live parts in one shared banner: read the roster instruments from `$ART/roster.txt` and
-run `$CS coda --pairs <TOPIC> <instrument…>` (one 9s graceful FINE-banner batch, then hard-kill +
-per-part archive). Per-part failures are tolerated. (Equivalent fallback: `$CS coda <instrument>
-<TOPIC>` per part.) Fast-path: no parts → skip.
+Tear down all live workers in one shared banner: read the roster agents from `$ART/roster.txt` and
+run `$CS coda --pairs <TOPIC> <agent…>` (one 9s graceful DONE-banner batch, then hard-kill +
+per-worker archive). Per-worker failures are tolerated. (Equivalent fallback: `$CS coda <agent>
+<TOPIC>` per worker.) Fast-path: no workers → skip.
 
 ## Stage 14 — archive
 
-`$CS score archive <TOPIC>` → `archiveTopic(topic,'score')`: stamps every part `status.json` to
+`$CS score archive <TOPIC>` → `archiveTopic(topic,'score')`: stamps every worker `status.json` to
 `state=archived`, moves the whole `_score/` dir (including `drilldowns/`) to
 `~/.ap/archive/<repo-hash>/<TOPIC>/_score-<ts>`, and rmdirs the topic. The forensics file from
 Stage 13a is untouched (it lives outside the state tree). Fast-path: skip (nothing beyond the doc).
@@ -305,8 +305,8 @@ This is the end of `score`.
 
 ## Notes
 
-- Fast-path spawns no parts and writes no working artifacts beyond `topic.txt`, `.draft/*.md`, the
+- Fast-path spawns no workers and writes no working artifacts beyond `topic.txt`, `.draft/*.md`, the
   assembled `design-doc/<date>-<slug>-design.md`, and `audit.log`. No teardown needed.
 - Escalation runs Stages 3–11 (spawn-all → research → diff → cross-verify → adjudicate → synthesize →
-  design walk → deploy-audit gate), then the wind-down (Stages 12–15: drilldown → forensics + Maestro
+  design walk → deploy-audit gate), then the wind-down (Stages 12–15: drilldown → forensics + Hub
   reflection → `coda` teardown → archive → present + perform handoff).

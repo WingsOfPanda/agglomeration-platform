@@ -1,0 +1,38 @@
+# config/agents.yaml — curated agent-name pool; user-editable.
+# `spawn random <model> <topic>` picks an unused agent from this pool.
+# Names are matched case-insensitively; conventionally lowercase at use site.
+# Grouping by cluster is documentation only; cluster membership (and per-cluster
+# pane color) lives in core/colors.ts.
+agents:
+  # azure
+  - alpha
+  - bravo
+  - charlie
+  - delta
+  - echo
+  # sage
+  - foxtrot
+  - golf
+  - hotel
+  - india
+  - juliet
+  - kilo
+  # amber
+  - lima
+  - mike
+  - november
+  - oscar
+  - papa
+  # slate
+  - quebec
+  - romeo
+  - sierra
+  - tango
+  - uniform
+  # ivory
+  - victor
+  - whiskey
+  - xray
+  # violet
+  - yankee
+  - zulu

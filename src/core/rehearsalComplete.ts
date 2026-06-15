@@ -32,7 +32,7 @@ function cmp(a: string, op: string | undefined, b: string | undefined): boolean 
   }
 }
 
-interface SbRow { exp: string; instrument: string; metric: string; status: string; metricName: string; approach: string; }
+interface SbRow { exp: string; agent: string; metric: string; status: string; metricName: string; approach: string; }
 
 /** Parse plain-rank data rows (| <int> | exp-… |). Excludes header/sep and ~-prefixed partial rows. */
 function parseRows(scoreboardMd: string): SbRow[] {
@@ -40,8 +40,8 @@ function parseRows(scoreboardMd: string): SbRow[] {
   for (const line of scoreboardMd.split("\n")) {
     if (!/^\|\s+\d+\s+\|\s+exp-/.test(line)) continue;
     const c = line.split("|").map((s) => s.trim());
-    // c[0]="" c[1]=rank c[2]=exp c[3]=instrument c[4]=metric c[5]=status c[6]=runtime c[7]=approach c[8]=metric_name
-    out.push({ exp: c[2], instrument: c[3], metric: c[4], status: c[5], metricName: c[8] ?? "", approach: c[7] ?? "" });
+    // c[0]="" c[1]=rank c[2]=exp c[3]=agent c[4]=metric c[5]=status c[6]=runtime c[7]=approach c[8]=metric_name
+    out.push({ exp: c[2], agent: c[3], metric: c[4], status: c[5], metricName: c[8] ?? "", approach: c[7] ?? "" });
   }
   return out;
 }
@@ -63,20 +63,20 @@ export function checkCompletion(scoreboardMd: string, metricMd: string): Complet
     if (cmp(r.metric, t.tgtOp, t.tgtVal)) targetMet = true;
   }
 
-  // K_so_far: per-part longest strictly-improving at-target streak. "Improving" is
+  // K_so_far: per-worker longest strictly-improving at-target streak. "Improving" is
   // direction-aware: a lower metric is better for minimize, higher for maximize. The
   // seed sentinel (no prior value in the chain) is the worst-possible value for the
   // direction, so the first at-target row always starts a chain.
   const minimize = t.direction === "minimize";
   const SEED = minimize ? Infinity : -Infinity;
   const tuples = [...allRows].sort((a, b) =>
-    (a.instrument < b.instrument ? -1 : a.instrument > b.instrument ? 1 : 0) ||
+    (a.agent < b.agent ? -1 : a.agent > b.agent ? 1 : 0) ||
     (a.exp < b.exp ? -1 : a.exp > b.exp ? 1 : 0));
   let kSoFar = 0, chain = 0, best = SEED, prevInst = "";
   for (const r of tuples) {
-    if (r.instrument !== prevInst) {
+    if (r.agent !== prevInst) {
       if (chain > kSoFar) kSoFar = chain;
-      chain = 0; best = SEED; prevInst = r.instrument;
+      chain = 0; best = SEED; prevInst = r.agent;
     }
     const mv = parseFloat(r.metric);
     const atTarget = cmp(r.metric, t.tgtOp, t.tgtVal);

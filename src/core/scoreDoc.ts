@@ -35,7 +35,7 @@ const SEED_SPECS: { section: string; heading: string; comment: string; match: (l
   { section: "success-criteria", heading: "## Success Criteria", comment: "<!-- seed: claims tagged [Success Criteria] -->",
     match: (l) => /^- \[Success/i.test(l) },
 ];
-const SEED_PLACEHOLDER = "_(no seed content matched; Maestro drafts from scratch in the design walk)_";
+const SEED_PLACEHOLDER = "_(no seed content matched; Hub drafts from scratch in the design walk)_";
 
 /** Port of bin/consult-synthesize.sh — 6 single-repo seed drafts from adjudicated.md content.
  *  Each: heading + blank + seed comment + matched claim lines (placeholder if none matched). */

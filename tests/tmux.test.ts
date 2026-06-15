@@ -47,7 +47,7 @@ describe("tmux arg builders", () => {
     expect(T.sendKeysEnterArgs("%1")).toEqual(["send-keys", "-t", "%1", "Enter"]);
   });
   it("sentinelCommand holds pane open with colored label", () => {
-    const c = T.sentinelCommand("#[fg=colour110,bold]strings-violin#[default]");
+    const c = T.sentinelCommand("#[fg=colour110,bold]azure-bravo#[default]");
     expect(c).toContain("reserved — awaiting spawn");
     expect(c).toContain("sleep infinity");
   });

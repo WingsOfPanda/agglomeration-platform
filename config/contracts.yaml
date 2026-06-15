@@ -4,7 +4,7 @@
 #   modes:            map of mode-name -> args list passed to the CLI
 #                     two modes are reserved: 'full' (yolo/bypass) and 'read-only'
 #   default_mode:     mode used by ap spawn when --mode is omitted
-#   ready_timeout_s:  how long ap spawn waits for the part's "ready"
+#   ready_timeout_s:  how long ap spawn waits for the worker's "ready"
 #                     event in outbox.jsonl before giving up
 #
 # Modes that have no native equivalent on a given provider are shipped as best-effort
@@ -30,7 +30,7 @@ codex:
   # tripped the 600s research_timeout_s by 1-2 min, forcing a re-arm dance
   # (playback 2026-06-08: 4x across distinct prelude/score topics). Same lever
   # opencode uses for its wall-clock slowness; 1.5 -> 900s gives margin and the
-  # liveness probe still catches genuinely-dead parts.
+  # liveness probe still catches genuinely-dead workers.
   timeout_multiplier: 1.5
 
 agy:
@@ -44,7 +44,7 @@ agy:
   # v0.61.2: bumped 8 → 20 (matching codex). agy displays an
   # eligibility-check screen at startup; with 8s the identity
   # keystrokes were sometimes sent BEFORE the REPL was accepting input
-  # and got swallowed by the screen-transition, causing the part
+  # and got swallowed by the screen-transition, causing the worker
   # to time out without ever processing identity.md (empty outbox,
   # visible `>` prompt at capture). Verified by the bly-agy
   # 20260524T012248Z FAILED archive: pane.json registered, outbox.jsonl
@@ -76,8 +76,8 @@ opencode:
   # v0.35.0: DeepSeek V4 Pro is wall-clock slower than codex/claude; multiply
   # per-kind consult timeouts by this factor before the liveness probe kicks in.
   # Closes the false-FS=timeout symptom hit during ap score when
-  # a part recorded timeout while findings.md was 18 KB and the pane was
-  # visibly working. See the part-liveness design notes for the full design.
+  # a worker recorded timeout while findings.md was 18 KB and the pane was
+  # visibly working. See the worker-liveness design notes for the full design.
   timeout_multiplier: 2.5
 
 consult:

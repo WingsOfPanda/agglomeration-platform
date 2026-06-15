@@ -30,8 +30,8 @@ describe("solo init", () => {
   beforeEach(() => { h = freshHome(); outSpy = captureStdout(); });
   afterEach(() => { outSpy.restore(); h.cleanup(); });
 
-  // Deterministic deps: provider present + on PATH, instrument fixed — no env dependency.
-  const okDeps: InitDeps = { haveCmd: () => true, instrumentBinary: () => "codex", pickRandomInstrument: () => "violin" };
+  // Deterministic deps: provider present + on PATH, agent fixed — no env dependency.
+  const okDeps: InitDeps = { haveCmd: () => true, agentBinary: () => "codex", pickRandomAgent: () => "bravo" };
 
   it("scaffolds _solo, validates provider, prints KV; rc 0", async () => {
     const rc = await initWith(["add", "oauth", "login", "--provider", "codex"], okDeps);
@@ -40,11 +40,11 @@ describe("solo init", () => {
     expect(existsSync(join(art, "execute"))).toBe(true);
     expect(readFileSync(join(art, "topic.txt"), "utf8").trim()).toBe("add-oauth-login");
     expect(readFileSync(join(art, "selected-provider.txt"), "utf8").trim()).toBe("codex");
-    expect(readFileSync(join(art, "instrument.txt"), "utf8").trim()).toBe("violin");
+    expect(readFileSync(join(art, "agent.txt"), "utf8").trim()).toBe("bravo");
     expect(readFileSync(join(art, "execute", "finish.txt"), "utf8").trim()).toBe("yes");
     expect(outSpy.text()).toMatch(/^SLUG=add-oauth-login$/m);
     expect(outSpy.text()).toMatch(/^PROVIDER=codex$/m);
-    expect(outSpy.text()).toMatch(/^INSTRUMENT=violin$/m);
+    expect(outSpy.text()).toMatch(/^AGENT=bravo$/m);
   });
 
   it("--no-finish opts out → finish.txt is no; rc 0", async () => {
@@ -60,12 +60,12 @@ describe("solo init", () => {
 
   it("unknown provider → rc 3 (env-independent: reads shipped contracts.yaml)", async () => {
     // Under verbatim-tail (Task 4), only leading --flag pairs are peeled; a --provider after the
-    // body is now part of the verbatim topic. Lead with the flag so it parses as the provider.
+    // body is now worker of the verbatim topic. Lead with the flag so it parses as the provider.
     expect(await soloRun(["init", "--args-file", argsFile(h.home, "--provider nope do thing")])).toBe(3);
   });
 
   it("provider known but binary not on PATH → rc 3", async () => {
-    const rc = await initWith(["do", "thing"], { haveCmd: () => false, instrumentBinary: () => "codex", pickRandomInstrument: () => "violin" });
+    const rc = await initWith(["do", "thing"], { haveCmd: () => false, agentBinary: () => "codex", pickRandomAgent: () => "bravo" });
     expect(rc).toBe(3);
   });
 
@@ -142,15 +142,15 @@ describe("solo turn-send (turnSendWith core)", () => {
 
   async function scaffold(topic: string) {
     const { soloArtDir, soloExecDir } = await import("../src/core/solo.js");
-    const { partDir } = await import("../src/core/paths.js");
+    const { workerDir } = await import("../src/core/paths.js");
     const { mkdirSync } = await import("node:fs");
     mkdirSync(soloExecDir(topic), { recursive: true });
     const art = soloArtDir(topic);
-    writeFileSync(join(art, "instrument.txt"), "violin\n");
+    writeFileSync(join(art, "agent.txt"), "bravo\n");
     writeFileSync(join(art, "selected-provider.txt"), "codex\n");
     writeFileSync(join(art, "task-brief.md"), "## Goal\nDo X");
     writeFileSync(join(soloExecDir(topic), "branch.txt"), "feat/solo-auth\n");
-    const pd = partDir("violin", "codex", topic); // a spawned part has an outbox (turn-send's not-found guard)
+    const pd = workerDir("bravo", "codex", topic); // a spawned worker has an outbox (turn-send's not-found guard)
     mkdirSync(pd, { recursive: true });
     writeFileSync(join(pd, "outbox.jsonl"), "");
   }
@@ -167,7 +167,7 @@ describe("solo turn-send (turnSendWith core)", () => {
     const exec = soloExecDir("auth");
     expect(readFileSync(join(exec, "turn-1.txt"), "utf8")).toBe("OFFSET=42\n");
     expect(readFileSync(join(exec, "turn-prompt-1.md"), "utf8")).toContain("## Goal\nDo X");
-    expect(sends[0]).toEqual(["violin", "auth", `@${join(exec, "turn-prompt-1.md")}`]);
+    expect(sends[0]).toEqual(["bravo", "auth", `@${join(exec, "turn-prompt-1.md")}`]);
   });
 
   it("round 1 idempotency: existing turn-1.txt → rc 1", async () => {
@@ -194,7 +194,7 @@ describe("solo turn-wait (turnWaitWith core)", () => {
     const { soloArtDir, soloExecDir } = await import("../src/core/solo.js");
     const { mkdirSync } = await import("node:fs");
     mkdirSync(soloExecDir(topic), { recursive: true });
-    writeFileSync(join(soloArtDir(topic), "instrument.txt"), "violin\n");
+    writeFileSync(join(soloArtDir(topic), "agent.txt"), "bravo\n");
     writeFileSync(join(soloArtDir(topic), "selected-provider.txt"), "codex\n");
     writeFileSync(join(soloExecDir(topic), `turn-1.txt`), stateBody);
   }
@@ -229,8 +229,8 @@ describe("solo turn-wait (turnWaitWith core)", () => {
 
   it("question: appends a bumped OFFSET so a re-arm resumes past it (no loop)", async () => {
     await scaffold("auth", "OFFSET=0\n");
-    // Give the part an outbox with known bytes so the bump is non-zero (outboxOffset = file size).
-    const ob = outboxPath("violin", "codex", "auth");
+    // Give the worker an outbox with known bytes so the bump is non-zero (outboxOffset = file size).
+    const ob = outboxPath("bravo", "codex", "auth");
     mkdirSync(dirname(ob), { recursive: true });
     const body = '{"event":"question","message":"which db?"}\n';
     writeFileSync(ob, body);
@@ -321,7 +321,7 @@ describe("solo summary", () => {
     writeFileSync(join(art, "topic.txt"), topic + "\n");
     writeFileSync(join(art, "timing.txt"), "started=2026-05-29T06:00:00Z\n");
     writeFileSync(join(art, "selected-provider.txt"), "codex\n");
-    writeFileSync(join(art, "instrument.txt"), "violin\n");
+    writeFileSync(join(art, "agent.txt"), "bravo\n");
     writeFileSync(join(exec, "branch.txt"), "feat/solo-auth\n");
     writeFileSync(join(exec, "verify-result.txt"), "PASS (npm test)\n");
     writeFileSync(join(exec, "diff-stats.txt"), "2 files changed\n");
@@ -340,7 +340,7 @@ describe("solo summary", () => {
 
   it("aborted summary → SUMMARY.md (aborted) + RESUME.md", async () => {
     await scaffold("auth");
-    expect(await soloRun(["summary", "auth", "--aborted", "build", "part-turn-failed", "turn", "failed", "twice"])).toBe(0);
+    expect(await soloRun(["summary", "auth", "--aborted", "build", "worker-turn-failed", "turn", "failed", "twice"])).toBe(0);
     const { soloArtDir } = await import("../src/core/solo.js");
     expect(readFileSync(join(soloArtDir("auth"), "SUMMARY.md"), "utf8")).toContain("status: aborted");
     expect(readFileSync(join(soloArtDir("auth"), "SUMMARY.md"), "utf8")).toContain("turn failed twice");

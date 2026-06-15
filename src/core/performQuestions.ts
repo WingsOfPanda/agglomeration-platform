@@ -1,6 +1,6 @@
 // src/core/performQuestions.ts — perform-side QUESTION-CLAIM verifier (Phase A).
 // Byte-faithful port of the prior bash plugin's deploy-questions lib (question payload extractor)
-// + the part-question lib (claim verify dispatcher + reply formatter), rebranded for ap.
+// + the worker-question lib (claim verify dispatcher + reply formatter), rebranded for ap.
 // Side effects (git ref resolution, command lookup, diagnostic test runs) shell through an injected
 // Runner so unit tests stay pure. Filesystem (path) + environment (env) checks read ambient state.
 import { existsSync, accessSync, constants, statSync } from "node:fs";
@@ -30,7 +30,7 @@ export interface QuestionPayload { text: string; claimKind: ClaimKind; claimValu
 
 const KNOWN_KINDS = new Set<ClaimKind>(["path", "git", "env", "cmd", "test"]);
 
-/** Parse a question-<part>-<round>.txt payload body. KEY=value lines: TEXT (percent-encoded),
+/** Parse a question-<worker>-<round>.txt payload body. KEY=value lines: TEXT (percent-encoded),
  *  CLAIM_KIND, CLAIM_VALUE, ROUTE. Value = everything after the FIRST '=' on the first matching
  *  line. ROUTE defaults to escalate; CLAIM_KIND/VALUE default to "" when absent. */
 export function parseQuestionPayload(body: string): QuestionPayload {
@@ -122,12 +122,12 @@ export function verifyClaim(kind: string, value: string, runner?: QuestionRunner
   }
 }
 
-/** Format the inbox.md reply body for the part (rebranded From: maestro). Begins with FOUND /
+/** Format the inbox.md reply body for the worker (rebranded From: hub). Begins with FOUND /
  *  NOT FOUND / UNVERIFIABLE and ends with "Resume implementation.\n". kind=test inserts a NOTE. */
 export function formatReply(kind: string, value: string, rc: number, evidence: string): string {
   const verdict = rc === 0 ? "FOUND" : rc === 1 ? "NOT FOUND" : "UNVERIFIABLE";
   let body =
-    `From: maestro\n\n` +
+    `From: hub\n\n` +
     `Verdict: ${verdict}\n` +
     `Claim kind: ${kind}\n` +
     `Claim value: ${value}\n\n` +
@@ -143,7 +143,7 @@ export function formatReply(kind: string, value: string, rc: number, evidence: s
   return body;
 }
 
-/** Port of the prior plugin's part-question validate-line helper: a question event is well-formed iff
+/** Port of the prior plugin's worker-question validate-line helper: a question event is well-formed iff
  *  its message is non-empty printable-ASCII (+tab/newline) with no raw escaped quote/backslash, AND any
  *  present `claim` has kind in {path,git,env,cmd,test} and a non-empty value. Returns false otherwise so
  *  the caller downgrades to TS=failed rather than routing a malformed claim to verify. */

@@ -1,12 +1,12 @@
 ---
-description: Show active parts (panes + state); optionally scoped to a topic
+description: Show active workers (panes + state); optionally scoped to a topic
 argument-hint: [<topic>]
 allowed-tools: Bash, Write
 ---
 
 # /ap:roster
 
-Show every active part across topics, or scope to a single topic.
+Show every active worker across topics, or scope to a single topic.
 
 ## Steps
 

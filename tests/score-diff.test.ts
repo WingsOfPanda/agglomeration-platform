@@ -77,13 +77,13 @@ describe("diffFindings N=2", () => {
   });
   it("non-exact cites merge into Agreed via RANGE overlap (10-20 contains 15)", () => {
     // Pins overlap-into-bucketing: a line-range cite and a single-line cite that
-    // falls inside it must land in the same bucket (not the per-part -only files).
+    // falls inside it must land in the same bucket (not the per-worker -only files).
     const rex = claims("[src/a.ts:10-20] range claim");
     const cody = claims("[src/a.ts:15] point claim");
     const r = diffFindings([{ name: "rex", findings: rex }, { name: "cody", findings: cody }]);
     expect(r.files.find((f) => f.filename === "rex_only_items.txt")!.content).toBe("");
     expect(r.files.find((f) => f.filename === "cody_only_items.txt")!.content).toBe("");
-    // Bucket line uses the first part's cite; texts pipe-joined in input order.
+    // Bucket line uses the first worker's cite; texts pipe-joined in input order.
     expect(r.diffMd).toContain("## Agreed\n- [src/a.ts:10-20] range claim | point claim\n");
   });
 });

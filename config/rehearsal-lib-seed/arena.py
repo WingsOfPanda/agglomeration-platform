@@ -1,11 +1,11 @@
-"""Shared arena helper for rehearsal parts.
+"""Shared arena helper for rehearsal workers.
 
-Imported by part experiments via:
+Imported by worker experiments via:
     import sys
     sys.path.insert(0, "<art-dir>/lib")
     from arena import arena_color_rotated
 
-Why this exists: multiple parts independently reimplemented color-rotated
+Why this exists: multiple workers independently reimplemented color-rotated
 arena in an early alpha-training session, and one implementation had a
 first-move-advantage bug (arena_vs_agz_v1=0.0 masquerading as defeat)
 that took hours to diagnose. A shared canonical implementation removes

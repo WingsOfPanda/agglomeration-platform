@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync, readdirSync, readFileSync, existsSync, type D
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { soloArtDir } from "../src/core/solo.js";
-import { partDir, globalRoot } from "../src/core/paths.js";
+import { workerDir, globalRoot } from "../src/core/paths.js";
 import { forensicsRun } from "../src/commands/solo.js";
 
 let env: { home: string; cleanup: () => void };
@@ -25,9 +25,9 @@ function walkForensicsMd(): string[] {
 }
 
 describe("solo forensics", () => {
-  it("captures a part's outbox errors into a command:solo forensics file under globalRoot/forensics", async () => {
+  it("captures a worker's outbox errors into a command:solo forensics file under globalRoot/forensics", async () => {
     mkdirSync(soloArtDir("fix-bug"), { recursive: true });
-    const pd = partDir("cody", "codex", "fix-bug");
+    const pd = workerDir("cody", "codex", "fix-bug");
     mkdirSync(pd, { recursive: true });
     writeFileSync(join(pd, "outbox.jsonl"), JSON.stringify({ event: "error", message: "boom", fatal: false }) + "\n");
 

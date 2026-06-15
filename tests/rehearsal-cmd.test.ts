@@ -5,7 +5,7 @@ import { freshHome } from "./helpers/tmpHome.js";
 import { initWith, type RehearsalInitDeps } from "../src/commands/rehearsal.js";
 import { metricWith, sotaWith } from "../src/commands/rehearsal.js";
 import { spawnAllWith, type SpawnAllDeps } from "../src/commands/rehearsal.js";
-import { dropPartWith, type DropPartDeps } from "../src/commands/rehearsal.js";
+import { dropWorkerWith, type DropWorkerDeps } from "../src/commands/rehearsal.js";
 import { experimentSendWith, type ExperimentSendDeps } from "../src/commands/rehearsal.js";
 import { experimentTimeoutDefault } from "../src/commands/rehearsal.js";
 import { consultTimeout } from "../src/core/contracts.js";
@@ -15,8 +15,8 @@ import { monitorRun } from "../src/commands/rehearsal.js";
 import { statusBriefWith } from "../src/commands/rehearsal.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { rehearsalArtDir, partStateDir, experimentDir, partsDir } from "../src/core/rehearsal.js";
-import { partDir } from "../src/core/paths.js";
+import { rehearsalArtDir, workerStateDir, experimentDir, workersDir } from "../src/core/rehearsal.js";
+import { workerDir } from "../src/core/paths.js";
 import { inboxPath } from "../src/core/ipc.js";
 
 const cleanups: Array<() => void> = [];
@@ -26,7 +26,7 @@ function home() { const h = freshHome(); cleanups.push(h.cleanup); return h; }
 
 const okDeps = (over: Partial<RehearsalInitDeps> = {}): RehearsalInitDeps => ({
   haveCmd: () => true,
-  instrumentBinary: (n) => (n === "codex" ? "codex" : undefined),
+  agentBinary: (n) => (n === "codex" ? "codex" : undefined),
   now: () => "2026-05-30T00:00:00Z",
   probeHardware: () => {},
   configRoot: () => process.cwd(),
@@ -177,32 +177,32 @@ describe("rehearsal spawn-all", () => {
       },
       spawn: async () => 0,
       repoRoot: () => "/repo",
-      pickInstruments: (_t, n) => Array.from({ length: n }, (_, i) => `inst${i + 1}`),
+      pickAgents: (_t, n) => Array.from({ length: n }, (_, i) => `inst${i + 1}`),
       ...over,
     };
   }
-  it("picks N codex parts, spawns them, writes parts.txt + spawn-results.tsv, rc 0", async () => {
+  it("picks N codex workers, spawns them, writes workers.txt + spawn-results.tsv, rc 0", async () => {
     const h = home();
     await initWith(["--slug", "s1", "spawn topic"], okDeps({ opts: { home: h.home, cwd: h.home } }));
     const rc = await spawnAllWith(["s1", "2"], deps(), { home: h.home, cwd: h.home });
     expect(rc).toBe(0);
     const art = rehearsalArtDir("s1", { home: h.home, cwd: h.home });
-    expect(readFileSync(`${art}/parts.txt`, "utf8").trim().split("\n")).toEqual(["inst1", "inst2"]);
+    expect(readFileSync(`${art}/workers.txt`, "utf8").trim().split("\n")).toEqual(["inst1", "inst2"]);
     expect(readFileSync(`${art}/spawn-results.tsv`, "utf8")).toContain("inst1\tcodex\t0");
   });
-  it("rc 1 when one part fails to come up", async () => {
+  it("rc 1 when one worker fails to come up", async () => {
     const h = home();
     await initWith(["--slug", "s2", "spawn topic 2"], okDeps({ opts: { home: h.home, cwd: h.home } }));
     const rc = await spawnAllWith(["s2", "2"], deps({ spawn: async (a) => (a[0] === "inst2" ? 1 : 0) }), { home: h.home, cwd: h.home });
     expect(rc).toBe(1);
   });
-  it("rc 3 when fewer than 2 instruments can be picked", async () => {
+  it("rc 3 when fewer than 2 agents can be picked", async () => {
     const h = home();
     await initWith(["--slug", "s3", "spawn topic 3"], okDeps({ opts: { home: h.home, cwd: h.home } }));
-    const rc = await spawnAllWith(["s3", "2"], deps({ pickInstruments: () => ["only1"] }), { home: h.home, cwd: h.home });
+    const rc = await spawnAllWith(["s3", "2"], deps({ pickAgents: () => ["only1"] }), { home: h.home, cwd: h.home });
     expect(rc).toBe(3);
   });
-  it("rc 3 when preflight omits a pane for some part (orphan guard)", async () => {
+  it("rc 3 when preflight omits a pane for some worker (orphan guard)", async () => {
     const h = home();
     await initWith(["--slug", "s4", "spawn topic 4"], okDeps({ opts: { home: h.home, cwd: h.home } }));
     const d = deps({
@@ -218,49 +218,49 @@ describe("rehearsal spawn-all", () => {
   });
 });
 
-describe("rehearsal drop-part", () => {
+describe("rehearsal drop-worker", () => {
   const TOPIC = "dp-topic";
   const opts = (h: { home: string }) => ({ home: h.home, cwd: process.cwd() });
-  const noKill: DropPartDeps = { killPane: () => {} };
-  it("prunes the named instrument from parts.txt and reports remaining N", async () => {
+  const noKill: DropWorkerDeps = { killPane: () => {} };
+  it("prunes the named agent from workers.txt and reports remaining N", async () => {
     const h = home();
     const art = rehearsalArtDir(TOPIC, opts(h));
     mkdirSync(art, { recursive: true });
-    writeFileSync(join(art, "parts.txt"), "rex\nkeeli\ncolt\n");
-    expect(await dropPartWith([TOPIC, "keeli"], noKill, opts(h))).toBe(0);
-    expect(readFileSync(join(art, "parts.txt"), "utf8")).toBe("rex\ncolt\n");
+    writeFileSync(join(art, "workers.txt"), "rex\nkeeli\ncolt\n");
+    expect(await dropWorkerWith([TOPIC, "keeli"], noKill, opts(h))).toBe(0);
+    expect(readFileSync(join(art, "workers.txt"), "utf8")).toBe("rex\ncolt\n");
   });
-  it("writes an empty parts.txt when the last instrument is dropped", async () => {
+  it("writes an empty workers.txt when the last agent is dropped", async () => {
     const h = home();
     const art = rehearsalArtDir(TOPIC, opts(h));
     mkdirSync(art, { recursive: true });
-    writeFileSync(join(art, "parts.txt"), "rex\n");
-    expect(await dropPartWith([TOPIC, "rex"], noKill, opts(h))).toBe(0);
-    expect(readFileSync(join(art, "parts.txt"), "utf8")).toBe("");
+    writeFileSync(join(art, "workers.txt"), "rex\n");
+    expect(await dropWorkerWith([TOPIC, "rex"], noKill, opts(h))).toBe(0);
+    expect(readFileSync(join(art, "workers.txt"), "utf8")).toBe("");
   });
-  it("rc 1 when parts.txt is missing", async () => {
+  it("rc 1 when workers.txt is missing", async () => {
     const h = home();
-    expect(await dropPartWith([TOPIC, "rex"], noKill, opts(h))).toBe(1);
+    expect(await dropWorkerWith([TOPIC, "rex"], noKill, opts(h))).toBe(1);
   });
-  it("rc 1 when the instrument is not present", async () => {
+  it("rc 1 when the agent is not present", async () => {
     const h = home();
     const art = rehearsalArtDir(TOPIC, opts(h));
     mkdirSync(art, { recursive: true });
-    writeFileSync(join(art, "parts.txt"), "rex\n");
-    expect(await dropPartWith([TOPIC, "ghost"], noKill, opts(h))).toBe(1);
+    writeFileSync(join(art, "workers.txt"), "rex\n");
+    expect(await dropWorkerWith([TOPIC, "ghost"], noKill, opts(h))).toBe(1);
   });
   it("rc 2 on bad usage", async () => {
     const h = home();
-    expect(await dropPartWith([TOPIC], noKill, opts(h))).toBe(2);
+    expect(await dropWorkerWith([TOPIC], noKill, opts(h))).toBe(2);
   });
-  it("best-effort kills the dropped instrument's preflight pane", async () => {
+  it("best-effort kills the dropped agent's preflight pane", async () => {
     const h = home();
     const art = rehearsalArtDir(TOPIC, opts(h));
     mkdirSync(art, { recursive: true });
-    writeFileSync(join(art, "parts.txt"), "rex\nkeeli\n");
+    writeFileSync(join(art, "workers.txt"), "rex\nkeeli\n");
     writeFileSync(join(art, "preflight-panes.txt"), "rex\t%5\nkeeli\t%6\n");
     const killed: string[] = [];
-    await dropPartWith([TOPIC, "keeli"], { killPane: (p) => killed.push(p) }, opts(h));
+    await dropWorkerWith([TOPIC, "keeli"], { killPane: (p) => killed.push(p) }, opts(h));
     expect(killed).toEqual(["%6"]);
   });
 });
@@ -281,20 +281,20 @@ describe("rehearsal experiment timeout env override", () => {
   });
 });
 
-// ---- Phase C: experiment-send — dispatch ONE experiment to a persistent codex part ----
+// ---- Phase C: experiment-send — dispatch ONE experiment to a persistent codex worker ----
 
 describe("rehearsal experiment-send", () => {
   const TOPIC = "es-topic";
-  const INST = "violin";
+  const INST = "bravo";
   const MODEL = "codex";
-  // resolveModel (in ipc.ts) looks up the part via topicDir(topic) with NO cwd opt,
-  // so it hashes process.cwd(). Scaffold under the same cwd so the part dir + art dir
+  // resolveModel (in ipc.ts) looks up the worker via topicDir(topic) with NO cwd opt,
+  // so it hashes process.cwd(). Scaffold under the same cwd so the worker dir + art dir
   // (which thread opts) and resolveModel's lookup all land on one repoHash. home is set
   // via AP_HOME (freshHome) so the state root agrees regardless.
   const opts = (h: { home: string }) => ({ home: h.home, cwd: process.cwd() });
 
-  /** Scaffold an in-flight topic: art dir + metric.md + topic.txt + part state.txt (idle) +
-   *  a live part dir (pane.json + outbox.jsonl) so resolveModel/outbox/paneMetaRead resolve. */
+  /** Scaffold an in-flight topic: art dir + metric.md + topic.txt + worker state.txt (idle) +
+   *  a live worker dir (pane.json + outbox.jsonl) so resolveModel/outbox/paneMetaRead resolve. */
   function scaffold(h: { home: string }, over: { phase?: string; metric?: boolean; state?: boolean; outbox?: boolean; sota?: string } = {}) {
     const o = opts(h);
     const art = rehearsalArtDir(TOPIC, o);
@@ -302,12 +302,12 @@ describe("rehearsal experiment-send", () => {
     if (over.metric !== false) writeFileSync(join(art, "metric.md"), "# Research goal\n\n**Primary metric:** accuracy\n**Direction:** maximize\n");
     writeFileSync(join(art, "topic.txt"), "improve accuracy");
     if (over.sota) writeFileSync(join(art, "sota.md"), over.sota);
-    const sd = partStateDir(art, INST);
+    const sd = workerStateDir(art, INST);
     if (over.state !== false) { mkdirSync(sd, { recursive: true }); writeFileSync(join(sd, "state.txt"), `phase=${over.phase ?? "idle"}\nexp_counter=0\n`); }
     else mkdirSync(sd, { recursive: true });
-    const pd = partDir(INST, MODEL, TOPIC, o);
+    const pd = workerDir(INST, MODEL, TOPIC, o);
     mkdirSync(pd, { recursive: true });
-    writeFileSync(join(pd, "pane.json"), JSON.stringify({ pane_id: "%7", instrument: INST, model: MODEL, spawned_at: "t" }));
+    writeFileSync(join(pd, "pane.json"), JSON.stringify({ pane_id: "%7", agent: INST, model: MODEL, spawned_at: "t" }));
     if (over.outbox !== false) writeFileSync(join(pd, "outbox.jsonl"), "");
     return { art, sd, pd, o };
   }
@@ -324,12 +324,12 @@ describe("rehearsal experiment-send", () => {
     };
   }
 
-  it("idle part -> rc 0: renders prompt.md, writes inbox + transitions state", async () => {
+  it("idle worker -> rc 0: renders prompt.md, writes inbox + transitions state", async () => {
     const h = home();
     const { art, sd, o } = scaffold(h);
     const rc = await experimentSendWith([TOPIC, INST, "exp-001", "baseline", "a plain baseline"], deps(h));
     expect(rc).toBe(0);
-    const promptPath = join(art, "parts", INST, "experiments", "exp-001", "prompt.md");
+    const promptPath = join(art, "workers", INST, "experiments", "exp-001", "prompt.md");
     expect(existsSync(promptPath)).toBe(true);
     const prompt = readFileSync(promptPath, "utf8");
     expect(prompt).not.toContain("{{");
@@ -381,10 +381,10 @@ describe("rehearsal experiment-send", () => {
     expect(await experimentSendWith([TOPIC, INST, "exp1", "x", "y"], deps(h))).toBe(2);
   });
 
-  it("bad instrument -> rc 2", async () => {
+  it("bad agent -> rc 2", async () => {
     const h = home();
     scaffold(h);
-    expect(await experimentSendWith([TOPIC, "Viola", "exp-001", "x", "y"], deps(h))).toBe(2);
+    expect(await experimentSendWith([TOPIC, "Alpha", "exp-001", "x", "y"], deps(h))).toBe(2);
   });
 
   it("bad --timeout -> rc 2", async () => {
@@ -458,7 +458,7 @@ describe("rehearsal experiment-send", () => {
     writeFileSync(ctx, "SPECIAL_CONTEXT_MARKER");
     const rc = await experimentSendWith(["--context-file", ctx, TOPIC, INST, "exp-003", "x", "y"], deps(h));
     expect(rc).toBe(0);
-    const prompt = readFileSync(join(art, "parts", INST, "experiments", "exp-003", "prompt.md"), "utf8");
+    const prompt = readFileSync(join(art, "workers", INST, "experiments", "exp-003", "prompt.md"), "utf8");
     expect(prompt).toContain("SPECIAL_CONTEXT_MARKER");
   });
 
@@ -470,7 +470,7 @@ describe("rehearsal experiment-send", () => {
     const rc = await experimentSendWith(["--smoke-test", script, TOPIC, INST, "exp-004", "x", "y"],
       deps(h, { runSmokeTest: () => ({ ok: false, stderr: "boom" }) }));
     expect(rc).toBe(2);
-    expect(readFileSync(join(art, "parts", INST, "experiments", "exp-004", "smoke-test.err"), "utf8")).toContain("boom");
+    expect(readFileSync(join(art, "workers", INST, "experiments", "exp-004", "smoke-test.err"), "utf8")).toContain("boom");
     expect(readFileSync(join(sd, "state.txt"), "utf8")).toContain("phase=idle");
   });
 
@@ -479,7 +479,7 @@ describe("rehearsal experiment-send", () => {
     const { art } = scaffold(h, { sota: "# SOTA reference — mnist\n\n| a | b |\n" });
     const rc = await experimentSendWith([TOPIC, INST, "exp-005", "x", "y"], deps(h));
     expect(rc).toBe(0);
-    const prompt = readFileSync(join(art, "parts", INST, "experiments", "exp-005", "prompt.md"), "utf8");
+    const prompt = readFileSync(join(art, "workers", INST, "experiments", "exp-005", "prompt.md"), "utf8");
     expect(prompt).toContain("## Reference: SOTA");
   });
 
@@ -509,14 +509,14 @@ describe("rehearsal score", () => {
     });
   }
 
-  /** Scaffold an in-flight rehearsal art dir with metric.md + two working parts each with one
-   *  experiment result.json. `over.experiments` patches the per-instrument result body/expId. */
-  function scaffold(h: { home: string }, parts: Record<string, { expId: string; body: string; experiments?: boolean }>) {
+  /** Scaffold an in-flight rehearsal art dir with metric.md + two working workers each with one
+   *  experiment result.json. `over.experiments` patches the per-agent result body/expId. */
+  function scaffold(h: { home: string }, workers: Record<string, { expId: string; body: string; experiments?: boolean }>) {
     const art = rehearsalArtDir("topic", { home: h.home });
     mkdirSync(art, { recursive: true });
     writeFileSync(join(art, "metric.md"), "# Research goal\n\n**Primary metric:** accuracy\n**Direction:** maximize\n");
-    for (const [inst, p] of Object.entries(parts)) {
-      const sd = partStateDir(art, inst);
+    for (const [inst, p] of Object.entries(workers)) {
+      const sd = workerStateDir(art, inst);
       mkdirSync(sd, { recursive: true });
       writeFileSync(join(sd, "state.txt"), `phase=working\ncurrent_exp_id=${p.expId}\n`);
       if (p.experiments !== false) {
@@ -539,7 +539,7 @@ describe("rehearsal score", () => {
 
     const sb = readFileSync(join(art, "scoreboard.md"), "utf8");
     expect(existsSync(join(art, "scoreboard.md"))).toBe(true);
-    // 0.95 part ranked #1, 0.90 ranked #2.
+    // 0.95 worker ranked #1, 0.90 ranked #2.
     const rank1 = sb.split("\n").find((l) => l.startsWith("| 1 |"))!;
     const rank2 = sb.split("\n").find((l) => l.startsWith("| 2 |"))!;
     expect(rank1).toContain("exp-001");
@@ -549,15 +549,15 @@ describe("rehearsal score", () => {
     const tsv = readFileSync(join(art, "results.tsv"), "utf8");
     expect(existsSync(join(art, "results.tsv"))).toBe(true);
     const tsvLines = tsv.trimEnd().split("\n");
-    expect(tsvLines[0]).toBe("exp_id\tinstrument\tapproach\tmetric\tstatus\truntime_s\tmetric_name");
+    expect(tsvLines[0]).toBe("exp_id\tagent\tapproach\tmetric\tstatus\truntime_s\tmetric_name");
     expect(tsvLines).toHaveLength(3); // header + 2 rows
     // ascending walk order (alto before bass)
     expect(tsvLines[1]).toContain("alto");
     expect(tsvLines[2]).toContain("bass");
 
-    // phase cleared on both parts
+    // phase cleared on both workers
     for (const inst of ["alto", "bass"]) {
-      const st = readFileSync(join(partStateDir(art, inst), "state.txt"), "utf8");
+      const st = readFileSync(join(workerStateDir(art, inst), "state.txt"), "utf8");
       expect(st).toContain("phase=idle");
       expect(st).toContain("current_exp_id=");
       expect(st).not.toMatch(/current_exp_id=exp-001/);
@@ -572,7 +572,7 @@ describe("rehearsal score", () => {
     });
     const rc = await scoreWith(["topic"], SCORE_OPTS(h));
     expect(rc).toBe(0);
-    const sidecar = join(partStateDir(art, "bad"), "experiments", "exp-001", "result-validation.txt");
+    const sidecar = join(workerStateDir(art, "bad"), "experiments", "exp-001", "result-validation.txt");
     expect(existsSync(sidecar)).toBe(true);
     expect(readFileSync(sidecar, "utf8")).toContain("FAILED");
     const sb = readFileSync(join(art, "scoreboard.md"), "utf8");
@@ -590,7 +590,7 @@ describe("rehearsal score", () => {
     expect(await scoreWith(["a", "b"], SCORE_OPTS(h))).toBe(2);
   });
 
-  it("missing parts dir -> rc 1", async () => {
+  it("missing workers dir -> rc 1", async () => {
     const h = home();
     const art = rehearsalArtDir("topic", { home: h.home });
     mkdirSync(art, { recursive: true });
@@ -598,12 +598,12 @@ describe("rehearsal score", () => {
     expect(await scoreWith(["topic"], SCORE_OPTS(h))).toBe(1);
   });
 
-  it("ENOENT-safe: a part with state.txt but no experiments/ dir does not crash -> rc 0", async () => {
+  it("ENOENT-safe: a worker with state.txt but no experiments/ dir does not crash -> rc 0", async () => {
     const h = home();
     const art = rehearsalArtDir("topic", { home: h.home });
     mkdirSync(art, { recursive: true });
     writeFileSync(join(art, "metric.md"), "# Research goal\n\n**Primary metric:** accuracy\n**Direction:** maximize\n");
-    const sd = partStateDir(art, "solo");
+    const sd = workerStateDir(art, "solo");
     mkdirSync(sd, { recursive: true });
     writeFileSync(join(sd, "state.txt"), "phase=working\ncurrent_exp_id=exp-001\n");
     // NO experiments/ dir under solo -> live listDir must return [] not throw.
@@ -613,7 +613,7 @@ describe("rehearsal score", () => {
   it("writes coverage.tsv from computeScore's coverageRows (B1)", async () => {
     const h = home();
     const art = rehearsalArtDir("topic", { home: h.home });
-    mkdirSync(partsDir(art), { recursive: true });   // scoreWith requires parts/ to exist
+    mkdirSync(workersDir(art), { recursive: true });   // scoreWith requires workers/ to exist
     const writes: { path: string; content: string }[] = [];
     const comp: ScoreComputation = {
       scoreboardMd: "", resultsTsv: "", sidecars: [], staleSidecars: [], phaseClears: [],
@@ -637,12 +637,12 @@ describe("rehearsal score", () => {
   it("writes lineage.tsv from computeScore's lineageRows (B2)", async () => {
     const h = home();
     const art = rehearsalArtDir("topic", { home: h.home });
-    mkdirSync(partsDir(art), { recursive: true });   // scoreWith requires parts/ to exist
+    mkdirSync(workersDir(art), { recursive: true });   // scoreWith requires workers/ to exist
     const writes: { path: string; content: string }[] = [];
     const comp: ScoreComputation = {
       scoreboardMd: "", resultsTsv: "", sidecars: [], staleSidecars: [], phaseClears: [],
       warnings: [], manifests: [], sanityRows: [], coverageRows: [],
-      lineageRows: [{ expId: "exp-003", instrument: "oboe", parentId: "exp-002", knobsChanged: "2", verdict: "improve-multi", ts: "T" }],
+      lineageRows: [{ expId: "exp-003", agent: "golf", parentId: "exp-002", knobsChanged: "2", verdict: "improve-multi", ts: "T" }],
     };
     const deps: RehearsalScoreDeps = {
       computeScore: () => comp,
@@ -655,30 +655,30 @@ describe("rehearsal score", () => {
     expect(await scoreWith(["topic"], deps)).toBe(0);
     const lin = writes.find((w) => w.path === join(art, "lineage.tsv"));
     expect(lin).toBeDefined();
-    expect(lin!.content).toBe("exp_id\tinstrument\tparent_id\tknobs_changed\tverdict\tts\nexp-003\toboe\texp-002\t2\timprove-multi\tT\n");
+    expect(lin!.content).toBe("exp_id\tagent\tparent_id\tknobs_changed\tverdict\tts\nexp-003\tgolf\texp-002\t2\timprove-multi\tT\n");
   });
 });
 
-// ---- Phase C: monitor — per-part liveness scan loop (C7) ----
+// ---- Phase C: monitor — per-worker liveness scan loop (C7) ----
 
 describe("rehearsal monitor", () => {
   const TOPIC = "mon-topic";
-  const INST = "viola";
+  const INST = "alpha";
   const MODEL = "codex";
   // resolveModel hashes process.cwd() (no cwd opt), so scaffold under process.cwd().
   const opts = (h: { home: string }) => ({ home: h.home, cwd: process.cwd() });
 
-  /** Scaffold an in-flight topic with a live codex part (pane.json + outbox.jsonl carrying
-   *  one done event) and a working state.txt under the art's part state dir. */
+  /** Scaffold an in-flight topic with a live codex worker (pane.json + outbox.jsonl carrying
+   *  one done event) and a working state.txt under the art's worker state dir. */
   function scaffold(h: { home: string }) {
     const o = opts(h);
     const art = rehearsalArtDir(TOPIC, o);
     mkdirSync(art, { recursive: true });
-    const pd = partDir(INST, MODEL, TOPIC, o);
+    const pd = workerDir(INST, MODEL, TOPIC, o);
     mkdirSync(pd, { recursive: true });
-    writeFileSync(join(pd, "pane.json"), JSON.stringify({ instrument: INST, model: MODEL, pane_id: "%1" }));
+    writeFileSync(join(pd, "pane.json"), JSON.stringify({ agent: INST, model: MODEL, pane_id: "%1" }));
     writeFileSync(join(pd, "outbox.jsonl"), '{"event":"done","summary":"finished","ts":"T"}\n');
-    const sd = partStateDir(art, INST);
+    const sd = workerStateDir(art, INST);
     mkdirSync(sd, { recursive: true });
     writeFileSync(join(sd, "state.txt"), "phase=working\n");
     return { art, pd, sd, o };
@@ -706,8 +706,8 @@ describe("rehearsal monitor", () => {
     writeFileSync(join(sd, "liveness-cursor.txt"), "0");
     const { rc, lines } = await capture(() => monitorRun([TOPIC, INST, "--once"], opts(h)));
     expect(rc).toBe(0);
-    const events = lines.map((l) => JSON.parse(l) as { part: string; event: string });
-    expect(events.some((e) => e.part === INST && e.event === "done")).toBe(true);
+    const events = lines.map((l) => JSON.parse(l) as { worker: string; event: string });
+    expect(events.some((e) => e.worker === INST && e.event === "done")).toBe(true);
     // cursor advanced to the outbox byte size
     const size = readFileSync(join(pd, "outbox.jsonl")).length;
     expect(readFileSync(join(sd, "liveness-cursor.txt"), "utf8")).toBe(String(size));
@@ -727,7 +727,7 @@ describe("rehearsal monitor", () => {
     expect(rc).toBe(2);
   });
 
-  it("null model (no part dir) -> rc 1", async () => {
+  it("null model (no worker dir) -> rc 1", async () => {
     const h = home();
     scaffold(h);
     const { rc } = await capture(() => monitorRun([TOPIC, "ghost", "--once"], opts(h)));
@@ -747,22 +747,22 @@ describe("rehearsal monitor", () => {
 
 describe("rehearsal status-brief", () => {
   const TOPIC = "sb-topic";
-  const INST = "viola";
+  const INST = "alpha";
 
   /** Scaffold an in-flight topic: art + metric.md + scoreboard.md (one OK row) +
-   *  parts.txt (one instrument) + the part's working state.txt + its prompt.md. */
+   *  workers.txt (one agent) + the worker's working state.txt + its prompt.md. */
   function scaffold(h: { home: string }) {
     const o = { home: h.home };
     const art = rehearsalArtDir(TOPIC, o);
     mkdirSync(art, { recursive: true });
     writeFileSync(join(art, "metric.md"), "# Research goal\n\n**Primary metric:** accuracy\n**Direction:** maximize\n");
     writeFileSync(join(art, "scoreboard.md"), [
-      "| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |",
+      "| Rank | Experiment | Agent | Metric | Status | Runtime | Approach | metric_name |",
       "|---|---|---|---|---|---|---|---|",
-      "| 1 | exp-001 | viola | 0.9500 | ok | 10.00s | baseline | accuracy |",
+      "| 1 | exp-001 | alpha | 0.9500 | ok | 10.00s | baseline | accuracy |",
     ].join("\n") + "\n");
-    writeFileSync(join(art, "parts.txt"), INST + "\n");
-    const sd = partStateDir(art, INST);
+    writeFileSync(join(art, "workers.txt"), INST + "\n");
+    const sd = workerStateDir(art, INST);
     mkdirSync(sd, { recursive: true });
     writeFileSync(join(sd, "state.txt"), "phase=working\ncurrent_exp_id=exp-001\n");
     const expDir = experimentDir(art, INST, "exp-001");
@@ -777,41 +777,41 @@ describe("rehearsal status-brief", () => {
     return { rc, text: lines.join("\n") };
   }
 
-  it("renders header, the | Part | table with the working row, scoreboard top-3, and completion line; rc 0", async () => {
+  it("renders header, the | Worker | table with the working row, scoreboard top-3, and completion line; rc 0", async () => {
     const h = home();
     const { o } = scaffold(h);
     const { rc, text } = await capture((stdout) => statusBriefWith([TOPIC], { opts: o, stdout }));
     expect(rc).toBe(0);
     expect(text).toContain("## Experiment status");
-    expect(text).toContain("| Part | Phase | Current/last | Approach | Metric |");
+    expect(text).toContain("| Worker | Phase | Current/last | Approach | Metric |");
     expect(text).not.toContain("| Trooper |");
-    // working part row: phase working, approach from prompt.md, metric (running)
-    expect(text).toContain("| viola | working | exp-001 | baseline | (running) |");
+    // working worker row: phase working, approach from prompt.md, metric (running)
+    expect(text).toContain("| alpha | working | exp-001 | baseline | (running) |");
     // scoreboard top-3 line
-    expect(text).toContain("1. viola/exp-001 — 0.9500 — accuracy");
+    expect(text).toContain("1. alpha/exp-001 — 0.9500 — accuracy");
     // completion line
     expect(text).toContain("**Completion check:** floor_met=");
   });
 
-  it("--latest-instrument/--latest-exp name the just-landed experiment in the header", async () => {
+  it("--latest-agent/--latest-exp name the just-landed experiment in the header", async () => {
     const h = home();
     const { o } = scaffold(h);
     const { rc, text } = await capture((stdout) =>
-      statusBriefWith([TOPIC, "--latest-instrument", INST, "--latest-exp", "exp-001"], { opts: o, stdout }));
+      statusBriefWith([TOPIC, "--latest-agent", INST, "--latest-exp", "exp-001"], { opts: o, stdout }));
     expect(rc).toBe(0);
-    expect(text).toContain("## Experiment status — exp-001 (viola) just landed");
+    expect(text).toContain("## Experiment status — exp-001 (alpha) just landed");
   });
 
-  it("non-working part: approach comes from result.json (wins over prompt.md), metric is '<value> <status>'", async () => {
+  it("non-working worker: approach comes from result.json (wins over prompt.md), metric is '<value> <status>'", async () => {
     const h = home();
     const o = { home: h.home };
     const art = rehearsalArtDir(TOPIC, o);
     mkdirSync(art, { recursive: true });
     writeFileSync(join(art, "metric.md"), "# Research goal\n\n**Primary metric:** accuracy\n**Direction:** maximize\n");
-    writeFileSync(join(art, "parts.txt"), INST + "\n");
-    const sd = partStateDir(art, INST);
+    writeFileSync(join(art, "workers.txt"), INST + "\n");
+    const sd = workerStateDir(art, INST);
     mkdirSync(sd, { recursive: true });
-    // Finished part: idle, current/last exp via current_exp_id.
+    // Finished worker: idle, current/last exp via current_exp_id.
     writeFileSync(join(sd, "state.txt"), "phase=idle\ncurrent_exp_id=exp-002\n");
     const expDir = experimentDir(art, INST, "exp-002");
     mkdirSync(expDir, { recursive: true });
@@ -824,7 +824,7 @@ describe("rehearsal status-brief", () => {
     const { rc, text } = await capture((stdout) => statusBriefWith([TOPIC], { opts: o, stdout }));
     expect(rc).toBe(0);
     // result.json's approach_label (deep-net) wins; prompt.md's baseline must NOT appear.
-    expect(text).toContain("| viola | idle | exp-002 | deep-net | 0.9 ok |");
+    expect(text).toContain("| alpha | idle | exp-002 | deep-net | 0.9 ok |");
     expect(text).not.toContain("baseline");
   });
 
@@ -835,11 +835,11 @@ describe("rehearsal status-brief", () => {
     mkdirSync(art, { recursive: true });
     // scoreboard.md present but metric.md absent -> completion can't be computed.
     writeFileSync(join(art, "scoreboard.md"), [
-      "| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |",
+      "| Rank | Experiment | Agent | Metric | Status | Runtime | Approach | metric_name |",
       "|---|---|---|---|---|---|---|---|",
-      "| 1 | exp-001 | viola | 0.9500 | ok | 10.00s | baseline | accuracy |",
+      "| 1 | exp-001 | alpha | 0.9500 | ok | 10.00s | baseline | accuracy |",
     ].join("\n") + "\n");
-    writeFileSync(join(art, "parts.txt"), INST + "\n");
+    writeFileSync(join(art, "workers.txt"), INST + "\n");
     const { rc, text } = await capture((stdout) => statusBriefWith([TOPIC], { opts: o, stdout }));
     expect(rc).toBe(0);
     expect(text).toContain("**Completion check:** _(scoreboard or metric absent)_");
@@ -860,11 +860,11 @@ describe("rehearsal status-brief", () => {
     writeFileSync(join(art, "metric.md"),
       "# Research goal\n\n**Primary metric:** accuracy\n**Direction:** maximize\n**min_families:** 2\n");
     writeFileSync(join(art, "scoreboard.md"), [
-      "| Rank | Experiment | Instrument | Metric | Status | Runtime | Approach | metric_name |",
+      "| Rank | Experiment | Agent | Metric | Status | Runtime | Approach | metric_name |",
       "|---|---|---|---|---|---|---|---|",
-      "| 1 | exp-001 | viola | 0.9600 | ok | 10.00s | single-pass | accuracy |",
+      "| 1 | exp-001 | alpha | 0.9600 | ok | 10.00s | single-pass | accuracy |",
     ].join("\n") + "\n");
-    writeFileSync(join(art, "parts.txt"), INST + "\n");
+    writeFileSync(join(art, "workers.txt"), INST + "\n");
     writeFileSync(join(art, "coverage.tsv"),
       "family\tcount\tbest\tts\nsingle-pass\t2\t0.96\tT\ntyped-routing\t1\t0.94\tT\n");
     const { rc, text } = await capture((stdout) => statusBriefWith([TOPIC], { opts: o, stdout }));
@@ -897,29 +897,29 @@ describe("rehearsal verify-plan", () => {
 
   it("clean -> emits RUN_CMD, persists nothing", async () => {
     const { d, rows, out } = deps({});
-    expect(await verifyPlanWith(["topic", "viola", "exp-001"], d)).toBe(0);
+    expect(await verifyPlanWith(["topic", "alpha", "exp-001"], d)).toBe(0);
     expect(out.some((l) => l.startsWith("RUN_CMD=python s.py"))).toBe(true);
     expect(out.some((l) => l.startsWith("METRIC_FROM=marker"))).toBe(true);
     expect(rows).toHaveLength(0);
   });
   it("provenance change -> persists mismatch, no RUN_CMD", async () => {
     const { d, rows, out } = deps({ readInput: () => "TAMPERED" });
-    await verifyPlanWith(["topic", "viola", "exp-001"], d);
+    await verifyPlanWith(["topic", "alpha", "exp-001"], d);
     expect(rows[0]).toMatchObject({ verdict: "mismatch", reason: "provenance:./p.json" });
     expect(out.some((l) => l.startsWith("RUN_CMD"))).toBe(false);
   });
   it("rerun without --authorize-rerun -> pending", async () => {
     const { d, rows } = deps({ readResult: () => ({ metric_value: 1, verify: { kind: "rerun", command: "c" } }) });
-    await verifyPlanWith(["topic", "viola", "exp-001"], d);
+    await verifyPlanWith(["topic", "alpha", "exp-001"], d);
     expect(rows[0]).toMatchObject({ verdict: "pending", reason: "rerun-deferred" });
   });
   it("missing result -> rc 1", async () => {
     const { d } = deps({ readResult: () => null });
-    expect(await verifyPlanWith(["topic", "viola", "exp-001"], d)).toBe(1);
+    expect(await verifyPlanWith(["topic", "alpha", "exp-001"], d)).toBe(1);
   });
   it("bad arity -> rc 2", async () => {
     const { d } = deps({});
-    expect(await verifyPlanWith(["topic", "viola"], d)).toBe(2);
+    expect(await verifyPlanWith(["topic", "alpha"], d)).toBe(2);
   });
 });
 
@@ -942,27 +942,27 @@ describe("rehearsal verify-check", () => {
   }
   it("recomputed within epsilon -> verified", async () => {
     const { d, rows } = deps({});
-    expect(await verifyCheckWith(["topic", "viola", "exp-001", "--stdout-file", "/x"], d)).toBe(0);
+    expect(await verifyCheckWith(["topic", "alpha", "exp-001", "--stdout-file", "/x"], d)).toBe(0);
     expect(rows[0]).toMatchObject({ verdict: "verified" });
   });
   it("beyond epsilon -> mismatch", async () => {
     const { d, rows } = deps({ readStdout: () => "VERIFY_METRIC=0.5\n" });
-    await verifyCheckWith(["topic", "viola", "exp-001", "--stdout-file", "/x"], d);
+    await verifyCheckWith(["topic", "alpha", "exp-001", "--stdout-file", "/x"], d);
     expect(rows[0].verdict).toBe("mismatch");
   });
   it("--run-failed -> mismatch rerun-failed", async () => {
     const { d, rows } = deps({});
-    await verifyCheckWith(["topic", "viola", "exp-001", "--run-failed"], d);
+    await verifyCheckWith(["topic", "alpha", "exp-001", "--run-failed"], d);
     expect(rows[0]).toMatchObject({ verdict: "mismatch", reason: "rerun-failed" });
   });
   it("honors metric.md verify_epsilon", async () => {
     const { d, rows } = deps({ readMetricMd: () => "**Primary metric:** accuracy\n**verify_epsilon:** 0.2\n", readStdout: () => "VERIFY_METRIC=0.75\n" });
-    await verifyCheckWith(["topic", "viola", "exp-001", "--stdout-file", "/x"], d);
+    await verifyCheckWith(["topic", "alpha", "exp-001", "--stdout-file", "/x"], d);
     expect(rows[0].verdict).toBe("verified");
   });
   it("missing --stdout-file and no --run-failed -> rc 2", async () => {
     const { d } = deps({});
-    expect(await verifyCheckWith(["topic", "viola", "exp-001"], d)).toBe(2);
+    expect(await verifyCheckWith(["topic", "alpha", "exp-001"], d)).toBe(2);
   });
 });
 
@@ -976,7 +976,7 @@ describe("rehearsal inspect-plan (C1)", () => {
       readResult: () => result,
       readMetricMd: () => "**Primary metric:** accuracy\n",
       inspectionCount: () => 0,
-      partProvider: () => "codex",
+      workerProvider: () => "codex",
       writeRow: (_a, _i, _e, row) => { rows.push(row); },
       now: () => "T",
       stdout: (l) => lines.push(l),
@@ -986,29 +986,29 @@ describe("rehearsal inspect-plan (C1)", () => {
   };
   it("without --authorize-inspect -> inconclusive inspect-deferred", async () => {
     const { deps, rows, lines } = mkPlan();
-    expect(await inspectPlanWith(["t", "oboe", "exp-001"], deps)).toBe(0);
+    expect(await inspectPlanWith(["t", "golf", "exp-001"], deps)).toBe(0);
     expect(rows[0].verdict).toBe("inconclusive");
     expect(rows[0].reason).toBe("inspect-deferred");
     expect(lines.join("\n")).toContain("VERDICT=inconclusive reason=inspect-deferred");
   });
   it("authorized but no data_spec -> run-card-insufficient", async () => {
     const { deps, rows } = mkPlan({}, { metric_value: 0.9, metric_name: "accuracy", approach_label: "x", metric_formula: "f" });
-    expect(await inspectPlanWith(["t", "oboe", "exp-001", "--authorize-inspect"], deps)).toBe(0);
+    expect(await inspectPlanWith(["t", "golf", "exp-001", "--authorize-inspect"], deps)).toBe(0);
     expect(rows[0].reason).toBe("run-card-insufficient");
   });
   it("authorized + budget hit -> budget-exhausted", async () => {
     const { deps, rows } = mkPlan({ inspectionCount: () => 5, readMetricMd: () => "**c1_budget:** 2\n**Primary metric:** accuracy\n" });
-    expect(await inspectPlanWith(["t", "oboe", "exp-001", "--authorize-inspect"], deps)).toBe(0);
+    expect(await inspectPlanWith(["t", "golf", "exp-001", "--authorize-inspect"], deps)).toBe(0);
     expect(rows[0].reason).toBe("budget-exhausted");
   });
-  it("authorized + claude part -> same-family", async () => {
-    const { deps, rows } = mkPlan({ partProvider: () => "claude" });
-    expect(await inspectPlanWith(["t", "oboe", "exp-001", "--authorize-inspect"], deps)).toBe(0);
+  it("authorized + claude worker -> same-family", async () => {
+    const { deps, rows } = mkPlan({ workerProvider: () => "claude" });
+    expect(await inspectPlanWith(["t", "golf", "exp-001", "--authorize-inspect"], deps)).toBe(0);
     expect(rows[0].reason).toBe("same-family");
   });
   it("authorized + sufficient -> prints INSPECT_CWD + run-card", async () => {
     const { deps, lines } = mkPlan();
-    expect(await inspectPlanWith(["t", "oboe", "exp-001", "--authorize-inspect"], deps)).toBe(0);
+    expect(await inspectPlanWith(["t", "golf", "exp-001", "--authorize-inspect"], deps)).toBe(0);
     const out = lines.join("\n");
     expect(out).toContain("INSPECT_CWD=");
     expect(out).toContain("METRIC_FORMULA=macro-F1");
@@ -1016,7 +1016,7 @@ describe("rehearsal inspect-plan (C1)", () => {
   });
   it("missing result.json -> rc 1", async () => {
     const { deps } = mkPlan({}, null);
-    expect(await inspectPlanWith(["t", "oboe", "exp-001", "--authorize-inspect"], deps)).toBe(1);
+    expect(await inspectPlanWith(["t", "golf", "exp-001", "--authorize-inspect"], deps)).toBe(1);
   });
 });
 
@@ -1037,29 +1037,29 @@ describe("rehearsal inspect-check (C1)", () => {
   };
   it("--stdout-file within c1_epsilon -> reproduced", async () => {
     const { deps, rows } = mkCheck();
-    expect(await inspectCheckWith(["t", "oboe", "exp-001", "--stdout-file", "/x"], deps)).toBe(0);
+    expect(await inspectCheckWith(["t", "golf", "exp-001", "--stdout-file", "/x"], deps)).toBe(0);
     expect(rows[0].verdict).toBe("reproduced");
   });
   it("--stdout-file beyond c1_epsilon -> not-reproduced", async () => {
     const { deps, rows } = mkCheck({ readStdout: () => "VERIFY_METRIC=0.5\n" });
-    expect(await inspectCheckWith(["t", "oboe", "exp-001", "--stdout-file", "/x"], deps)).toBe(0);
+    expect(await inspectCheckWith(["t", "golf", "exp-001", "--stdout-file", "/x"], deps)).toBe(0);
     expect(rows[0].verdict).toBe("not-reproduced");
   });
   it("--run-failed -> inconclusive", async () => {
     const { deps, rows } = mkCheck();
-    expect(await inspectCheckWith(["t", "oboe", "exp-001", "--run-failed"], deps)).toBe(0);
+    expect(await inspectCheckWith(["t", "golf", "exp-001", "--run-failed"], deps)).toBe(0);
     expect(rows[0].verdict).toBe("inconclusive");
   });
   it("--integrity-refuted -> not-reproduced", async () => {
     const { deps, rows } = mkCheck();
-    expect(await inspectCheckWith(["t", "oboe", "exp-001", "--integrity-refuted"], deps)).toBe(0);
+    expect(await inspectCheckWith(["t", "golf", "exp-001", "--integrity-refuted"], deps)).toBe(0);
     expect(rows[0].verdict).toBe("not-reproduced");
     expect(rows[0].reason).toBe("integrity-refuted");
   });
 });
 
 describe("experiment template verify contract", () => {
-  it("instructs the part to emit a verify block + VERIFY_METRIC marker", () => {
+  it("instructs the worker to emit a verify block + VERIFY_METRIC marker", () => {
     const tpl = readFileSync("config/prompt-templates/rehearsal/experiment.md", "utf8");
     expect(tpl).toContain("\"verify\"");
     expect(tpl).toContain("VERIFY_METRIC=");
@@ -1068,7 +1068,7 @@ describe("experiment template verify contract", () => {
 });
 
 describe("experiment template integrity attestation", () => {
-  it("instructs the part to emit an integrity block", () => {
+  it("instructs the worker to emit an integrity block", () => {
     const tpl = readFileSync("config/prompt-templates/rehearsal/experiment.md", "utf8");
     expect(tpl).toContain("\"integrity\"");
     expect(tpl).toContain("split_before_fit");

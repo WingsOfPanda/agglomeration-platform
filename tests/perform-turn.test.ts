@@ -74,7 +74,7 @@ describe("composeRound1Prompt", () => {
   it("is branch-disciplined and documents the halt-and-ask question protocol", () => {
     expect(p).toMatch(/do NOT run 'git checkout', 'git switch'/i);
     expect(p).toContain('"event":"error","reason":"branch-discipline');
-    expect(p).not.toContain("part-ask.sh");
+    expect(p).not.toContain("worker-ask.sh");
     expect(p).not.toContain("inbox-ack.sh");
     expect(p).toContain('{"event":"question"');
     expect(p).toContain('{"event":"ack"');
@@ -117,7 +117,7 @@ describe("composeFixPrompt", () => {
   });
   it("is branch-disciplined, documents the ask protocol, carries no fence/done-line", () => {
     expect(p).toMatch(/do NOT run 'git checkout', 'git switch'/i);
-    expect(p).not.toContain("part-ask.sh");
+    expect(p).not.toContain("worker-ask.sh");
     expect(p).not.toContain("inbox-ack.sh");
     expect(p).toContain('{"event":"question"');
     expect(p).toContain('{"event":"ack"');

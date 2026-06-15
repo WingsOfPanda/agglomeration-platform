@@ -1,6 +1,6 @@
 // /ap:rehearsal CLI verbs (Phase B front half). Ports deep-research-init.sh
 // (slug/codex-gate/flags/scaffolding) + the deep-research.md Phase 0-3 surface.
-// Phase C: experiment-send (dispatch ONE experiment to a persistent codex part).
+// Phase C: experiment-send (dispatch ONE experiment to a persistent codex worker).
 import { accessSync, appendFileSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, relative, resolve } from "node:path";
@@ -12,7 +12,7 @@ import { splitNonCommentLines } from "../core/text.js";
 import { archiveTopic, isoUtc } from "../core/archive.js";
 import { deriveSlug } from "../core/solo.js";
 import { extractMetric, formatMetricBlock, formatSotaBlock, parseMetricMd } from "../core/rehearsalMetric.js";
-import { rehearsalArtDir, partsDir, partStateDir, experimentsDir, experimentDir, seedLib } from "../core/rehearsal.js";
+import { rehearsalArtDir, workersDir, workerStateDir, experimentsDir, experimentDir, seedLib } from "../core/rehearsal.js";
 import { computeScore, type ScoreFs, type ScoreComputation } from "../core/rehearsalScore.js";
 import { sanityRow, SANITY_TSV_HEADER } from "../core/rehearsalSanity.js";
 import { coverageRow, COVERAGE_TSV_HEADER, type CoverageRow } from "../core/rehearsalCoverage.js";
@@ -22,23 +22,23 @@ import { checkCompletion, checkTimeBudget } from "../core/rehearsalComplete.js";
 import { normalizeResult, type ResultJson } from "../core/rehearsalResult.js";
 import { renderSessionSummary, type StatusRow, type EventRow } from "../core/rehearsalSummary.js";
 import { finalizePhase, parseHardConstraints } from "../core/rehearsalFinalize.js";
-import { buildStatusBrief, type PartBrief } from "../core/rehearsalBrief.js";
+import { buildStatusBrief, type WorkerBrief } from "../core/rehearsalBrief.js";
 import { initScanState, monitorScan, type MonitorScanState } from "../core/rehearsalMonitor.js";
 import {
   renderExperimentPrompt, buildSotaBlock, assembleHardwareBlock, hardwareDiffAlert,
-  formatPeersBlock, buildDispatchState, EXP_ID_RE, INSTRUMENT_RE, type PeerRow,
+  formatPeersBlock, buildDispatchState, EXP_ID_RE, AGENT_RE, type PeerRow,
 } from "../core/rehearsalExperiment.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { parseScoreboard, buildHandoffKv, type HandoffInput } from "../core/rehearsalHandoff.js";
 import { buildConsensus } from "../core/rehearsalConsensus.js";
 import { parseVerifyBlock, planVerify, checkVerify, recomputedFromOutput, verificationRow, VERIFICATION_TSV_HEADER, type VerifyManifest, type VerificationRow } from "../core/rehearsalVerify.js";
 import { classifyInspect, inspectionRow, INSPECTION_TSV_HEADER, type InspectVerdict, type InspectionRow } from "../core/rehearsalInspect.js";
-import { instrumentBinary, consultTimeout } from "../core/contracts.js";
+import { agentBinary, consultTimeout } from "../core/contracts.js";
 import { inboxWrite, inboxPath, outboxPath, paneMetaRead, resolveModel } from "../core/ipc.js";
 import { paneSend, killNow } from "../core/tmux.js";
 import { haveCmd } from "../core/deps.js";
 import { spawnRosterArg, parsePanesFile, spawnResultsTsv, spawnTally, type SpawnResult } from "../core/score.js";
-import { pickInstruments } from "../core/instruments.js";
+import { pickAgents } from "../core/agents.js";
 import { repoRoot, pluginRoot } from "../core/paths.js";
 import { run as spawnRun } from "./spawn.js";
 import { run as preflightRun } from "./preflight.js";
@@ -48,13 +48,13 @@ import { run as codaRun } from "./coda.js";
 type PathOpts = { home?: string; cwd?: string };
 
 function usage(): number {
-  log.error("usage: rehearsal <init|metric|sota|spawn-all|drop-part|verify-plan|verify-check|inspect-plan|inspect-check|experiment-send|score|monitor|status-brief|finalize|refine|handoff-extract|teardown|fresh-part|forensics|abort|consensus> ...");
+  log.error("usage: rehearsal <init|metric|sota|spawn-all|drop-worker|verify-plan|verify-check|inspect-plan|inspect-check|experiment-send|score|monitor|status-brief|finalize|refine|handoff-extract|teardown|fresh-worker|forensics|abort|consensus> ...");
   return 2;
 }
 
 export interface RehearsalInitDeps {
   haveCmd(name: string): boolean;
-  instrumentBinary(name: string): string | undefined;
+  agentBinary(name: string): string | undefined;
   now(): string;
   configRoot(): string;
   probeHardware?(path: string): void;
@@ -113,7 +113,7 @@ export async function initWith(args: string[], deps: RehearsalInitDeps): Promise
     catch (e) { log.error(`rehearsal init: ${(e as Error).message}`); return 2; }
   }
 
-  const binary = deps.instrumentBinary("codex");
+  const binary = deps.agentBinary("codex");
   if (!binary) { log.error("rehearsal init: codex has no entry in contracts.yaml"); return 3; }
   if (!deps.haveCmd(binary)) { log.error("rehearsal init: codex binary not on PATH; install codex and run /ap:soundcheck"); return 3; }
 
@@ -150,7 +150,7 @@ export async function initWith(args: string[], deps: RehearsalInitDeps): Promise
 }
 
 const liveInitDeps: RehearsalInitDeps = {
-  haveCmd, instrumentBinary,
+  haveCmd, agentBinary,
   now: () => isoUtc(),
   configRoot: () => pluginRoot(),
 };
@@ -195,18 +195,18 @@ export async function sotaWith(args: string[], v: VerbOpts = {}): Promise<number
   return 0;
 }
 
-// ---- Phase B: spawn-all — pick N codex parts + batch-spawn them, reusing score's machinery ----
+// ---- Phase B: spawn-all — pick N codex workers + batch-spawn them, reusing score's machinery ----
 
 export interface SpawnAllDeps {
   preflight(args: string[]): Promise<number>;
   spawn(args: string[]): Promise<number>;
   repoRoot(): string;
-  pickInstruments(topic: string, n: number): string[];
+  pickAgents(topic: string, n: number): string[];
 }
-const liveSpawnAllDeps: SpawnAllDeps = { preflight: preflightRun, spawn: spawnRun, repoRoot, pickInstruments };
+const liveSpawnAllDeps: SpawnAllDeps = { preflight: preflightRun, spawn: spawnRun, repoRoot, pickAgents };
 
-/** Pick N distinct codex parts for <topic>, preflight + batch-spawn them (port of score spawn-all,
- *  fixed to the codex provider). Writes parts.txt (one instrument per line) + spawn-results.tsv;
+/** Pick N distinct codex workers for <topic>, preflight + batch-spawn them (port of score spawn-all,
+ *  fixed to the codex provider). Writes workers.txt (one agent per line) + spawn-results.tsv;
  *  returns spawnTally (all ok 0 / partial 1 / none ok 2; preflight/setup failures 3). */
 export async function spawnAllWith(args: string[], deps: SpawnAllDeps, opts?: PathOpts): Promise<number> {
   const topic = args.find((a) => !a.startsWith("--") && !/^\d+$/.test(a)) ?? "";
@@ -219,72 +219,72 @@ export async function spawnAllWith(args: string[], deps: SpawnAllDeps, opts?: Pa
   const staleResults = join(art, "spawn-results.tsv");
   if (existsSync(staleResults)) rmSync(staleResults);
 
-  const instruments = deps.pickInstruments(topic, n);
-  if (instruments.length < 2) { log.error(`rehearsal spawn-all: need >= 2 codex parts; picked ${instruments.length}`); return 3; }
-  const rows = instruments.map((instrument) => ({ instrument, provider: "codex" }));
-  atomicWrite(join(art, "parts.txt"), instruments.join("\n") + "\n");
+  const agents = deps.pickAgents(topic, n);
+  if (agents.length < 2) { log.error(`rehearsal spawn-all: need >= 2 codex workers; picked ${agents.length}`); return 3; }
+  const rows = agents.map((agent) => ({ agent, provider: "codex" }));
+  atomicWrite(join(art, "workers.txt"), agents.join("\n") + "\n");
 
   const prc = await deps.preflight([topic, String(rows.length), "--roster", spawnRosterArg(rows), "--art-dir", art]);
   if (prc !== 0) { log.error(`rehearsal spawn-all: preflight failed (rc ${prc})`); return 3; }
   const panes = parsePanesFile(readFileSync(join(art, "preflight-panes.txt"), "utf8"));
-  const orphans = rows.filter((r) => !panes.has(r.instrument));
-  if (orphans.length) { log.error(`rehearsal spawn-all: parts missing a preflight pane: ${orphans.map((r) => r.instrument).join(", ")}`); return 3; }
+  const orphans = rows.filter((r) => !panes.has(r.agent));
+  if (orphans.length) { log.error(`rehearsal spawn-all: workers missing a preflight pane: ${orphans.map((r) => r.agent).join(", ")}`); return 3; }
 
   const cwd = deps.repoRoot();
   const results: SpawnResult[] = await Promise.all(rows.map(async (r) => ({
-    instrument: r.instrument, provider: r.provider,
-    rc: await deps.spawn([r.instrument, r.provider, topic, "--target-pane", panes.get(r.instrument)!, "--cwd", cwd, "--preflight-art-dir", art]),
+    agent: r.agent, provider: r.provider,
+    rc: await deps.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent)!, "--cwd", cwd, "--preflight-art-dir", art]),
   })));
   atomicWrite(join(art, "spawn-results.tsv"), spawnResultsTsv(results));
 
   const rc = spawnTally(results.map((r) => r.rc));
   const nOk = results.filter((r) => r.rc === 0).length;
-  if (rc === 0) log.ok(`rehearsal spawn-all: ${nOk}/${rows.length} codex parts ready`);
-  else log.warn(`rehearsal spawn-all: ${nOk}/${rows.length} codex parts ready (rc=${rc})`);
+  if (rc === 0) log.ok(`rehearsal spawn-all: ${nOk}/${rows.length} codex workers ready`);
+  else log.warn(`rehearsal spawn-all: ${nOk}/${rows.length} codex workers ready (rc=${rc})`);
   return rc;
 }
 
-export interface DropPartDeps { killPane(paneId: string): void; }
-const liveDropPartDeps: DropPartDeps = { killPane: (p) => killNow(p) };
+export interface DropWorkerDeps { killPane(paneId: string): void; }
+const liveDropWorkerDeps: DropWorkerDeps = { killPane: (p) => killNow(p) };
 
-// ---- drop-part (Phase-3 degraded proceed) — prune parts.txt + kill the dropped part's preflight pane ----
-// On a partial spawn the directive ships the rest: it drops a failed instrument by name so Phase 4's
-// per-part loop (which iterates parts.txt verbatim) no longer seeds state + a Monitor for a dead pane.
-// Mirrors perform's dropPartRun; rehearsal's parts.txt is 1-col (one instrument per line). Best-effort
-// kills the dropped instrument's preflight pane so it does not linger until final teardown.
-export async function dropPartWith(rest: string[], deps: DropPartDeps, opts?: PathOpts): Promise<number> {
-  const [topic, instrument] = rest;
-  if (!topic || !instrument || rest.length !== 2) { log.error("usage: rehearsal drop-part <topic> <instrument>"); return 2; }
+// ---- drop-worker (Phase-3 degraded proceed) — prune workers.txt + kill the dropped worker's preflight pane ----
+// On a partial spawn the directive ships the rest: it drops a failed agent by name so Phase 4's
+// per-worker loop (which iterates workers.txt verbatim) no longer seeds state + a Monitor for a dead pane.
+// Mirrors perform's dropWorkerRun; rehearsal's workers.txt is 1-col (one agent per line). Best-effort
+// kills the dropped agent's preflight pane so it does not linger until final teardown.
+export async function dropWorkerWith(rest: string[], deps: DropWorkerDeps, opts?: PathOpts): Promise<number> {
+  const [topic, agent] = rest;
+  if (!topic || !agent || rest.length !== 2) { log.error("usage: rehearsal drop-worker <topic> <agent>"); return 2; }
   const art = rehearsalArtDir(topic, opts);
-  const partsFile = join(art, "parts.txt");
-  if (!existsSync(partsFile)) { log.error(`rehearsal drop-part: parts.txt missing`); return 1; }
+  const workersFile = join(art, "workers.txt");
+  if (!existsSync(workersFile)) { log.error(`rehearsal drop-worker: workers.txt missing`); return 1; }
   const kept: string[] = []; let dropped = false;
-  for (const line of readFileSync(partsFile, "utf8").split("\n")) {
+  for (const line of readFileSync(workersFile, "utf8").split("\n")) {
     if (line.length === 0) continue;
-    if (line === instrument) { dropped = true; continue; }
+    if (line === agent) { dropped = true; continue; }
     kept.push(line);
   }
-  if (!dropped) { log.error(`rehearsal drop-part: no part for instrument=${instrument}`); return 1; }
-  atomicWrite(partsFile, kept.length ? kept.join("\n") + "\n" : "");
-  // Best-effort: kill the dropped instrument's preflight pane (never fatal).
+  if (!dropped) { log.error(`rehearsal drop-worker: no worker for agent=${agent}`); return 1; }
+  atomicWrite(workersFile, kept.length ? kept.join("\n") + "\n" : "");
+  // Best-effort: kill the dropped agent's preflight pane (never fatal).
   const panesFile = join(art, "preflight-panes.txt");
   if (existsSync(panesFile)) {
     try {
-      const pane = parsePanesFile(readFileSync(panesFile, "utf8")).get(instrument);
+      const pane = parsePanesFile(readFileSync(panesFile, "utf8")).get(agent);
       if (pane) deps.killPane(pane);
-    } catch (e) { log.warn(`rehearsal drop-part: preflight pane kill failed (${(e as Error).message})`); }
+    } catch (e) { log.warn(`rehearsal drop-worker: preflight pane kill failed (${(e as Error).message})`); }
   }
-  log.ok(`rehearsal drop-part: dropped ${instrument}, ${kept.length} part(s) remain`);
+  log.ok(`rehearsal drop-worker: dropped ${agent}, ${kept.length} worker(s) remain`);
   process.stdout.write(`N=${kept.length}\n`);
   return 0;
 }
 
 // ---- A1: verify-plan — plan the harness re-execution + persist terminal verdicts ----
 export interface VerifyPlanDeps {
-  readResult(art: string, instrument: string, expId: string): Record<string, unknown> | null;
-  readManifest(art: string, instrument: string, expId: string): VerifyManifest | null;
-  readInput(art: string, instrument: string, expId: string, rel: string): string | null;
-  writeRow(art: string, instrument: string, expId: string, row: VerificationRow): void;
+  readResult(art: string, agent: string, expId: string): Record<string, unknown> | null;
+  readManifest(art: string, agent: string, expId: string): VerifyManifest | null;
+  readInput(art: string, agent: string, expId: string, rel: string): string | null;
+  writeRow(art: string, agent: string, expId: string, row: VerificationRow): void;
   now(): string;
   stdout?: (l: string) => void;
   opts?: PathOpts;
@@ -293,21 +293,21 @@ export interface VerifyPlanDeps {
 export async function verifyPlanWith(args: string[], deps: VerifyPlanDeps): Promise<number> {
   const authorize = args.includes("--authorize-rerun");
   const pos = args.filter((a) => !a.startsWith("--"));
-  if (pos.length !== 3) { log.error("rehearsal verify-plan: usage: <topic> <instrument> <exp-id> [--authorize-rerun]"); return 2; }
-  const [topic, instrument, expId] = pos;
+  if (pos.length !== 3) { log.error("rehearsal verify-plan: usage: <topic> <agent> <exp-id> [--authorize-rerun]"); return 2; }
+  const [topic, agent, expId] = pos;
   const art = rehearsalArtDir(topic, deps.opts);
-  const result = deps.readResult(art, instrument, expId);
-  if (result === null) { log.error(`rehearsal verify-plan: result.json missing for ${instrument}/${expId}`); return 1; }
+  const result = deps.readResult(art, agent, expId);
+  if (result === null) { log.error(`rehearsal verify-plan: result.json missing for ${agent}/${expId}`); return 1; }
   const block = parseVerifyBlock(result);
-  const manifest = deps.readManifest(art, instrument, expId);
-  const plan = planVerify({ block, manifest, authorizeRerun: authorize, readInput: (rel) => deps.readInput(art, instrument, expId, rel) });
+  const manifest = deps.readManifest(art, agent, expId);
+  const plan = planVerify({ block, manifest, authorizeRerun: authorize, readInput: (rel) => deps.readInput(art, agent, expId, rel) });
   const out = deps.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
   if (!plan.run) {
-    deps.writeRow(art, instrument, expId, { expId, instrument, verdict: plan.verdict, reason: plan.reason, recomputed: "", ts: deps.now() });
+    deps.writeRow(art, agent, expId, { expId, agent, verdict: plan.verdict, reason: plan.reason, recomputed: "", ts: deps.now() });
     out(`VERDICT=${plan.verdict} reason=${plan.reason}`);
     return 0;
   }
-  out(`RUN_CWD=${experimentDir(art, instrument, expId)}`);
+  out(`RUN_CWD=${experimentDir(art, agent, expId)}`);
   out(`RUN_CMD=${plan.command}`);
   out(`METRIC_FROM=${plan.metricFrom}`);
   return 0;
@@ -315,11 +315,11 @@ export async function verifyPlanWith(args: string[], deps: VerifyPlanDeps): Prom
 
 // ---- A1: verify-check — adjudicate the harness re-execution into a verdict ----
 export interface VerifyCheckDeps {
-  readResult(art: string, instrument: string, expId: string): Record<string, unknown> | null;
+  readResult(art: string, agent: string, expId: string): Record<string, unknown> | null;
   readMetricMd(art: string): string | null;
   readStdout(path: string): string | null;
   readJson(path: string): string | null;
-  writeRow(art: string, instrument: string, expId: string, row: VerificationRow): void;
+  writeRow(art: string, agent: string, expId: string, row: VerificationRow): void;
   now(): string;
   stdout?: (l: string) => void;
   opts?: PathOpts;
@@ -334,12 +334,12 @@ export async function verifyCheckWith(args: string[], deps: VerifyCheckDeps): Pr
     else if (args[i] === "--run-failed") { /* flag */ }
     else if (!args[i].startsWith("--")) pos.push(args[i]);
   }
-  if (pos.length !== 3) { log.error("rehearsal verify-check: usage: <topic> <instrument> <exp-id> (--stdout-file <path> | --run-failed)"); return 2; }
+  if (pos.length !== 3) { log.error("rehearsal verify-check: usage: <topic> <agent> <exp-id> (--stdout-file <path> | --run-failed)"); return 2; }
   if (!runFailed && stdoutFile === undefined) { log.error("rehearsal verify-check: need --stdout-file <path> or --run-failed"); return 2; }
-  const [topic, instrument, expId] = pos;
+  const [topic, agent, expId] = pos;
   const art = rehearsalArtDir(topic, deps.opts);
-  const result = deps.readResult(art, instrument, expId);
-  if (result === null) { log.error(`rehearsal verify-check: result.json missing for ${instrument}/${expId}`); return 1; }
+  const result = deps.readResult(art, agent, expId);
+  if (result === null) { log.error(`rehearsal verify-check: result.json missing for ${agent}/${expId}`); return 1; }
   const reported = typeof result.metric_value === "number" ? result.metric_value : null;
   const block = parseVerifyBlock(result);
   const metricFrom = block?.metric_from ?? "marker";
@@ -349,10 +349,10 @@ export async function verifyCheckWith(args: string[], deps: VerifyCheckDeps): Pr
   let recomputed: number | null = null;
   if (!runFailed) {
     const stdout = stdoutFile ? deps.readStdout(stdoutFile) : null;
-    recomputed = stdout === null ? null : recomputedFromOutput(stdout, metricFrom, (p) => deps.readJson(join(experimentDir(art, instrument, expId), p)));
+    recomputed = stdout === null ? null : recomputedFromOutput(stdout, metricFrom, (p) => deps.readJson(join(experimentDir(art, agent, expId), p)));
   }
   const { verdict, reason } = checkVerify({ recomputed, runFailed, reported, epsilon });
-  deps.writeRow(art, instrument, expId, { expId, instrument, verdict, reason, recomputed: recomputed === null ? "" : String(recomputed), ts: deps.now() });
+  deps.writeRow(art, agent, expId, { expId, agent, verdict, reason, recomputed: recomputed === null ? "" : String(recomputed), ts: deps.now() });
   const out = deps.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
   out(`VERDICT=${verdict} reason=${reason}`);
   return 0;
@@ -360,11 +360,11 @@ export async function verifyCheckWith(args: string[], deps: VerifyCheckDeps): Pr
 
 // ---- C1: inspect-plan — adjudicate eligibility + emit the run-card for an independent re-implementation ----
 export interface InspectPlanDeps {
-  readResult(art: string, instrument: string, expId: string): Record<string, unknown> | null;
+  readResult(art: string, agent: string, expId: string): Record<string, unknown> | null;
   readMetricMd(art: string): string | null;
   inspectionCount(art: string): number;
-  partProvider(art: string, instrument: string, topic: string): string | null;
-  writeRow(art: string, instrument: string, expId: string, row: InspectionRow): void;
+  workerProvider(art: string, agent: string, topic: string): string | null;
+  writeRow(art: string, agent: string, expId: string, row: InspectionRow): void;
   now(): string;
   stdout?: (l: string) => void;
   opts?: PathOpts;
@@ -373,14 +373,14 @@ export interface InspectPlanDeps {
 export async function inspectPlanWith(args: string[], deps: InspectPlanDeps): Promise<number> {
   const authorize = args.includes("--authorize-inspect");
   const pos = args.filter((a) => !a.startsWith("--"));
-  if (pos.length !== 3) { log.error("rehearsal inspect-plan: usage: <topic> <instrument> <exp-id> [--authorize-inspect]"); return 2; }
-  const [topic, instrument, expId] = pos;
+  if (pos.length !== 3) { log.error("rehearsal inspect-plan: usage: <topic> <agent> <exp-id> [--authorize-inspect]"); return 2; }
+  const [topic, agent, expId] = pos;
   const art = rehearsalArtDir(topic, deps.opts);
-  const result = deps.readResult(art, instrument, expId);
-  if (result === null) { log.error(`rehearsal inspect-plan: result.json missing for ${instrument}/${expId}`); return 1; }
+  const result = deps.readResult(art, agent, expId);
+  if (result === null) { log.error(`rehearsal inspect-plan: result.json missing for ${agent}/${expId}`); return 1; }
   const out = deps.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
   const term = (verdict: InspectVerdict, reason: string): number => {
-    deps.writeRow(art, instrument, expId, { expId, instrument, verdict, reason, reimplMetric: "", ts: deps.now() });
+    deps.writeRow(art, agent, expId, { expId, agent, verdict, reason, reimplMetric: "", ts: deps.now() });
     out(`VERDICT=${verdict} reason=${reason}`); return 0;
   };
   if (!authorize) return term("inconclusive", "inspect-deferred");
@@ -390,8 +390,8 @@ export async function inspectPlanWith(args: string[], deps: InspectPlanDeps): Pr
   if (result.data_spec === undefined || result.data_spec === null || typeof result.metric_formula !== "string" || result.metric_formula === "") {
     return term("inconclusive", "run-card-insufficient");
   }
-  if ((deps.partProvider(art, instrument, topic) ?? "") === "claude") return term("inconclusive", "same-family");
-  out(`INSPECT_CWD=${join(experimentDir(art, instrument, expId), "c1")}`);
+  if ((deps.workerProvider(art, agent, topic) ?? "") === "claude") return term("inconclusive", "same-family");
+  out(`INSPECT_CWD=${join(experimentDir(art, agent, expId), "c1")}`);
   out(`REPORTED_METRIC=${typeof result.metric_value === "number" ? result.metric_value : ""}`);
   out(`METRIC_NAME=${String(result.metric_name ?? "")}`);
   out(`METRIC_FORMULA=${String(result.metric_formula ?? "")}`);
@@ -403,11 +403,11 @@ export async function inspectPlanWith(args: string[], deps: InspectPlanDeps): Pr
 
 // ---- C1: inspect-check — adjudicate the independent re-implementation into a three-way verdict ----
 export interface InspectCheckDeps {
-  readResult(art: string, instrument: string, expId: string): Record<string, unknown> | null;
+  readResult(art: string, agent: string, expId: string): Record<string, unknown> | null;
   readMetricMd(art: string): string | null;
   readStdout(path: string): string | null;
   readJson(path: string): string | null;
-  writeRow(art: string, instrument: string, expId: string, row: InspectionRow): void;
+  writeRow(art: string, agent: string, expId: string, row: InspectionRow): void;
   now(): string;
   stdout?: (l: string) => void;
   opts?: PathOpts;
@@ -423,12 +423,12 @@ export async function inspectCheckWith(args: string[], deps: InspectCheckDeps): 
     else if (args[i] === "--run-failed" || args[i] === "--integrity-refuted") { /* flags */ }
     else if (!args[i].startsWith("--")) pos.push(args[i]);
   }
-  if (pos.length !== 3) { log.error("rehearsal inspect-check: usage: <topic> <instrument> <exp-id> (--stdout-file <path> | --run-failed) [--integrity-refuted]"); return 2; }
+  if (pos.length !== 3) { log.error("rehearsal inspect-check: usage: <topic> <agent> <exp-id> (--stdout-file <path> | --run-failed) [--integrity-refuted]"); return 2; }
   if (!runFailed && !integrityRefuted && stdoutFile === undefined) { log.error("rehearsal inspect-check: need --stdout-file <path> or --run-failed or --integrity-refuted"); return 2; }
-  const [topic, instrument, expId] = pos;
+  const [topic, agent, expId] = pos;
   const art = rehearsalArtDir(topic, deps.opts);
-  const result = deps.readResult(art, instrument, expId);
-  if (result === null) { log.error(`rehearsal inspect-check: result.json missing for ${instrument}/${expId}`); return 1; }
+  const result = deps.readResult(art, agent, expId);
+  if (result === null) { log.error(`rehearsal inspect-check: result.json missing for ${agent}/${expId}`); return 1; }
   const reported = typeof result.metric_value === "number" ? result.metric_value : null;
   const md = deps.readMetricMd(art);
   const t = md ? parseMetricMd(md) : null;
@@ -436,16 +436,16 @@ export async function inspectCheckWith(args: string[], deps: InspectCheckDeps): 
   let reimplMetric: number | null = null;
   if (!runFailed && !integrityRefuted) {
     const stdout = stdoutFile ? deps.readStdout(stdoutFile) : null;
-    reimplMetric = stdout === null ? null : recomputedFromOutput(stdout, "marker", (p) => deps.readJson(join(experimentDir(art, instrument, expId), p)));
+    reimplMetric = stdout === null ? null : recomputedFromOutput(stdout, "marker", (p) => deps.readJson(join(experimentDir(art, agent, expId), p)));
   }
   const { verdict, reason } = classifyInspect({ reimplMetric, runFailed, reported, epsilon, integrityRefuted });
-  deps.writeRow(art, instrument, expId, { expId, instrument, verdict, reason, reimplMetric: reimplMetric === null ? "" : String(reimplMetric), ts: deps.now() });
+  deps.writeRow(art, agent, expId, { expId, agent, verdict, reason, reimplMetric: reimplMetric === null ? "" : String(reimplMetric), ts: deps.now() });
   const out = deps.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
   out(`VERDICT=${verdict} reason=${reason}`);
   return 0;
 }
 
-// ---- Phase C: experiment-send — dispatch ONE experiment to a persistent codex part ----
+// ---- Phase C: experiment-send — dispatch ONE experiment to a persistent codex worker ----
 // Ports deep-research-experiment-send.sh: gather blocks, render the experiment
 // template, write prompt.md, write the inbox (canonical fence via inboxWrite),
 // transition state, best-effort nudge the pane.
@@ -463,7 +463,7 @@ export interface ExperimentSendDeps {
 }
 
 interface ExperimentSendArgs {
-  topic: string; instrument: string; expId: string; approachLabel: string; approachBrief: string;
+  topic: string; agent: string; expId: string; approachLabel: string; approachBrief: string;
   inputs?: string; contextFile?: string; smokeTest?: string; timeout?: string; parentId?: string;
   badArgs?: boolean;
 }
@@ -480,25 +480,25 @@ function parseExperimentSendArgs(args: string[]): ExperimentSendArgs {
     else if (a === "--smoke-test" || a.startsWith("--smoke-test=")) { const r = kvParse(a, args[i + 1]); smokeTest = r.value; i += r.shift - 1; }
     else if (a === "--timeout" || a.startsWith("--timeout=")) { const r = kvParse(a, args[i + 1]); timeout = r.value; i += r.shift - 1; }
     else if (a === "--parent" || a.startsWith("--parent=")) { const r = kvParse(a, args[i + 1]); parentId = r.value; i += r.shift - 1; }
-    else { return { topic: "", instrument: "", expId: "", approachLabel: "", approachBrief: "", badArgs: true }; }
+    else { return { topic: "", agent: "", expId: "", approachLabel: "", approachBrief: "", badArgs: true }; }
   }
   const pos = args.slice(i);
-  if (pos.length !== 5) return { topic: "", instrument: "", expId: "", approachLabel: "", approachBrief: "", badArgs: true };
-  const [topic, instrument, expId, approachLabel, approachBrief] = pos;
-  return { topic, instrument, expId, approachLabel, approachBrief, inputs, contextFile, smokeTest, timeout, parentId };
+  if (pos.length !== 5) return { topic: "", agent: "", expId: "", approachLabel: "", approachBrief: "", badArgs: true };
+  const [topic, agent, expId, approachLabel, approachBrief] = pos;
+  return { topic, agent, expId, approachLabel, approachBrief, inputs, contextFile, smokeTest, timeout, parentId };
 }
 
-/** Best-effort peer snapshot for the {{PEERS_BLOCK}} slot. Reads parts.txt (one instrument/line)
+/** Best-effort peer snapshot for the {{PEERS_BLOCK}} slot. Reads workers.txt (one agent/line)
  *  under art; for each peer != self, reads its state.txt (phase, current_exp_id) + its latest
  *  experiment result.json (approach_label, metric_value, status, notes). Missing files → empty
- *  cells. Returns [] when parts.txt is absent or lists only self. Faithful to the bash helper. */
+ *  cells. Returns [] when workers.txt is absent or lists only self. Faithful to the bash helper. */
 function gatherPeers(art: string, self: string): PeerRow[] {
-  const partsFile = join(art, "parts.txt");
-  if (!existsSync(partsFile)) return [];
-  const peers = readFileSync(partsFile, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && l !== self);
+  const workersFile = join(art, "workers.txt");
+  if (!existsSync(workersFile)) return [];
+  const peers = readFileSync(workersFile, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && l !== self);
   const rows: PeerRow[] = [];
   for (const peer of peers) {
-    const peerDir = partStateDir(art, peer);
+    const peerDir = workerStateDir(art, peer);
     if (!existsSync(peerDir)) continue;
     let phase = "", currentExp = "";
     const statePath = join(peerDir, "state.txt");
@@ -523,7 +523,7 @@ function gatherPeers(art: string, self: string): PeerRow[] {
       status = resultStr(r, "status");
       notes = resultStr(r, "notes");
     }
-    rows.push({ instrument: peer, phase, currentExp: latest, approach, metric, status, notes });
+    rows.push({ agent: peer, phase, currentExp: latest, approach, metric, status, notes });
   }
   return rows;
 }
@@ -532,11 +532,11 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   const out = deps.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
   const opts = deps.opts;
   const p = parseExperimentSendArgs(args);
-  if (p.badArgs) { log.error("rehearsal experiment-send: usage: [--inputs csv] [--context-file path] [--smoke-test script] [--timeout N] [--parent exp-id] <topic> <instrument> <exp-id> <approach-label> <approach-brief>"); return 2; }
-  const { topic, instrument, expId, approachLabel, approachBrief } = p;
+  if (p.badArgs) { log.error("rehearsal experiment-send: usage: [--inputs csv] [--context-file path] [--smoke-test script] [--timeout N] [--parent exp-id] <topic> <agent> <exp-id> <approach-label> <approach-brief>"); return 2; }
+  const { topic, agent, expId, approachLabel, approachBrief } = p;
 
   if (!EXP_ID_RE.test(expId)) { log.error(`rehearsal experiment-send: exp-id must match exp-[0-9]+; got '${expId}'`); return 2; }
-  if (!INSTRUMENT_RE.test(instrument)) { log.error(`rehearsal experiment-send: instrument must match [a-z][a-z0-9-]*; got '${instrument}'`); return 2; }
+  if (!AGENT_RE.test(agent)) { log.error(`rehearsal experiment-send: agent must match [a-z][a-z0-9-]*; got '${agent}'`); return 2; }
 
   // --inputs: each csv path must be readable.
   if (p.inputs) {
@@ -566,37 +566,37 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   if (!existsSync(art)) { log.error(`rehearsal experiment-send: topic state dir missing: ${art} (was rehearsal init run?)`); return 1; }
   const metricMd = join(art, "metric.md");
   if (!existsSync(metricMd)) { log.error(`rehearsal experiment-send: metric.md missing at ${metricMd}`); return 1; }
-  const stateDir = partStateDir(art, instrument);
+  const stateDir = workerStateDir(art, agent);
   const stateTxt = join(stateDir, "state.txt");
-  if (!existsSync(stateTxt)) { log.error(`rehearsal experiment-send: part state.txt missing: ${stateTxt}`); return 1; }
+  if (!existsSync(stateTxt)) { log.error(`rehearsal experiment-send: worker state.txt missing: ${stateTxt}`); return 1; }
 
   // 3-outcome phase gate: abandoned (2, distinct) / not-idle (1) / idle (proceed).
   const phase = parseState(readFileSync(stateTxt, "utf8")).phase ?? "";
-  if (phase === "abandoned") { log.error(`rehearsal experiment-send: part ${instrument} lane is abandoned; not dispatching`); return 2; }
-  if (phase !== "idle") { log.error(`rehearsal experiment-send: part ${instrument} not idle (phase=${phase}); wait or finalize first`); return 1; }
+  if (phase === "abandoned") { log.error(`rehearsal experiment-send: worker ${agent} lane is abandoned; not dispatching`); return 2; }
+  if (phase !== "idle") { log.error(`rehearsal experiment-send: worker ${agent} not idle (phase=${phase}); wait or finalize first`); return 1; }
 
   // --parent (B2): same-lane parent exp must exist (lineage is recorded for the advisory diff).
   if (p.parentId !== undefined) {
     if (!EXP_ID_RE.test(p.parentId)) { log.error(`rehearsal experiment-send: --parent must match exp-[0-9]+; got '${p.parentId}'`); return 2; }
-    if (!existsSync(experimentDir(art, instrument, p.parentId))) { log.error(`rehearsal experiment-send: --parent ${p.parentId} has no experiment dir under ${instrument}`); return 1; }
+    if (!existsSync(experimentDir(art, agent, p.parentId))) { log.error(`rehearsal experiment-send: --parent ${p.parentId} has no experiment dir under ${agent}`); return 1; }
   }
 
   // Branch dir + smoke-test BEFORE any state mutation.
-  const branchDir = experimentDir(art, instrument, expId);
+  const branchDir = experimentDir(art, agent, expId);
   mkdirSync(join(branchDir, "code"), { recursive: true });
   if (p.smokeTest) {
     const r = deps.runSmokeTest!(p.smokeTest, join(branchDir, "code"), deps.smokeTimeoutSec ?? 60);
     if (!r.ok) {
       atomicWrite(join(branchDir, "smoke-test.err"), r.stderr);
-      log.error(`rehearsal experiment-send: smoke-test failed for ${instrument}/${expId}; stderr -> ${join(branchDir, "smoke-test.err")}`);
+      log.error(`rehearsal experiment-send: smoke-test failed for ${agent}/${expId}; stderr -> ${join(branchDir, "smoke-test.err")}`);
       return 2;
     }
   }
 
-  const model = resolveModel(instrument, topic);
-  if (!model) { log.error(`rehearsal experiment-send: no part '${instrument}' on topic '${topic}' (resolveModel null)`); return 1; }
-  const outbox = outboxPath(instrument, model, topic);
-  if (!existsSync(outbox)) { log.error(`rehearsal experiment-send: part outbox missing: ${outbox} (was spawn run for ${instrument}?)`); return 1; }
+  const model = resolveModel(agent, topic);
+  if (!model) { log.error(`rehearsal experiment-send: no worker '${agent}' on topic '${topic}' (resolveModel null)`); return 1; }
+  const outbox = outboxPath(agent, model, topic);
+  if (!existsSync(outbox)) { log.error(`rehearsal experiment-send: worker outbox missing: ${outbox} (was spawn run for ${agent}?)`); return 1; }
 
   // Gather template fields.
   const metricBlock = readFileSync(metricMd, "utf8");
@@ -612,7 +612,7 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   const topicText = readIfExists(topicTextPath);
   const sotaPath = join(art, "sota.md");
   const sotaBlock = buildSotaBlock(readIfExistsOrNull(sotaPath));
-  const peersBlock = formatPeersBlock(gatherPeers(art, instrument));
+  const peersBlock = formatPeersBlock(gatherPeers(art, agent));
   const timeBudgetS = String(p.timeout ?? deps.consultTimeout());
 
   // Read + render the template.
@@ -633,19 +633,19 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   // Persist prompt.md, write the inbox (canonical fence), transition state.
   atomicWrite(join(branchDir, "prompt.md"), prompt);
   if (p.parentId !== undefined) atomicWrite(join(branchDir, "lineage.txt"), `parent_id=${p.parentId}\n`);
-  inboxWrite(instrument, model, topic, prompt, { from: "maestro", noDoneInstruction: true });
+  inboxWrite(agent, model, topic, prompt, { from: "hub", noDoneInstruction: true });
   atomicWrite(stateTxt, buildDispatchState(readFileSync(stateTxt, "utf8"), expId, deps.now()));
 
   // Best-effort pane nudge (NON-FATAL; inbox + state already committed).
   if (!deps.dryRun) {
-    const pane = paneMetaRead(instrument, model, topic);
+    const pane = paneMetaRead(agent, model, topic);
     if (pane) {
-      try { await deps.paneSend(pane, `Read ${inboxPath(instrument, model, topic)} and execute the task. Reply when done.`); }
-      catch (e) { log.warn(`rehearsal experiment-send: pane nudge failed (${(e as Error).message}); part may not have noticed inbox`); }
+      try { await deps.paneSend(pane, `Read ${inboxPath(agent, model, topic)} and execute the task. Reply when done.`); }
+      catch (e) { log.warn(`rehearsal experiment-send: pane nudge failed (${(e as Error).message}); worker may not have noticed inbox`); }
     }
   }
 
-  out(`dispatched ${expId} -> ${instrument}`);
+  out(`dispatched ${expId} -> ${agent}`);
   return 0;
 }
 
@@ -684,7 +684,7 @@ function liveProbeHardware(): string {
 }
 
 // ---- Phase C: score — thin FS shell over computeScore ----
-// Ports deep-research-score.sh: validate the topic arg, guard the parts dir,
+// Ports deep-research-score.sh: validate the topic arg, guard the workers dir,
 // run computeScore (pure), then apply the returned plan in the FROZEN order
 // (scoreboard -> log -> results.tsv -> sidecars -> stale removals -> phase
 // clears -> warnings) so a concurrent reader observes a consistent sequence.
@@ -705,8 +705,8 @@ export async function scoreWith(args: string[], deps: RehearsalScoreDeps): Promi
   const topic = positionals[0];
 
   const art = rehearsalArtDir(topic, deps.opts);
-  const partsRoot = partsDir(art);
-  if (!existsSync(partsRoot)) { log.error(`rehearsal score: parts dir missing: ${partsRoot}`); return 1; }
+  const workersRoot = workersDir(art);
+  if (!existsSync(workersRoot)) { log.error(`rehearsal score: workers dir missing: ${workersRoot}`); return 1; }
 
   const c = deps.computeScore(art, deps.fs, deps.now);
 
@@ -738,9 +738,9 @@ export const liveScoreDeps: RehearsalScoreDeps = {
   now: () => isoUtc(),
 };
 
-// ---- Phase C: monitor — per-part liveness scan loop ----
+// ---- Phase C: monitor — per-worker liveness scan loop ----
 // Wires the pure monitorScan/initScanState (C6) into a CLI verb. The Monitor tool
-// launches this persistently per part; it loops, emitting notification JSON lines to
+// launches this persistently per worker; it loops, emitting notification JSON lines to
 // stdout, with the cursor + rescan-set persisted to disk for restart-survival.
 // This verb is the impure shell (Date.now/statSync/readFileSync/writeFileSync are fine).
 
@@ -750,17 +750,17 @@ export async function monitorRun(args: string[], opts?: { home?: string; cwd?: s
   // Strip --once anywhere so it's position-independent; the rest are the 2 positionals.
   const once = args.includes("--once");
   const pos = args.filter((a) => a !== "--once");
-  if (pos.length !== 2) { log.error("rehearsal monitor: usage: <topic> <instrument> [--once]"); return 2; }
-  const [topic, instrument] = pos;
+  if (pos.length !== 2) { log.error("rehearsal monitor: usage: <topic> <agent> [--once]"); return 2; }
+  const [topic, agent] = pos;
 
   const art = rehearsalArtDir(topic, opts);
   if (!existsSync(art)) { log.error(`rehearsal monitor: art dir missing: ${art}`); return 2; }
 
-  const model = resolveModel(instrument, topic);
-  if (!model) { log.error(`rehearsal monitor: no part '${instrument}' on topic '${topic}' (resolveModel null)`); return 1; }
-  const outbox = outboxPath(instrument, model, topic);
+  const model = resolveModel(agent, topic);
+  if (!model) { log.error(`rehearsal monitor: no worker '${agent}' on topic '${topic}' (resolveModel null)`); return 1; }
+  const outbox = outboxPath(agent, model, topic);
 
-  const stateDir = partStateDir(art, instrument);
+  const stateDir = workerStateDir(art, agent);
   mkdirSync(stateDir, { recursive: true });
   const cursorFile = join(stateDir, "liveness-cursor.txt");
   const rescanFile = join(stateDir, "liveness-rescan-emitted.txt");
@@ -794,7 +794,7 @@ export async function monitorRun(args: string[], opts?: { home?: string; cwd?: s
     const mtime = existsSync(outbox) ? Math.floor(statSync(outbox).mtimeMs / 1000) : 0;
     const phase = (existsSync(stateTxt) ? parseState(readFileSync(stateTxt, "utf8")).phase : "") ?? "";
 
-    const r = monitorScan(outbox, instrument, state, {
+    const r = monitorScan(outbox, agent, state, {
       outboxText: text, outboxFullText: full, outboxSize: size, outboxMtime: mtime,
       phase, now: Math.floor(Date.now() / 1000), nowIso: isoUtc(), thresholds,
     });
@@ -811,7 +811,7 @@ export async function monitorRun(args: string[], opts?: { home?: string; cwd?: s
 }
 
 // ---- Phase C: status-brief — render a compact chat-shaped status update (C8) ----
-// Ports deep-research.sh's render_status_brief: gather per-part data (state.txt +
+// Ports deep-research.sh's render_status_brief: gather per-worker data (state.txt +
 // result.json approach/metric, prompt.md approach fallback), read scoreboard.md,
 // compute the completion signals, then hand off to the pure buildStatusBrief
 // renderer. Read-only FS shell; no injected deps needed.
@@ -828,7 +828,7 @@ function approachFromPrompt(promptPath: string): string {
   return "";
 }
 
-/** Read result.json ONCE and surface the brief's two cells for a non-working part:
+/** Read result.json ONCE and surface the brief's two cells for a non-working worker:
  *  approach (from approach_label) + metric ("<metric_value> <status>", e.g. "0.9 ok").
  *  Both default empty/"—" when the result is absent/garbled. Faithful to the bash:
  *  approach comes from result.json approach_label (prompt.md is only the fallback,
@@ -851,16 +851,16 @@ function gatherCompletion(art: string): { scoreboardMd: string | null; completio
   return { scoreboardMd, completion };
 }
 
-/** Parse the --latest-instrument / --latest-exp flags + the single positional <topic>. */
-function parseStatusBriefArgs(args: string[]): { topic: string; latestInstrument?: string; latestExp?: string } {
-  let topic = "", latestInstrument: string | undefined, latestExp: string | undefined;
+/** Parse the --latest-agent / --latest-exp flags + the single positional <topic>. */
+function parseStatusBriefArgs(args: string[]): { topic: string; latestAgent?: string; latestExp?: string } {
+  let topic = "", latestAgent: string | undefined, latestExp: string | undefined;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === "--latest-instrument") latestInstrument = args[++i];
+    if (a === "--latest-agent") latestAgent = args[++i];
     else if (a === "--latest-exp") latestExp = args[++i];
     else if (!a.startsWith("--") && !topic) topic = a;
   }
-  return { topic, latestInstrument, latestExp };
+  return { topic, latestAgent, latestExp };
 }
 
 /** Read a `.tsv` sidecar's data rows (each tab-split into cells), skipping blank lines and the
@@ -883,18 +883,18 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
 
   const art = rehearsalArtDir(p.topic, v.opts);
 
-  // Per-part rows: read parts.txt (one instrument/line); for each, parse state.txt
-  // (phase + current_exp_id), then approach + metric. Working parts have no
+  // Per-worker rows: read workers.txt (one agent/line); for each, parse state.txt
+  // (phase + current_exp_id), then approach + metric. Working workers have no
   // result.json yet -> approach from prompt.md, metric "(running)". Non-working
-  // parts -> approach from result.json approach_label (prompt.md fallback), metric
+  // workers -> approach from result.json approach_label (prompt.md fallback), metric
   // "<metric_value> <status>". Faithful to deep-research.sh's render_status_brief.
-  const parts: PartBrief[] = [];
-  const partsFile = join(art, "parts.txt");
-  if (existsSync(partsFile)) {
-    const instruments = splitNonCommentLines(readFileSync(partsFile, "utf8"));
-    for (const instrument of instruments) {
+  const workers: WorkerBrief[] = [];
+  const workersFile = join(art, "workers.txt");
+  if (existsSync(workersFile)) {
+    const agents = splitNonCommentLines(readFileSync(workersFile, "utf8"));
+    for (const agent of agents) {
       let phase = "?", currentOrLast = "—";
-      const stateTxt = join(partStateDir(art, instrument), "state.txt");
+      const stateTxt = join(workerStateDir(art, agent), "state.txt");
       let curExp = "";
       if (existsSync(stateTxt)) {
         const kv = parseState(readFileSync(stateTxt, "utf8"));
@@ -905,7 +905,7 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
         currentOrLast = curExp;
       } else {
         // Most-recent scored experiment from the filesystem (lexical sort on exp-NNN).
-        const expsRoot = experimentsDir(art, instrument);
+        const expsRoot = experimentsDir(art, agent);
         if (existsSync(expsRoot)) {
           let newest = "";
           for (const name of readdirSync(expsRoot)) {
@@ -915,8 +915,8 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
         }
       }
       const expForFiles = curExp || (currentOrLast !== "—" ? currentOrLast : "");
-      const promptPath = expForFiles ? join(experimentDir(art, instrument, expForFiles), "prompt.md") : "";
-      const resultPath = expForFiles ? join(experimentDir(art, instrument, expForFiles), "result.json") : "";
+      const promptPath = expForFiles ? join(experimentDir(art, agent, expForFiles), "prompt.md") : "";
+      const resultPath = expForFiles ? join(experimentDir(art, agent, expForFiles), "result.json") : "";
 
       let approach: string, metric: string;
       if (phase === "working") {
@@ -929,20 +929,20 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
         approach = cells.approach || (promptPath && approachFromPrompt(promptPath)) || "—";
         metric = cells.metric;
       }
-      parts.push({ instrument, phase, currentOrLast, approach, metric });
+      workers.push({ agent, phase, currentOrLast, approach, metric });
     }
   }
 
   const { scoreboardMd, completion } = gatherCompletion(art);
 
-  const vrows = readTsvRows(join(art, "verification.tsv"), "exp_id\t");   // exp_id, instrument, verdict, ...
+  const vrows = readTsvRows(join(art, "verification.tsv"), "exp_id\t");   // exp_id, agent, verdict, ...
   let verdicts: Record<string, string> | undefined;
   if (vrows) {
     verdicts = {};
     for (const c of vrows) if (c[0] && c[1] && c[2]) verdicts[`${c[1]}/${c[0]}`] = c[2];   // last write wins (latest verdict)
   }
 
-  const srows = readTsvRows(join(art, "sanity.tsv"), "exp_id\t");          // exp_id, instrument, flag, ...
+  const srows = readTsvRows(join(art, "sanity.tsv"), "exp_id\t");          // exp_id, agent, flag, ...
   let suspects: Record<string, string[]> | undefined;
   if (srows) {
     suspects = {};
@@ -956,27 +956,27 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
     for (const cells of crows) if (cells[0]) coverage.push({ family: cells[0], count: parseInt(cells[1] ?? "0", 10) || 0, best: cells[2] ?? "", ts: cells[3] ?? "" });
   }
 
-  const lrows = readTsvRows(join(art, "lineage.tsv"), "exp_id\t");         // exp_id, instrument, parent_id, knobs_changed, verdict, ts
+  const lrows = readTsvRows(join(art, "lineage.tsv"), "exp_id\t");         // exp_id, agent, parent_id, knobs_changed, verdict, ts
   let multiChange: Record<string, boolean> | undefined;
   if (lrows) {
     multiChange = {};
     for (const cells of lrows) if (cells[0] && cells[1] && cells[4] === "improve-multi") multiChange[`${cells[1]}/${cells[0]}`] = true;
   }
 
-  const irows = readTsvRows(join(art, "inspection.tsv"), "exp_id\t");      // exp_id, instrument, verdict, ...
+  const irows = readTsvRows(join(art, "inspection.tsv"), "exp_id\t");      // exp_id, agent, verdict, ...
   let inspections: Record<string, string> | undefined;
   if (irows) {
     inspections = {};
     for (const cells of irows) if (cells[0] && cells[1] && cells[2]) inspections[`${cells[1]}/${cells[0]}`] = cells[2];
   }
 
-  const latest = p.latestInstrument && p.latestExp ? { instrument: p.latestInstrument, exp: p.latestExp } : undefined;
-  out(buildStatusBrief({ parts, scoreboardMd, completion, latest, verdicts, suspects, coverage, multiChange, inspections }));
+  const latest = p.latestAgent && p.latestExp ? { agent: p.latestAgent, exp: p.latestExp } : undefined;
+  out(buildStatusBrief({ workers, scoreboardMd, completion, latest, verdicts, suspects, coverage, multiChange, inspections }));
   return 0;
 }
 
 // ---- Phase D: finalize — Phase 4->5 wind-down. Idempotent FS orchestration. ----
-// Ports deep-research-finalize.sh: per-part reconcile + phase normalization,
+// Ports deep-research-finalize.sh: per-worker reconcile + phase normalization,
 // result.json normalization, intermediate-checkpoint prune, pane-artifact link,
 // size + audit warnings, and a wholesale session-summary.md re-render. ap
 // adaptations: NO active-marker lifecycle (omit the rm -f active-<sid>.txt step;
@@ -997,7 +997,7 @@ function readOr(path: string, fallback = ""): string {
   try { return readFileSync(path, "utf8"); } catch { return fallback; }
 }
 
-/** List the exp-NNN dirs directly under a part's experiments root (ENOENT-safe). */
+/** List the exp-NNN dirs directly under a worker's experiments root (ENOENT-safe). */
 function listExpDirs(expsRoot: string): string[] {
   try {
     return readdirSync(expsRoot, { withFileTypes: true })
@@ -1027,9 +1027,9 @@ function fileCountDepth1(dir: string): number {
 }
 
 /** Step 4: enforce status/metric_value joint validity per exp (normalize_result). */
-function normalizeResults(art: string, instruments: string[]): void {
-  for (const instrument of instruments) {
-    const expsRoot = experimentsDir(art, instrument);
+function normalizeResults(art: string, agents: string[]): void {
+  for (const agent of agents) {
+    const expsRoot = experimentsDir(art, agent);
     for (const expId of listExpDirs(expsRoot)) {
       const resultPath = join(expsRoot, expId, "result.json");
       if (!existsSync(resultPath)) continue;
@@ -1038,16 +1038,16 @@ function normalizeResults(art: string, instruments: string[]): void {
       const norm = normalizeResult(parsed);
       if (norm.status !== parsed.status || norm.metric_value !== parsed.metric_value) {
         atomicWrite(resultPath, JSON.stringify(norm));
-        log.info(`normalize: ${instrument}/${expId} -> ${norm.status}`);
+        log.info(`normalize: ${agent}/${expId} -> ${norm.status}`);
       }
     }
   }
 }
 
 /** Step 5: prune intermediate checkpoints (caller guards with !keep). */
-function pruneIntermediate(art: string, instruments: string[]): void {
-  for (const instrument of instruments) {
-    const expsRoot = experimentsDir(art, instrument);
+function pruneIntermediate(art: string, agents: string[]): void {
+  for (const agent of agents) {
+    const expsRoot = experimentsDir(art, agent);
     for (const expId of listExpDirs(expsRoot)) {
       const expDir = join(expsRoot, expId);
       const resultPath = join(expDir, "result.json");
@@ -1077,18 +1077,18 @@ function pruneIntermediate(art: string, instruments: string[]): void {
 }
 
 /** Step 6: link pane artifacts (relative symlinks of outbox/inbox into the art tree). */
-function linkPaneArtifacts(art: string, instruments: string[], topic: string): void {
-  for (const instrument of instruments) {
-    const model = resolveModel(instrument, topic);
+function linkPaneArtifacts(art: string, agents: string[], topic: string): void {
+  for (const agent of agents) {
+    const model = resolveModel(agent, topic);
     if (!model) continue;
-    const targetDir = partStateDir(art, instrument);
+    const targetDir = workerStateDir(art, agent);
     mkdirSync(targetDir, { recursive: true });
     const paneFiles: Array<[string, string]> = [
-      ["outbox.jsonl", outboxPath(instrument, model, topic)],
-      ["inbox.md", inboxPath(instrument, model, topic)],
+      ["outbox.jsonl", outboxPath(agent, model, topic)],
+      ["inbox.md", inboxPath(agent, model, topic)],
     ];
     for (const [name, src] of paneFiles) {
-      if (!existsSync(src)) { log.warn(`link_pane_artifacts: pane file missing for ${instrument}: ${name}`); continue; }
+      if (!existsSync(src)) { log.warn(`link_pane_artifacts: pane file missing for ${agent}: ${name}`); continue; }
       const linkPath = join(targetDir, name);
       const rel = relative(targetDir, src);
       try {
@@ -1100,17 +1100,17 @@ function linkPaneArtifacts(art: string, instruments: string[], topic: string): v
 }
 
 /** Step 7: compute size warnings (post-prune); TRUNCATE warnings.txt first. */
-function computeSizeWarnings(art: string, instruments: string[], threshold: number): void {
+function computeSizeWarnings(art: string, agents: string[], threshold: number): void {
   const warningsPath = join(art, "warnings.txt");
   const sizeLines: string[] = [];
-  for (const instrument of instruments) {
-    const expsRoot = experimentsDir(art, instrument);
+  for (const agent of agents) {
+    const expsRoot = experimentsDir(art, agent);
     for (const expId of listExpDirs(expsRoot)) {
       const expDir = join(expsRoot, expId);
       const bytes = dirByteSize(expDir);
       if (bytes >= threshold) {
         const gb = (bytes / GIB).toFixed(1);
-        sizeLines.push(`size_warn\t${instrument}/${expId}\t${gb}\t${fileCountDepth1(expDir)}`);
+        sizeLines.push(`size_warn\t${agent}/${expId}\t${gb}\t${fileCountDepth1(expDir)}`);
       }
     }
   }
@@ -1118,10 +1118,10 @@ function computeSizeWarnings(art: string, instruments: string[], threshold: numb
 }
 
 /** Step 8: audit diff — append audit_warn rows for prompt/audit knob mismatches (AFTER size). */
-function computeAuditWarnings(art: string, instruments: string[], warningsPath: string): void {
+function computeAuditWarnings(art: string, agents: string[], warningsPath: string): void {
   const auditLines: string[] = [];
-  for (const instrument of instruments) {
-    const expsRoot = experimentsDir(art, instrument);
+  for (const agent of agents) {
+    const expsRoot = experimentsDir(art, agent);
     for (const expId of listExpDirs(expsRoot)) {
       const expDir = join(expsRoot, expId);
       const promptMd = join(expDir, "prompt.md");
@@ -1133,7 +1133,7 @@ function computeAuditWarnings(art: string, instruments: string[], warningsPath: 
         const actual = audit[key];
         if (actual == null || String(actual) === "null") continue;
         if (String(value) !== String(actual)) {
-          auditLines.push(`audit_warn\t${instrument}/${expId}\t${key}\tprompt=${value}  actual=${String(actual)}`);
+          auditLines.push(`audit_warn\t${agent}/${expId}\t${key}\tprompt=${value}  actual=${String(actual)}`);
         }
       }
     }
@@ -1161,27 +1161,27 @@ export async function finalizeWith(args: string[], deps: RehearsalFinalizeDeps):
     log.error(`finalize: art-dir missing: ${art}`); return 1;
   }
 
-  // Parts list (one instrument per non-blank line). Used in steps 2 + 9.
-  const partsFile = join(art, "parts.txt");
-  const instruments = existsSync(partsFile) ? splitNonCommentLines(readFileSync(partsFile, "utf8")) : [];
+  // Workers list (one agent per non-blank line). Used in steps 2 + 9.
+  const workersFile = join(art, "workers.txt");
+  const agents = existsSync(workersFile) ? splitNonCommentLines(readFileSync(workersFile, "utf8")) : [];
 
-  // 2. Per-part reconcile + phase normalization.
-  for (const instrument of instruments) {
-    const stateDir = partStateDir(art, instrument);
+  // 2. Per-worker reconcile + phase normalization.
+  for (const agent of agents) {
+    const stateDir = workerStateDir(art, agent);
     const stateTxt = join(stateDir, "state.txt");
     if (!existsSync(stateTxt)) continue;
 
     // (a) reconcile: replay the PANE outbox tail past the liveness cursor.
     const cursorRaw = readOr(join(stateDir, "liveness-cursor.txt"));
     const offset = Number.parseInt(cursorRaw.trim(), 10) || 0;
-    const model = resolveModel(instrument, topic);
-    const ob = model ? outboxPath(instrument, model, topic) : "";
+    const model = resolveModel(agent, topic);
+    const ob = model ? outboxPath(agent, model, topic) : "";
     let tail = "";
     if (ob && existsSync(ob)) {
       try { tail = readFileSync(ob).subarray(offset).toString("utf8"); } catch { tail = ""; }
     }
     const curExp = parseState(readOr(stateTxt)).current_exp_id ?? "";
-    const doneResultExists = !!curExp && existsSync(join(experimentDir(art, instrument, curExp), "result.json"));
+    const doneResultExists = !!curExp && existsSync(join(experimentDir(art, agent, curExp), "result.json"));
     const recon = reconcileFromOutbox(tail, doneResultExists);
     if (recon === "failed" || recon === "idle") {
       atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: recon }));
@@ -1196,24 +1196,24 @@ export async function finalizeWith(args: string[], deps: RehearsalFinalizeDeps):
   // 3. (OMIT active-marker removal — ap has no active-marker lifecycle.)
 
   // 4. normalize_result: enforce status/metric_value joint validity per exp.
-  normalizeResults(art, instruments);
+  normalizeResults(art, agents);
 
   // 5. prune intermediate checkpoints (skip if --keep-intermediate).
-  if (!keep) pruneIntermediate(art, instruments);
+  if (!keep) pruneIntermediate(art, agents);
 
   // 6. link pane artifacts: relative symlinks of the pane outbox/inbox into the art tree.
-  linkPaneArtifacts(art, instruments, topic);
+  linkPaneArtifacts(art, agents, topic);
 
   // 7. compute size warnings (post-prune). TRUNCATE warnings.txt first.
   const warningsPath = join(art, "warnings.txt");
-  computeSizeWarnings(art, instruments, (deps.sizeWarnGb ?? 2) * GIB);
+  computeSizeWarnings(art, agents, (deps.sizeWarnGb ?? 2) * GIB);
 
   // 8. audit diff: append audit_warn rows for prompt/audit knob mismatches (AFTER size).
-  computeAuditWarnings(art, instruments, warningsPath);
+  computeAuditWarnings(art, agents, warningsPath);
 
   // A3: fold non-audit sanity flags into warnings.txt (audit-knob-drift already covered by audit_warn).
   const sanityExtra: string[] = [];
-  for (const c of readTsvRows(join(art, "sanity.tsv"), "exp_id\t") ?? []) {   // exp_id, instrument, flag, detail, ts
+  for (const c of readTsvRows(join(art, "sanity.tsv"), "exp_id\t") ?? []) {   // exp_id, agent, flag, detail, ts
     if (c[2] === "audit-knob-drift") continue;   // dedupe vs finalize audit_warn
     if (c[0] && c[1] && c[2]) sanityExtra.push(`sanity\t${c[1]}/${c[0]}\t${c[2]}\t${c[3] ?? ""}`);
   }
@@ -1221,7 +1221,7 @@ export async function finalizeWith(args: string[], deps: RehearsalFinalizeDeps):
 
   // B2: fold improve-multi lineage rows into warnings.txt (advisory: delta not cleanly attributable).
   const lineageExtra: string[] = [];
-  for (const c of readTsvRows(join(art, "lineage.tsv"), "exp_id\t") ?? []) {   // exp_id, instrument, parent_id, knobs_changed, verdict, ts
+  for (const c of readTsvRows(join(art, "lineage.tsv"), "exp_id\t") ?? []) {   // exp_id, agent, parent_id, knobs_changed, verdict, ts
     if (c[4] !== "improve-multi") continue;
     if (c[0] && c[1]) lineageExtra.push(`lineage\t${c[1]}/${c[0]}\timprove-multi\tparent=${c[2] ?? ""} knobs_changed=${c[3] ?? ""}`);
   }
@@ -1230,7 +1230,7 @@ export async function finalizeWith(args: string[], deps: RehearsalFinalizeDeps):
   // C1: fold a not-reproduced inspection into warnings.txt (advisory in the summary; the row is
   // already demoted to x<rank> by computeScore).
   const reimplExtra: string[] = [];
-  for (const c of readTsvRows(join(art, "inspection.tsv"), "exp_id\t") ?? []) {   // exp_id, instrument, verdict, reason, reimpl_metric, ts
+  for (const c of readTsvRows(join(art, "inspection.tsv"), "exp_id\t") ?? []) {   // exp_id, agent, verdict, reason, reimpl_metric, ts
     if (c[2] !== "not-reproduced") continue;
     if (c[0] && c[1]) reimplExtra.push(`reimpl\t${c[1]}/${c[0]}\tnot-reproduced\t${c[3] ?? ""}`);
   }
@@ -1238,19 +1238,19 @@ export async function finalizeWith(args: string[], deps: RehearsalFinalizeDeps):
 
   // 9. render session-summary.md (FULL re-render; wholesale atomic replace).
   const statusRows: StatusRow[] = [];
-  for (const instrument of instruments) {
-    const stateTxt = join(partStateDir(art, instrument), "state.txt");
+  for (const agent of agents) {
+    const stateTxt = join(workerStateDir(art, agent), "state.txt");
     if (existsSync(stateTxt)) {
       const kv = parseState(readOr(stateTxt));
       statusRows.push({
-        instrument,
+        agent,
         phase: kv.phase ?? "?",
         current: kv.current_exp_id ?? "",
         lastTs: kv.last_event_ts ?? "?",
         lastEvent: kv.last_event ?? "?",
       });
     } else {
-      statusRows.push({ instrument, phase: "?", current: "", lastTs: "?", lastEvent: "?" });
+      statusRows.push({ agent, phase: "?", current: "", lastTs: "?", lastEvent: "?" });
     }
   }
 
@@ -1269,18 +1269,18 @@ export async function finalizeWith(args: string[], deps: RehearsalFinalizeDeps):
     } catch { hardCap = null; }
   }
 
-  // Recent events: tail-10 of EACH part's PANE outbox, merged + sorted desc by ts, capped 10.
+  // Recent events: tail-10 of EACH worker's PANE outbox, merged + sorted desc by ts, capped 10.
   const allEvents: EventRow[] = [];
-  for (const instrument of instruments) {
-    const model = resolveModel(instrument, topic);
+  for (const agent of agents) {
+    const model = resolveModel(agent, topic);
     if (!model) continue;
-    const ob = outboxPath(instrument, model, topic);
+    const ob = outboxPath(agent, model, topic);
     if (!existsSync(ob)) continue;
     const lines = readOr(ob).split("\n").filter((l) => l.trim() !== "").slice(-10);
     for (const line of lines) {
       try {
         const o = JSON.parse(line) as { ts?: unknown; event?: unknown };
-        allEvents.push({ ts: o.ts != null ? String(o.ts) : "", instrument, event: o.event != null ? String(o.event) : "" });
+        allEvents.push({ ts: o.ts != null ? String(o.ts) : "", agent, event: o.event != null ? String(o.event) : "" });
       } catch { /* skip non-JSON */ }
     }
   }
@@ -1332,7 +1332,7 @@ const liveFinalizeDeps: RehearsalFinalizeDeps = {
 // Ports deep-research-refine.sh: write a numbered refine-N.md into the LIVE
 // branch (experiment) dir + a best-effort pane nudge. By contract this NEVER
 // mutates the state machine (no state.txt / phase / scoreboard touch) — it only
-// drops a refinement note the part reads before continuing its current experiment.
+// drops a refinement note the worker reads before continuing its current experiment.
 
 export interface RehearsalRefineDeps {
   send(args: string[]): Promise<number>;
@@ -1341,26 +1341,26 @@ export interface RehearsalRefineDeps {
   opts?: PathOpts;
 }
 
-interface RefineArgs { topic: string; instrument: string; expId: string; text: string; ok: boolean }
+interface RefineArgs { topic: string; agent: string; expId: string; text: string; ok: boolean }
 
-/** EXACTLY 4 positionals: <topic> <instrument> <exp-id> <refinement-text>. The
+/** EXACTLY 4 positionals: <topic> <agent> <exp-id> <refinement-text>. The
  *  quoted multi-word refinement-text already arrives as one token (applyArgsFile). */
 function parseRefineArgs(args: string[]): RefineArgs {
-  if (args.length !== 4) return { topic: "", instrument: "", expId: "", text: "", ok: false };
-  const [topic, instrument, expId, text] = args;
-  return { topic, instrument, expId, text, ok: true };
+  if (args.length !== 4) return { topic: "", agent: "", expId: "", text: "", ok: false };
+  const [topic, agent, expId, text] = args;
+  return { topic, agent, expId, text, ok: true };
 }
 
 export async function refineWith(args: string[], deps: RehearsalRefineDeps): Promise<number> {
   const p = parseRefineArgs(args);
-  if (!p.ok) { log.error("rehearsal refine: usage: <topic> <instrument> <exp-id> <refinement-text>"); return 2; }
-  const { topic, instrument, expId, text } = p;
+  if (!p.ok) { log.error("rehearsal refine: usage: <topic> <agent> <exp-id> <refinement-text>"); return 2; }
+  const { topic, agent, expId, text } = p;
 
-  if (!INSTRUMENT_RE.test(instrument)) { log.error(`instrument must match [a-z][a-z0-9-]*; got '${instrument}'`); return 2; }
+  if (!AGENT_RE.test(agent)) { log.error(`agent must match [a-z][a-z0-9-]*; got '${agent}'`); return 2; }
   if (!EXP_ID_RE.test(expId)) { log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`); return 2; }
 
   const art = rehearsalArtDir(topic, deps.opts);
-  const branchDir = experimentDir(art, instrument, expId);
+  const branchDir = experimentDir(art, agent, expId);
   if (!existsSync(branchDir) || !statSync(branchDir).isDirectory()) { log.error(`branch dir missing: ${branchDir}`); return 1; }
 
   // First FREE slot (not max+1) — faithful to the bash `while [ -f refine-$n.md ]`.
@@ -1368,7 +1368,7 @@ export async function refineWith(args: string[], deps: RehearsalRefineDeps): Pro
   while (existsSync(join(branchDir, `refine-${n}.md`))) n++;
   const refinePath = join(branchDir, `refine-${n}.md`);
 
-  // The single trailing newline IS part of the content (bash `printf '%s\n'`).
+  // The single trailing newline IS worker of the content (bash `printf '%s\n'`).
   atomicWrite(refinePath, text + "\n");
   log.info(`[refine] wrote ${refinePath}`);
 
@@ -1376,12 +1376,12 @@ export async function refineWith(args: string[], deps: RehearsalRefineDeps): Pro
   if (!deps.dryRun) {
     const msg = `REFINE: read ${refinePath} before continuing your current experiment (${expId}).`;
     try {
-      const rc = await deps.send(["--from", "maestro", instrument, topic, msg]);
-      if (rc !== 0) log.warn(`[refine] send nudge failed; part may not have noticed refine-${n}.md`);
-    } catch { log.warn(`[refine] send nudge failed; part may not have noticed refine-${n}.md`); }
+      const rc = await deps.send(["--from", "hub", agent, topic, msg]);
+      if (rc !== 0) log.warn(`[refine] send nudge failed; worker may not have noticed refine-${n}.md`);
+    } catch { log.warn(`[refine] send nudge failed; worker may not have noticed refine-${n}.md`); }
   }
 
-  log.ok(`[refine] ${instrument}/${expId} refine-${n}.md sent`);
+  log.ok(`[refine] ${agent}/${expId} refine-${n}.md sent`);
   return 0;
 }
 
@@ -1437,7 +1437,7 @@ export async function handoffExtractWith(args: string[], deps: RehearsalHandoffD
   if (!winner) {
     input = { topic, landscapeDoc, hasMetricMd, generatedTs, winner: null, runnerUps: [] };
   } else {
-    const expRel = `parts/${winner.instrument}/experiments/${winner.expId}`;
+    const expRel = `workers/${winner.agent}/experiments/${winner.expId}`;
     const result = readResultJson(join(art, expRel, "result.json"));
     const approach = resultStr(result, "approach_label");
     const notes = String(result.notes ?? "").replace(/\n/g, " ");
@@ -1447,13 +1447,13 @@ export async function handoffExtractWith(args: string[], deps: RehearsalHandoffD
       checkpoint = ckptRaw.startsWith("/") ? ckptRaw : `${expRel}/${ckptRaw}`;
     }
     const runners = runnerUps.map((r) => {
-      const rr = readResultJson(join(art, `parts/${r.instrument}/experiments/${r.expId}`, "result.json"));
-      return { instrument: r.instrument, exp: r.expId, metric: r.metric, approach: resultStr(rr, "approach_label") };
+      const rr = readResultJson(join(art, `workers/${r.agent}/experiments/${r.expId}`, "result.json"));
+      return { agent: r.agent, exp: r.expId, metric: r.metric, approach: resultStr(rr, "approach_label") };
     });
     input = {
       topic, landscapeDoc, hasMetricMd, generatedTs,
       winner: {
-        instrument: winner.instrument, exp: winner.expId, approach, metric: winner.metric,
+        agent: winner.agent, exp: winner.expId, approach, metric: winner.metric,
         checkpoint, notes: notes || undefined, codeDir: `${expRel}/code/`,
       },
       runnerUps: runners,
@@ -1519,7 +1519,7 @@ export async function teardownWith(args: string[], deps: RehearsalTeardownDeps):
   }
 
   if (panesOnly) {
-    // spawn-all self-clears spawn-results.tsv + rewrites parts.txt/preflight-panes.txt on retry,
+    // spawn-all self-clears spawn-results.tsv + rewrites workers.txt/preflight-panes.txt on retry,
     // so killing the partial panes (above) + skipping archive/finalize is the full reset.
     try { rmSync(join(art, "spawn-results.tsv"), { force: true }); } catch { /* best-effort */ }
     log.ok(`[teardown] panes-only reset for ${topic} (state preserved for retry)`);
@@ -1527,23 +1527,23 @@ export async function teardownWith(args: string[], deps: RehearsalTeardownDeps):
   }
 
   // 2. shared/ sweep (best-effort): drop *.tmp / *.lock leak shapes (depth <= 2).
-  //    Scoped to shared/ so part experiment dirs are untouched.
+  //    Scoped to shared/ so worker experiment dirs are untouched.
   const shared = join(art, "shared");
   if (existsSync(shared) && statSync(shared).isDirectory()) sweepTmpLock(shared, 2);
 
   // 3. winner symlink (best-effort): scoreboard top-1 ok row ->
-  //    parts/<instrument>/experiments/<exp-id>/code (RELATIVE so it survives the
+  //    workers/<agent>/experiments/<exp-id>/code (RELATIVE so it survives the
   //    archive mv; the symlink rides along inside _rehearsal).
   const sbPath = join(art, "scoreboard.md");
   if (existsSync(sbPath)) {
     const { winner } = parseScoreboard(readFileSync(sbPath, "utf8"));
     if (winner) {
-      const rel = `parts/${winner.instrument}/experiments/${winner.expId}/code`;
+      const rel = `workers/${winner.agent}/experiments/${winner.expId}/code`;
       if (existsSync(join(art, rel)) && statSync(join(art, rel)).isDirectory()) {
         const link = join(art, "winner");
         try { rmSync(link, { force: true }); } catch { /* nothing to replace */ }
         symlinkSync(rel, link);
-        log.ok(`[teardown] winner symlink -> ${rel} (${winner.instrument}/${winner.expId})`);
+        log.ok(`[teardown] winner symlink -> ${rel} (${winner.agent}/${winner.expId})`);
       } else {
         log.warn(`[teardown] scoreboard top-1 dir missing: ${join(art, rel)}; no symlink`);
       }
@@ -1573,33 +1573,33 @@ export async function forensicsRun(rest: string[]): Promise<number> {
   return runForensics("rehearsal", rehearsalArtDir, rest[0]);
 }
 
-// ---- Phase D: fresh-part — graceful codex-session reset by pane respawn. ----
-// Ports the deep-research fresh-part reset: teardown the part's pane + respawn the SAME
-// instrument on the SAME topic, reset runtime state (phase=idle, current_exp_id=,
+// ---- Phase D: fresh-worker — graceful codex-session reset by pane respawn. ----
+// Ports the deep-research fresh-worker reset: teardown the worker's pane + respawn the SAME
+// agent on the SAME topic, reset runtime state (phase=idle, current_exp_id=,
 // probe_sent_ts=) but PRESERVE exp_counter. Refuse mid-experiment (phase=working).
-// state event last_event=fresh-part-respawn.
+// state event last_event=fresh-worker-respawn.
 
-export interface RehearsalFreshPartDeps {
-  teardown(topic: string, instrument: string): Promise<void>;
+export interface RehearsalFreshWorkerDeps {
+  teardown(topic: string, agent: string): Promise<void>;
   spawn(args: string[]): Promise<number>;
   now(): string;
   stdout?: (line: string) => void;
   opts?: PathOpts;
 }
 
-export async function freshPartWith(args: string[], deps: RehearsalFreshPartDeps): Promise<number> {
-  if (args.length !== 2) { log.error("rehearsal fresh-part: usage: <topic> <instrument>"); return 2; }
-  const [topic, instrument] = args;
-  if (!INSTRUMENT_RE.test(instrument)) { log.error(`instrument must match [a-z][a-z0-9-]*; got '${instrument}'`); return 2; }
+export async function freshWorkerWith(args: string[], deps: RehearsalFreshWorkerDeps): Promise<number> {
+  if (args.length !== 2) { log.error("rehearsal fresh-worker: usage: <topic> <agent>"); return 2; }
+  const [topic, agent] = args;
+  if (!AGENT_RE.test(agent)) { log.error(`agent must match [a-z][a-z0-9-]*; got '${agent}'`); return 2; }
 
   const art = rehearsalArtDir(topic, deps.opts);
-  const stateTxt = join(partStateDir(art, instrument), "state.txt");
-  if (!existsSync(stateTxt)) { log.error(`part state.txt missing: ${stateTxt}`); return 1; }
+  const stateTxt = join(workerStateDir(art, agent), "state.txt");
+  if (!existsSync(stateTxt)) { log.error(`worker state.txt missing: ${stateTxt}`); return 1; }
 
   const prev = parseState(readFileSync(stateTxt, "utf8"));
   // Refuse mid-experiment (rc 1, faithful to the bash — NOT rc 2).
   if (prev.phase === "working") {
-    log.error(`part ${instrument} is mid-experiment (phase=working); abort or wait for done before fresh-part.`);
+    log.error(`worker ${agent} is mid-experiment (phase=working); abort or wait for done before fresh-worker.`);
     return 1;
   }
 
@@ -1607,17 +1607,17 @@ export async function freshPartWith(args: string[], deps: RehearsalFreshPartDeps
   const prevCounter = /^[0-9]+$/.test(prev.exp_counter ?? "") ? (prev.exp_counter as string) : "0";
 
   // Teardown the live pane gracefully — best-effort; a missing/dead pane must not block respawn.
-  log.info(`[fresh-part] tearing down ${instrument}'s pane on ${topic} ...`);
-  try { await deps.teardown(topic, instrument); } catch { /* best-effort — a missing/dead pane must not block respawn */ }
+  log.info(`[fresh-worker] tearing down ${agent}'s pane on ${topic} ...`);
+  try { await deps.teardown(topic, agent); } catch { /* best-effort — a missing/dead pane must not block respawn */ }
 
-  // Respawn in a new pane — same instrument, same topic.
-  log.info(`[fresh-part] respawning ${instrument} ...`);
-  const rc = await deps.spawn([instrument, "codex", topic]);
-  if (rc !== 0) { log.error(`spawn failed for ${instrument} on ${topic}`); return 1; }
+  // Respawn in a new pane — same agent, same topic.
+  log.info(`[fresh-worker] respawning ${agent} ...`);
+  const rc = await deps.spawn([agent, "codex", topic]);
+  if (rc !== 0) { log.error(`spawn failed for ${agent} on ${topic}`); return 1; }
 
   // Reset runtime state AFTER a successful spawn, preserving exp_counter (+ all other keys).
   atomicWrite(stateTxt, mergeState(readFileSync(stateTxt, "utf8"), {
-    last_event: "fresh-part-respawn",
+    last_event: "fresh-worker-respawn",
     last_event_ts: deps.now(),
     phase: "idle",
     current_exp_id: "",
@@ -1625,11 +1625,11 @@ export async function freshPartWith(args: string[], deps: RehearsalFreshPartDeps
     probe_sent_ts: "",
   }));
 
-  log.ok(`[fresh-part] ${instrument} respawned on ${topic}; state preserved (exp_counter=${prevCounter})`);
+  log.ok(`[fresh-worker] ${agent} respawned on ${topic}; state preserved (exp_counter=${prevCounter})`);
   return 0;
 }
 
-const liveFreshPartDeps: RehearsalFreshPartDeps = {
+const liveFreshWorkerDeps: RehearsalFreshWorkerDeps = {
   teardown: (t, i) => codaRun(["--pairs", t, i]).then(() => undefined),
   spawn: (a) => spawnRun(a),
   now: () => isoUtc(),
@@ -1676,7 +1676,7 @@ export async function abortWith(args: string[], deps: RehearsalAbortDeps): Promi
 
   // TaskStop deferral hint (LOG ONLY — TaskStop is the harness tool the directive fires).
   if (ids.length > 0) {
-    log.info(`note: ${ids.length} Monitor task(s) still active; will TaskStop on next Maestro turn (halt.flag detected):`);
+    log.info(`note: ${ids.length} Monitor task(s) still active; will TaskStop on next Hub turn (halt.flag detected):`);
     for (const id of ids) log.info(`  - ${id}`);
   } else {
     log.info("no Monitor tasks to stop");
@@ -1693,10 +1693,10 @@ const liveAbortDeps: RehearsalAbortDeps = {
 };
 
 // ---- Phase D: consensus — advisory latest-ok agreement matrix. ----
-// Ports deep-research-consensus.sh (standalone, advisory). Walks each part's
+// Ports deep-research-consensus.sh (standalone, advisory). Walks each worker's
 // experiments in ascending order, keeps the lexically-greatest exp whose
-// result.json parses with status === "ok" as that part's representative, then
-// hands the per-part field maps to the pure buildConsensus renderer.
+// result.json parses with status === "ok" as that worker's representative, then
+// hands the per-worker field maps to the pure buildConsensus renderer.
 
 export interface RehearsalConsensusDeps {
   now(): string;
@@ -1726,27 +1726,27 @@ export async function consensusWith(args: string[], deps: RehearsalConsensusDeps
   const epsilon = deps.epsilon ?? p.epsilon;
 
   const art = rehearsalArtDir(p.topic, deps.opts);
-  const partsRoot = partsDir(art);
-  if (!existsSync(partsRoot)) { log.error(`rehearsal consensus: no parts dir under ${art}`); return 1; }
+  const workersRoot = workersDir(art);
+  if (!existsSync(workersRoot)) { log.error(`rehearsal consensus: no workers dir under ${art}`); return 1; }
 
-  // Per part: the lexically-greatest exp-NNN whose result.json parses with status === "ok".
+  // Per worker: the lexically-greatest exp-NNN whose result.json parses with status === "ok".
   const latestOk: Record<string, Record<string, unknown>> = {};
-  let instruments: string[];
+  let agents: string[];
   try {
-    instruments = readdirSync(partsRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
-  } catch { instruments = []; }
-  for (const instrument of instruments) {
-    const expsRoot = experimentsDir(art, instrument);
+    agents = readdirSync(workersRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+  } catch { agents = []; }
+  for (const agent of agents) {
+    const expsRoot = experimentsDir(art, agent);
     let names: string[];
     try { names = readdirSync(expsRoot).filter((n) => EXP_ID_RE.test(n)).sort(); } catch { continue; }
     let newest = "";
     for (const exp of names) {
-      const resultPath = join(experimentDir(art, instrument, exp), "result.json");
+      const resultPath = join(experimentDir(art, agent, exp), "result.json");
       if (!existsSync(resultPath)) continue;
       let parsed: Record<string, unknown>;
       try { parsed = JSON.parse(readFileSync(resultPath, "utf8")) as Record<string, unknown>; } catch { continue; }
       if (parsed.status !== "ok") continue;
-      if (exp > newest) { newest = exp; latestOk[instrument] = parsed; }
+      if (exp > newest) { newest = exp; latestOk[agent] = parsed; }
     }
   }
 
@@ -1754,17 +1754,17 @@ export async function consensusWith(args: string[], deps: RehearsalConsensusDeps
 
   const md = buildConsensus(latestOk, { topic: p.topic, nowIso: deps.now(), epsilon });
   atomicWrite(join(art, "consensus.md"), md);
-  log.ok(`[consensus] wrote ${join(art, "consensus.md")} (${Object.keys(latestOk).length} parts)`);
+  log.ok(`[consensus] wrote ${join(art, "consensus.md")} (${Object.keys(latestOk).length} workers)`);
   return 0;
 }
 
 const liveConsensusDeps: RehearsalConsensusDeps = { now: () => isoUtc() };
 
-function appendVerificationRow(art: string, instrument: string, expId: string, row: VerificationRow): void {
+function appendVerificationRow(art: string, agent: string, expId: string, row: VerificationRow): void {
   const tsv = join(art, "verification.tsv");
   const prior = existsSync(tsv) ? readFileSync(tsv, "utf8") : VERIFICATION_TSV_HEADER;
   atomicWrite(tsv, prior + verificationRow(row));
-  atomicWrite(join(experimentDir(art, instrument, expId), "verification.txt"),
+  atomicWrite(join(experimentDir(art, agent, expId), "verification.txt"),
     `${row.verdict} reason=${row.reason} recomputed=${row.recomputed} at ${row.ts}\n`);
 }
 const liveVerifyPlanDeps: VerifyPlanDeps = {
@@ -1783,18 +1783,18 @@ const liveVerifyCheckDeps: VerifyCheckDeps = {
   now: () => isoUtc(),
 };
 
-function appendInspectionRow(art: string, instrument: string, expId: string, row: InspectionRow): void {
+function appendInspectionRow(art: string, agent: string, expId: string, row: InspectionRow): void {
   const tsv = join(art, "inspection.tsv");
   const prior = existsSync(tsv) ? readFileSync(tsv, "utf8") : INSPECTION_TSV_HEADER;
   atomicWrite(tsv, prior + inspectionRow(row));
-  atomicWrite(join(experimentDir(art, instrument, expId), "inspection.txt"),
+  atomicWrite(join(experimentDir(art, agent, expId), "inspection.txt"),
     `${row.verdict} reason=${row.reason} reimpl_metric=${row.reimplMetric} at ${row.ts}\n`);
 }
 const liveInspectPlanDeps: InspectPlanDeps = {
   readResult: liveVerifyPlanDeps.readResult,
   readMetricMd: (art) => readIfExistsOrNull(join(art, "metric.md")),
   inspectionCount: (art) => { const p = join(art, "inspection.tsv"); if (!existsSync(p)) return 0; return readFileSync(p, "utf8").split("\n").filter((l) => l && !l.startsWith("exp_id\t")).length; },
-  partProvider: (_art, i, topic) => resolveModel(i, topic),
+  workerProvider: (_art, i, topic) => resolveModel(i, topic),
   writeRow: appendInspectionRow,
   now: () => isoUtc(),
 };
@@ -1814,7 +1814,7 @@ export async function run(args: string[]): Promise<number> {
     case "metric": return metricWith(rest);
     case "sota": return sotaWith(rest);
     case "spawn-all": return spawnAllWith(rest, liveSpawnAllDeps);
-    case "drop-part": return dropPartWith(rest, liveDropPartDeps);
+    case "drop-worker": return dropWorkerWith(rest, liveDropWorkerDeps);
     case "verify-plan": return verifyPlanWith(rest, liveVerifyPlanDeps);
     case "verify-check": return verifyCheckWith(rest, liveVerifyCheckDeps);
     case "inspect-plan": return inspectPlanWith(rest, liveInspectPlanDeps);
@@ -1827,7 +1827,7 @@ export async function run(args: string[]): Promise<number> {
     case "refine": return refineWith(applyArgsFile(rest), liveRefineDeps);
     case "handoff-extract": return handoffExtractWith(rest, liveHandoffDeps);
     case "teardown": return teardownWith(rest, liveTeardownDeps);
-    case "fresh-part": return freshPartWith(rest, liveFreshPartDeps);
+    case "fresh-worker": return freshWorkerWith(rest, liveFreshWorkerDeps);
     case "forensics": return forensicsRun(rest);
     case "flag": return runFlag("rehearsal", rest[0], rest.slice(1).join(" "));
     case "abort": return abortWith(applyArgsFile(rest), liveAbortDeps);

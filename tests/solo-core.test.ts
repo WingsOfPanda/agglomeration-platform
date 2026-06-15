@@ -72,9 +72,9 @@ describe("detectTestCommand (precedence)", () => {
 
 const okFacts = {
   topic: "auth", status: "ok" as const, started: "2026-05-29T06:00:00Z",
-  ended: "2026-05-29T06:05:00Z", duration: 300, provider: "codex", instrument: "violin",
+  ended: "2026-05-29T06:05:00Z", duration: 300, provider: "codex", agent: "bravo",
   branch: "feat/solo-auth", verify: "PASS (npm test)", diffStats: " 2 files changed, 9 insertions(+)",
-  archived: "/arch/violin-codex-...", targetCwd: "/proj", branchBase: "abc123",
+  archived: "/arch/bravo-codex-...", targetCwd: "/proj", branchBase: "abc123",
 };
 
 describe("renderSummary", () => {
@@ -89,7 +89,7 @@ describe("renderSummary", () => {
   });
   it("aborted summary carries the abort fields + RESUME pointer", () => {
     const md = renderSummary({ ...okFacts, status: "aborted", ended: undefined, duration: undefined,
-      abortedPhase: "build", abortedGate: "part-turn-failed", abortedReason: "turn failed twice (TS=failed)" });
+      abortedPhase: "build", abortedGate: "worker-turn-failed", abortedReason: "turn failed twice (TS=failed)" });
     expect(md).toContain("status: aborted");
     expect(md).toContain("aborted_phase: build");
     expect(md).toContain("aborted_reason: turn failed twice (TS=failed)");
@@ -101,7 +101,7 @@ describe("renderSummary", () => {
 
 describe("renderResume", () => {
   it("points at the state dir + manual resume", () => {
-    const md = renderResume({ topic: "auth", branch: "feat/solo-auth", artDir: "/s/_solo", phase: "build", gate: "part-turn-failed" });
+    const md = renderResume({ topic: "auth", branch: "feat/solo-auth", artDir: "/s/_solo", phase: "build", gate: "worker-turn-failed" });
     expect(md).toContain("# RESUME — auth");
     expect(md).toContain("State dir: /s/_solo");
     expect(md).toContain("re-run /ap:solo");

@@ -61,7 +61,7 @@ export interface SummaryFacts {
   ended?: string;
   duration?: number | string;
   provider: string;
-  instrument: string;
+  agent: string;
   branch: string;
   verify: string;
   diffStats: string;
@@ -87,7 +87,7 @@ export function renderSummary(f: SummaryFacts): string {
       ...head,
       "## Result",
       `- Provider: ${f.provider}`,
-      `- Instrument: ${f.instrument}`,
+      `- Agent: ${f.agent}`,
       `- Branch: ${f.branch}`,
       `- Verify: ${f.verify}`,
       `- Diff: ${f.diffStats}`,
@@ -128,7 +128,7 @@ export function renderResume(f: ResumeFacts): string {
     `- Branch: ${f.branch}`,
     "",
     "## Manual resume",
-    `- Inspect ${f.artDir}/execute/ for the part's partial work, then re-run /ap:solo.`,
+    `- Inspect ${f.artDir}/execute/ for the worker's partial work, then re-run /ap:solo.`,
     "",
   ].join("\n");
 }

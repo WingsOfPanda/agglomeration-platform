@@ -16,7 +16,7 @@ function agedOutbox(ageSec: number): string {
 }
 
 describe("classifyStale honors a custom threshold (L11 semantics)", () => {
-  it("a 300s-old working part is 'working' under a 600 threshold but 'stale' under 180", () => {
+  it("a 300s-old working worker is 'working' under a 600 threshold but 'stale' under 180", () => {
     const ob = agedOutbox(300);
     expect(classifyStale("working", ob, 600)).toBe("working");
     expect(classifyStale("working", ob, 180)).toBe("stale");

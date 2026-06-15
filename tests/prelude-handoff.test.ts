@@ -8,7 +8,7 @@ describe("buildHandoffKv", () => {
   it("emits the frozen key order with convergence", () => {
     const kv = buildHandoffKv({
       topic: "attention kernels", landscapeDoc: "landscape-2026-05-30-attention.md",
-      topApproach: "FlashAttention", findingsPaths: ["findings-rex.md", "findings-viola.md"],
+      topApproach: "FlashAttention", findingsPaths: ["findings-rex.md", "findings-alpha.md"],
       confidenceSignals: "S1=true,S2=true,S3=true,S4=true,S5=true",
       adversaryFindingsPaths: ["adversary-rex.md"], tradeoffMatrixPresent: true,
       generatedTs: "2026-05-30T00:00:00Z",
@@ -18,7 +18,7 @@ describe("buildHandoffKv", () => {
       "topic=attention kernels\n" +
       "landscape_doc=landscape-2026-05-30-attention.md\n" +
       "top_approach=FlashAttention\n" +
-      "findings_paths=findings-rex.md,findings-viola.md\n" +
+      "findings_paths=findings-rex.md,findings-alpha.md\n" +
       "confidence_signals=S1=true,S2=true,S3=true,S4=true,S5=true\n" +
       "adversary_findings_paths=adversary-rex.md\n" +
       "tradeoff_matrix_present=true\n" +
@@ -72,10 +72,10 @@ describe("extractHandoffData (reconciled reads)", () => {
     try {
       writeFileSync(join(art, "topic.txt"), "x");
       writeFileSync(join(art, "adversary-skip.txt"), "signals_passed: S1=true S2=true S3=true S4=true S5=true\n");
-      writeFileSync(join(art, "viola_adversary_prompt.md"), "prompt");
-      writeFileSync(join(art, "adversary-viola.md"), "critique");
+      writeFileSync(join(art, "alpha_adversary_prompt.md"), "prompt");
+      writeFileSync(join(art, "adversary-alpha.md"), "critique");
       const kv = readFileSync(extractHandoffData(art)!, "utf8");
-      expect(kv).toContain("adversary_findings_paths=adversary-viola.md\n");
+      expect(kv).toContain("adversary_findings_paths=adversary-alpha.md\n");
     } finally { rmSync(art, { recursive: true, force: true }); }
   });
 });
