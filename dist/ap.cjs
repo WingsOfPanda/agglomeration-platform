@@ -17783,7 +17783,7 @@ function listSet(providers) {
 }
 function paneBorderDiagnosis(pbs, pbf) {
   const fix = [
-    "  fix: `ap` spawn sets this automatically, or add to ~/.tmux.conf:",
+    "  fix: `ap` spawn/check sets this automatically, or add to ~/.tmux.conf:",
     "    set -g pane-border-status top",
     "    set -g pane-border-format ' #{?@ap_label_fmt,#{@ap_label_fmt},#[fg=#{?@ap_color,#{@ap_color},default}#,bold]#{?@ap_label,#{@ap_label},#{pane_title}}#[default]} '"
   ];
@@ -17800,6 +17800,14 @@ function tmuxGlobalOption(name) {
     return (0, import_node_child_process8.execFileSync)("tmux", ["show-options", "-gv", name], { encoding: "utf8" }).trim();
   } catch {
     return "";
+  }
+}
+function applyPaneBorders() {
+  for (const a2 of paneBorderArgs()) {
+    try {
+      (0, import_node_child_process8.execFileSync)("tmux", a2, { stdio: "ignore" });
+    } catch {
+    }
   }
 }
 function healthCheck() {
@@ -17819,6 +17827,7 @@ function healthCheck() {
   } else log.ok(`tmux: ${ver}`);
   if (inTmuxSession()) {
     log.ok(`tmux session: ${process.env.TMUX} is set`);
+    applyPaneBorders();
     const diag = paneBorderDiagnosis(tmuxGlobalOption("pane-border-status"), tmuxGlobalOption("pane-border-format"));
     if (diag.ok) log.ok(`  ${diag.lines[0]}`);
     else {
@@ -17908,6 +17917,7 @@ var init_check = __esm({
     import_node_os6 = require("node:os");
     init_log();
     init_deps();
+    init_tmux();
     init_paths();
     init_atomic();
     init_contracts();
