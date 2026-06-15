@@ -1,4 +1,4 @@
-// tests/rehearsal-summary.test.ts — pure render_summary port for /consort:rehearsal.
+// tests/rehearsal-summary.test.ts — pure render_summary port for /ap:rehearsal.
 // Faithful to cw_deep_research_render_summary (clone-wars deep-research.sh ~712-877).
 import { describe, it, expect } from "vitest";
 import {

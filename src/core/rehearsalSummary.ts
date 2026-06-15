@@ -1,10 +1,10 @@
-// Pure session-summary renderer for /consort:rehearsal. Faithful port of the
+// Pure session-summary renderer for /ap:rehearsal. Faithful port of the
 // deep-research render_summary routine (deep-research.sh ~712-877): renders
 // sections 1/2/4/5 mechanically from disk-gathered data. The finalize verb
 // gathers inputs (topic, status rows, scoreboard, completion, events, warnings,
 // halt) from disk; this module just renders. No I/O here.
 //
-// REBRAND: the source status table uses the worker noun; consort uses "| Part |".
+// REBRAND: the source status table uses the worker noun; ap uses "| Part |".
 
 import type { CompletionSignals } from "./rehearsalComplete.js";
 import type { HaltFlag } from "./rehearsalState.js";

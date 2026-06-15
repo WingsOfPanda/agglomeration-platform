@@ -1,35 +1,35 @@
 ---
-description: Deep multi-aspect exploration — SOTA surveys, multi-angle thinking, adversary-tested landscape doc that feeds /consort:score
+description: Deep multi-aspect exploration — SOTA surveys, multi-angle thinking, adversary-tested landscape doc that feeds /ap:score
 argument-hint: <topic>
 allowed-tools: Bash, Write, Read, Edit, AskUserQuestion, WebSearch, WebFetch, Skill
 ---
 
-# /consort:prelude
+# /ap:prelude
 
 Deep multi-aspect exploration of `$ARGUMENTS`. The Maestro orchestrates an N-part research
 pass — classifying the topic up front to tell each part how much to weight academic-paper
 retrieval — synthesizes a preliminary landscape doc, runs a 5-signal confidence gate, dispatches
 all N parts as adversaries against the synthesis if the gate doesn't let the user skip, then writes
 a final landscape doc with a tradeoff matrix + adversary critiques + a directional Conclusion. The
-Conclusion is the hand-off seed for `/consort:score`, emitted as `score-handoff.md`. **The Maestro
+Conclusion is the hand-off seed for `/ap:score`, emitted as `score-handoff.md`. **The Maestro
 itself never runs retrieval — parts are the only retrievers.** The intended workflow is
 `prelude → score → perform`.
 
-**When to use this command.** Invoke `/consort:prelude` when the user wants to explore SOTA,
+**When to use this command.** Invoke `/ap:prelude` when the user wants to explore SOTA,
 think deeply, survey a landscape, or research a hard topic from multiple angles WITHOUT committing
 to a buildable plan — "explore SOTA …", "find new architectures for …", "deep think about …",
-"survey the landscape of …". Phrases that route to `/consort:score` instead (they need a buildable
+"survey the landscape of …". Phrases that route to `/ap:score` instead (they need a buildable
 spec): "design X", "build X", "compare A vs B to decide", "should we adopt …". The line is fuzzy;
 prelude's Conclusion feeds score's next research round.
 
-Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs"`.
+Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
 
 ## Flagging suspicions
 
 At any point in the run, if something looks weird, surprising, or suspicious — even a likely false
 alarm — record it: `$CS prelude flag <TOPIC> "<what looked off>"`. It writes straight to the playback
 feed (survives teardown and aborts) and costs nothing, so prefer over-recording. Review later with
-`/consort:playback`.
+`/ap:playback`.
 
 ## Task list (TaskCreate × 11 before Phase 0)
 
@@ -70,7 +70,7 @@ Set task `0` → `in_progress`.
    files under `$ART` and pass `<TOPIC>` to every subcommand. Non-zero exit aborts:
    - **rc 1** = empty topic OR fewer than 2 validated providers (redirect: just ask Claude directly
      — no orchestration needed).
-   - **rc 2** = topic already in flight (run `/consort:coda` or pick a different topic).
+   - **rc 2** = topic already in flight (run `/ap:coda` or pick a different topic).
 
    Surface stderr verbatim and stop on a non-zero rc.
 
@@ -291,12 +291,12 @@ Then **use the Write tool** to author the final doc, reading `$ART/landscape-dra
 > _Adversary phase skipped after the confidence gate passed and the user accepted skip. Findings
 > are single-pass — no post-synthesis challenge was performed._
 
-**The `## Conclusion`** is the hand-off seed for `/consort:score`. It must:
+**The `## Conclusion`** is the hand-off seed for `/ap:score`. It must:
 
 - Name the strongest approach + state explicit caveats.
 - List the adversary-surfaced weaknesses the design phase must address.
 - Suggest a concrete next invocation:
-  `/consort:score Design <X> using approach <A>, with mitigations for <flagged-issue>`.
+  `/ap:score Design <X> using approach <A>, with mitigations for <flagged-issue>`.
 - If user priorities would shift the answer, point to the matrix row that changes it.
 
 Set task `8` → `completed`.
@@ -399,7 +399,7 @@ Handoff doc (pipe directly into score):
   $ART/score-handoff.md
 
 Suggested next step:
-  /consort:score $ART/score-handoff.md
+  /ap:score $ART/score-handoff.md
 
 (Or hand-edit the topic to investigate a different angle.)
 ```

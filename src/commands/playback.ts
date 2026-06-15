@@ -1,4 +1,4 @@
-// src/commands/playback.ts — /consort:playback verbs. survey = read-only list + trend digest;
+// src/commands/playback.ts — /ap:playback verbs. survey = read-only list + trend digest;
 // archive = accrue trend + move surveyed files to .reviewed/. Logic lives in core/playback.ts.
 // Port of the prior plugin's review-forensics.sh + forensics-mark-reviewed.sh (review half).
 import { existsSync, readdirSync, readFileSync, statSync, mkdirSync, renameSync, type Dirent } from "node:fs";

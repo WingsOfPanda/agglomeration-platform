@@ -1,5 +1,5 @@
 // tests/perform-cmd.test.ts — B2b: perform pre-snapshot / branch / scope-check / summary / finish /
-// forensics / archive verbs. Fake Runner injection; CONSORT_HOME temp; byte-exact state-file asserts.
+// forensics / archive verbs. Fake Runner injection; AP_HOME temp; byte-exact state-file asserts.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -219,7 +219,7 @@ describe("perform finish", () => {
   });
 });
 
-describe("perform archive (real archiveTopic under CONSORT_HOME)", () => {
+describe("perform archive (real archiveTopic under AP_HOME)", () => {
   let h: { home: string; cleanup: () => void };
   beforeEach(() => { h = freshHome(); });
   afterEach(() => { h.cleanup(); });

@@ -4,19 +4,19 @@ argument-hint: --repo <abs-repo-path> <opening task> [--provider codex|claude|ag
 allowed-tools: Bash, Write, Read, Edit, AskUserQuestion
 ---
 
-# /consort:duet
+# /ap:duet
 
 Open ONE persistent part in the repo named by `--repo` (repo B) and collaborate with it over as many
 rounds as the work needs. You (the conductor) stay in your own repo (repo A); the part edits repo B.
 Use **judgment** on the part's questions: answer the ones you can confidently handle from context;
 pull in the human via AskUserQuestion only for real decisions (taste, scope, ambiguous trade-offs).
 
-Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs"`.
+Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
 
 ## Flagging suspicions
 
 At any point, if something looks off, record it: `$CS duet flag <SLUG> "<what looked off>"`. It writes
-straight to the playback feed (survives teardown and aborts) and costs nothing. Review with `/consort:playback`.
+straight to the playback feed (survives teardown and aborts) and costs nothing. Review with `/ap:playback`.
 
 ## Stage 0 — Init
 
@@ -109,4 +109,4 @@ continue.
 - One part, one repo (repo B), open-ended rounds. This is NOT the retired multi-repo subsystem — no
   discovery, no `--targets`, no DAG.
 - State lives under YOUR (conductor) repo hash; the part just works in repo B via `--cwd`.
-- `<SLUG state>` = `<repo-A>/.consort/state/<hash>/<SLUG>` (the conductor's state tree).
+- `<SLUG state>` = `<repo-A>/.ap/state/<hash>/<SLUG>` (the conductor's state tree).

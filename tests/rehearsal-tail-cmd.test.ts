@@ -112,7 +112,7 @@ describe("refine", () => {
     expect(await refineWith([TOPIC, INST, EXP, "throw nudge"], deps(h.home, { send: throwingSend }))).toBe(0);
   });
 
-  it("passes the consort send signature [--from maestro, instrument, topic, msg] referencing the refine path + exp-id", async () => {
+  it("passes the ap send signature [--from maestro, instrument, topic, msg] referencing the refine path + exp-id", async () => {
     const h = home();
     const dir = mkBranch(h.home, TOPIC, INST, EXP);
     let captured: string[] = [];

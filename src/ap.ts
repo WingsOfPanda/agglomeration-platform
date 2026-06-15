@@ -24,7 +24,7 @@ async function banner(label: string, color: string): Promise<number> {
   process.stdout.write(renderBannerHead(label, color) + "\n");
   const c = ansiFromColor(color);
   const r = "\x1b[0m";
-  const fast = Boolean(process.env.CONSORT_BANNER_FAST);
+  const fast = Boolean(process.env.AP_BANNER_FAST);
   for (let i = 8; i >= 1; i--) {
     process.stdout.write(`  ${c}Closing in ${i} second${i === 1 ? "" : "s"}...${r}\r`);
     if (!fast) await new Promise((res) => setTimeout(res, 1000));
@@ -38,7 +38,7 @@ async function main(): Promise<number> {
   const sub = argv[0];
   const rest = argv.slice(1);
 
-  if (!sub) { process.stderr.write("consort: missing subcommand\n"); return 2; }
+  if (!sub) { process.stderr.write("ap: missing subcommand\n"); return 2; }
   if (sub === "_banner") return banner(rest[0] ?? "part", rest[1] ?? "");
 
   // --mint-args-file: the command directives' step 1
@@ -50,7 +50,7 @@ async function main(): Promise<number> {
 
   const handlers = await loadHandlers();
   const fn = handlers[sub];
-  if (!fn) { process.stderr.write(`consort: unknown subcommand '${sub}'\n`); return 2; }
+  if (!fn) { process.stderr.write(`ap: unknown subcommand '${sub}'\n`); return 2; }
   return dispatch(fn, resolved);
 }
 

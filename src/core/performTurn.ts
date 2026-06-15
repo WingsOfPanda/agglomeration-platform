@@ -63,7 +63,7 @@ export function composeRound1Prompt(args: { designPath: string; planPath: string
   const round = args.round ?? 1;
   const testLog = `${dirname(verifyPath)}/test-output-${round}.log`;
   return [
-    `You are entering ROUND ${round} of /consort:perform.`,
+    `You are entering ROUND ${round} of /ap:perform.`,
     "",
     "This is a single-turn workflow: you will write the implementation plan,",
     "implement it, run the test suite, and write the verify report — all in",
@@ -112,7 +112,7 @@ export function composeRound1Prompt(args: { designPath: string; planPath: string
 export function composeFixPrompt(round: number, bundleText: string, verifyPath: string, testCmd: string): string {
   const testLog = `${dirname(verifyPath)}/test-output-${round}.log`;
   return [
-    `You are entering ROUND ${round} of /consort:perform (fix loop).`,
+    `You are entering ROUND ${round} of /ap:perform (fix loop).`,
     "",
     "This is a single-turn workflow: address each issue below, re-run the test",
     "suite, and write the verify report — all in one autonomous run.",

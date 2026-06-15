@@ -28,10 +28,10 @@ describe("score classifyTopic", () => {
 
 describe("score skillHintAppend", () => {
   const saved = process.env.CLAUDE_PLUGIN_ROOT;
-  const savedOv = process.env.CONSORT_SCORE_SKILL_OVERRIDE;
+  const savedOv = process.env.AP_SCORE_SKILL_OVERRIDE;
   afterEach(() => {
     if (saved === undefined) delete process.env.CLAUDE_PLUGIN_ROOT; else process.env.CLAUDE_PLUGIN_ROOT = saved;
-    if (savedOv === undefined) delete process.env.CONSORT_SCORE_SKILL_OVERRIDE; else process.env.CONSORT_SCORE_SKILL_OVERRIDE = savedOv;
+    if (savedOv === undefined) delete process.env.AP_SCORE_SKILL_OVERRIDE; else process.env.AP_SCORE_SKILL_OVERRIDE = savedOv;
   });
   function root(): string {
     const r = mkdtempSync(join(tmpdir(), "sk-"));
@@ -40,7 +40,7 @@ describe("score skillHintAppend", () => {
     return r;
   }
   it("appends the hint file when skill.txt names a real skill", () => {
-    const r = root(); process.env.CLAUDE_PLUGIN_ROOT = r; delete process.env.CONSORT_SCORE_SKILL_OVERRIDE;
+    const r = root(); process.env.CLAUDE_PLUGIN_ROOT = r; delete process.env.AP_SCORE_SKILL_OVERRIDE;
     const st = join(r, "skill.txt"); writeFileSync(st, "brainstorming\n");
     expect(skillHintAppend(st, "BASE")).toBe("BASE\n\n---\n\nHINT-BRAIN\n");
     rmSync(r, { recursive: true, force: true });
@@ -52,7 +52,7 @@ describe("score skillHintAppend", () => {
     const dbg = join(r, "d.txt"); writeFileSync(dbg, "systematic-debugging\n");
     expect(skillHintAppend(dbg, "BASE")).toBe("BASE");
     const brain = join(r, "b.txt"); writeFileSync(brain, "brainstorming\n");
-    process.env.CONSORT_SCORE_SKILL_OVERRIDE = "none";
+    process.env.AP_SCORE_SKILL_OVERRIDE = "none";
     expect(skillHintAppend(brain, "BASE")).toBe("BASE");
     rmSync(r, { recursive: true, force: true });
   });

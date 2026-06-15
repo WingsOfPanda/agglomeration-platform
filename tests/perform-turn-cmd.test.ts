@@ -126,7 +126,7 @@ function waitDeps(over: Partial<PerformWaitDeps> = {}): PerformWaitDeps {
 describe("perform turn-wait (rc 0 always; TS= carries the outcome)", () => {
   let h: { home: string; cleanup: () => void };
   beforeEach(() => { h = freshHome(); });
-  afterEach(() => { h.cleanup(); delete process.env.CONSORT_PERFORM_TURN_TIMEOUT_S; });
+  afterEach(() => { h.cleanup(); delete process.env.AP_PERFORM_TURN_TIMEOUT_S; });
 
   function seedWait(round = 1): string {
     const art = seed("codex");
@@ -212,9 +212,9 @@ describe("perform turn-wait (rc 0 always; TS= carries the outcome)", () => {
     expect(stateText).not.toContain("OBJECTIONS=");
   });
 
-  it("CONSORT_PERFORM_TURN_TIMEOUT_S=5 → wait dep receives scaledTimeout(5,'1')===5", async () => {
+  it("AP_PERFORM_TURN_TIMEOUT_S=5 → wait dep receives scaledTimeout(5,'1')===5", async () => {
     seedWait();
-    process.env.CONSORT_PERFORM_TURN_TIMEOUT_S = "5";
+    process.env.AP_PERFORM_TURN_TIMEOUT_S = "5";
     let gotTimeout = -1;
     const rc = await turnWaitWith(TOPIC, 1, waitDeps({
       multiplier: () => "1",

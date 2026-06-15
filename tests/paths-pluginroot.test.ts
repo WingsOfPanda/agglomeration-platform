@@ -19,29 +19,29 @@ describe("pluginRoot", () => {
 
   it("self-locates from the bundle path when CLAUDE_PLUGIN_ROOT is unset", () => {
     delete process.env.CLAUDE_PLUGIN_ROOT;
-    const root = mkdtempSync(join(tmpdir(), "consort-plugin-"));
+    const root = mkdtempSync(join(tmpdir(), "ap-plugin-"));
     mkdirSync(join(root, "dist"), { recursive: true });
     mkdirSync(join(root, "config", "prompt-templates"), { recursive: true });
     writeFileSync(join(root, "config", "prompt-templates", "identity.md"), "x");
-    writeFileSync(join(root, "dist", "consort.cjs"), "//");
-    process.argv[1] = join(root, "dist", "consort.cjs");
+    writeFileSync(join(root, "dist", "ap.cjs"), "//");
+    process.argv[1] = join(root, "dist", "ap.cjs");
     try { expect(pluginRoot()).toBe(realpathSync(root)); }
     finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it("falls back to cwd when the bundle path has no config asset", () => {
     delete process.env.CLAUDE_PLUGIN_ROOT;
-    const root = mkdtempSync(join(tmpdir(), "consort-noasset-"));
+    const root = mkdtempSync(join(tmpdir(), "ap-noasset-"));
     mkdirSync(join(root, "dist"), { recursive: true });
-    writeFileSync(join(root, "dist", "consort.cjs"), "//");
-    process.argv[1] = join(root, "dist", "consort.cjs");
+    writeFileSync(join(root, "dist", "ap.cjs"), "//");
+    process.argv[1] = join(root, "dist", "ap.cjs");
     try { expect(pluginRoot()).toBe(process.cwd()); }
     finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it("falls back to process.cwd() when unset and argv[1] is not a bundle", () => {
     delete process.env.CLAUDE_PLUGIN_ROOT;
-    process.argv[1] = "/definitely/not/a/consort/bundle/path.js";
+    process.argv[1] = "/definitely/not/a/ap/bundle/path.js";
     expect(pluginRoot()).toBe(process.cwd());
   });
 });

@@ -4,13 +4,13 @@ argument-hint: [--no-branch] [--branch <n>] [--topic <slug>] [--max-rounds N] [<
 allowed-tools: Bash, Write, Read, Edit, AskUserQuestion, Skill, TodoWrite, mcp__codegraph
 ---
 
-# /consort:perform
+# /ap:perform
 
 Run a part-implements / Maestro-verifies pipeline on `$ARGUMENTS` — the consumer of the
-deploy-schema design doc that `/consort:score` produces. The `tutti` part stays attached for the
+deploy-schema design doc that `/ap:score` produces. The `tutti` part stays attached for the
 whole run; `tmux select-pane` to watch.
 
-Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs"`.
+Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
 
 ## Progress tracking
 
@@ -25,7 +25,7 @@ leave it, and use **one rolling todo** for the dynamic fix-rounds rather than on
 At any point in the run, if something looks weird, surprising, or suspicious — even a likely false
 alarm — record it: `$CS perform flag <TOPIC> "<what looked off>"`. It writes straight to the playback
 feed (survives teardown and aborts) and costs nothing, so prefer over-recording. Review later with
-`/consort:playback`.
+`/ap:playback`.
 
 > **Scope:** single-repo. One part implements the design doc on its own `feat/perform-<TOPIC>`
 > branch; the Maestro cross-verifies and runs a bounded fix-loop, then a finish menu + teardown/archive.
@@ -46,7 +46,7 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
         trailing positional so `init` receives it as the design doc, then continue to step 4.
       - *Cancel* — stop.
       On rc 1 (none found) → stop and tell the user to pass a `<design-doc-path>` (or run
-      `/consort:score` to generate one).
+      `/ap:score` to generate one).
 4. **Audit the doc (before init).** Let `<doc>` be the design-doc path now in `<args-path>` (the
    positional you wrote in step 3 / appended in step 3.1). Run `$CS perform audit <doc>` and branch
    on its rc:
@@ -57,7 +57,7 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
      stderr). Surface the issues, then **AskUserQuestion** ("Proceed anyway / Abort and edit doc"):
      - *Proceed anyway* — append ` --force` to `<args-path>` (so `init` reads the args file with the
        force flag and skips the audit gate), then run `init` as in the rc 0 path below.
-     - *Abort and edit doc* — tell the user to fix the design doc (or re-run `/consort:score` to
+     - *Abort and edit doc* — tell the user to fix the design doc (or re-run `/ap:score` to
        regenerate one) and stop.
    - **rc 0** — audit PASSED. Proceed to `init` normally.
 
@@ -71,7 +71,7 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
    Capture all four. Non-zero aborts:
    - **rc 1** — the doc/topic/target was unreadable/unresolvable (the audit was already cleared
      above). Surface the message and stop.
-   - **rc 2** — usage error, or the topic is already in flight (run `/consort:coda <TOPIC>` to clear it
+   - **rc 2** — usage error, or the topic is already in flight (run `/ap:coda <TOPIC>` to clear it
      first). Stop.
 5. **Pre-snapshot + branch.** `$CS perform pre-snapshot <TOPIC>` (commits any dirty tree so the
    perform branch forks clean; rc 2 = the target is not a git repo → surface and stop). Then, unless
@@ -121,7 +121,7 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
    Bash(command='$CS perform turn-wait "$TOPIC" "$ROUND"', run_in_background: true,
         description="maestro await tutti round=$ROUND")
    ```
-   The default turn budget is 4 hours (`CONSORT_PERFORM_TURN_TIMEOUT_S=14400`); override the env var
+   The default turn budget is 4 hours (`AP_PERFORM_TURN_TIMEOUT_S=14400`); override the env var
    for unusually large or small tasks.
 3. On completion, read `TS=` from `$ART/turn-tutti-<ROUND>.txt` (the **last** `TS=` line). Branch:
    - **`TS=ok`** → Stage 2.

@@ -6,8 +6,8 @@ import * as IPC from "../src/core/ipc.js";
 import { partDir } from "../src/core/paths.js";
 
 beforeEach(() => { process.env.CLAUDE_PLUGIN_ROOT = process.cwd(); });
-afterEach(() => { delete process.env.CONSORT_HOME; });
-function home() { const h = mkdtempSync(join(tmpdir(), "ipc-")); process.env.CONSORT_HOME = h; return h; }
+afterEach(() => { delete process.env.AP_HOME; });
+function home() { const h = mkdtempSync(join(tmpdir(), "ipc-")); process.env.AP_HOME = h; return h; }
 function seedPart(i: string, m: string, t: string) { const d = partDir(i, m, t); mkdirSync(d, { recursive: true }); writeFileSync(join(d, "outbox.jsonl"), ""); return d; }
 
 describe("ipc inbox", () => {

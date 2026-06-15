@@ -59,7 +59,7 @@ describe("composeRound1Prompt", () => {
     testCmd: "",
   });
   it("names ROUND 1, the three phases, and the design/plan/verify paths", () => {
-    expect(p).toContain("ROUND 1 of /consort:perform");
+    expect(p).toContain("ROUND 1 of /ap:perform");
     expect(p).toContain("PHASE 1: Plan");
     expect(p).toContain("PHASE 2: Implement");
     expect(p).toContain("PHASE 3: Self-verify");
@@ -91,7 +91,7 @@ describe("composeRound1Prompt", () => {
   });
   it("honors a custom round number in the test-output log name", () => {
     const r3 = composeRound1Prompt({ designPath: "/d", planPath: "/p", verifyPath: "/v/verify-report-3.md", round: 3, testCmd: "" });
-    expect(r3).toContain("ROUND 3 of /consort:perform");
+    expect(r3).toContain("ROUND 3 of /ap:perform");
     expect(r3).toContain("/v/test-output-3.log");
   });
 });
@@ -100,7 +100,7 @@ describe("composeFixPrompt", () => {
   const bundle = "1. [bug] test foo crashes on null input\n2. [spec-gap] missing retry path";
   const p = composeFixPrompt(2, bundle, "/state/topic/_perform/verify-report-2.md", "");
   it("names the round + fix loop, embeds the bundle verbatim under ISSUES, names the routing skills", () => {
-    expect(p).toContain("ROUND 2 of /consort:perform (fix loop)");
+    expect(p).toContain("ROUND 2 of /ap:perform (fix loop)");
     expect(p).toContain("ISSUES TO ADDRESS:");
     expect(p).toContain(bundle);
     expect(p).toMatch(/systematic-debugging/);

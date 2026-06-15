@@ -1,18 +1,18 @@
 {
-  "name": "consort",
+  "name": "agglomeration-platform",
   "owner": {
     "name": "WingsOfPanda",
     "email": "WingsOfPanda@users.noreply.github.com"
   },
   "plugins": [
     {
-      "name": "consort",
+      "name": "ap",
       "source": "./",
       "description": "Multi-model tmux pane orchestration for Claude Code — spawn codex/claude/agy/opencode TUIs as attachable parts",
-      "version": "0.1.36",
+      "version": "0.2.0",
       "author": { "name": "WingsOfPanda", "email": "WingsOfPanda@users.noreply.github.com" },
-      "homepage": "https://github.com/WingsOfPanda/consort",
-      "repository": "https://github.com/WingsOfPanda/consort",
+      "homepage": "https://github.com/WingsOfPanda/agglomeration-platform",
+      "repository": "https://github.com/WingsOfPanda/agglomeration-platform",
       "license": "MIT",
       "keywords": ["claude-code", "plugin", "multi-agent", "orchestration", "tmux", "codex"]
     }

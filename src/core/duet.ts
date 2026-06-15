@@ -1,4 +1,4 @@
-// src/core/duet.ts — pure helpers for /consort:duet (collaborative cross-repo session).
+// src/core/duet.ts — pure helpers for /ap:duet (collaborative cross-repo session).
 import { join } from "node:path";
 import { topicDir } from "./paths.js";
 
@@ -54,7 +54,7 @@ export function renderDuetResume(f: DuetResumeFacts): string {
     "",
     "## Restore",
     `- ${restore}`,
-    "- Forensic pointer only: /consort:duet cannot auto-resume an in-flight slug — run /consort:coda to clear it, then re-run.",
+    "- Forensic pointer only: /ap:duet cannot auto-resume an in-flight slug — run /ap:coda to clear it, then re-run.",
     "",
   ].join("\n");
 }

@@ -1,10 +1,10 @@
 ---
-description: Advisor-driven autoresearch — lock a measurable metric, sweep SOTA, spawn 2-3 persistent codex parts, and adaptively dispatch experiments until a target/plateau/budget stop. Explore-only; promotion to real code is /consort:perform.
+description: Advisor-driven autoresearch — lock a measurable metric, sweep SOTA, spawn 2-3 persistent codex parts, and adaptively dispatch experiments until a target/plateau/budget stop. Explore-only; promotion to real code is /ap:perform.
 argument-hint: <objective-text> [--metric k=v,...] [--time-budget none|<N>h|<N>s] [--slug s] [--seed-from path]
 allowed-tools: Bash, Write, Read, Edit, AskUserQuestion, WebSearch, Skill
 ---
 
-# /consort:rehearsal
+# /ap:rehearsal
 
 Run an executable research session: you (the Maestro, the conductor) lock a metric with the user, sweep
 the SOTA, spawn 2-3 persistent **codex parts** (PhD-student executors) once, then adaptively dispatch
@@ -19,14 +19,14 @@ source. This directive covers Phases 0-4 (setup + spawn + the adaptive experimen
 > run on machines with sensitive credentials, production data, or shared state.
 > Use a scratch worktree if uncertain.
 
-Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs"`.
+Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
 
 ## Flagging suspicions
 
 At any point in the run, if something looks weird, surprising, or suspicious — even a likely false
 alarm — record it: `$CS rehearsal flag <TOPIC> "<what looked off>"`. It writes straight to the playback
 feed (survives teardown and aborts) and costs nothing, so prefer over-recording. Review later with
-`/consort:playback`.
+`/ap:playback`.
 
 ## Task list (TaskCreate × 9 before Phase 0)
 
@@ -54,7 +54,7 @@ Step 5 may add a per-dispatch `<instrument> exp-NNN on <approach-label>` sub-row
    TOPIC=<slug>
    ART=<abs path to the _rehearsal art dir>
    ```
-   Capture `TOPIC` and `ART`. Non-zero exit aborts: rc 2 = bad args / empty slug / in-flight / bad --metric; rc 3 = codex unavailable (tell the user to install codex + run /consort:soundcheck); rc 1 = --seed-from missing. Surface stderr verbatim and stop.
+   Capture `TOPIC` and `ART`. Non-zero exit aborts: rc 2 = bad args / empty slug / in-flight / bad --metric; rc 3 = codex unavailable (tell the user to install codex + run /ap:soundcheck); rc 1 = --seed-from missing. Surface stderr verbatim and stop.
 
 ## Phase 1 — Metric discussion (THREE unconditional AskUserQuestions)
 Read the heuristic seed: `cat "$ART/metric.txt"` and `cat "$ART/topic.txt"`. **If `$ART/metric.md` already
@@ -86,7 +86,7 @@ Read `primary_metric` + `hard_constraints` from `$ART/metric.md`. Fire ONE **tri
 Web access in this phase relies on the Maestro's `WebSearch` / Tavily / AnySearch
 tool availability and on part-side net access (permitted-by-default, honor-system —
 not enforced). For a hard block, restrict at OS / firewall / network-namespace level
-before invoking `/consort:rehearsal`; the command exposes no opt-out flag.
+before invoking `/ap:rehearsal`; the command exposes no opt-out flag.
 
 ## Phase 2 — Roster size + time budget
 1. **Pick N silently** (your call, explain in chat): **N=2** (default — single objective + tight
@@ -141,7 +141,7 @@ round. This phase runs **once**; its last step ENTERS THE LOOP (do NOT end the t
 
 2. **Start one persistent Monitor task per part.** Use the **Monitor TOOL** (NOT a Bash call) once per
    instrument, with config:
-   - `command`: `node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs rehearsal monitor <TOPIC> <instrument>`
+   - `command`: `node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs rehearsal monitor <TOPIC> <instrument>`
    - `persistent`: `true`
    - `description`: `rehearsal monitor for <instrument>`
 
@@ -177,7 +177,7 @@ round. This phase runs **once**; its last step ENTERS THE LOOP (do NOT end the t
 ## The inline loop (Steps 1-8 — repeat until Step 2 or Step 4 stops)
 
 You are the Maestro mid-session. Unlike the bash predecessor (which ended the turn at Step 8 and waited
-for a hook to re-enter), consort runs this loop **inline** — the same idiom `score`/`perform` use for
+for a hook to re-enter), ap runs this loop **inline** — the same idiom `score`/`perform` use for
 their wait barriers, but **UNBOUNDED**. **Step 8 is the LOOP TAIL → go to Step 1; it is NOT a turn end.**
 The loop BLOCKS in-process for the next part-completion notification (the persistent Monitor tasks surface
 `done`/`error`/`question`/`heartbeat`/`stale`/`stuck`), then continues.
@@ -285,7 +285,7 @@ brief entirely when `RAN_SCORE=0` (only heartbeat/question/stale/stuck fired —
         the part's `code/`). Obtain the same data per `DATA_SPEC`, re-run the experiment end-to-end with a
         timeout, compute the metric per `METRIC_FORMULA`, and print `VERIFY_METRIC=<n>` as the last stdout
         line; tee stdout to `<exp-dir>/c1/inspect-stdout.log`. **Explore-only: write ONLY under
-        `<exp-dir>/c1/` -- never the user's repo, never `/consort:perform`.** Also cross-check the
+        `<exp-dir>/c1/` -- never the user's repo, never `/ap:perform`.** Also cross-check the
         `INTEGRITY` claims against the split you reconstructed (e.g. does the data actually keep
         train/test disjoint?).
      c. `$CS rehearsal inspect-check <TOPIC> <instrument> <exp> --stdout-file <exp-dir>/c1/inspect-stdout.log`
@@ -434,8 +434,8 @@ Then the sections, IN ORDER:
 - `## Branches preserved` — note that all dirs under each part's `parts/<instrument>/experiments/` are
   kept in the archive (each holds `code/`, `result.json`, `stdout.log`, `stderr.log`, `prompt.md`).
 - `## Suggested next` —
-  **Step 1** — `/consort:score <abs-art-dir>/score-handoff.md` (produce a deploy-schema design doc).
-  **Step 2** — `/consort:perform <abs path to score's design-doc>` (implement it).
+  **Step 1** — `/ap:score <abs-art-dir>/score-handoff.md` (produce a deploy-schema design doc).
+  **Step 2** — `/ap:perform <abs path to score's design-doc>` (implement it).
   (Skip Step 1 ONLY if the winner is drop-in trivial; the `score-handoff.md` lists carry-forward
   constraints and open questions `score` should answer first.)
 
@@ -513,6 +513,6 @@ attached; the Maestro regains control between every sub-step.
 
 ## Budget overrides
 
-`CONSORT_REHEARSAL_EXPERIMENT_TIMEOUT_OVERRIDE` (positive integer seconds) overrides the per-experiment
+`AP_REHEARSAL_EXPERIMENT_TIMEOUT_OVERRIDE` (positive integer seconds) overrides the per-experiment
 wall-clock cap that `experiment-send` embeds in the part's prompt. Precedence: the `--timeout` flag >
 this env var > the `contracts.yaml` `experiment` default (1800s).

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Port-parity dogfood — exercises the new CLI verbs added in the port-parity workstream
-# end-to-end against the REAL built bundle (`node dist/consort.cjs`) and a throwaway
-# CONSORT_HOME. Covers the surface that the per-command dogfoods (rehearsal/prelude) miss:
+# end-to-end against the REAL built bundle (`node dist/ap.cjs`) and a throwaway
+# AP_HOME. Covers the surface that the per-command dogfoods (rehearsal/prelude) miss:
 #
 #   score   offset-reset  — clean-retry cascade wipes findings/diff/state for one part/phase
 #   perform drop-part     — rewrites parts.txt, removing one row + reports new N
@@ -11,20 +11,20 @@
 # State is seeded by hand at the exact filenames the verbs operate on (mirroring the unit
 # tests) so the script is self-contained, git-less-cwd-safe, and needs no model panes/tmux.
 #
-# Self-contained + idempotent: own temp CONSORT_HOME + temp cwd, PASS/FAIL per assertion,
+# Self-contained + idempotent: own temp AP_HOME + temp cwd, PASS/FAIL per assertion,
 # final tally. Exit 0 iff every assertion passed.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO" || exit 1
 # Absolute bundle path: the verbs are run from a throwaway cwd (so repoHash(cwd) matches
-# the seeded state dir), where a relative "dist/consort.cjs" would not resolve.
-CS="node $REPO/dist/consort.cjs"
+# the seeded state dir), where a relative "dist/ap.cjs" would not resolve.
+CS="node $REPO/dist/ap.cjs"
 
-CONSORT_HOME="$(mktemp -d "${TMPDIR:-/tmp}/consort-portparity-home.XXXXXX")"
-WD="$(mktemp -d "${TMPDIR:-/tmp}/consort-portparity-cwd.XXXXXX")"
-export CONSORT_HOME
-trap 'rm -rf "$CONSORT_HOME" "$WD"' EXIT
+AP_HOME="$(mktemp -d "${TMPDIR:-/tmp}/ap-portparity-home.XXXXXX")"
+WD="$(mktemp -d "${TMPDIR:-/tmp}/ap-portparity-cwd.XXXXXX")"
+export AP_HOME
+trap 'rm -rf "$AP_HOME" "$WD"' EXIT
 
 PASS=0
 FAIL=0
@@ -40,7 +40,7 @@ wd_rc()  { local rc=0; ( cd "$WD" || exit 99; "$@" >/dev/null 2>&1 ) || rc=$?; e
 
 # state subdir for our temp cwd: <HOME>/state/<sha256(realpath(cwd))>
 REPO_HASH="$(cd "$WD" && node -e 'const{createHash}=require("crypto");const{realpathSync}=require("fs");process.stdout.write(createHash("sha256").update(realpathSync(process.cwd()),"utf8").digest("hex"))')"
-STATE="$CONSORT_HOME/state/$REPO_HASH"
+STATE="$AP_HOME/state/$REPO_HASH"
 
 ############################################################################
 # Scenario A — score offset-reset (research clean-retry cascade)

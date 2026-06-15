@@ -1,15 +1,15 @@
 // src/core/perform.ts
-// CORE paths / parse / target-resolution + provider-detection for /consort:perform.
+// CORE paths / parse / target-resolution + provider-detection for /ap:perform.
 // Byte-faithful port of the prior bash plugin's deploy core helpers (cosmetic rebrand: _deploy/ ->
-// _perform/, worker-noun -> "part", deploy env prefix -> CONSORT_PERFORM_*). Logic preserved verbatim.
+// _perform/, worker-noun -> "part", deploy env prefix -> AP_PERFORM_*). Logic preserved verbatim.
 import { join, basename } from "node:path";
 import { readFileSync, existsSync } from "node:fs";
 import { topicDir } from "./paths.js";
 import { kvParse } from "../args.js";
 
-/** `_perform` art dir for a topic. Honors CONSORT_PERFORM_ART_DIR_OVERRIDE; else <topicDir>/_perform. */
+/** `_perform` art dir for a topic. Honors AP_PERFORM_ART_DIR_OVERRIDE; else <topicDir>/_perform. */
 export function performArtDir(topic: string, opts?: { home?: string; cwd?: string }): string {
-  const override = process.env.CONSORT_PERFORM_ART_DIR_OVERRIDE;
+  const override = process.env.AP_PERFORM_ART_DIR_OVERRIDE;
   if (override) return override;
   return join(topicDir(topic, opts), "_perform");
 }

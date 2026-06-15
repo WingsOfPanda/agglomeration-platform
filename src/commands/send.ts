@@ -12,10 +12,10 @@ export async function run(args: string[]): Promise<number> {
   let msg = a.slice(2).join(" ");
 
   const model = resolveModel(instrument, topic);
-  if (!model) { log.error(`no part '${instrument}' on topic '${topic}' (state dir absent)`); log.error(`  spawn first: consort spawn ${instrument} <model> ${topic}`); return 1; }
+  if (!model) { log.error(`no part '${instrument}' on topic '${topic}' (state dir absent)`); log.error(`  spawn first: ap spawn ${instrument} <model> ${topic}`); return 1; }
   const pane = paneMetaRead(instrument, model, topic);
   if (!pane) { log.error(`pane.json missing for ${instrument}-${model} on ${topic}`); return 1; }
-  if (!(await paneAlive(pane))) { log.error(`${instrument}'s pane ${pane} is gone (orphan); run consort coda ${instrument} ${topic}`); return 1; }
+  if (!(await paneAlive(pane))) { log.error(`${instrument}'s pane ${pane} is gone (orphan); run ap coda ${instrument} ${topic}`); return 1; }
 
   if (msg.startsWith("@")) {
     const f = msg.slice(1);
@@ -26,6 +26,6 @@ export async function run(args: string[]): Promise<number> {
   const inbox = inboxPath(instrument, model, topic);
   log.info(`wrote inbox at ${inbox}; nudging pane ${pane}`);
   await paneSend(pane, `Read ${inbox} and execute the task. Reply when done.`);
-  process.stdout.write(`\n  part:    ${instrument}-${model} on ${topic}\n  pane:    ${pane}\n  inbox:   ${inbox}\n  status:  queued — use: consort collect ${instrument} ${topic}  (to wait for {done})\n`);
+  process.stdout.write(`\n  part:    ${instrument}-${model} on ${topic}\n  pane:    ${pane}\n  inbox:   ${inbox}\n  status:  queued — use: ap collect ${instrument} ${topic}  (to wait for {done})\n`);
   return 0;
 }

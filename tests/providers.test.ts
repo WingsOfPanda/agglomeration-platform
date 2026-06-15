@@ -51,12 +51,12 @@ describe("planRoster", () => {
 describe("formatActiveFile", () => {
   it("header + one provider per line + trailing newline", () => {
     expect(formatActiveFile(["codex", "claude"], "2026-05-29T00:00:00Z")).toBe(
-      "# generated 2026-05-29T00:00:00Z by /consort:soundcheck\n# active providers selected by user\ncodex\nclaude\n",
+      "# generated 2026-05-29T00:00:00Z by /ap:soundcheck\n# active providers selected by user\ncodex\nclaude\n",
     );
   });
   it("empty set → headers only, no trailing provider newline", () => {
     expect(formatActiveFile([], "2026-05-29T00:00:00Z")).toBe(
-      "# generated 2026-05-29T00:00:00Z by /consort:soundcheck\n# active providers selected by user\n",
+      "# generated 2026-05-29T00:00:00Z by /ap:soundcheck\n# active providers selected by user\n",
     );
   });
 });
@@ -64,7 +64,7 @@ describe("formatActiveFile", () => {
 describe("formatProviderFile", () => {
   it("renders a custom subtitle (the available-file form)", () => {
     expect(formatProviderFile(["codex", "claude"], "2026-05-29T00:00:00Z", "providers detected with binary on PATH + contracts.yaml row")).toBe(
-      "# generated 2026-05-29T00:00:00Z by /consort:soundcheck\n# providers detected with binary on PATH + contracts.yaml row\ncodex\nclaude\n",
+      "# generated 2026-05-29T00:00:00Z by /ap:soundcheck\n# providers detected with binary on PATH + contracts.yaml row\ncodex\nclaude\n",
     );
   });
 });

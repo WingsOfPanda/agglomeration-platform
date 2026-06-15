@@ -1,4 +1,4 @@
-// src/core/duetTurn.ts — round-1 brief + round-N follow-up builders for /consort:duet.
+// src/core/duetTurn.ts — round-1 brief + round-N follow-up builders for /ap:duet.
 // Like turn.ts's composers, these bodies do NOT carry a done-event line or END_OF_INSTRUCTION;
 // inboxWrite appends exactly one of each (the prelude duplicate-END_OF_INSTRUCTION lesson, 0.1.25).
 import { BRANCH_DISCIPLINE, BLOCKERS } from "./turn.js";
