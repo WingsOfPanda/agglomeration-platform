@@ -50,7 +50,7 @@ echo "Scenario A — score offset-reset wipes one worker's research artifacts"
 echo "===================================================================="
 
 TOPIC_S=svc
-INST_S=violin
+INST_S=bravo
 ART_S="$STATE/$TOPIC_S/_score"
 PART_S="$STATE/$TOPIC_S/$INST_S-codex"   # <inst>-<model> worker dir
 mkdir -p "$ART_S" "$PART_S"
@@ -67,8 +67,8 @@ printf 'sim only\n'        > "$ART_S/codex_only_items.txt"
 printf 'done\n'            > "$ART_S/research-$INST_S.txt"
 # An UNRELATED file that must survive (different worker's findings + the metric doc).
 printf 'keep me\n'         > "$ART_S/scoreboard.md"
-mkdir -p "$STATE/$TOPIC_S/viola-codex"
-printf 'viola findings\n' > "$STATE/$TOPIC_S/viola-codex/findings.md"
+mkdir -p "$STATE/$TOPIC_S/alpha-codex"
+printf 'alpha findings\n' > "$STATE/$TOPIC_S/alpha-codex/findings.md"
 
 or_rc="$(wd_rc $CS score offset-reset "$TOPIC_S" "$INST_S" research)"
 assert "A1 score offset-reset research rc 0" "$or_rc"
@@ -81,7 +81,7 @@ assert "A4 glob targets (consensus.txt + *_only_items.txt) removed" \
 assert "A5 state research-$INST_S.txt removed" \
   "$([ ! -f "$ART_S/research-$INST_S.txt" ] && echo 0 || echo 1)"
 assert "A6 unrelated scoreboard.md + sibling worker findings survive" \
-  "$([ -f "$ART_S/scoreboard.md" ] && [ -f "$STATE/$TOPIC_S/viola-codex/findings.md" ] && echo 0 || echo 1)"
+  "$([ -f "$ART_S/scoreboard.md" ] && [ -f "$STATE/$TOPIC_S/alpha-codex/findings.md" ] && echo 0 || echo 1)"
 
 # --keep-findings leaves the worker deliverable intact (seed a fresh one first).
 printf 'fresh findings\n' > "$PART_S/findings.md"
@@ -101,14 +101,14 @@ ART_P="$STATE/$TOPIC_P/_perform"
 mkdir -p "$ART_P"
 # workers.txt = 3-col TSV (slug \t cwd \t provider) per the multiInit format. drop-worker
 # matches on col 0 (the agent slug) and must keep the other rows byte-faithfully.
-printf 'violin\t/repo/a\tcodex\nviola\t/repo/b\tcodex\ncello\t/repo/c\tclaude\n' > "$ART_P/workers.txt"
+printf 'bravo\t/repo/a\tcodex\nalpha\t/repo/b\tcodex\ncharlie\t/repo/c\tclaude\n' > "$ART_P/workers.txt"
 
-DP_OUT="$(wd_out $CS perform drop-worker "$TOPIC_P" viola)"; dp_rc=$?
+DP_OUT="$(wd_out $CS perform drop-worker "$TOPIC_P" alpha)"; dp_rc=$?
 assert "B1 perform drop-worker rc 0" "$dp_rc"
 assert "B2 drop-worker prints N=2" \
   "$(printf '%s' "$DP_OUT" | grep -q '^N=2$' && echo 0 || echo 1)"
-assert "B3 viola row gone; violin + cello remain" \
-  "$(! grep -q '^viola' "$ART_P/workers.txt" && grep -q '^violin' "$ART_P/workers.txt" && grep -q '^cello' "$ART_P/workers.txt" && echo 0 || echo 1)"
+assert "B3 alpha row gone; bravo + charlie remain" \
+  "$(! grep -q '^alpha' "$ART_P/workers.txt" && grep -q '^bravo' "$ART_P/workers.txt" && grep -q '^charlie' "$ART_P/workers.txt" && echo 0 || echo 1)"
 assert "B4 workers.txt now has exactly 2 rows" \
   "$([ "$(wc -l < "$ART_P/workers.txt")" -eq 2 ] && echo 0 || echo 1)"
 # dropping a non-existent agent -> rc 1 (not 2; usage is well-formed).

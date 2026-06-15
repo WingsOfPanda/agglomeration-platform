@@ -12,25 +12,25 @@ describe("archive", () => {
   it("stateInit creates clean worker dir + session id", () => {
     home();
     process.env.CLAUDE_CODE_SESSION_ID = "sess-123";
-    const dir = workerDir("violin", "codex", "demo");
+    const dir = workerDir("bravo", "codex", "demo");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "outbox.jsonl"), "STALE\n");
-    A.stateInit("violin", "codex", "demo");
+    A.stateInit("bravo", "codex", "demo");
     expect(readFileSync(join(dir, "outbox.jsonl"), "utf8")).toBe(""); // touched fresh
     expect(readFileSync(join(dir, ".session_id"), "utf8")).toBe("sess-123\n");
   });
   it("stateArchive moves dir, returns dest, collision suffixes", () => {
     home();
-    const dir = workerDir("violin", "codex", "demo");
+    const dir = workerDir("bravo", "codex", "demo");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "f"), "x");
-    const d1 = A.stateArchive("violin", "codex", "demo", "FAILED", { now: new Date("2026-05-29T14:30:22Z") });
+    const d1 = A.stateArchive("bravo", "codex", "demo", "FAILED", { now: new Date("2026-05-29T14:30:22Z") });
     expect(d1).toContain("/archive/");
-    expect(d1).toContain("violin-codex-20260529T143022Z-FAILED");
+    expect(d1).toContain("bravo-codex-20260529T143022Z-FAILED");
     expect(existsSync(dir)).toBe(false);
     // second archive same second → -2
     mkdirSync(dir, { recursive: true });
-    const d2 = A.stateArchive("violin", "codex", "demo", "FAILED", { now: new Date("2026-05-29T14:30:22Z") });
+    const d2 = A.stateArchive("bravo", "codex", "demo", "FAILED", { now: new Date("2026-05-29T14:30:22Z") });
     expect(d2).not.toBe(d1);
     expect(d2!.endsWith("-2")).toBe(true);
   });
@@ -41,7 +41,7 @@ describe("archive", () => {
   it("finalizeArchived sets archived + archived_ts, preserves fields, idempotent", () => {
     home();
     const td = topicDir("demo");
-    const p = join(td, "violin-codex");
+    const p = join(td, "bravo-codex");
     mkdirSync(p, { recursive: true });
     writeFileSync(join(p, "status.json"), `{"state":"working","updated":"2026-05-25T14:55:44Z","last_event":"heartbeat"}`);
     A.finalizeArchived(td, { now: new Date("2026-05-29T14:30:22Z") });

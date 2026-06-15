@@ -10,7 +10,7 @@ function initDeps(over: Partial<PreludeInitDeps> = {}): PreludeInitDeps {
   return {
     activeProviders: () => ["codex", "claude"],
     isValidated: () => true,
-    pickAgents: (_t, n) => ["viola", "cello", "oboe"].slice(0, n),
+    pickAgents: (_t, n) => ["alpha", "charlie", "golf"].slice(0, n),
     ...over,
   };
 }
@@ -24,7 +24,7 @@ describe("prelude init", () => {
       const art = preludeArtDir("attention-kernels");
       expect(existsSync(join(art, "topic.txt"))).toBe(true);
       expect(readFileSync(join(art, "topic.txt"), "utf8")).toBe("attention kernels");
-      expect(readFileSync(join(art, "roster.txt"), "utf8")).toContain("codex\tviola");
+      expect(readFileSync(join(art, "roster.txt"), "utf8")).toContain("codex\talpha");
     } finally { cleanup(); }
   });
   it("rc1 when fewer than 2 validated providers", async () => {
@@ -77,13 +77,13 @@ describe("prelude spawn-all", () => {
       await initWith(["x"], initDeps());
       const art = preludeArtDir("x");
       const deps: PreludeSpawnAllDeps = {
-        preflight: async () => { writeFileSync(join(art, "preflight-panes.txt"), "viola\t%1\ncello\t%2\n"); return 0; },
+        preflight: async () => { writeFileSync(join(art, "preflight-panes.txt"), "alpha\t%1\ncharlie\t%2\n"); return 0; },
         spawn: async () => 0,
         repoRoot: () => "/repo",
       };
       const rc = await spawnAllWith("x", deps);
       expect(rc).toBe(0);
-      expect(readFileSync(join(art, "spawn-results.tsv"), "utf8")).toContain("viola\tcodex\t0");
+      expect(readFileSync(join(art, "spawn-results.tsv"), "utf8")).toContain("alpha\tcodex\t0");
     } finally { cleanup(); }
   });
 });
@@ -97,12 +97,12 @@ describe("prelude research-send/wait", () => {
       const art = preludeArtDir("x");
       let sent: string[] = [];
       const deps: ResearchSendDeps = { offsetFor: () => 7, send: async (a) => { sent = a; return 0; } };
-      const rc = await researchSendWith("x", "viola", "codex", deps);
+      const rc = await researchSendWith("x", "alpha", "codex", deps);
       expect(rc).toBe(0);
-      expect(readFileSync(join(art, "research-viola.txt"), "utf8")).toContain("OFFSET=7");
-      const prompt = readFileSync(join(art, "viola_research_prompt.md"), "utf8");
-      expect(prompt).toContain(join(art, "findings-viola.md"));
-      expect(sent).toEqual(["--from", "hub", "viola", "x", `@${join(art, "viola_research_prompt.md")}`]);
+      expect(readFileSync(join(art, "research-alpha.txt"), "utf8")).toContain("OFFSET=7");
+      const prompt = readFileSync(join(art, "alpha_research_prompt.md"), "utf8");
+      expect(prompt).toContain(join(art, "findings-alpha.md"));
+      expect(sent).toEqual(["--from", "hub", "alpha", "x", `@${join(art, "alpha_research_prompt.md")}`]);
     } finally { cleanup(); }
   });
   it("wait classifies a done event with findings as FS=ok and writes the .done sentinel", async () => {
@@ -110,20 +110,20 @@ describe("prelude research-send/wait", () => {
     try {
       await initWith(["x"], initDeps());
       const art = preludeArtDir("x");
-      writeFileSync(join(art, "research-viola.txt"), "OFFSET=0\n");
-      writeFileSync(join(art, "findings-viola.md"), "## Claims\n1. [src/a.ts:1] x\n");
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\n");
+      writeFileSync(join(art, "findings-alpha.md"), "## Claims\n1. [src/a.ts:1] x\n");
       const deps: ResearchWaitDeps = { wait: async () => ({ event: "done" } as any), multiplier: () => "1" };
-      const rc = await researchWaitWith("x", "viola", "codex", deps);
+      const rc = await researchWaitWith("x", "alpha", "codex", deps);
       expect(rc).toBe(0);
-      expect(existsSync(join(art, "research-viola.done"))).toBe(true);
-      expect(readFileSync(join(art, "research-viola.txt"), "utf8")).toContain("FS=ok");
+      expect(existsSync(join(art, "research-alpha.done"))).toBe(true);
+      expect(readFileSync(join(art, "research-alpha.txt"), "utf8")).toContain("FS=ok");
     } finally { cleanup(); }
   });
 });
 
 async function seedFindings(art: string, draft: string): Promise<void> {
-  writeFileSync(join(art, "findings-viola.md"), "FlashAttention is fast. https://x.test/p . uncertain about batch.");
-  writeFileSync(join(art, "findings-cello.md"), "FlashAttention wins. https://x.test/p .");
+  writeFileSync(join(art, "findings-alpha.md"), "FlashAttention is fast. https://x.test/p . uncertain about batch.");
+  writeFileSync(join(art, "findings-charlie.md"), "FlashAttention wins. https://x.test/p .");
   writeFileSync(join(art, "landscape-draft.md"), draft);
 }
 const DRAFT = [
@@ -137,7 +137,7 @@ describe("prelude synth-preliminary", () => {
     try {
       await initWith(["x"], initDeps());
       const art = preludeArtDir("x");
-      writeFileSync(join(art, "findings-viola.md"), "a"); writeFileSync(join(art, "findings-cello.md"), "b");
+      writeFileSync(join(art, "findings-alpha.md"), "a"); writeFileSync(join(art, "findings-charlie.md"), "b");
       const rc = await synthPreliminaryRun(["x"]);
       expect(rc).toBe(0);
     } finally { cleanup(); }
@@ -146,7 +146,7 @@ describe("prelude synth-preliminary", () => {
     const { cleanup } = freshHome();
     try {
       await initWith(["x"], initDeps());
-      writeFileSync(join(preludeArtDir("x"), "findings-viola.md"), "a"); // cello missing
+      writeFileSync(join(preludeArtDir("x"), "findings-alpha.md"), "a"); // charlie missing
       expect(await synthPreliminaryRun(["x"])).toBe(1);
     } finally { cleanup(); }
   });
@@ -180,7 +180,7 @@ describe("prelude confidence", () => {
     try {
       await initWith(["x"], initDeps());
       const art = preludeArtDir("x");
-      // header-less matrix with a /-anchored Reason cell so the strict S4 holds; viola finding has
+      // header-less matrix with a /-anchored Reason cell so the strict S4 holds; alpha finding has
       // "uncertain" (S5); both findings cite https://x.test/p (S1/S2); no CONTESTED (S3) -> all hold.
       const allHold = [
         "## Approaches", "1. FlashAttention — fused", "## Tradeoff matrix",
@@ -202,10 +202,10 @@ describe("prelude adversary-send/wait", () => {
       const art = preludeArtDir("x");
       writeFileSync(join(art, "landscape-draft.md"), "## Approaches\n1. A");
       let sent: string[] = [];
-      const rc = await adversarySendWith("x", "viola", "codex", { offsetFor: () => 3, send: async (a) => { sent = a; return 0; } });
+      const rc = await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 3, send: async (a) => { sent = a; return 0; } });
       expect(rc).toBe(0);
-      expect(readFileSync(join(art, "viola_adversary_prompt.md"), "utf8")).toContain(join(art, "adversary-viola.md"));
-      expect(readFileSync(join(art, "adversary-viola.txt"), "utf8")).toContain("OFFSET=3");
+      expect(readFileSync(join(art, "alpha_adversary_prompt.md"), "utf8")).toContain(join(art, "adversary-alpha.md"));
+      expect(readFileSync(join(art, "adversary-alpha.txt"), "utf8")).toContain("OFFSET=3");
       expect(sent[0]).toBe("--from");
     } finally { cleanup(); }
   });
@@ -213,7 +213,7 @@ describe("prelude adversary-send/wait", () => {
     const { cleanup } = freshHome();
     try {
       await initWith(["x"], initDeps());
-      expect(await adversarySendWith("x", "viola", "codex", { offsetFor: () => 0, send: async () => 0 })).toBe(1);
+      expect(await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => 0 })).toBe(1);
     } finally { cleanup(); }
   });
   it("wait marks AS=ok on a done event with a non-empty critique", async () => {
@@ -221,12 +221,12 @@ describe("prelude adversary-send/wait", () => {
     try {
       await initWith(["x"], initDeps());
       const art = preludeArtDir("x");
-      writeFileSync(join(art, "adversary-viola.txt"), "OFFSET=0\n");
-      writeFileSync(join(art, "adversary-viola.md"), "## Verdict\naccept");
-      const rc = await adversaryWaitWith("x", "viola", "codex", { wait: async () => ({ event: "done" } as any), multiplier: () => "1" });
+      writeFileSync(join(art, "adversary-alpha.txt"), "OFFSET=0\n");
+      writeFileSync(join(art, "adversary-alpha.md"), "## Verdict\naccept");
+      const rc = await adversaryWaitWith("x", "alpha", "codex", { wait: async () => ({ event: "done" } as any), multiplier: () => "1" });
       expect(rc).toBe(0);
-      expect(existsSync(join(art, "adversary-viola.done"))).toBe(true);
-      expect(readFileSync(join(art, "adversary-viola.txt"), "utf8")).toContain("AS=ok");
+      expect(existsSync(join(art, "adversary-alpha.done"))).toBe(true);
+      expect(readFileSync(join(art, "adversary-alpha.txt"), "utf8")).toContain("AS=ok");
     } finally { cleanup(); }
   });
   it("wait marks AS=missing on a done event with an EMPTY critique (locks verifyState, not researchState)", async () => {
@@ -234,11 +234,11 @@ describe("prelude adversary-send/wait", () => {
     try {
       await initWith(["x"], initDeps());
       const art = preludeArtDir("x");
-      writeFileSync(join(art, "adversary-viola.txt"), "OFFSET=0\n");
-      writeFileSync(join(art, "adversary-viola.md"), ""); // empty critique → missing (researchState would say "empty")
-      const rc = await adversaryWaitWith("x", "viola", "codex", { wait: async () => ({ event: "done" } as any), multiplier: () => "1" });
+      writeFileSync(join(art, "adversary-alpha.txt"), "OFFSET=0\n");
+      writeFileSync(join(art, "adversary-alpha.md"), ""); // empty critique → missing (researchState would say "empty")
+      const rc = await adversaryWaitWith("x", "alpha", "codex", { wait: async () => ({ event: "done" } as any), multiplier: () => "1" });
       expect(rc).toBe(0);
-      expect(readFileSync(join(art, "adversary-viola.txt"), "utf8")).toContain("AS=missing");
+      expect(readFileSync(join(art, "adversary-alpha.txt"), "utf8")).toContain("AS=missing");
     } finally { cleanup(); }
   });
 });
@@ -251,7 +251,7 @@ describe("prelude synth-final", () => {
       const art = preludeArtDir("x");
       writeFileSync(join(art, "topic.txt"), "x"); writeFileSync(join(art, "landscape-draft.md"), "d");
       writeFileSync(join(art, "adversary-skip.txt"), "user_decision: continue\n");
-      writeFileSync(join(art, "adversary-viola.md"), "c"); writeFileSync(join(art, "adversary-cello.md"), "c");
+      writeFileSync(join(art, "adversary-alpha.md"), "c"); writeFileSync(join(art, "adversary-charlie.md"), "c");
       expect(await synthFinalRun(["x"])).toBe(0);
     } finally { cleanup(); }
   });
@@ -272,7 +272,7 @@ describe("prelude synth-final", () => {
       const art = preludeArtDir("x");
       writeFileSync(join(art, "landscape-draft.md"), "d");
       writeFileSync(join(art, "adversary-skip.txt"), "user_decision: continue\n");
-      writeFileSync(join(art, "adversary-viola.md"), "c"); // cello missing
+      writeFileSync(join(art, "adversary-alpha.md"), "c"); // charlie missing
       expect(await synthFinalRun(["x"])).toBe(1);
     } finally { cleanup(); }
   });
@@ -284,7 +284,7 @@ describe("prelude teardown", () => {
     try {
       await initWith(["x"], initDeps());
       const art = preludeArtDir("x");
-      writeFileSync(join(art, "preflight-panes.txt"), "viola\t%1\ncello\t%2\n");
+      writeFileSync(join(art, "preflight-panes.txt"), "alpha\t%1\ncharlie\t%2\n");
       let dest = "";
       const killed: string[] = [];
       const rc = await preludeTeardownWith(["x"], {
@@ -294,7 +294,7 @@ describe("prelude teardown", () => {
       });
       expect(rc).toBe(0);
       expect(dest).toContain("_prelude");
-      expect(killed).toEqual(["%1", "%2"]);   // pane id, not "viola\t%1"
+      expect(killed).toEqual(["%1", "%2"]);   // pane id, not "alpha\t%1"
     } finally { cleanup(); }
   });
 
@@ -303,8 +303,8 @@ describe("prelude teardown", () => {
     try {
       await initWith(["x"], initDeps());
       const art = preludeArtDir("x");
-      writeFileSync(join(art, "preflight-panes.txt"), "viola\t%1\ncello\t%2\n");
-      writeFileSync(join(art, "spawn-results.tsv"), "viola\tcodex\t0\n");
+      writeFileSync(join(art, "preflight-panes.txt"), "alpha\t%1\ncharlie\t%2\n");
+      writeFileSync(join(art, "spawn-results.tsv"), "alpha\tcodex\t0\n");
       const killed: string[] = [];
       let archived = false;
       const rc = await preludeTeardownWith(["x", "--panes-only"], {

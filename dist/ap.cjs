@@ -249,7 +249,7 @@ var init_paths = __esm({
 function entry(agent) {
   return PALETTE[agent.toLowerCase()] ?? FALLBACK;
 }
-function isOrchestral(agent) {
+function isClustered(agent) {
   return agent.toLowerCase() in PALETTE;
 }
 function clusterFor(agent) {
@@ -260,12 +260,12 @@ function colorFor(agent) {
 }
 function labelFor(agent, model, topic) {
   const sec = clusterFor(agent);
-  const head = isOrchestral(agent) ? `${sec}-${agent}` : sec;
+  const head = isClustered(agent) ? `${sec}-${agent}` : sec;
   return `${head}:${model}:${topic}`;
 }
 function labelFmt(agent, model, topic) {
   const e = entry(agent);
-  const head = isOrchestral(agent) ? `#[fg=${e.primary},bold]${e.cluster}-${agent}#[default]` : `#[fg=${e.primary},bold]${e.cluster}#[default]`;
+  const head = isClustered(agent) ? `#[fg=${e.primary},bold]${e.cluster}-${agent}#[default]` : `#[fg=${e.primary},bold]${e.cluster}#[default]`;
   return `${head}:#[fg=${e.secondary},bold]${model}#[default]:${topic}`;
 }
 function ansiFromColor(color) {
@@ -290,46 +290,40 @@ var init_colors = __esm({
   "src/core/colors.ts"() {
     "use strict";
     PALETTE = {
-      // strings — cool dusty blues/slate
-      violin: { cluster: "strings", primary: "colour110", secondary: "colour187" },
-      viola: { cluster: "strings", primary: "colour109", secondary: "colour187" },
-      cello: { cluster: "strings", primary: "colour67", secondary: "colour187" },
-      contrabass: { cluster: "strings", primary: "colour60", secondary: "colour250" },
-      harp: { cluster: "strings", primary: "colour103", secondary: "colour187" },
-      // woodwinds — sage/olive earth tones
-      flute: { cluster: "woodwinds", primary: "colour108", secondary: "colour144" },
-      piccolo: { cluster: "woodwinds", primary: "colour144", secondary: "colour247" },
-      oboe: { cluster: "woodwinds", primary: "colour100", secondary: "colour137" },
-      clarinet: { cluster: "woodwinds", primary: "colour101", secondary: "colour241" },
-      bassoon: { cluster: "woodwinds", primary: "colour95", secondary: "colour241" },
-      recorder: { cluster: "woodwinds", primary: "colour152", secondary: "colour187" },
-      // brass — terracotta/warm
-      horn: { cluster: "brass", primary: "colour137", secondary: "colour187" },
-      trumpet: { cluster: "brass", primary: "colour173", secondary: "colour144" },
-      trombone: { cluster: "brass", primary: "colour180", secondary: "colour247" },
-      tuba: { cluster: "brass", primary: "colour131", secondary: "colour110" },
-      cornet: { cluster: "brass", primary: "colour223", secondary: "colour174" },
-      // percussion — neutral greys
-      timpani: { cluster: "percussion", primary: "colour102", secondary: "colour247" },
-      celesta: { cluster: "percussion", primary: "colour245", secondary: "colour187" },
-      vibraphone: { cluster: "percussion", primary: "colour243", secondary: "colour250" },
-      marimba: { cluster: "percussion", primary: "colour96", secondary: "colour250" },
-      xylophone: { cluster: "percussion", primary: "colour250", secondary: "colour241" },
-      glockenspiel: { cluster: "percussion", primary: "colour247", secondary: "colour250" },
-      // keys — cream/beige
-      piano: { cluster: "keys", primary: "colour187", secondary: "colour250" },
-      organ: { cluster: "keys", primary: "colour181", secondary: "colour250" },
-      harpsichord: { cluster: "keys", primary: "colour146", secondary: "colour250" },
-      // early — mauve/plum
-      lute: { cluster: "early", primary: "colour139", secondary: "colour241" },
-      theorbo: { cluster: "early", primary: "colour97", secondary: "colour187" },
-      viol: { cluster: "early", primary: "colour132", secondary: "colour137" },
-      sackbut: { cluster: "early", primary: "colour138", secondary: "colour241" },
-      shawm: { cluster: "early", primary: "colour174", secondary: "colour250" },
-      crumhorn: { cluster: "early", primary: "colour182", secondary: "colour250" },
-      cittern: { cluster: "early", primary: "colour218", secondary: "colour250" }
+      // azure — cool dusty blues/slate
+      alpha: { cluster: "azure", primary: "colour109", secondary: "colour187" },
+      bravo: { cluster: "azure", primary: "colour110", secondary: "colour187" },
+      charlie: { cluster: "azure", primary: "colour67", secondary: "colour187" },
+      delta: { cluster: "azure", primary: "colour103", secondary: "colour187" },
+      echo: { cluster: "azure", primary: "colour60", secondary: "colour250" },
+      // sage — sage/olive earth tones
+      foxtrot: { cluster: "sage", primary: "colour108", secondary: "colour144" },
+      golf: { cluster: "sage", primary: "colour100", secondary: "colour137" },
+      hotel: { cluster: "sage", primary: "colour95", secondary: "colour241" },
+      india: { cluster: "sage", primary: "colour101", secondary: "colour241" },
+      juliet: { cluster: "sage", primary: "colour144", secondary: "colour247" },
+      kilo: { cluster: "sage", primary: "colour152", secondary: "colour187" },
+      // amber — terracotta/warm
+      lima: { cluster: "amber", primary: "colour173", secondary: "colour144" },
+      mike: { cluster: "amber", primary: "colour137", secondary: "colour187" },
+      november: { cluster: "amber", primary: "colour180", secondary: "colour247" },
+      oscar: { cluster: "amber", primary: "colour131", secondary: "colour110" },
+      papa: { cluster: "amber", primary: "colour223", secondary: "colour174" },
+      // slate — neutral greys
+      quebec: { cluster: "slate", primary: "colour102", secondary: "colour247" },
+      romeo: { cluster: "slate", primary: "colour245", secondary: "colour187" },
+      sierra: { cluster: "slate", primary: "colour243", secondary: "colour250" },
+      tango: { cluster: "slate", primary: "colour96", secondary: "colour250" },
+      uniform: { cluster: "slate", primary: "colour250", secondary: "colour241" },
+      // ivory — cream/beige
+      victor: { cluster: "ivory", primary: "colour187", secondary: "colour250" },
+      whiskey: { cluster: "ivory", primary: "colour181", secondary: "colour250" },
+      xray: { cluster: "ivory", primary: "colour146", secondary: "colour250" },
+      // violet — mauve/plum
+      yankee: { cluster: "violet", primary: "colour139", secondary: "colour241" },
+      zulu: { cluster: "violet", primary: "colour132", secondary: "colour137" }
     };
-    FALLBACK = { cluster: "tutti", primary: "white", secondary: "default" };
+    FALLBACK = { cluster: "neutral", primary: "white", secondary: "default" };
     RULE = "\u2501".repeat(43);
   }
 });
@@ -20440,17 +20434,17 @@ async function turnSendWith2(topic, round, d) {
   const model = workerModel(art);
   const targetCwd = readIfExists((0, import_node_path26.join)(art, "target_cwd.txt")).trim();
   const testCmd = targetCwd ? detectTestCommand(targetCwd) : "";
-  const stateFile = (0, import_node_path26.join)(art, `turn-${PART}-${round}.txt`);
+  const stateFile = (0, import_node_path26.join)(art, `turn-${WORKER}-${round}.txt`);
   if ((0, import_node_fs30.existsSync)(stateFile)) {
     log.error(`perform turn-send: ${stateFile} already exists; rm to retry`);
     return 1;
   }
-  const outbox = outboxPath(PART, model, topic);
+  const outbox = outboxPath(WORKER, model, topic);
   if (!(0, import_node_fs30.existsSync)(outbox)) {
-    log.error(`perform turn-send: outbox not found at ${outbox} \u2014 was ${PART} spawned?`);
+    log.error(`perform turn-send: outbox not found at ${outbox} \u2014 was ${WORKER} spawned?`);
     return 1;
   }
-  const sp = statusPath(PART, model, topic);
+  const sp = statusPath(WORKER, model, topic);
   if ((0, import_node_fs30.existsSync)(sp)) {
     const m = (0, import_node_fs30.readFileSync)(sp, "utf8").match(/"state":"([^"]*)"/);
     if (m && m[1] && m[1] !== "idle") {
@@ -20458,7 +20452,7 @@ async function turnSendWith2(topic, round, d) {
       return 1;
     }
   }
-  const promptFile = (0, import_node_path26.join)(art, `${PART}_turn_prompt_${round}.md`);
+  const promptFile = (0, import_node_path26.join)(art, `${WORKER}_turn_prompt_${round}.md`);
   if (round === 1) atomicWrite(promptFile, composeRound1Prompt2({ designPath: (0, import_node_path26.join)(art, "design.md"), planPath: (0, import_node_path26.join)(art, "plan.md"), verifyPath: (0, import_node_path26.join)(art, "verify-report-1.md"), round, testCmd }));
   else {
     const bundle = (0, import_node_path26.join)(art, `fix-prompt-${round}.md`);
@@ -20468,15 +20462,15 @@ async function turnSendWith2(topic, round, d) {
     }
     atomicWrite(promptFile, composeFixPrompt2(round, (0, import_node_fs30.readFileSync)(bundle, "utf8"), (0, import_node_path26.join)(art, `verify-report-${round}.md`), testCmd));
   }
-  const offset = d.offsetFor(PART, model, topic);
+  const offset = d.offsetFor(WORKER, model, topic);
   atomicWrite(stateFile, `OFFSET=${offset}
 `);
-  const rc = await d.send(["--from", "hub", PART, topic, `@${promptFile}`]);
+  const rc = await d.send(["--from", "hub", WORKER, topic, `@${promptFile}`]);
   if (rc !== 0) {
     log.error(`perform turn-send: send failed (rc=${rc}); ${stateFile} kept (rm to retry)`);
     return 1;
   }
-  log.info(`[turn-send] ${PART} round=${round} offset=${offset}`);
+  log.info(`[turn-send] ${WORKER} round=${round} offset=${offset}`);
   return 0;
 }
 async function turnWaitRun2(rest) {
@@ -20494,7 +20488,7 @@ async function turnWaitRun2(rest) {
 async function turnWaitWith2(topic, round, d) {
   const art = performArtDir(topic);
   const model = workerModel(art);
-  const stateFile = (0, import_node_path26.join)(art, `turn-${PART}-${round}.txt`);
+  const stateFile = (0, import_node_path26.join)(art, `turn-${WORKER}-${round}.txt`);
   if (!(0, import_node_fs30.existsSync)(stateFile)) {
     log.error(`perform turn-wait: ${stateFile} missing \u2014 run perform turn-send first`);
     return 1;
@@ -20505,16 +20499,16 @@ async function turnWaitWith2(topic, round, d) {
     return 1;
   }
   const timeout = scaledTimeout(PERFORM_TURN_TIMEOUT(), d.multiplier(model));
-  log.info(`[turn-wait] ${PART} round=${round} offset=${offset} timeout=${timeout}s`);
-  const ev = await d.wait(PART, model, topic, offset, ["done", "error", "question"], timeout);
+  log.info(`[turn-wait] ${WORKER} round=${round} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(WORKER, model, topic, offset, ["done", "error", "question"], timeout);
   const verifyPath = (0, import_node_path26.join)(art, `verify-report-${round}.md`);
   const verifyText = readIfExistsOrNull(verifyPath);
   let ts = performState(ev, verifyText);
   if (ts === "question" && ev) {
     const payload = extractQuestionPayload(ev, d.now());
     if (payload !== null) {
-      atomicWrite((0, import_node_path26.join)(art, `question-${PART}-${round}.txt`), payload);
-      const bumped = outboxOffset(outboxPath(PART, model, topic));
+      atomicWrite((0, import_node_path26.join)(art, `question-${WORKER}-${round}.txt`), payload);
+      const bumped = outboxOffset(outboxPath(WORKER, model, topic));
       const objLine = parseQuestionPayload(payload).route === "objection" ? `OBJECTIONS=${latestObjections(stateFile) + 1}
 ` : "";
       (0, import_node_fs30.appendFileSync)(stateFile, `OFFSET=${bumped}
@@ -20527,8 +20521,8 @@ ${objLine}`);
     }
   } else (0, import_node_fs30.appendFileSync)(stateFile, `TS=${ts}
 `);
-  (0, import_node_fs30.writeFileSync)((0, import_node_path26.join)(art, `turn-${PART}-${round}.done`), "");
-  log.ok(`[turn-wait] ${PART} round=${round} TS=${ts}`);
+  (0, import_node_fs30.writeFileSync)((0, import_node_path26.join)(art, `turn-${WORKER}-${round}.done`), "");
+  log.ok(`[turn-wait] ${WORKER} round=${round} TS=${ts}`);
   return 0;
 }
 async function resetStatusRun(rest) {
@@ -20826,7 +20820,7 @@ async function archiveRun2(rest) {
   log.ok(`perform archive: archived _perform for ${topic}`);
   return 0;
 }
-var import_node_fs30, import_node_path26, PART, PERFORM_TURN_TIMEOUT, liveInitDeps3, liveSendDeps, liveWaitDeps, liveScopeDeps, liveSummaryDeps, liveFinishDeps;
+var import_node_fs30, import_node_path26, WORKER, PERFORM_TURN_TIMEOUT, liveInitDeps3, liveSendDeps, liveWaitDeps, liveScopeDeps, liveSummaryDeps, liveFinishDeps;
 var init_perform2 = __esm({
   "src/commands/perform.ts"() {
     "use strict";
@@ -20851,7 +20845,7 @@ var init_perform2 = __esm({
     init_scoreTurn();
     init_send2();
     init_solo();
-    PART = "tutti";
+    WORKER = "lead";
     PERFORM_TURN_TIMEOUT = () => Number(process.env.AP_PERFORM_TURN_TIMEOUT_S) || 14400;
     liveInitDeps3 = { repoRoot };
     liveSendDeps = { offsetFor: (i2, m, t) => outboxOffset(outboxPath(i2, m, t)), send: run2 };

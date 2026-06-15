@@ -18,7 +18,7 @@ function captureStdout() {
 const okDeps: InitDeps = {
   haveCmd: () => true,
   agentBinary: () => "codex",
-  pickRandomAgent: () => "viola",
+  pickRandomAgent: () => "alpha",
   isGitRepo: () => true,
   headSha: () => "abc123",
 };
@@ -138,13 +138,13 @@ import { workerDir } from "../src/core/paths.js";
 function seedPart(slug: string, repo: string) {
   const art = duetArtDir(slug), exec = duetExecDir(slug);
   mkdirSync(exec, { recursive: true });
-  writeFileSync(join(art, "agent.txt"), "viola\n");
+  writeFileSync(join(art, "agent.txt"), "alpha\n");
   writeFileSync(join(art, "selected-provider.txt"), "codex\n");
   writeFileSync(join(art, "topic-text.txt"), "implement X");
   writeFileSync(join(exec, "target_cwd.txt"), repo + "\n");
   writeFileSync(join(exec, "branch.txt"), `feat/duet-${slug}\n`);
   // outbox must exist for the guard
-  const pd = workerDir("viola", "codex", slug); mkdirSync(pd, { recursive: true }); writeFileSync(join(pd, "outbox.jsonl"), "");
+  const pd = workerDir("alpha", "codex", slug); mkdirSync(pd, { recursive: true }); writeFileSync(join(pd, "outbox.jsonl"), "");
 }
 
 describe("duet round-send / round-wait", () => {
@@ -159,7 +159,7 @@ describe("duet round-send / round-wait", () => {
     const rc = await roundSendWith("t", 1, deps);
     expect(rc).toBe(0);
     expect(readFileSync(join(duetExecDir("t"), "round-1.txt"), "utf8")).toContain("OFFSET=0");
-    expect(sent?.[0]).toBe("viola");
+    expect(sent?.[0]).toBe("alpha");
     expect(sent?.[2]).toMatch(/^@.*round-prompt-1\.md$/);
     expect(readFileSync(join(duetExecDir("t"), "round-prompt-1.md"), "utf8")).toContain("implement X");
   });
@@ -182,7 +182,7 @@ describe("duet round-send / round-wait", () => {
     seedPart("t", "/abs/repoB");
     writeFileSync(join(duetExecDir("t"), "round-1.txt"), "OFFSET=0\n");
     // make the outbox non-empty so the bumped offset differs
-    writeFileSync(join(workerDir("viola", "codex", "t"), "outbox.jsonl"), '{"event":"question","question":"?","ts":"now"}\n');
+    writeFileSync(join(workerDir("alpha", "codex", "t"), "outbox.jsonl"), '{"event":"question","question":"?","ts":"now"}\n');
     const deps: TurnWaitDeps = { wait: async () => ({ event: "question", question: "?", ts: "now" } as unknown as OutboxEvent) };
     expect(await roundWaitWith("t", 1, deps)).toBe(0);
     const st = readFileSync(join(duetExecDir("t"), "round-1.txt"), "utf8");

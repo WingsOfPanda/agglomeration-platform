@@ -56,10 +56,10 @@ describe("scaledTimeout", () => {
 });
 
 describe("composeResearchPrompt", () => {
-  const p = composeResearchPrompt("compare LRU vs LFU", "/state/x/viola-codex/findings.md");
+  const p = composeResearchPrompt("compare LRU vs LFU", "/state/x/alpha-codex/findings.md");
   it("names the topic + the findings write path with the Findings structure", () => {
     expect(p).toContain("compare LRU vs LFU");
-    expect(p).toContain("/state/x/viola-codex/findings.md");
+    expect(p).toContain("/state/x/alpha-codex/findings.md");
     expect(p).toContain("## Claims");
     expect(p).toMatch(/\[<source citation>\]/);
   });
@@ -89,12 +89,12 @@ describe("verifyState", () => {
 });
 
 describe("composeVerifyPrompt", () => {
-  const p = composeVerifyPrompt("[a:1] claim one\n[b:2] claim two", "/s/viola-codex/verify.md");
+  const p = composeVerifyPrompt("[a:1] claim one\n[b:2] claim two", "/s/alpha-codex/verify.md");
   it("numbers the items, names AGREE/DISPUTE/UNCERTAIN + the write path, no fence/rebrand tokens", () => {
     expect(p).toContain("1. [a:1] claim one");
     expect(p).toContain("2. [b:2] claim two");
     expect(p).toMatch(/AGREE/); expect(p).toMatch(/DISPUTE/); expect(p).toMatch(/UNCERTAIN/);
-    expect(p).toContain("/s/viola-codex/verify.md");
+    expect(p).toContain("/s/alpha-codex/verify.md");
     expect(p).toContain("## Verdicts");
     expect(p).not.toContain("END_OF_INSTRUCTION");
     expect(p).not.toContain('"event":"done"');

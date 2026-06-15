@@ -285,7 +285,7 @@ describe("rehearsal experiment timeout env override", () => {
 
 describe("rehearsal experiment-send", () => {
   const TOPIC = "es-topic";
-  const INST = "violin";
+  const INST = "bravo";
   const MODEL = "codex";
   // resolveModel (in ipc.ts) looks up the worker via topicDir(topic) with NO cwd opt,
   // so it hashes process.cwd(). Scaffold under the same cwd so the worker dir + art dir
@@ -384,7 +384,7 @@ describe("rehearsal experiment-send", () => {
   it("bad agent -> rc 2", async () => {
     const h = home();
     scaffold(h);
-    expect(await experimentSendWith([TOPIC, "Viola", "exp-001", "x", "y"], deps(h))).toBe(2);
+    expect(await experimentSendWith([TOPIC, "Alpha", "exp-001", "x", "y"], deps(h))).toBe(2);
   });
 
   it("bad --timeout -> rc 2", async () => {
@@ -642,7 +642,7 @@ describe("rehearsal score", () => {
     const comp: ScoreComputation = {
       scoreboardMd: "", resultsTsv: "", sidecars: [], staleSidecars: [], phaseClears: [],
       warnings: [], manifests: [], sanityRows: [], coverageRows: [],
-      lineageRows: [{ expId: "exp-003", agent: "oboe", parentId: "exp-002", knobsChanged: "2", verdict: "improve-multi", ts: "T" }],
+      lineageRows: [{ expId: "exp-003", agent: "golf", parentId: "exp-002", knobsChanged: "2", verdict: "improve-multi", ts: "T" }],
     };
     const deps: RehearsalScoreDeps = {
       computeScore: () => comp,
@@ -655,7 +655,7 @@ describe("rehearsal score", () => {
     expect(await scoreWith(["topic"], deps)).toBe(0);
     const lin = writes.find((w) => w.path === join(art, "lineage.tsv"));
     expect(lin).toBeDefined();
-    expect(lin!.content).toBe("exp_id\tagent\tparent_id\tknobs_changed\tverdict\tts\nexp-003\toboe\texp-002\t2\timprove-multi\tT\n");
+    expect(lin!.content).toBe("exp_id\tagent\tparent_id\tknobs_changed\tverdict\tts\nexp-003\tgolf\texp-002\t2\timprove-multi\tT\n");
   });
 });
 
@@ -663,7 +663,7 @@ describe("rehearsal score", () => {
 
 describe("rehearsal monitor", () => {
   const TOPIC = "mon-topic";
-  const INST = "viola";
+  const INST = "alpha";
   const MODEL = "codex";
   // resolveModel hashes process.cwd() (no cwd opt), so scaffold under process.cwd().
   const opts = (h: { home: string }) => ({ home: h.home, cwd: process.cwd() });
@@ -747,7 +747,7 @@ describe("rehearsal monitor", () => {
 
 describe("rehearsal status-brief", () => {
   const TOPIC = "sb-topic";
-  const INST = "viola";
+  const INST = "alpha";
 
   /** Scaffold an in-flight topic: art + metric.md + scoreboard.md (one OK row) +
    *  workers.txt (one agent) + the worker's working state.txt + its prompt.md. */
@@ -759,7 +759,7 @@ describe("rehearsal status-brief", () => {
     writeFileSync(join(art, "scoreboard.md"), [
       "| Rank | Experiment | Agent | Metric | Status | Runtime | Approach | metric_name |",
       "|---|---|---|---|---|---|---|---|",
-      "| 1 | exp-001 | viola | 0.9500 | ok | 10.00s | baseline | accuracy |",
+      "| 1 | exp-001 | alpha | 0.9500 | ok | 10.00s | baseline | accuracy |",
     ].join("\n") + "\n");
     writeFileSync(join(art, "workers.txt"), INST + "\n");
     const sd = workerStateDir(art, INST);
@@ -786,9 +786,9 @@ describe("rehearsal status-brief", () => {
     expect(text).toContain("| Worker | Phase | Current/last | Approach | Metric |");
     expect(text).not.toContain("| Trooper |");
     // working worker row: phase working, approach from prompt.md, metric (running)
-    expect(text).toContain("| viola | working | exp-001 | baseline | (running) |");
+    expect(text).toContain("| alpha | working | exp-001 | baseline | (running) |");
     // scoreboard top-3 line
-    expect(text).toContain("1. viola/exp-001 — 0.9500 — accuracy");
+    expect(text).toContain("1. alpha/exp-001 — 0.9500 — accuracy");
     // completion line
     expect(text).toContain("**Completion check:** floor_met=");
   });
@@ -799,7 +799,7 @@ describe("rehearsal status-brief", () => {
     const { rc, text } = await capture((stdout) =>
       statusBriefWith([TOPIC, "--latest-agent", INST, "--latest-exp", "exp-001"], { opts: o, stdout }));
     expect(rc).toBe(0);
-    expect(text).toContain("## Experiment status — exp-001 (viola) just landed");
+    expect(text).toContain("## Experiment status — exp-001 (alpha) just landed");
   });
 
   it("non-working worker: approach comes from result.json (wins over prompt.md), metric is '<value> <status>'", async () => {
@@ -824,7 +824,7 @@ describe("rehearsal status-brief", () => {
     const { rc, text } = await capture((stdout) => statusBriefWith([TOPIC], { opts: o, stdout }));
     expect(rc).toBe(0);
     // result.json's approach_label (deep-net) wins; prompt.md's baseline must NOT appear.
-    expect(text).toContain("| viola | idle | exp-002 | deep-net | 0.9 ok |");
+    expect(text).toContain("| alpha | idle | exp-002 | deep-net | 0.9 ok |");
     expect(text).not.toContain("baseline");
   });
 
@@ -837,7 +837,7 @@ describe("rehearsal status-brief", () => {
     writeFileSync(join(art, "scoreboard.md"), [
       "| Rank | Experiment | Agent | Metric | Status | Runtime | Approach | metric_name |",
       "|---|---|---|---|---|---|---|---|",
-      "| 1 | exp-001 | viola | 0.9500 | ok | 10.00s | baseline | accuracy |",
+      "| 1 | exp-001 | alpha | 0.9500 | ok | 10.00s | baseline | accuracy |",
     ].join("\n") + "\n");
     writeFileSync(join(art, "workers.txt"), INST + "\n");
     const { rc, text } = await capture((stdout) => statusBriefWith([TOPIC], { opts: o, stdout }));
@@ -862,7 +862,7 @@ describe("rehearsal status-brief", () => {
     writeFileSync(join(art, "scoreboard.md"), [
       "| Rank | Experiment | Agent | Metric | Status | Runtime | Approach | metric_name |",
       "|---|---|---|---|---|---|---|---|",
-      "| 1 | exp-001 | viola | 0.9600 | ok | 10.00s | single-pass | accuracy |",
+      "| 1 | exp-001 | alpha | 0.9600 | ok | 10.00s | single-pass | accuracy |",
     ].join("\n") + "\n");
     writeFileSync(join(art, "workers.txt"), INST + "\n");
     writeFileSync(join(art, "coverage.tsv"),
@@ -897,29 +897,29 @@ describe("rehearsal verify-plan", () => {
 
   it("clean -> emits RUN_CMD, persists nothing", async () => {
     const { d, rows, out } = deps({});
-    expect(await verifyPlanWith(["topic", "viola", "exp-001"], d)).toBe(0);
+    expect(await verifyPlanWith(["topic", "alpha", "exp-001"], d)).toBe(0);
     expect(out.some((l) => l.startsWith("RUN_CMD=python s.py"))).toBe(true);
     expect(out.some((l) => l.startsWith("METRIC_FROM=marker"))).toBe(true);
     expect(rows).toHaveLength(0);
   });
   it("provenance change -> persists mismatch, no RUN_CMD", async () => {
     const { d, rows, out } = deps({ readInput: () => "TAMPERED" });
-    await verifyPlanWith(["topic", "viola", "exp-001"], d);
+    await verifyPlanWith(["topic", "alpha", "exp-001"], d);
     expect(rows[0]).toMatchObject({ verdict: "mismatch", reason: "provenance:./p.json" });
     expect(out.some((l) => l.startsWith("RUN_CMD"))).toBe(false);
   });
   it("rerun without --authorize-rerun -> pending", async () => {
     const { d, rows } = deps({ readResult: () => ({ metric_value: 1, verify: { kind: "rerun", command: "c" } }) });
-    await verifyPlanWith(["topic", "viola", "exp-001"], d);
+    await verifyPlanWith(["topic", "alpha", "exp-001"], d);
     expect(rows[0]).toMatchObject({ verdict: "pending", reason: "rerun-deferred" });
   });
   it("missing result -> rc 1", async () => {
     const { d } = deps({ readResult: () => null });
-    expect(await verifyPlanWith(["topic", "viola", "exp-001"], d)).toBe(1);
+    expect(await verifyPlanWith(["topic", "alpha", "exp-001"], d)).toBe(1);
   });
   it("bad arity -> rc 2", async () => {
     const { d } = deps({});
-    expect(await verifyPlanWith(["topic", "viola"], d)).toBe(2);
+    expect(await verifyPlanWith(["topic", "alpha"], d)).toBe(2);
   });
 });
 
@@ -942,27 +942,27 @@ describe("rehearsal verify-check", () => {
   }
   it("recomputed within epsilon -> verified", async () => {
     const { d, rows } = deps({});
-    expect(await verifyCheckWith(["topic", "viola", "exp-001", "--stdout-file", "/x"], d)).toBe(0);
+    expect(await verifyCheckWith(["topic", "alpha", "exp-001", "--stdout-file", "/x"], d)).toBe(0);
     expect(rows[0]).toMatchObject({ verdict: "verified" });
   });
   it("beyond epsilon -> mismatch", async () => {
     const { d, rows } = deps({ readStdout: () => "VERIFY_METRIC=0.5\n" });
-    await verifyCheckWith(["topic", "viola", "exp-001", "--stdout-file", "/x"], d);
+    await verifyCheckWith(["topic", "alpha", "exp-001", "--stdout-file", "/x"], d);
     expect(rows[0].verdict).toBe("mismatch");
   });
   it("--run-failed -> mismatch rerun-failed", async () => {
     const { d, rows } = deps({});
-    await verifyCheckWith(["topic", "viola", "exp-001", "--run-failed"], d);
+    await verifyCheckWith(["topic", "alpha", "exp-001", "--run-failed"], d);
     expect(rows[0]).toMatchObject({ verdict: "mismatch", reason: "rerun-failed" });
   });
   it("honors metric.md verify_epsilon", async () => {
     const { d, rows } = deps({ readMetricMd: () => "**Primary metric:** accuracy\n**verify_epsilon:** 0.2\n", readStdout: () => "VERIFY_METRIC=0.75\n" });
-    await verifyCheckWith(["topic", "viola", "exp-001", "--stdout-file", "/x"], d);
+    await verifyCheckWith(["topic", "alpha", "exp-001", "--stdout-file", "/x"], d);
     expect(rows[0].verdict).toBe("verified");
   });
   it("missing --stdout-file and no --run-failed -> rc 2", async () => {
     const { d } = deps({});
-    expect(await verifyCheckWith(["topic", "viola", "exp-001"], d)).toBe(2);
+    expect(await verifyCheckWith(["topic", "alpha", "exp-001"], d)).toBe(2);
   });
 });
 
@@ -986,29 +986,29 @@ describe("rehearsal inspect-plan (C1)", () => {
   };
   it("without --authorize-inspect -> inconclusive inspect-deferred", async () => {
     const { deps, rows, lines } = mkPlan();
-    expect(await inspectPlanWith(["t", "oboe", "exp-001"], deps)).toBe(0);
+    expect(await inspectPlanWith(["t", "golf", "exp-001"], deps)).toBe(0);
     expect(rows[0].verdict).toBe("inconclusive");
     expect(rows[0].reason).toBe("inspect-deferred");
     expect(lines.join("\n")).toContain("VERDICT=inconclusive reason=inspect-deferred");
   });
   it("authorized but no data_spec -> run-card-insufficient", async () => {
     const { deps, rows } = mkPlan({}, { metric_value: 0.9, metric_name: "accuracy", approach_label: "x", metric_formula: "f" });
-    expect(await inspectPlanWith(["t", "oboe", "exp-001", "--authorize-inspect"], deps)).toBe(0);
+    expect(await inspectPlanWith(["t", "golf", "exp-001", "--authorize-inspect"], deps)).toBe(0);
     expect(rows[0].reason).toBe("run-card-insufficient");
   });
   it("authorized + budget hit -> budget-exhausted", async () => {
     const { deps, rows } = mkPlan({ inspectionCount: () => 5, readMetricMd: () => "**c1_budget:** 2\n**Primary metric:** accuracy\n" });
-    expect(await inspectPlanWith(["t", "oboe", "exp-001", "--authorize-inspect"], deps)).toBe(0);
+    expect(await inspectPlanWith(["t", "golf", "exp-001", "--authorize-inspect"], deps)).toBe(0);
     expect(rows[0].reason).toBe("budget-exhausted");
   });
   it("authorized + claude worker -> same-family", async () => {
     const { deps, rows } = mkPlan({ workerProvider: () => "claude" });
-    expect(await inspectPlanWith(["t", "oboe", "exp-001", "--authorize-inspect"], deps)).toBe(0);
+    expect(await inspectPlanWith(["t", "golf", "exp-001", "--authorize-inspect"], deps)).toBe(0);
     expect(rows[0].reason).toBe("same-family");
   });
   it("authorized + sufficient -> prints INSPECT_CWD + run-card", async () => {
     const { deps, lines } = mkPlan();
-    expect(await inspectPlanWith(["t", "oboe", "exp-001", "--authorize-inspect"], deps)).toBe(0);
+    expect(await inspectPlanWith(["t", "golf", "exp-001", "--authorize-inspect"], deps)).toBe(0);
     const out = lines.join("\n");
     expect(out).toContain("INSPECT_CWD=");
     expect(out).toContain("METRIC_FORMULA=macro-F1");
@@ -1016,7 +1016,7 @@ describe("rehearsal inspect-plan (C1)", () => {
   });
   it("missing result.json -> rc 1", async () => {
     const { deps } = mkPlan({}, null);
-    expect(await inspectPlanWith(["t", "oboe", "exp-001", "--authorize-inspect"], deps)).toBe(1);
+    expect(await inspectPlanWith(["t", "golf", "exp-001", "--authorize-inspect"], deps)).toBe(1);
   });
 });
 
@@ -1037,22 +1037,22 @@ describe("rehearsal inspect-check (C1)", () => {
   };
   it("--stdout-file within c1_epsilon -> reproduced", async () => {
     const { deps, rows } = mkCheck();
-    expect(await inspectCheckWith(["t", "oboe", "exp-001", "--stdout-file", "/x"], deps)).toBe(0);
+    expect(await inspectCheckWith(["t", "golf", "exp-001", "--stdout-file", "/x"], deps)).toBe(0);
     expect(rows[0].verdict).toBe("reproduced");
   });
   it("--stdout-file beyond c1_epsilon -> not-reproduced", async () => {
     const { deps, rows } = mkCheck({ readStdout: () => "VERIFY_METRIC=0.5\n" });
-    expect(await inspectCheckWith(["t", "oboe", "exp-001", "--stdout-file", "/x"], deps)).toBe(0);
+    expect(await inspectCheckWith(["t", "golf", "exp-001", "--stdout-file", "/x"], deps)).toBe(0);
     expect(rows[0].verdict).toBe("not-reproduced");
   });
   it("--run-failed -> inconclusive", async () => {
     const { deps, rows } = mkCheck();
-    expect(await inspectCheckWith(["t", "oboe", "exp-001", "--run-failed"], deps)).toBe(0);
+    expect(await inspectCheckWith(["t", "golf", "exp-001", "--run-failed"], deps)).toBe(0);
     expect(rows[0].verdict).toBe("inconclusive");
   });
   it("--integrity-refuted -> not-reproduced", async () => {
     const { deps, rows } = mkCheck();
-    expect(await inspectCheckWith(["t", "oboe", "exp-001", "--integrity-refuted"], deps)).toBe(0);
+    expect(await inspectCheckWith(["t", "golf", "exp-001", "--integrity-refuted"], deps)).toBe(0);
     expect(rows[0].verdict).toBe("not-reproduced");
     expect(rows[0].reason).toBe("integrity-refuted");
   });

@@ -36,7 +36,7 @@ describe("classifyLineage", () => {
 describe("lineageRow + header", () => {
   it("emits a tab-joined row with trailing newline", () => {
     expect(LINEAGE_TSV_HEADER).toBe("exp_id\tagent\tparent_id\tknobs_changed\tverdict\tts\n");
-    expect(lineageRow({ expId: "exp-002", agent: "oboe", parentId: "exp-001", knobsChanged: "2", verdict: "improve-multi", ts: "T" }))
-      .toBe("exp-002\toboe\texp-001\t2\timprove-multi\tT\n");
+    expect(lineageRow({ expId: "exp-002", agent: "golf", parentId: "exp-001", knobsChanged: "2", verdict: "improve-multi", ts: "T" }))
+      .toBe("exp-002\tgolf\texp-001\t2\timprove-multi\tT\n");
   });
 });

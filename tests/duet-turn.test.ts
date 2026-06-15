@@ -39,9 +39,9 @@ describe("duet inbox carries a single done contract (no duplicate END_OF_INSTRUC
   afterEach(() => h.cleanup());
   const count = (s: string, sub: string): number => s.split(sub).length - 1;
   it("brief → exactly one END_OF_INSTRUCTION and one done line", () => {
-    const d = workerDir("viola", "codex", "demo"); mkdirSync(d, { recursive: true }); writeFileSync(join(d, "outbox.jsonl"), "");
-    inboxWrite("viola", "codex", "demo", composeDuetBrief("t", "/abs/repoB", "feat/duet-demo"));
-    const txt = readFileSync(inboxPath("viola", "codex", "demo"), "utf8");
+    const d = workerDir("alpha", "codex", "demo"); mkdirSync(d, { recursive: true }); writeFileSync(join(d, "outbox.jsonl"), "");
+    inboxWrite("alpha", "codex", "demo", composeDuetBrief("t", "/abs/repoB", "feat/duet-demo"));
+    const txt = readFileSync(inboxPath("alpha", "codex", "demo"), "utf8");
     expect(count(txt, "END_OF_INSTRUCTION")).toBe(1);
     expect(count(txt, '"event":"done"')).toBe(1);
     expect(txt.trimEnd().endsWith("END_OF_INSTRUCTION")).toBe(true);

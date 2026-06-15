@@ -34,11 +34,11 @@ describe("composePreludeResearchPrompt", () => {
 });
 
 describe("composeAdversaryPrompt", () => {
-  const p = composeAdversaryPrompt("## Topic\nflash\n## Approaches\n1. A", "viola", "/art/adversary-viola.md");
+  const p = composeAdversaryPrompt("## Topic\nflash\n## Approaches\n1. A", "alpha", "/art/adversary-alpha.md");
   it("inlines the draft, names the agent, targets the out-path", () => {
     expect(p).toContain("## Approaches");
-    expect(p).toContain("viola");
-    expect(p).toContain("/art/adversary-viola.md");
+    expect(p).toContain("alpha");
+    expect(p).toContain("/art/adversary-alpha.md");
   });
   it("does NOT embed its own done-event line or END_OF_INSTRUCTION (inboxWrite owns them)", () => {
     expect(p).not.toContain('{"event":"done"');
@@ -69,9 +69,9 @@ describe("prelude inbox carries a single done contract (no duplicate END_OF_INST
   });
 
   it("adversary prompt → exactly one END_OF_INSTRUCTION and one done line", () => {
-    seedPart("viola", "codex", "demo");
-    inboxWrite("viola", "codex", "demo", composeAdversaryPrompt("## Approaches\n1. A", "viola", "/art/adversary-viola.md"));
-    const txt = readFileSync(inboxPath("viola", "codex", "demo"), "utf8");
+    seedPart("alpha", "codex", "demo");
+    inboxWrite("alpha", "codex", "demo", composeAdversaryPrompt("## Approaches\n1. A", "alpha", "/art/adversary-alpha.md"));
+    const txt = readFileSync(inboxPath("alpha", "codex", "demo"), "utf8");
     expect(count(txt, "END_OF_INSTRUCTION")).toBe(1);
     expect(count(txt, '"event":"done"')).toBe(1);
   });

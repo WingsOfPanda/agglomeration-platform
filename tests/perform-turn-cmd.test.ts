@@ -20,7 +20,7 @@ function seed(provider: "codex" | "claude", opts?: { state?: string }): string {
   mkdirSync(art, { recursive: true });
   writeFileSync(join(art, "provider.txt"), provider + "\n");
   writeFileSync(join(art, "design.md"), "# design\n");
-  const outbox = outboxPath("tutti", provider, TOPIC);
+  const outbox = outboxPath("lead", provider, TOPIC);
   mkdirSync(dirname(outbox), { recursive: true });
   writeFileSync(outbox, ""); // touch the outbox so existsSync passes
   if (opts?.state !== undefined) {
@@ -45,7 +45,7 @@ describe("perform turn-send", () => {
     const art = seed("codex");
     let stateExistedAtSend = false;
     let captured: string[] | null = null;
-    const stateFile = join(art, "turn-tutti-1.txt");
+    const stateFile = join(art, "turn-lead-1.txt");
     const d = sendDeps({
       offsetFor: () => 17,
       send: async (a) => { stateExistedAtSend = existsSync(stateFile); captured = a; return 0; },
@@ -54,7 +54,7 @@ describe("perform turn-send", () => {
     expect(rc).toBe(0);
     expect(readFileSync(stateFile, "utf8")).toBe("OFFSET=17\n");
     expect(stateExistedAtSend).toBe(true); // state file written BEFORE send ran
-    const promptFile = join(art, "tutti_turn_prompt_1.md");
+    const promptFile = join(art, "lead_turn_prompt_1.md");
     expect(readFileSync(promptFile, "utf8")).toBe(composeRound1Prompt({
       designPath: join(art, "design.md"),
       planPath: join(art, "plan.md"),
@@ -62,7 +62,7 @@ describe("perform turn-send", () => {
       round: 1,
       testCmd: "",
     }));
-    expect(captured).toEqual(["--from", "hub", "tutti", TOPIC, "@" + promptFile]);
+    expect(captured).toEqual(["--from", "hub", "lead", TOPIC, "@" + promptFile]);
   });
 
   it("round 2 with NO fix-prompt-2.md → rc 1, send NOT called", async () => {
@@ -73,9 +73,9 @@ describe("perform turn-send", () => {
     expect(called).toBe(false);
   });
 
-  it("existing turn-tutti-1.txt → rc 1, send NOT called", async () => {
+  it("existing turn-lead-1.txt → rc 1, send NOT called", async () => {
     const art = seed("codex");
-    writeFileSync(join(art, "turn-tutti-1.txt"), "OFFSET=5\n");
+    writeFileSync(join(art, "turn-lead-1.txt"), "OFFSET=5\n");
     let called = false;
     const rc = await turnSendWith(TOPIC, 1, sendDeps({ send: async () => { called = true; return 0; } }));
     expect(rc).toBe(1);
@@ -96,22 +96,22 @@ describe("perform turn-send", () => {
     expect(rc).toBe(0);
   });
 
-  it("send returns 2 → rc 1 AND turn-tutti-1.txt still exists (kept for retry)", async () => {
+  it("send returns 2 → rc 1 AND turn-lead-1.txt still exists (kept for retry)", async () => {
     const art = seed("codex");
     const rc = await turnSendWith(TOPIC, 1, sendDeps({ send: async () => 2 }));
     expect(rc).toBe(1);
-    expect(existsSync(join(art, "turn-tutti-1.txt"))).toBe(true);
+    expect(existsSync(join(art, "turn-lead-1.txt"))).toBe(true);
   });
 
-  it("provider.txt=claude → uses the tutti-claude worker dir outbox", async () => {
+  it("provider.txt=claude → uses the lead-claude worker dir outbox", async () => {
     const art = seed("claude");
     let captured: string[] | null = null;
     const rc = await turnSendWith(TOPIC, 1, sendDeps({ send: async (a) => { captured = a; return 0; } }));
     expect(rc).toBe(0);
     // round-1 prompt path is provider-independent (art dir), but the outbox/status checks
-    // keyed on tutti-claude must have passed — which they did since rc 0.
+    // keyed on lead-claude must have passed — which they did since rc 0.
     expect(captured![0]).toBe("--from");
-    expect(readFileSync(join(art, "turn-tutti-1.txt"), "utf8")).toBe("OFFSET=17\n");
+    expect(readFileSync(join(art, "turn-lead-1.txt"), "utf8")).toBe("OFFSET=17\n");
   });
 });
 
@@ -130,7 +130,7 @@ describe("perform turn-wait (rc 0 always; TS= carries the outcome)", () => {
 
   function seedWait(round = 1): string {
     const art = seed("codex");
-    writeFileSync(join(art, `turn-tutti-${round}.txt`), "OFFSET=10\n");
+    writeFileSync(join(art, `turn-lead-${round}.txt`), "OFFSET=10\n");
     return art;
   }
 
@@ -139,35 +139,35 @@ describe("perform turn-wait (rc 0 always; TS= carries the outcome)", () => {
     writeFileSync(join(art, "verify-report-1.md"), "VERDICT: PASS\n");
     const rc = await turnWaitWith(TOPIC, 1, waitDeps({ wait: async () => ({ event: "done", summary: "x" }) }));
     expect(rc).toBe(0);
-    expect(readFileSync(join(art, "turn-tutti-1.txt"), "utf8")).toContain("TS=ok\n");
-    expect(existsSync(join(art, "turn-tutti-1.done"))).toBe(true);
+    expect(readFileSync(join(art, "turn-lead-1.txt"), "utf8")).toContain("TS=ok\n");
+    expect(existsSync(join(art, "turn-lead-1.done"))).toBe(true);
   });
 
   it("done + missing verify report → TS=failed, rc 0", async () => {
     const art = seedWait();
     const rc = await turnWaitWith(TOPIC, 1, waitDeps({ wait: async () => ({ event: "done", summary: "x" }) }));
     expect(rc).toBe(0);
-    expect(readFileSync(join(art, "turn-tutti-1.txt"), "utf8")).toContain("TS=failed\n");
+    expect(readFileSync(join(art, "turn-lead-1.txt"), "utf8")).toContain("TS=failed\n");
   });
 
   it("ev=null → TS=timeout, rc 0", async () => {
     const art = seedWait();
     const rc = await turnWaitWith(TOPIC, 1, waitDeps({ wait: async () => null }));
     expect(rc).toBe(0);
-    expect(readFileSync(join(art, "turn-tutti-1.txt"), "utf8")).toContain("TS=timeout\n");
+    expect(readFileSync(join(art, "turn-lead-1.txt"), "utf8")).toContain("TS=timeout\n");
   });
 
   it("question with claim → writes question payload, re-arms OFFSET, TS=question, rc 0", async () => {
     const art = seedWait();
     // bump the outbox so the re-armed offset is > 10
-    writeFileSync(outboxPath("tutti", "codex", TOPIC), '{"event":"question","message":"need X"}\n');
+    writeFileSync(outboxPath("lead", "codex", TOPIC), '{"event":"question","message":"need X"}\n');
     const ev = { event: "question", message: "need X", claim: { kind: "path", value: "/x" } };
     const rc = await turnWaitWith(TOPIC, 1, waitDeps({ wait: async () => ev, now: () => 1700000000 }));
     expect(rc).toBe(0);
-    expect(readFileSync(join(art, "question-tutti-1.txt"), "utf8")).toBe(
+    expect(readFileSync(join(art, "question-lead-1.txt"), "utf8")).toBe(
       "TEXT=need X\nCLAIM_KIND=path\nCLAIM_VALUE=/x\nROUTE=verify\nASKED_AT=1700000000\n",
     );
-    const stateText = readFileSync(join(art, "turn-tutti-1.txt"), "utf8");
+    const stateText = readFileSync(join(art, "turn-lead-1.txt"), "utf8");
     expect(stateText).toContain("TS=question\n");
     const bumped = parseLatestOffset(stateText);
     expect(bumped).not.toBeNull();
@@ -179,35 +179,35 @@ describe("perform turn-wait (rc 0 always; TS= carries the outcome)", () => {
     const ev = { event: "question" }; // no message
     const rc = await turnWaitWith(TOPIC, 1, waitDeps({ wait: async () => ev }));
     expect(rc).toBe(0);
-    expect(readFileSync(join(art, "turn-tutti-1.txt"), "utf8")).toContain("TS=failed\n");
-    expect(existsSync(join(art, "question-tutti-1.txt"))).toBe(false);
+    expect(readFileSync(join(art, "turn-lead-1.txt"), "utf8")).toContain("TS=failed\n");
+    expect(existsSync(join(art, "question-lead-1.txt"))).toBe(false);
   });
 
   it("objection question (no claim, OBJECTION: message) → ROUTE=objection payload + OBJECTIONS=1", async () => {
     const art = seedWait();
-    writeFileSync(outboxPath("tutti", "codex", TOPIC), '{"event":"question","message":"OBJECTION: bad plan"}\n');
+    writeFileSync(outboxPath("lead", "codex", TOPIC), '{"event":"question","message":"OBJECTION: bad plan"}\n');
     await turnWaitWith(TOPIC, 1, waitDeps({ wait: async () => ({ event: "question", message: "OBJECTION: bad plan" }) }));
-    const stateText = readFileSync(join(art, "turn-tutti-1.txt"), "utf8");
+    const stateText = readFileSync(join(art, "turn-lead-1.txt"), "utf8");
     expect(stateText).toContain("TS=question\n");
     expect(stateText).toContain("OBJECTIONS=1\n");
-    const payload = readFileSync(join(art, "question-tutti-1.txt"), "utf8");
+    const payload = readFileSync(join(art, "question-lead-1.txt"), "utf8");
     expect(payload).toContain("ROUTE=objection\n");
     expect(payload).toContain("TEXT=bad plan\n");
   });
 
   it("objection cap increments across re-arms (persisted, latest-line-wins)", async () => {
     const art = seedWait();
-    writeFileSync(join(art, "turn-tutti-1.txt"), "OFFSET=10\nOBJECTIONS=1\n"); // a prior objection this round
-    writeFileSync(outboxPath("tutti", "codex", TOPIC), '{"event":"question","message":"OBJECTION: still bad"}\n');
+    writeFileSync(join(art, "turn-lead-1.txt"), "OFFSET=10\nOBJECTIONS=1\n"); // a prior objection this round
+    writeFileSync(outboxPath("lead", "codex", TOPIC), '{"event":"question","message":"OBJECTION: still bad"}\n');
     await turnWaitWith(TOPIC, 1, waitDeps({ wait: async () => ({ event: "question", message: "OBJECTION: still bad" }) }));
-    expect(readFileSync(join(art, "turn-tutti-1.txt"), "utf8")).toContain("OBJECTIONS=2\n");
+    expect(readFileSync(join(art, "turn-lead-1.txt"), "utf8")).toContain("OBJECTIONS=2\n");
   });
 
   it("escalate question (no claim, no marker) → TS=question but NO OBJECTIONS line", async () => {
     const art = seedWait();
-    writeFileSync(outboxPath("tutti", "codex", TOPIC), '{"event":"question","message":"which fallback?"}\n');
+    writeFileSync(outboxPath("lead", "codex", TOPIC), '{"event":"question","message":"which fallback?"}\n');
     await turnWaitWith(TOPIC, 1, waitDeps({ wait: async () => ({ event: "question", message: "which fallback?" }) }));
-    const stateText = readFileSync(join(art, "turn-tutti-1.txt"), "utf8");
+    const stateText = readFileSync(join(art, "turn-lead-1.txt"), "utf8");
     expect(stateText).toContain("TS=question\n");
     expect(stateText).not.toContain("OBJECTIONS=");
   });
@@ -225,7 +225,7 @@ describe("perform turn-wait (rc 0 always; TS= carries the outcome)", () => {
   });
 
   it("missing state file → rc 1 (turn-send not run)", async () => {
-    seed("codex"); // no turn-tutti-1.txt
+    seed("codex"); // no turn-lead-1.txt
     const rc = await turnWaitWith(TOPIC, 1, waitDeps());
     expect(rc).toBe(1);
   });

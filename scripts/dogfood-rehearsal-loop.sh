@@ -82,9 +82,9 @@ check "A1b init seeded <art>/lib/arena.py + __init__.py" \
 $CS rehearsal metric "$TOPIC" --kv "primary_metric=accuracy,direction=maximize,min_acceptable=>= 0.90,target=>= 0.99,K_corroboration=2,plateau_window=5,plateau_threshold=0.01" >/dev/null 2>&1
 check "A2 metric.md written" "$([ -f "$ART/metric.md" ] && echo 0 || echo 1)"
 
-# Simulate spawn of 2 agents (first two from agents.yaml = violin, viola).
-INST_A=violin
-INST_B=viola
+# Simulate spawn of 2 agents (first two from agents.yaml = bravo, alpha).
+INST_A=bravo
+INST_B=alpha
 printf '%s\n%s\n' "$INST_A" "$INST_B" > "$ART/workers.txt"
 scaffold_part "$ART" "$topicDir" "$INST_A"
 scaffold_part "$ART" "$topicDir" "$INST_B"
@@ -112,10 +112,10 @@ write_result "$ART" "$INST_B" exp-001 0.88
 
 sc_rc="$(rc_of $CS rehearsal score "$TOPIC")"
 check "A8 score rc 0" "$sc_rc"
-# scoreboard sorted higher-metric first: rank 1 must be viola (0.88) over violin (0.85).
+# scoreboard sorted higher-metric first: rank 1 must be alpha (0.88) over bravo (0.85).
 rank1="$(grep -E '^\| 1 \|' "$ART/scoreboard.md" || true)"
-check "A9 scoreboard sorted (rank 1 = viola 0.8800)" \
-  "$(printf '%s' "$rank1" | grep -q 'viola' && printf '%s' "$rank1" | grep -q '0.8800' && echo 0 || echo 1)"
+check "A9 scoreboard sorted (rank 1 = alpha 0.8800)" \
+  "$(printf '%s' "$rank1" | grep -q 'alpha' && printf '%s' "$rank1" | grep -q '0.8800' && echo 0 || echo 1)"
 # results.tsv: header + 2 data rows.
 nrows="$(wc -l < "$ART/results.tsv")"
 check "A10 results.tsv header + 2 rows (3 lines)" "$([ "$nrows" -eq 3 ] && echo 0 || echo 1)"
@@ -130,9 +130,9 @@ check "A12 status-brief prints | Worker | table" \
 check "A13 completion line floor_met=no (both below 0.90)" \
   "$(printf '%s' "$sb" | grep -q 'Completion check:.*floor_met=no' && echo 0 || echo 1)"
 
-# --- Round 2 (cross floor + reach target x K=2 on violin) ------------------
-# violin: exp-002=0.992, exp-003=0.995  (both >= target 0.99, strictly improving => K_so_far=2)
-# viola : exp-002=0.91 (crosses floor, not at target)
+# --- Round 2 (cross floor + reach target x K=2 on bravo) ------------------
+# bravo: exp-002=0.992, exp-003=0.995  (both >= target 0.99, strictly improving => K_so_far=2)
+# alpha : exp-002=0.91 (crosses floor, not at target)
 r=0
 dispatch "$TOPIC" "$INST_A" exp-002 "augment-a" "add data augmentation + wider conv" >/dev/null 2>&1 || r=$?
 dispatch "$TOPIC" "$INST_B" exp-002 "augment-b" "add batchnorm + label smoothing" >/dev/null 2>&1 || r=$?
@@ -144,10 +144,10 @@ cl="$(completion_line "$TOPIC")"
 check "A15 after exp-002: floor_met=yes (floor crossed)" \
   "$(printf '%s' "$cl" | grep -q 'floor_met=yes' && echo 0 || echo 1)"
 
-# violin exp-003 = 0.995 — second strictly-improving at-target experiment => K=2.
+# bravo exp-003 = 0.995 — second strictly-improving at-target experiment => K=2.
 r=0
 dispatch "$TOPIC" "$INST_A" exp-003 "augment-a2" "tune LR schedule on the augmented pipeline" >/dev/null 2>&1 || r=$?
-check "A16 round-3 dispatch rc 0 (violin exp-003)" "$r"
+check "A16 round-3 dispatch rc 0 (bravo exp-003)" "$r"
 write_result "$ART" "$INST_A" exp-003 0.995
 $CS rehearsal score "$TOPIC" >/dev/null 2>&1
 cl="$(completion_line "$TOPIC")"
@@ -168,7 +168,7 @@ topicDir_B="${ART_B%/_rehearsal}"
 # floor 0.90, target 0.99 (never met), plateau defaults (window 5, threshold 0.01).
 $CS rehearsal metric "$TOPIC_B" --kv "primary_metric=accuracy,direction=maximize,min_acceptable=>= 0.90,target=>= 0.99,K_corroboration=2,plateau_window=5,plateau_threshold=0.01" >/dev/null 2>&1
 
-INST_P=cello
+INST_P=charlie
 printf '%s\n' "$INST_P" > "$ART_B/workers.txt"
 # scaffold_part uses the global $topicDir; point it at B's worker dir explicitly.
 mkdir -p "$ART_B/workers/$INST_P/experiments"
@@ -200,7 +200,7 @@ echo "===================================================================="
 echo "Scenario C — monitor --once (cursor advance + parseable done line)"
 echo "===================================================================="
 
-# Reuse Scenario B's worker (cello) — its outbox already has done lines.
+# Reuse Scenario B's worker (charlie) — its outbox already has done lines.
 # Pre-write liveness-cursor.txt=0 under workerStateDir, then monitor --once.
 printf '0' > "$ART_B/workers/$INST_P/liveness-cursor.txt"
 OUTBOX_C="$topicDir_B/$INST_P-codex/outbox.jsonl"
@@ -236,18 +236,18 @@ con_rc="$(rc_of $CS rehearsal consensus "$TOPIC")"
 check "D3 consensus rc 0 + consensus.md ## Agreed/## Contested" \
   "$([ "$con_rc" -eq 0 ] && [ -f "$ART/consensus.md" ] && grep -q '## Agreed' "$ART/consensus.md" && grep -q '## Contested' "$ART/consensus.md" && echo 0 || echo 1)"
 
-# D4 handoff-extract (takes the ART-DIR): winner = violin/exp-003 @ 0.9950.
+# D4 handoff-extract (takes the ART-DIR): winner = bravo/exp-003 @ 0.9950.
 he_rc="$(rc_of $CS rehearsal handoff-extract "$ART")"
 KV="$ART/handoff-data.kv"
-check "D4 handoff-extract rc 0 + kv winner=violin metric=0.9950 + code_dir + mode=rehearsal" \
-  "$([ "$he_rc" -eq 0 ] && grep -q '^winner_agent=violin$' "$KV" && grep -q '^winner_metric=0.9950$' "$KV" && grep -q '^winner_code_dir=workers/violin/experiments/exp-003/code/$' "$KV" && grep -q '^mode=rehearsal$' "$KV" && echo 0 || echo 1)"
+check "D4 handoff-extract rc 0 + kv winner=bravo metric=0.9950 + code_dir + mode=rehearsal" \
+  "$([ "$he_rc" -eq 0 ] && grep -q '^winner_agent=bravo$' "$KV" && grep -q '^winner_metric=0.9950$' "$KV" && grep -q '^winner_code_dir=workers/bravo/experiments/exp-003/code/$' "$KV" && grep -q '^mode=rehearsal$' "$KV" && echo 0 || echo 1)"
 
 # D5 forensics: best-effort, rc 0.
 fo_rc="$(rc_of $CS rehearsal forensics "$TOPIC")"
 check "D5 forensics rc 0 (best-effort)" "$fo_rc"
 
 # D6 teardown: winner symlink + archive. Make the winner code dir real first.
-mkdir -p "$ART/workers/violin/experiments/exp-003/code"
+mkdir -p "$ART/workers/bravo/experiments/exp-003/code"
 TD_OUT="$($CS rehearsal teardown "$TOPIC" 2>/dev/null)" && td_rc=0 || td_rc=$?
 ARCHIVE_ROOT="$AP_HOME/archive"
 check "D6 teardown rc 0 + printed archive dest under archive/" \
