@@ -22,7 +22,7 @@ import { extractQuestionPayload, parseQuestionPayload } from "../core/implementQ
 import { outboxOffset, outboxPath, outboxWaitSince, statusPath, resolveModel, type OutboxEvent } from "../core/ipc.js";
 import { readIfExists, readIfExistsOrNull } from "../core/fsread.js";
 import { agentTimeoutMultiplier } from "../core/contracts.js";
-import { scaledTimeout, parseLatestOffset } from "../core/designTurn.js";
+import { scaledTimeout, parseLatestOffset, lastKeyedNumber } from "../core/designTurn.js";
 import { run as sendRun } from "./send.js";
 import { detectTestCommand } from "../core/quick.js";
 
@@ -38,8 +38,7 @@ function workerModel(art: string): string {
  *  re-entry that drives the re-armed wait. Latest-line-wins, mirroring parseLatestOffset. */
 function latestObjections(stateFile: string): number {
   if (!existsSync(stateFile)) return 0;
-  const ms = [...readFileSync(stateFile, "utf8").matchAll(/^OBJECTIONS=(\d+)\s*$/gm)];
-  return ms.length ? Number(ms[ms.length - 1][1]) : 0;
+  return lastKeyedNumber(readFileSync(stateFile, "utf8"), "OBJECTIONS") ?? 0;
 }
 function usage(): number {
   log.error("usage: implement <init|audit|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|summary|finish|forensics|archive|find-latest-doc> ...");
