@@ -160,7 +160,12 @@ export function finishBranchPrMerge(r: Runner, o: PrMergeOpts): PrMergeResult {
   const url = o.originUrl ?? r.run("git", ["remote", "get-url", "origin"]).stdout.trim();
   const title = o.title ?? `bridge: ${o.branch}`;
   const body = o.body ?? `Automated bridge branch. Merged into ${o.base}.`;
-  if (r.run("gh", ["pr", "create", "--repo", url, "--base", o.base, "--head", o.branch, "--title", title, "--body", body]).code !== 0) {
+  // gh pr create fails if a PR for this branch already exists — common in bridge, where the worker
+  // often opens the PR itself. That is not a failure: only a create-failure with NO existing PR is
+  // pr-create-failed; otherwise fall through and merge the open PR (the merge + ff-pull below is the
+  // same recovery a stale local base needs).
+  if (r.run("gh", ["pr", "create", "--repo", url, "--base", o.base, "--head", o.branch, "--title", title, "--body", body]).code !== 0 &&
+      r.run("gh", ["pr", "view", o.branch, "--repo", url, "--json", "number"]).code !== 0) {
     r.run("git", ["checkout", "-q", o.base]);
     return { action: "pr-merge", outcome: "pr-create-failed" };
   }
