@@ -501,6 +501,15 @@ function readIfExists(path6) {
 function readIfExistsOrNull(path6) {
   return (0, import_node_fs5.existsSync)(path6) ? (0, import_node_fs5.readFileSync)(path6, "utf8") : null;
 }
+function readField(path6) {
+  return readIfExists(path6).split("\n")[0].trim();
+}
+function kvField(path6, key) {
+  if (!(0, import_node_fs5.existsSync)(path6)) return "";
+  const k = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = (0, import_node_fs5.readFileSync)(path6, "utf8").match(new RegExp(`^${k}=(.*)$`, "m"));
+  return m ? m[1].trim() : "";
+}
 var import_node_fs5;
 var init_fsread = __esm({
   "src/core/fsread.ts"() {
@@ -571,6 +580,13 @@ Then stop and wait. I will send another instruction asking you to read your inbo
 `;
   atomicWrite(identityPath(i2, m, t), body);
 }
+function parseEvent(line) {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
+  }
+}
 function outboxOffset(path6) {
   try {
     return (0, import_node_fs6.statSync)(path6).size;
@@ -599,11 +615,8 @@ function lastMatch(text, events) {
   const lines = text.split("\n").filter(Boolean);
   for (const name of events) {
     for (let k = lines.length - 1; k >= 0; k--) {
-      try {
-        const obj = JSON.parse(lines[k]);
-        if (obj.event === name) return obj;
-      } catch {
-      }
+      const obj = parseEvent(lines[k]);
+      if (obj && obj.event === name) return obj;
     }
   }
   return null;
@@ -627,36 +640,24 @@ function paneMetaWrite(i2, m, t, paneId, opts) {
   const spawned = isoUtc(opts?.now);
   atomicWrite(paneMetaPath(i2, m, t), JSON.stringify({ pane_id: paneId, agent: i2, model: m, spawned_at: spawned }) + "\n");
 }
-function paneMetaReadForDir(dir) {
-  const p = (0, import_node_path3.join)(dir, "pane.json");
-  if ((0, import_node_fs6.existsSync)(p)) {
-    try {
-      const o2 = JSON.parse((0, import_node_fs6.readFileSync)(p, "utf8"));
-      if (o2.agent && o2.model) return { agent: o2.agent, model: o2.model, paneId: o2.pane_id ?? "" };
-    } catch {
-    }
-  }
-  const name = dir.replace(/\/+$/, "").split("/").pop() ?? "";
-  return { agent: name.replace(/-[^-]*$/, ""), model: name.replace(/^.*-/, ""), paneId: "" };
-}
-function paneMetaRead(i2, m, t) {
-  const p = paneMetaPath(i2, m, t);
-  if (!(0, import_node_fs6.existsSync)(p)) return null;
+function readPaneJson(dir) {
   try {
-    return JSON.parse((0, import_node_fs6.readFileSync)(p, "utf8")).pane_id ?? null;
+    return JSON.parse((0, import_node_fs6.readFileSync)((0, import_node_path3.join)(dir, "pane.json"), "utf8"));
   } catch {
     return null;
   }
 }
+function paneMetaReadForDir(dir) {
+  const o2 = readPaneJson(dir);
+  if (o2 && o2.agent && o2.model) return { agent: o2.agent, model: o2.model, paneId: o2.pane_id ?? "" };
+  const name = dir.replace(/\/+$/, "").split("/").pop() ?? "";
+  return { agent: name.replace(/-[^-]*$/, ""), model: name.replace(/^.*-/, ""), paneId: "" };
+}
+function paneMetaRead(i2, m, t) {
+  return readPaneJson(workerDir(i2, m, t))?.pane_id ?? null;
+}
 function paneMetaModel(i2, modelHint, t) {
-  const p = paneMetaPath(i2, modelHint, t);
-  if ((0, import_node_fs6.existsSync)(p)) {
-    try {
-      return JSON.parse((0, import_node_fs6.readFileSync)(p, "utf8")).model ?? modelHint;
-    } catch {
-    }
-  }
-  return modelHint;
+  return readPaneJson(workerDir(i2, modelHint, t))?.model ?? modelHint;
 }
 function resolveModel(agent, topic) {
   const td = topicDir(topic);
@@ -8308,15 +8309,7 @@ function agentsInUseGlobally() {
   return [...new Set(all)].sort();
 }
 function pickRandomAgent(topic, rng = Math.random) {
-  const pool = loadAgentPool();
-  const global3 = new Set(agentsInUseGlobally());
-  let candidates = pool.filter((x) => !global3.has(x));
-  if (candidates.length === 0) {
-    const local = new Set(agentsInUseInTopic(topic));
-    candidates = pool.filter((x) => !local.has(x));
-  }
-  if (candidates.length === 0) return null;
-  return candidates[Math.floor(rng() * candidates.length)];
+  return pickAgents(topic, 1, rng)[0] ?? null;
 }
 function pickAgents(topic, n2, rng = Math.random) {
   const pool = loadAgentPool();
@@ -16901,12 +16894,10 @@ function scrapeOutbox(text, worker) {
   const out = [];
   for (const l of text.split("\n")) {
     if (!l.trim()) continue;
-    try {
-      const o2 = JSON.parse(l);
-      if (o2.event === "error" || o2.event === "question") out.push({ source: "outbox", key: l.trim(), context: `worker=${worker}` });
-      else if (typeof o2.note === "string" && /^\s*FLAG:/i.test(o2.note)) out.push({ source: "part_note", key: o2.note.replace(/^\s*FLAG:\s*/i, "").trim(), context: `worker=${worker}` });
-    } catch {
-    }
+    const o2 = parseEvent(l);
+    if (!o2) continue;
+    if (o2.event === "error" || o2.event === "question") out.push({ source: "outbox", key: l.trim(), context: `worker=${worker}` });
+    else if (typeof o2.note === "string" && /^\s*FLAG:/i.test(o2.note)) out.push({ source: "part_note", key: o2.note.replace(/^\s*FLAG:\s*/i, "").trim(), context: `worker=${worker}` });
   }
   return out;
 }
@@ -17095,6 +17086,7 @@ var init_forensics = __esm({
     init_atomic();
     init_archive();
     init_log();
+    init_ipc();
     SCROLLBACK_LINES = 50;
     NO_EVENT_SENTINEL = "no error event before timeout";
     FAILURE_FILENAME = "failure-reason.txt";
@@ -17459,11 +17451,7 @@ function lastOutboxEvent(outbox) {
   if (!(0, import_node_fs20.existsSync)(outbox)) return void 0;
   const lines = (0, import_node_fs20.readFileSync)(outbox, "utf8").split("\n").filter(Boolean);
   if (lines.length === 0) return void 0;
-  try {
-    return JSON.parse(lines[lines.length - 1]).event;
-  } catch {
-    return void 0;
-  }
+  return parseEvent(lines[lines.length - 1])?.event;
 }
 function classifyStale(state, outbox, thresholdS = 180) {
   if (state !== "working" || !(0, import_node_fs20.existsSync)(outbox)) return state;
@@ -17484,6 +17472,7 @@ async function run4(args) {
 `);
   process.stdout.write(`${"-".repeat(32)} ${"-".repeat(8)} ${"-".repeat(12)} ${"-".repeat(9)} -----
 `);
+  const threshold = staleThresholdS();
   for (const t of (0, import_node_fs20.readdirSync)(repo, { withFileTypes: true })) {
     if (!t.isDirectory()) continue;
     if (filter && t.name !== filter) continue;
@@ -17495,7 +17484,7 @@ async function run4(args) {
       const pane = meta.paneId || "?";
       const ob = outboxPath(meta.agent, meta.model, t.name);
       let state = "[ORPHAN]";
-      if (pane !== "?" && await paneAlive(pane)) state = classifyStale(deriveState(lastOutboxEvent(ob)), ob, staleThresholdS());
+      if (pane !== "?" && await paneAlive(pane)) state = classifyStale(deriveState(lastOutboxEvent(ob)), ob, threshold);
       process.stdout.write(`${W(meta.agent, 32)} ${W(meta.model, 8)} ${W(t.name, 12)} ${W(pane, 9)} ${state}
 `);
     }
@@ -18365,9 +18354,12 @@ function researchState(ev, findingsText) {
   if (ev.event === "done") return findingsStatus(findingsText);
   return "failed";
 }
-function parseLatestOffset(stateText) {
-  const ms = [...stateText.matchAll(/^OFFSET=(\d+)\s*$/gm)];
+function lastKeyedNumber(text, key) {
+  const ms = [...text.matchAll(new RegExp(`^${key}=(\\d+)\\s*$`, "gm"))];
   return ms.length ? Number(ms[ms.length - 1][1]) : null;
+}
+function parseLatestOffset(stateText) {
+  return lastKeyedNumber(stateText, "OFFSET");
 }
 function scaledTimeout(baseSec, multiplier) {
   const m = Number(multiplier);
@@ -18677,9 +18669,6 @@ async function turnSendWith(topic, round, d) {
   log.ok(`quick turn-send: round=${round} offset=${offset}`);
   return 0;
 }
-function readField(path6) {
-  return readIfExists(path6).split("\n")[0].trim();
-}
 async function turnWaitRun(rest) {
   const [topic, roundStr] = rest;
   const round = Number(roundStr);
@@ -18822,12 +18811,6 @@ duration=${duration}
   }
   log.ok(`quick summary: wrote ${(0, import_node_path20.join)(art, "SUMMARY.md")}`);
   return 0;
-}
-function kvField(path6, key) {
-  if (!(0, import_node_fs25.existsSync)(path6)) return "";
-  const k = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const m = (0, import_node_fs25.readFileSync)(path6, "utf8").match(new RegExp(`^${k}=(.*)$`, "m"));
-  return m ? m[1].trim() : "";
 }
 var import_node_fs25, import_node_path20, liveInitDeps, QUICK_TURN_TIMEOUT;
 var init_quick2 = __esm({
@@ -20255,8 +20238,7 @@ function workerModel(art) {
 }
 function latestObjections(stateFile) {
   if (!(0, import_node_fs30.existsSync)(stateFile)) return 0;
-  const ms = [...(0, import_node_fs30.readFileSync)(stateFile, "utf8").matchAll(/^OBJECTIONS=(\d+)\s*$/gm)];
-  return ms.length ? Number(ms[ms.length - 1][1]) : 0;
+  return lastKeyedNumber((0, import_node_fs30.readFileSync)(stateFile, "utf8"), "OBJECTIONS") ?? 0;
 }
 function usage3() {
   log.error("usage: implement <init|audit|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|summary|finish|forensics|archive|find-latest-doc> ...");
@@ -21264,7 +21246,173 @@ var init_autoresearchMetric = __esm({
   }
 });
 
+// src/core/autoresearchState.ts
+function parseState(text) {
+  const kv = {};
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    kv[line.slice(0, eq)] = line.slice(eq + 1).replace(/\\n/g, "\n");
+  }
+  return kv;
+}
+function renderState(kv) {
+  const lines = [];
+  for (const [k, v] of Object.entries(kv)) {
+    if (!k) continue;
+    lines.push(`${k}=${v.replace(/\n/g, "\\n")}`);
+  }
+  return lines.join("\n") + "\n";
+}
+function mergeState(existing, updates) {
+  const kv = existing ? parseState(existing) : {};
+  for (const [k, v] of Object.entries(updates)) if (k) kv[k] = v;
+  return renderState(kv);
+}
+function reconcileFromOutbox(outboxTail, doneResultExists) {
+  let sawDone = false, sawError = false;
+  for (const line of outboxTail.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    const o2 = parseEvent(t);
+    if (!o2) continue;
+    if (o2.event === "done") sawDone = true;
+    else if (o2.event === "error") sawError = true;
+  }
+  if (sawError) return "failed";
+  if (sawDone) return doneResultExists ? "idle" : null;
+  return null;
+}
+function readHaltFlag(body) {
+  if (body === null || body.trim() === "") return { format: "missing" };
+  const firstLine = body.split("\n").find((l) => l.trim() !== "") ?? "";
+  if (firstLine.startsWith("halted_by=")) {
+    const fields = {};
+    for (const line of body.split("\n")) {
+      const eq = line.indexOf("=");
+      if (eq > 0) fields[line.slice(0, eq)] = line.slice(eq + 1);
+    }
+    return { format: "structured", fields };
+  }
+  return { format: "prose", reason: body.split("\n").join(" ").replace(/\s+$/, "") };
+}
+var init_autoresearchState = __esm({
+  "src/core/autoresearchState.ts"() {
+    "use strict";
+    init_ipc();
+  }
+});
+
+// src/core/autoresearchExperiment.ts
+function renderExperimentPrompt(template, f) {
+  let out = template;
+  for (const [token, key] of TOKENS) out = out.split(token).join(f[key]);
+  const leftover = out.match(/\{\{[A-Z_]+\}\}/);
+  if (leftover) throw new Error(`renderExperimentPrompt: unrendered placeholder ${leftover[0]}`);
+  return out;
+}
+function buildSotaBlock(sotaMd) {
+  if (!sotaMd || sotaMd.trim() === "") return "";
+  return `## Reference: SOTA
+
+${sotaMd}
+
+${SOTA_AFFORDANCE}`;
+}
+function assembleHardwareBlock(probeText, alertText) {
+  return alertText ? `${probeText}
+${alertText}` : probeText;
+}
+function parseGpus(probe) {
+  const m = /* @__PURE__ */ new Map();
+  if (!probe) return m;
+  for (const line of probe.split("\n")) {
+    const c3 = line.split("	");
+    if (c3[0] === "gpu" && c3.length >= 4) m.set(c3[1], { name: c3[1], free: Number(c3[3]) });
+  }
+  return m;
+}
+function hardwareDiffAlert(baseline, current) {
+  const base = parseGpus(baseline);
+  const cur = parseGpus(current);
+  const out = [];
+  for (const [name, b] of base) {
+    const c3 = cur.get(name);
+    if (!c3 || !(b.free > 0) || !(c3.free < b.free * 0.5)) continue;
+    const dropPct = Math.trunc((1 - c3.free / b.free) * 100);
+    out.push(`ALERT: gpu '${name}' memory.free ${b.free} -> ${c3.free} MiB (-${dropPct}%)`);
+  }
+  return out.join("\n");
+}
+function formatPeersBlock(peers) {
+  if (peers.length === 0) return "";
+  const lines = [
+    "## Peers",
+    "",
+    "Other workers are exploring this objective in parallel. Diverge from their approaches \u2014",
+    "do not duplicate a pipeline a peer is already running. Use their results to decide where",
+    "the unexplored, promising region of the design space is.",
+    "",
+    "| Worker | Phase | Current/last | Approach | Best metric | Notes |",
+    "|---|---|---|---|---|---|"
+  ];
+  for (const p of peers) {
+    const metric = p.metric === "" ? "" : p.status ? `${p.metric} (${p.status})` : p.metric;
+    const flat = p.notes.replace(/\s+/g, " ").trim();
+    const notes = flat.length > 80 ? flat.slice(0, 77) + "..." : flat;
+    lines.push(`| ${p.agent} | ${p.phase} | ${p.currentExp} | ${p.approach} | ${metric} | ${notes} |`);
+  }
+  return lines.join("\n");
+}
+function buildDispatchState(existing, expId, nowIso) {
+  const prevCounter = existing?.split("\n").find((l) => l.startsWith("exp_counter="))?.slice("exp_counter=".length) ?? "";
+  const n2 = /^[0-9]+$/.test(prevCounter.trim()) ? parseInt(prevCounter, 10) : 0;
+  return mergeState(existing, {
+    phase: "working",
+    current_exp_id: expId,
+    exp_counter: String(n2 + 1),
+    last_event: "dispatched",
+    last_event_ts: nowIso
+  });
+}
+var EXP_ID_RE, AGENT_RE, TOKENS, SOTA_AFFORDANCE;
+var init_autoresearchExperiment = __esm({
+  "src/core/autoresearchExperiment.ts"() {
+    "use strict";
+    init_autoresearchState();
+    EXP_ID_RE = /^exp-[0-9]+$/;
+    AGENT_RE = /^[a-z][a-z0-9-]*$/;
+    TOKENS = [
+      ["{{METRIC_BLOCK}}", "metricBlock"],
+      ["{{HARDWARE_BLOCK}}", "hardwareBlock"],
+      ["{{OUTBOX_PATH}}", "outboxPath"],
+      ["{{TOPIC}}", "topicText"],
+      ["{{EXP_ID}}", "expId"],
+      ["{{APPROACH_LABEL}}", "approachLabel"],
+      ["{{APPROACH_BRIEF}}", "approachBrief"],
+      ["{{BRANCH_DIR}}", "branchDir"],
+      ["{{METRIC_NAME}}", "metricName"],
+      ["{{TIME_BUDGET_S}}", "timeBudgetS"],
+      ["{{TASK_CONTEXT}}", "taskContext"],
+      ["{{SOTA_BLOCK}}", "sotaBlock"],
+      ["{{PEERS_BLOCK}}", "peersBlock"],
+      ["{{ART_DIR}}", "artDir"]
+    ];
+    SOTA_AFFORDANCE = "### Web search affordance\n\nConsult this reference before starting. Web search (curl / pip install / arXiv / HuggingFace / etc.) is allowed when you hit a plateau or before scaling up. Record any consulted source in notes.md under a `## Sources consulted` heading.";
+  }
+});
+
 // src/core/autoresearch.ts
+function latestExpDir(dir) {
+  let latest = "";
+  if ((0, import_node_fs32.existsSync)(dir)) {
+    for (const name of (0, import_node_fs32.readdirSync)(dir)) {
+      if (EXP_ID_RE.test(name) && name > latest) latest = name;
+    }
+  }
+  return latest;
+}
 function autoresearchArtDir(topic, opts) {
   return (0, import_node_path28.join)(topicDir(topic, opts), "_autoresearch");
 }
@@ -21302,6 +21450,7 @@ var init_autoresearch = __esm({
     import_node_fs32 = require("node:fs");
     import_node_path28 = require("node:path");
     init_paths();
+    init_autoresearchExperiment();
   }
 });
 
@@ -21397,65 +21546,6 @@ var init_autoresearchResult = __esm({
     ];
     STATUS_ENUM = ["ok", "fail", "timeout", "cost_blown"];
     NUM_RE = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
-  }
-});
-
-// src/core/autoresearchState.ts
-function parseState(text) {
-  const kv = {};
-  for (const line of text.split("\n")) {
-    if (!line) continue;
-    const eq = line.indexOf("=");
-    if (eq <= 0) continue;
-    kv[line.slice(0, eq)] = line.slice(eq + 1).replace(/\\n/g, "\n");
-  }
-  return kv;
-}
-function renderState(kv) {
-  const lines = [];
-  for (const [k, v] of Object.entries(kv)) {
-    if (!k) continue;
-    lines.push(`${k}=${v.replace(/\n/g, "\\n")}`);
-  }
-  return lines.join("\n") + "\n";
-}
-function mergeState(existing, updates) {
-  const kv = existing ? parseState(existing) : {};
-  for (const [k, v] of Object.entries(updates)) if (k) kv[k] = v;
-  return renderState(kv);
-}
-function reconcileFromOutbox(outboxTail, doneResultExists) {
-  let sawDone = false, sawError = false;
-  for (const line of outboxTail.split("\n")) {
-    const t = line.trim();
-    if (!t) continue;
-    try {
-      const o2 = JSON.parse(t);
-      if (o2.event === "done") sawDone = true;
-      else if (o2.event === "error") sawError = true;
-    } catch {
-    }
-  }
-  if (sawError) return "failed";
-  if (sawDone) return doneResultExists ? "idle" : null;
-  return null;
-}
-function readHaltFlag(body) {
-  if (body === null || body.trim() === "") return { format: "missing" };
-  const firstLine = body.split("\n").find((l) => l.trim() !== "") ?? "";
-  if (firstLine.startsWith("halted_by=")) {
-    const fields = {};
-    for (const line of body.split("\n")) {
-      const eq = line.indexOf("=");
-      if (eq > 0) fields[line.slice(0, eq)] = line.slice(eq + 1);
-    }
-    return { format: "structured", fields };
-  }
-  return { format: "prose", reason: body.split("\n").join(" ").replace(/\s+$/, "") };
-}
-var init_autoresearchState = __esm({
-  "src/core/autoresearchState.ts"() {
-    "use strict";
   }
 });
 
@@ -21700,13 +21790,7 @@ function inspectInfeasibleReason(verdict) {
   return verdict === "not-reproduced" ? "reimpl-mismatch" : null;
 }
 function parseInspections(tsv) {
-  const out = {};
-  for (const line of tsv.split("\n")) {
-    if (!line || line.startsWith("exp_id	")) continue;
-    const c3 = line.split("	");
-    if (c3[0] && c3[1] && c3[2]) out[`${c3[1]}/${c3[0]}`] = c3[2];
-  }
-  return out;
+  return parseVerdicts2(tsv);
 }
 function inspectionRow(r) {
   return `${r.expId}	${r.agent}	${r.verdict}	${r.reason}	${r.reimplMetric}	${r.ts}
@@ -21716,6 +21800,7 @@ var INSPECTION_TSV_HEADER;
 var init_autoresearchInspect = __esm({
   "src/core/autoresearchInspect.ts"() {
     "use strict";
+    init_autoresearchInfeasible();
     INSPECTION_TSV_HEADER = "exp_id	agent	verdict	reason	reimpl_metric	ts\n";
   }
 });
@@ -21994,7 +22079,9 @@ function checkCompletion(scoreboardMd, metricMd) {
   const byFam = /* @__PURE__ */ new Map();
   for (const r of okRows) {
     const fam = normalizeFamily(r.approach);
-    (byFam.get(fam) ?? byFam.set(fam, []).get(fam)).push({ exp: r.exp, mv: parseFloat(r.metric) });
+    let arr = byFam.get(fam);
+    if (!arr) byFam.set(fam, arr = []);
+    arr.push({ exp: r.exp, mv: parseFloat(r.metric) });
   }
   const familiesActive = byFam.size;
   let familiesImproving = 0;
@@ -22270,105 +22357,6 @@ var init_autoresearchMonitor = __esm({
   }
 });
 
-// src/core/autoresearchExperiment.ts
-function renderExperimentPrompt(template, f) {
-  let out = template;
-  for (const [token, key] of TOKENS) out = out.split(token).join(f[key]);
-  const leftover = out.match(/\{\{[A-Z_]+\}\}/);
-  if (leftover) throw new Error(`renderExperimentPrompt: unrendered placeholder ${leftover[0]}`);
-  return out;
-}
-function buildSotaBlock(sotaMd) {
-  if (!sotaMd || sotaMd.trim() === "") return "";
-  return `## Reference: SOTA
-
-${sotaMd}
-
-${SOTA_AFFORDANCE}`;
-}
-function assembleHardwareBlock(probeText, alertText) {
-  return alertText ? `${probeText}
-${alertText}` : probeText;
-}
-function parseGpus(probe) {
-  const m = /* @__PURE__ */ new Map();
-  if (!probe) return m;
-  for (const line of probe.split("\n")) {
-    const c3 = line.split("	");
-    if (c3[0] === "gpu" && c3.length >= 4) m.set(c3[1], { name: c3[1], free: Number(c3[3]) });
-  }
-  return m;
-}
-function hardwareDiffAlert(baseline, current) {
-  const base = parseGpus(baseline);
-  const cur = parseGpus(current);
-  const out = [];
-  for (const [name, b] of base) {
-    const c3 = cur.get(name);
-    if (!c3 || !(b.free > 0) || !(c3.free < b.free * 0.5)) continue;
-    const dropPct = Math.trunc((1 - c3.free / b.free) * 100);
-    out.push(`ALERT: gpu '${name}' memory.free ${b.free} -> ${c3.free} MiB (-${dropPct}%)`);
-  }
-  return out.join("\n");
-}
-function formatPeersBlock(peers) {
-  if (peers.length === 0) return "";
-  const lines = [
-    "## Peers",
-    "",
-    "Other workers are exploring this objective in parallel. Diverge from their approaches \u2014",
-    "do not duplicate a pipeline a peer is already running. Use their results to decide where",
-    "the unexplored, promising region of the design space is.",
-    "",
-    "| Worker | Phase | Current/last | Approach | Best metric | Notes |",
-    "|---|---|---|---|---|---|"
-  ];
-  for (const p of peers) {
-    const metric = p.metric === "" ? "" : p.status ? `${p.metric} (${p.status})` : p.metric;
-    const flat = p.notes.replace(/\s+/g, " ").trim();
-    const notes = flat.length > 80 ? flat.slice(0, 77) + "..." : flat;
-    lines.push(`| ${p.agent} | ${p.phase} | ${p.currentExp} | ${p.approach} | ${metric} | ${notes} |`);
-  }
-  return lines.join("\n");
-}
-function buildDispatchState(existing, expId, nowIso) {
-  const prevCounter = existing?.split("\n").find((l) => l.startsWith("exp_counter="))?.slice("exp_counter=".length) ?? "";
-  const n2 = /^[0-9]+$/.test(prevCounter.trim()) ? parseInt(prevCounter, 10) : 0;
-  return mergeState(existing, {
-    phase: "working",
-    current_exp_id: expId,
-    exp_counter: String(n2 + 1),
-    last_event: "dispatched",
-    last_event_ts: nowIso
-  });
-}
-var EXP_ID_RE, AGENT_RE, TOKENS, SOTA_AFFORDANCE;
-var init_autoresearchExperiment = __esm({
-  "src/core/autoresearchExperiment.ts"() {
-    "use strict";
-    init_autoresearchState();
-    EXP_ID_RE = /^exp-[0-9]+$/;
-    AGENT_RE = /^[a-z][a-z0-9-]*$/;
-    TOKENS = [
-      ["{{METRIC_BLOCK}}", "metricBlock"],
-      ["{{HARDWARE_BLOCK}}", "hardwareBlock"],
-      ["{{OUTBOX_PATH}}", "outboxPath"],
-      ["{{TOPIC}}", "topicText"],
-      ["{{EXP_ID}}", "expId"],
-      ["{{APPROACH_LABEL}}", "approachLabel"],
-      ["{{APPROACH_BRIEF}}", "approachBrief"],
-      ["{{BRANCH_DIR}}", "branchDir"],
-      ["{{METRIC_NAME}}", "metricName"],
-      ["{{TIME_BUDGET_S}}", "timeBudgetS"],
-      ["{{TASK_CONTEXT}}", "taskContext"],
-      ["{{SOTA_BLOCK}}", "sotaBlock"],
-      ["{{PEERS_BLOCK}}", "peersBlock"],
-      ["{{ART_DIR}}", "artDir"]
-    ];
-    SOTA_AFFORDANCE = "### Web search affordance\n\nConsult this reference before starting. Web search (curl / pip install / arXiv / HuggingFace / etc.) is allowed when you hit a plateau or before scaling up. Record any consulted source in notes.md under a `## Sources consulted` heading.";
-  }
-});
-
 // src/core/autoresearchHandoff.ts
 function parseScoreboard(md) {
   const rows = [];
@@ -22568,9 +22556,7 @@ function resolveTimeBudget(v) {
   throw new Error(`invalid --time-budget: '${v}' (expected 'none', '<N>h', '<N>s', or positive seconds)`);
 }
 async function initWith4(args, deps) {
-  const out = deps.stdout ?? ((l) => {
-    process.stdout.write(l + "\n");
-  });
+  const out = deps.stdout ?? stdoutLine;
   const p = parseInitArgs(args);
   if (p.badFlag) {
     log.error(`autoresearch init: unknown flag: ${p.badFlag}`);
@@ -22798,9 +22784,7 @@ async function verifyPlanWith(args, deps) {
   const block = parseVerifyBlock(result);
   const manifest = deps.readManifest(art, agent, expId);
   const plan = planVerify({ block, manifest, authorizeRerun: authorize, readInput: (rel) => deps.readInput(art, agent, expId, rel) });
-  const out = deps.stdout ?? ((l) => {
-    process.stdout.write(l + "\n");
-  });
+  const out = deps.stdout ?? stdoutLine;
   if (!plan.run) {
     deps.writeRow(art, agent, expId, { expId, agent, verdict: plan.verdict, reason: plan.reason, recomputed: "", ts: deps.now() });
     out(`VERDICT=${plan.verdict} reason=${plan.reason}`);
@@ -22848,9 +22832,7 @@ async function verifyCheckWith(args, deps) {
   }
   const { verdict, reason } = checkVerify({ recomputed, runFailed, reported, epsilon });
   deps.writeRow(art, agent, expId, { expId, agent, verdict, reason, recomputed: recomputed === null ? "" : String(recomputed), ts: deps.now() });
-  const out = deps.stdout ?? ((l) => {
-    process.stdout.write(l + "\n");
-  });
+  const out = deps.stdout ?? stdoutLine;
   out(`VERDICT=${verdict} reason=${reason}`);
   return 0;
 }
@@ -22868,9 +22850,7 @@ async function inspectPlanWith(args, deps) {
     log.error(`autoresearch inspect-plan: result.json missing for ${agent}/${expId}`);
     return 1;
   }
-  const out = deps.stdout ?? ((l) => {
-    process.stdout.write(l + "\n");
-  });
+  const out = deps.stdout ?? stdoutLine;
   const term = (verdict, reason) => {
     deps.writeRow(art, agent, expId, { expId, agent, verdict, reason, reimplMetric: "", ts: deps.now() });
     out(`VERDICT=${verdict} reason=${reason}`);
@@ -22930,9 +22910,7 @@ async function inspectCheckWith(args, deps) {
   }
   const { verdict, reason } = classifyInspect({ reimplMetric, runFailed, reported, epsilon, integrityRefuted });
   deps.writeRow(art, agent, expId, { expId, agent, verdict, reason, reimplMetric: reimplMetric === null ? "" : String(reimplMetric), ts: deps.now() });
-  const out = deps.stdout ?? ((l) => {
-    process.stdout.write(l + "\n");
-  });
+  const out = deps.stdout ?? stdoutLine;
   out(`VERDICT=${verdict} reason=${reason}`);
   return 0;
 }
@@ -22988,11 +22966,7 @@ function gatherPeers(art, self) {
     }
     let latest = currentExp;
     const expsDir = (0, import_node_path30.join)(peerDir, "experiments");
-    if (!latest && (0, import_node_fs33.existsSync)(expsDir)) {
-      for (const name of (0, import_node_fs33.readdirSync)(expsDir)) {
-        if (EXP_ID_RE.test(name) && name > latest) latest = name;
-      }
-    }
+    if (!latest) latest = latestExpDir(expsDir);
     let approach = "", metric = "", status = "", notes = "";
     if (latest) {
       const r = readResultJson((0, import_node_path30.join)(expsDir, latest, "result.json"));
@@ -23006,9 +22980,7 @@ function gatherPeers(art, self) {
   return rows;
 }
 async function experimentSendWith(args, deps) {
-  const out = deps.stdout ?? ((l) => {
-    process.stdout.write(l + "\n");
-  });
+  const out = deps.stdout ?? stdoutLine;
   const opts = deps.opts;
   const p = parseExperimentSendArgs(args);
   if (p.badArgs) {
@@ -23331,9 +23303,7 @@ function readTsvRows(path6, headerToken) {
   return rows;
 }
 async function statusBriefWith(args, v = {}) {
-  const out = v.stdout ?? ((l) => {
-    process.stdout.write(l + "\n");
-  });
+  const out = v.stdout ?? stdoutLine;
   const p = parseStatusBriefArgs(args);
   if (!p.topic) {
     log.error("autoresearch status-brief: topic required");
@@ -23356,14 +23326,8 @@ async function statusBriefWith(args, v = {}) {
       if (curExp) {
         currentOrLast = curExp;
       } else {
-        const expsRoot = experimentsDir(art, agent);
-        if ((0, import_node_fs33.existsSync)(expsRoot)) {
-          let newest = "";
-          for (const name of (0, import_node_fs33.readdirSync)(expsRoot)) {
-            if (EXP_ID_RE.test(name) && name > newest) newest = name;
-          }
-          if (newest) currentOrLast = newest;
-        }
+        const newest = latestExpDir(experimentsDir(art, agent));
+        if (newest) currentOrLast = newest;
       }
       const expForFiles = curExp || (currentOrLast !== "\u2014" ? currentOrLast : "");
       const promptPath = expForFiles ? (0, import_node_path30.join)(experimentDir(art, agent, expForFiles), "prompt.md") : "";
@@ -23879,9 +23843,7 @@ function sweepTmpLock(dir, depth) {
   }
 }
 async function teardownWith(args, deps) {
-  const out = deps.stdout ?? ((l) => {
-    process.stdout.write(l + "\n");
-  });
+  const out = deps.stdout ?? stdoutLine;
   const panesOnly = args.includes("--panes-only");
   const topic = args.find((a2) => !a2.startsWith("--"));
   if (!topic) {
@@ -24173,7 +24135,7 @@ async function run13(args) {
       return usage4();
   }
 }
-var import_node_fs33, import_node_child_process10, import_node_path30, liveInitDeps4, liveSpawnAllDeps2, liveDropWorkerDeps, liveExperimentSendDeps, liveScoreDeps, sleep4, GIB, liveFinalizeDeps, liveRefineDeps, liveHandoffDeps, liveTeardownDeps, liveFreshWorkerDeps, liveAbortDeps, liveConsensusDeps, liveVerifyPlanDeps, liveVerifyCheckDeps, liveInspectPlanDeps, liveInspectCheckDeps;
+var import_node_fs33, import_node_child_process10, import_node_path30, stdoutLine, liveInitDeps4, liveSpawnAllDeps2, liveDropWorkerDeps, liveExperimentSendDeps, liveScoreDeps, sleep4, GIB, liveFinalizeDeps, liveRefineDeps, liveHandoffDeps, liveTeardownDeps, liveFreshWorkerDeps, liveAbortDeps, liveConsensusDeps, liveVerifyPlanDeps, liveVerifyCheckDeps, liveInspectPlanDeps, liveInspectCheckDeps;
 var init_autoresearch2 = __esm({
   "src/commands/autoresearch.ts"() {
     "use strict";
@@ -24217,6 +24179,9 @@ var init_autoresearch2 = __esm({
     init_preflight();
     init_send2();
     init_stop();
+    stdoutLine = (l) => {
+      process.stdout.write(l + "\n");
+    };
     liveInitDeps4 = {
       haveCmd,
       agentBinary,
@@ -25519,16 +25484,13 @@ TARGET=${repo}
 `);
   return 0;
 }
-function readField2(path6) {
-  return readIfExists(path6).split("\n")[0].trim();
-}
 async function branchRun3(rest) {
   const topic = rest[0];
   if (!topic) {
     log.error("usage: bridge branch <topic>");
     return 2;
   }
-  const target = readField2((0, import_node_path35.join)(bridgeExecDir(topic), "target_cwd.txt"));
+  const target = readField((0, import_node_path35.join)(bridgeExecDir(topic), "target_cwd.txt"));
   if (!target) {
     log.error("bridge branch: target_cwd.txt missing \u2014 run bridge init first");
     return 1;
@@ -25572,8 +25534,8 @@ async function roundSendRun(rest) {
 async function roundSendWith(topic, round, d) {
   const art = bridgeArtDir(topic);
   const exec = bridgeExecDir(topic);
-  const agent = readField2((0, import_node_path35.join)(art, "agent.txt"));
-  const provider = readField2((0, import_node_path35.join)(art, "selected-provider.txt"));
+  const agent = readField((0, import_node_path35.join)(art, "agent.txt"));
+  const provider = readField((0, import_node_path35.join)(art, "selected-provider.txt"));
   if (!agent || !provider) {
     log.error("bridge round-send: missing agent.txt/selected-provider.txt (run bridge init)");
     return 1;
@@ -25599,8 +25561,8 @@ async function roundSendWith(topic, round, d) {
   let prompt;
   if (round === 1) {
     const task = readIfExists((0, import_node_path35.join)(art, "topic-text.txt"));
-    const repo = readField2((0, import_node_path35.join)(exec, "target_cwd.txt"));
-    const branch = readField2((0, import_node_path35.join)(exec, "branch.txt")) || "the current branch";
+    const repo = readField((0, import_node_path35.join)(exec, "target_cwd.txt"));
+    const branch = readField((0, import_node_path35.join)(exec, "branch.txt")) || "the current branch";
     prompt = composeBridgeBrief(task, repo, branch);
   } else {
     const bundle = (0, import_node_path35.join)(exec, `followup-${round}.md`);
@@ -25635,8 +25597,8 @@ async function roundWaitRun(rest) {
 async function roundWaitWith(topic, round, d) {
   const art = bridgeArtDir(topic);
   const exec = bridgeExecDir(topic);
-  const agent = readField2((0, import_node_path35.join)(art, "agent.txt"));
-  const provider = readField2((0, import_node_path35.join)(art, "selected-provider.txt"));
+  const agent = readField((0, import_node_path35.join)(art, "agent.txt"));
+  const provider = readField((0, import_node_path35.join)(art, "selected-provider.txt"));
   if (!agent || !provider) {
     log.error("bridge round-wait: missing agent.txt/selected-provider.txt");
     return 1;
@@ -25667,12 +25629,6 @@ TS=question
   log.ok(`bridge round-wait: round=${round} TS=${ts}`);
   return 0;
 }
-function kvField2(path6, key) {
-  if (!(0, import_node_fs36.existsSync)(path6)) return "";
-  const k = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const m = (0, import_node_fs36.readFileSync)(path6, "utf8").match(new RegExp(`^${k}=(.*)$`, "m"));
-  return m ? m[1].trim() : "";
-}
 async function relayRun(rest) {
   const [topic, roundStr, ...answerParts] = rest;
   const round = Number(roundStr);
@@ -25681,8 +25637,8 @@ async function relayRun(rest) {
     return 2;
   }
   const art = bridgeArtDir(topic);
-  const agent = readField2((0, import_node_path35.join)(art, "agent.txt"));
-  const provider = readField2((0, import_node_path35.join)(art, "selected-provider.txt"));
+  const agent = readField((0, import_node_path35.join)(art, "agent.txt"));
+  const provider = readField((0, import_node_path35.join)(art, "selected-provider.txt"));
   if (!agent || !provider) {
     log.error("bridge relay: missing agent/provider (run bridge init)");
     return 1;
@@ -25709,7 +25665,7 @@ async function finishRun3(rest) {
     log.error("usage: bridge finish <topic>");
     return 2;
   }
-  const target = readField2((0, import_node_path35.join)(bridgeExecDir(topic), "target_cwd.txt"));
+  const target = readField((0, import_node_path35.join)(bridgeExecDir(topic), "target_cwd.txt"));
   if (!target) {
     log.error("bridge finish: target_cwd.txt missing/empty \u2014 refusing (will NOT fall back to the conductor repo)");
     return 1;
@@ -25718,21 +25674,21 @@ async function finishRun3(rest) {
 }
 async function finishWith3(topic, r, hasGh) {
   const exec = bridgeExecDir(topic);
-  const mode = readField2((0, import_node_path35.join)(exec, "mode.txt")) || "branch";
+  const mode = readField((0, import_node_path35.join)(exec, "mode.txt")) || "branch";
   if (mode === "in-place") {
     atomicWrite((0, import_node_path35.join)(exec, "finish-result.txt"), "none	in-place (commits on the current branch)\n");
     log.ok("bridge finish: in-place \u2014 commits left on the current branch");
     return 0;
   }
-  const branch = readField2((0, import_node_path35.join)(exec, "branch.txt"));
-  const startBranch = readField2((0, import_node_path35.join)(exec, "start-branch.txt")) || "main";
-  const base = readField2((0, import_node_path35.join)(exec, "branch-base.sha"));
+  const branch = readField((0, import_node_path35.join)(exec, "branch.txt"));
+  const startBranch = readField((0, import_node_path35.join)(exec, "start-branch.txt")) || "main";
+  const base = readField((0, import_node_path35.join)(exec, "branch-base.sha"));
   if (base) {
-    const ds = r.run("git", ["diff", "--shortstat", `${base}..HEAD`]).stdout.trim();
+    const ds = shortstat(r, base);
     atomicWrite((0, import_node_path35.join)(exec, "diff-stats.txt"), (ds || "(no changes)") + "\n");
   }
   const task = readIfExists((0, import_node_path35.join)(bridgeArtDir(topic), "topic-text.txt"));
-  const verify = readField2((0, import_node_path35.join)(exec, "verify-result.txt"));
+  const verify = readField((0, import_node_path35.join)(exec, "verify-result.txt"));
   const res = finishBranchPrMerge(r, {
     branch,
     base: startBranch,
@@ -25757,7 +25713,7 @@ async function summaryRun3(rest) {
   }
   const art = bridgeArtDir(topic);
   const exec = bridgeExecDir(topic);
-  const started = kvField2((0, import_node_path35.join)(art, "timing.txt"), "started") || "unknown";
+  const started = kvField((0, import_node_path35.join)(art, "timing.txt"), "started") || "unknown";
   let ended, duration;
   const i2 = rest.indexOf("--aborted");
   const aborted2 = i2 >= 0;
@@ -25778,16 +25734,16 @@ duration=${duration}
     started,
     ended,
     duration,
-    provider: readField2((0, import_node_path35.join)(art, "selected-provider.txt")) || "unknown",
-    agent: readField2((0, import_node_path35.join)(art, "agent.txt")) || "unknown",
-    repo: readField2((0, import_node_path35.join)(exec, "target_cwd.txt")) || "<repo>",
-    mode: readField2((0, import_node_path35.join)(exec, "mode.txt")) || "branch",
-    branch: readField2((0, import_node_path35.join)(exec, "branch.txt")) || "(none)",
+    provider: readField((0, import_node_path35.join)(art, "selected-provider.txt")) || "unknown",
+    agent: readField((0, import_node_path35.join)(art, "agent.txt")) || "unknown",
+    repo: readField((0, import_node_path35.join)(exec, "target_cwd.txt")) || "<repo>",
+    mode: readField((0, import_node_path35.join)(exec, "mode.txt")) || "branch",
+    branch: readField((0, import_node_path35.join)(exec, "branch.txt")) || "(none)",
     rounds,
-    verify: readField2((0, import_node_path35.join)(exec, "verify-result.txt")) || "unknown",
-    diffStats: readField2((0, import_node_path35.join)(exec, "diff-stats.txt")) || "unknown",
-    archived: readField2((0, import_node_path35.join)(art, "archived-path.txt")) || "(not archived)",
-    finishResult: readField2((0, import_node_path35.join)(exec, "finish-result.txt")) || "(not finished)",
+    verify: readField((0, import_node_path35.join)(exec, "verify-result.txt")) || "unknown",
+    diffStats: readField((0, import_node_path35.join)(exec, "diff-stats.txt")) || "unknown",
+    archived: readField((0, import_node_path35.join)(art, "archived-path.txt")) || "(not archived)",
+    finishResult: readField((0, import_node_path35.join)(exec, "finish-result.txt")) || "(not finished)",
     abortedPhase: aborted2 ? rest[i2 + 1] : void 0,
     abortedGate: aborted2 ? rest[i2 + 2] : void 0,
     abortedReason: aborted2 ? rest.slice(i2 + 3).join(" ") || "unknown" : void 0

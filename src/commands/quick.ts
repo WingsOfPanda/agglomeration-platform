@@ -17,7 +17,7 @@ import { outboxOffset, outboxPath, outboxWaitSince, statusPath, type OutboxEvent
 import { composeRound1Prompt, composeFixPrompt, classifyTurn } from "../core/turn.js";
 import { parseLatestOffset } from "../core/designTurn.js";
 import { run as sendRun } from "./send.js";
-import { readIfExists } from "../core/fsread.js";
+import { readIfExists, readField, kvField } from "../core/fsread.js";
 
 function usage(): number {
   log.error("usage: quick <init|branch|turn-send|turn-wait|detect-test|finish|forensics|summary> ...");
@@ -163,10 +163,6 @@ export async function turnSendWith(topic: string, round: number, d: TurnSendDeps
   return 0;
 }
 
-/** Read the first line of a single-value state file, trimmed; "" if absent. */
-function readField(path: string): string {
-  return readIfExists(path).split("\n")[0].trim();
-}
 export interface TurnWaitDeps {
   wait(agent: string, model: string, topic: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null>;
 }
@@ -287,12 +283,4 @@ async function summaryRun(rest: string[]): Promise<number> {
   }
   log.ok(`quick summary: wrote ${join(art, "SUMMARY.md")}`);
   return 0;
-}
-
-/** Read a `key=value` line from a KV file; "" if absent. */
-function kvField(path: string, key: string): string {
-  if (!existsSync(path)) return "";
-  const k = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const m = readFileSync(path, "utf8").match(new RegExp(`^${k}=(.*)$`, "m"));
-  return m ? m[1].trim() : "";
 }

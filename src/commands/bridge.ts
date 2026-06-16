@@ -8,9 +8,9 @@ import { isoUtc } from "../core/archive.js";
 import { agentBinary } from "../core/contracts.js";
 import { haveCmd } from "../core/deps.js";
 import { pickRandomAgent } from "../core/agents.js";
-import { runnerAt, preSnapshot, createOrResumeBranch, finishBranchPrMerge } from "../core/gitwork.js";
+import { runnerAt, preSnapshot, createOrResumeBranch, finishBranchPrMerge, shortstat } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
-import { readIfExists } from "../core/fsread.js";
+import { readIfExists, readField, kvField } from "../core/fsread.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { detectTestCommand } from "../core/quick.js";
 import { repoRoot } from "../core/paths.js";
@@ -99,10 +99,6 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
   log.ok(`bridge init: topic=${slug} agent=${agent} provider=${provider} mode=${mode} repo=${repo}`);
   process.stdout.write(`SLUG=${slug}\nAGENT=${agent}\nPROVIDER=${provider}\nMODE=${mode}\nTARGET=${repo}\n`);
   return 0;
-}
-
-function readField(path: string): string {
-  return readIfExists(path).split("\n")[0].trim();
 }
 
 async function branchRun(rest: string[]): Promise<number> {
@@ -222,14 +218,6 @@ export async function roundWaitWith(topic: string, round: number, d: TurnWaitDep
   return 0;
 }
 
-// Local mirror of quick.ts's private kvField (reads a key=value line from a state file).
-function kvField(path: string, key: string): string {
-  if (!existsSync(path)) return "";
-  const k = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const m = readFileSync(path, "utf8").match(new RegExp(`^${k}=(.*)$`, "m"));
-  return m ? m[1].trim() : "";
-}
-
 async function relayRun(rest: string[]): Promise<number> {
   const [topic, roundStr, ...answerParts] = rest;
   const round = Number(roundStr);
@@ -275,7 +263,7 @@ export async function finishWith(topic: string, r: Runner, hasGh: boolean): Prom
   const startBranch = readField(join(exec, "start-branch.txt")) || "main";
   const base = readField(join(exec, "branch-base.sha"));
   if (base) {
-    const ds = r.run("git", ["diff", "--shortstat", `${base}..HEAD`]).stdout.trim();
+    const ds = shortstat(r, base);
     atomicWrite(join(exec, "diff-stats.txt"), (ds || "(no changes)") + "\n");
   }
   const task = readIfExists(join(bridgeArtDir(topic), "topic-text.txt"));
