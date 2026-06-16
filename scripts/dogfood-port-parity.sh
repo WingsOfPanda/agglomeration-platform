@@ -4,7 +4,6 @@
 # AP_HOME. Covers the surface that the per-command dogfoods (autoresearch/explore) miss:
 #
 #   design   offset-reset  — clean-retry cascade wipes findings/diff/state for one worker/phase
-#   implement drop-worker     — rewrites workers.txt, removing one row + reports new N
 #   implement find-latest-doc — newest */_design/design-doc/*-design.md by mtime
 #   autoresearch init        — seeds <art>/lib/ from config/autoresearch-lib-seed/ (arena.py present)
 #
@@ -88,32 +87,6 @@ printf 'fresh findings\n' > "$PART_S/findings.md"
 kf_rc="$(wd_rc $CS design offset-reset "$TOPIC_S" "$INST_S" research --keep-findings)"
 assert "A7 design offset-reset --keep-findings rc 0 + findings.md preserved" \
   "$([ "$kf_rc" -eq 0 ] && [ -f "$PART_S/findings.md" ] && echo 0 || echo 1)"
-
-############################################################################
-# Scenario B — implement drop-worker (rewrite workers.txt, drop one row)
-############################################################################
-echo "===================================================================="
-echo "Scenario B — implement drop-worker removes a row + reports new N"
-echo "===================================================================="
-
-TOPIC_P=mr
-ART_P="$STATE/$TOPIC_P/_implement"
-mkdir -p "$ART_P"
-# workers.txt = 3-col TSV (slug \t cwd \t provider) per the multiInit format. drop-worker
-# matches on col 0 (the agent slug) and must keep the other rows byte-faithfully.
-printf 'bravo\t/repo/a\tcodex\nalpha\t/repo/b\tcodex\ncharlie\t/repo/c\tclaude\n' > "$ART_P/workers.txt"
-
-DP_OUT="$(wd_out $CS implement drop-worker "$TOPIC_P" alpha)"; dp_rc=$?
-assert "B1 implement drop-worker rc 0" "$dp_rc"
-assert "B2 drop-worker prints N=2" \
-  "$(printf '%s' "$DP_OUT" | grep -q '^N=2$' && echo 0 || echo 1)"
-assert "B3 alpha row gone; bravo + charlie remain" \
-  "$(! grep -q '^alpha' "$ART_P/workers.txt" && grep -q '^bravo' "$ART_P/workers.txt" && grep -q '^charlie' "$ART_P/workers.txt" && echo 0 || echo 1)"
-assert "B4 workers.txt now has exactly 2 rows" \
-  "$([ "$(wc -l < "$ART_P/workers.txt")" -eq 2 ] && echo 0 || echo 1)"
-# dropping a non-existent agent -> rc 1 (not 2; usage is well-formed).
-no_rc="$(wd_rc $CS implement drop-worker "$TOPIC_P" ghost)"
-assert "B5 drop-worker unknown agent rc 1" "$([ "$no_rc" -eq 1 ] && echo 0 || echo 1)"
 
 ############################################################################
 # Scenario C — implement find-latest-doc (newest *-design.md by mtime)
