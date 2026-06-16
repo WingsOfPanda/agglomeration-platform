@@ -18145,7 +18145,7 @@ function finishBranchPrMerge(r, o2) {
   const url = o2.originUrl ?? r.run("git", ["remote", "get-url", "origin"]).stdout.trim();
   const title = o2.title ?? `bridge: ${o2.branch}`;
   const body = o2.body ?? `Automated bridge branch. Merged into ${o2.base}.`;
-  if (r.run("gh", ["pr", "create", "--repo", url, "--base", o2.base, "--head", o2.branch, "--title", title, "--body", body]).code !== 0) {
+  if (r.run("gh", ["pr", "create", "--repo", url, "--base", o2.base, "--head", o2.branch, "--title", title, "--body", body]).code !== 0 && r.run("gh", ["pr", "view", o2.branch, "--repo", url, "--json", "number"]).code !== 0) {
     r.run("git", ["checkout", "-q", o2.base]);
     return { action: "pr-merge", outcome: "pr-create-failed" };
   }

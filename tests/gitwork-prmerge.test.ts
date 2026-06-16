@@ -64,4 +64,24 @@ describe("finishBranchPrMerge", () => {
     const res = finishBranchPrMerge(r, opts);
     expect(res).toEqual({ action: "none", outcome: "no-branch" });
   });
+
+  it("pr create fails + no existing PR → pr-create-failed (existence checked, no merge)", () => {
+    const log: string[] = [];
+    const r = fakeRunner({ ...BRANCH_EXISTS, "git remote": { stdout: "origin\n" }, "git remote get-url origin": { stdout: "u\n" }, "gh pr create": { code: 1 }, "gh pr view": { code: 1 } }, log);
+    const res = finishBranchPrMerge(r, opts);
+    expect(res).toEqual({ action: "pr-merge", outcome: "pr-create-failed" });
+    const seq = log.join(" | ");
+    expect(seq).toMatch(/gh pr view feat\/bridge-x --repo u --json number/);
+    expect(seq).not.toMatch(/gh pr merge/);
+  });
+
+  it("pr create fails but a PR already exists → merges it (worker self-created the PR)", () => {
+    const log: string[] = [];
+    const r = fakeRunner({ ...BRANCH_EXISTS, "git remote": { stdout: "origin\n" }, "git remote get-url origin": { stdout: "u\n" }, "gh pr create": { code: 1 }, "gh pr view": { code: 0 } }, log);
+    const res = finishBranchPrMerge(r, opts);
+    expect(res).toEqual({ action: "pr-merge", outcome: "pr-merged-pulled" });
+    const seq = log.join(" | ");
+    expect(seq).toMatch(/gh pr view feat\/bridge-x --repo u --json number/);
+    expect(seq).toMatch(/gh pr merge feat\/bridge-x --merge --delete-branch/);
+  });
 });
