@@ -12,7 +12,7 @@ import { splitNonCommentLines } from "../core/text.js";
 import { archiveTopic, isoUtc } from "../core/archive.js";
 import { deriveSlug } from "../core/quick.js";
 import { extractMetric, formatMetricBlock, formatSotaBlock, parseMetricMd } from "../core/autoresearchMetric.js";
-import { autoresearchArtDir, workersDir, workerStateDir, experimentsDir, experimentDir, seedLib } from "../core/autoresearch.js";
+import { autoresearchArtDir, workersDir, workerStateDir, experimentsDir, experimentDir, seedLib, latestExpDir } from "../core/autoresearch.js";
 import { computeScore, type ScoreFs, type ScoreComputation } from "../core/autoresearchScore.js";
 import { sanityRow, SANITY_TSV_HEADER } from "../core/autoresearchSanity.js";
 import { coverageRow, COVERAGE_TSV_HEADER, type CoverageRow } from "../core/autoresearchCoverage.js";
@@ -46,6 +46,9 @@ import { run as sendRun } from "./send.js";
 import { run as stopRun } from "./stop.js";
 
 type PathOpts = { home?: string; cwd?: string };
+
+/** Default line-writer used wherever a deps.stdout override is absent. */
+const stdoutLine = (l: string): void => { process.stdout.write(l + "\n"); };
 
 function usage(): number {
   log.error("usage: autoresearch <init|metric|sota|spawn-all|drop-worker|verify-plan|verify-check|inspect-plan|inspect-check|experiment-send|score|monitor|status-brief|finalize|refine|handoff-extract|teardown|fresh-worker|forensics|abort|consensus> ...");
@@ -102,7 +105,7 @@ function resolveTimeBudget(v: string): string {
 }
 
 export async function initWith(args: string[], deps: AutoresearchInitDeps): Promise<number> {
-  const out = deps.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
+  const out = deps.stdout ?? stdoutLine;
   const p = parseInitArgs(args);
   if (p.badFlag) { log.error(`autoresearch init: unknown flag: ${p.badFlag}`); return 2; }
   if (!p.topic) { log.error("autoresearch init: topic required"); return 2; }
@@ -301,7 +304,7 @@ export async function verifyPlanWith(args: string[], deps: VerifyPlanDeps): Prom
   const block = parseVerifyBlock(result);
   const manifest = deps.readManifest(art, agent, expId);
   const plan = planVerify({ block, manifest, authorizeRerun: authorize, readInput: (rel) => deps.readInput(art, agent, expId, rel) });
-  const out = deps.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
+  const out = deps.stdout ?? stdoutLine;
   if (!plan.run) {
     deps.writeRow(art, agent, expId, { expId, agent, verdict: plan.verdict, reason: plan.reason, recomputed: "", ts: deps.now() });
     out(`VERDICT=${plan.verdict} reason=${plan.reason}`);
@@ -353,7 +356,7 @@ export async function verifyCheckWith(args: string[], deps: VerifyCheckDeps): Pr
   }
   const { verdict, reason } = checkVerify({ recomputed, runFailed, reported, epsilon });
   deps.writeRow(art, agent, expId, { expId, agent, verdict, reason, recomputed: recomputed === null ? "" : String(recomputed), ts: deps.now() });
-  const out = deps.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
+  const out = deps.stdout ?? stdoutLine;
   out(`VERDICT=${verdict} reason=${reason}`);
   return 0;
 }
@@ -378,7 +381,7 @@ export async function inspectPlanWith(args: string[], deps: InspectPlanDeps): Pr
   const art = autoresearchArtDir(topic, deps.opts);
   const result = deps.readResult(art, agent, expId);
   if (result === null) { log.error(`autoresearch inspect-plan: result.json missing for ${agent}/${expId}`); return 1; }
-  const out = deps.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
+  const out = deps.stdout ?? stdoutLine;
   const term = (verdict: InspectVerdict, reason: string): number => {
     deps.writeRow(art, agent, expId, { expId, agent, verdict, reason, reimplMetric: "", ts: deps.now() });
     out(`VERDICT=${verdict} reason=${reason}`); return 0;
@@ -440,7 +443,7 @@ export async function inspectCheckWith(args: string[], deps: InspectCheckDeps): 
   }
   const { verdict, reason } = classifyInspect({ reimplMetric, runFailed, reported, epsilon, integrityRefuted });
   deps.writeRow(art, agent, expId, { expId, agent, verdict, reason, reimplMetric: reimplMetric === null ? "" : String(reimplMetric), ts: deps.now() });
-  const out = deps.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
+  const out = deps.stdout ?? stdoutLine;
   out(`VERDICT=${verdict} reason=${reason}`);
   return 0;
 }
@@ -510,11 +513,7 @@ function gatherPeers(art: string, self: string): PeerRow[] {
     // Latest experiment: prefer current_exp_id, else lex-greatest exp-NNN dir.
     let latest = currentExp;
     const expsDir = join(peerDir, "experiments");
-    if (!latest && existsSync(expsDir)) {
-      for (const name of readdirSync(expsDir)) {
-        if (EXP_ID_RE.test(name) && name > latest) latest = name;
-      }
-    }
+    if (!latest) latest = latestExpDir(expsDir);
     let approach = "", metric = "", status = "", notes = "";
     if (latest) {
       const r = readResultJson(join(expsDir, latest, "result.json"));
@@ -529,7 +528,7 @@ function gatherPeers(art: string, self: string): PeerRow[] {
 }
 
 export async function experimentSendWith(args: string[], deps: ExperimentSendDeps): Promise<number> {
-  const out = deps.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
+  const out = deps.stdout ?? stdoutLine;
   const opts = deps.opts;
   const p = parseExperimentSendArgs(args);
   if (p.badArgs) { log.error("autoresearch experiment-send: usage: [--inputs csv] [--context-file path] [--smoke-test script] [--timeout N] [--parent exp-id] <topic> <agent> <exp-id> <approach-label> <approach-brief>"); return 2; }
@@ -877,7 +876,7 @@ function readTsvRows(path: string, headerToken: string): string[][] | undefined 
 }
 
 export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (line: string) => void } = {}): Promise<number> {
-  const out = v.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
+  const out = v.stdout ?? stdoutLine;
   const p = parseStatusBriefArgs(args);
   if (!p.topic) { log.error("autoresearch status-brief: topic required"); return 2; }
 
@@ -905,14 +904,8 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
         currentOrLast = curExp;
       } else {
         // Most-recent scored experiment from the filesystem (lexical sort on exp-NNN).
-        const expsRoot = experimentsDir(art, agent);
-        if (existsSync(expsRoot)) {
-          let newest = "";
-          for (const name of readdirSync(expsRoot)) {
-            if (EXP_ID_RE.test(name) && name > newest) newest = name;
-          }
-          if (newest) currentOrLast = newest;
-        }
+        const newest = latestExpDir(experimentsDir(art, agent));
+        if (newest) currentOrLast = newest;
       }
       const expForFiles = curExp || (currentOrLast !== "—" ? currentOrLast : "");
       const promptPath = expForFiles ? join(experimentDir(art, agent, expForFiles), "prompt.md") : "";
@@ -1497,7 +1490,7 @@ function sweepTmpLock(dir: string, depth: number): void {
 }
 
 export async function teardownWith(args: string[], deps: AutoresearchTeardownDeps): Promise<number> {
-  const out = deps.stdout ?? ((l: string): void => { process.stdout.write(l + "\n"); });
+  const out = deps.stdout ?? stdoutLine;
   // --panes-only is Phase-3's spawn-retry reset: kill the partial-spawn panes only and PRESERVE
   // all state (no archive / winner-symlink / sweep) so the immediately-following spawn-all can
   // reuse it. The default (archiving) mode is the terminal Phase-6 teardown.

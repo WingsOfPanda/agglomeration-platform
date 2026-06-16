@@ -1,6 +1,20 @@
 import { existsSync, mkdirSync, readdirSync, statSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { topicDir } from "./paths.js";
+import { EXP_ID_RE } from "./autoresearchExperiment.js";
+
+/** The lexically-greatest `exp-NNN` directory name in `dir`, or "" when the dir is absent or holds
+ *  no experiment dirs. existsSync-guarded to match the two scan sites it replaces (which, by design,
+ *  throw if the dir exists but is unreadable). */
+export function latestExpDir(dir: string): string {
+  let latest = "";
+  if (existsSync(dir)) {
+    for (const name of readdirSync(dir)) {
+      if (EXP_ID_RE.test(name) && name > latest) latest = name;
+    }
+  }
+  return latest;
+}
 
 /** The autoresearch art/state dir for a topic: <topicDir>/_autoresearch. Mirrors design's _design. */
 export function autoresearchArtDir(topic: string, opts?: { home?: string; cwd?: string }): string {

@@ -47,15 +47,7 @@ export function agentsInUseGlobally(): string[] {
 }
 
 export function pickRandomAgent(topic: string, rng: () => number = Math.random): string | null {
-  const pool = loadAgentPool();
-  const global = new Set(agentsInUseGlobally());
-  let candidates = pool.filter((x) => !global.has(x));
-  if (candidates.length === 0) {
-    const local = new Set(agentsInUseInTopic(topic));
-    candidates = pool.filter((x) => !local.has(x));
-  }
-  if (candidates.length === 0) return null;
-  return candidates[Math.floor(rng() * candidates.length)];
+  return pickAgents(topic, 1, rng)[0] ?? null;
 }
 
 /** Pick n DISTINCT agents for a topic. Prefers globally-unused names; falls back to
