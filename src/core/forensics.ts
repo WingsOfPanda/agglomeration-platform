@@ -4,6 +4,7 @@ import { globalRoot, repoHash, workerDir } from "./paths.js";
 import { atomicWrite } from "./atomic.js";
 import { isoUtc } from "./archive.js";
 import { log } from "./log.js";
+import { parseEvent } from "./ipc.js";
 
 export type FailureReason = "timeout" | "error_event";
 export const SCROLLBACK_LINES = 50;
@@ -72,12 +73,10 @@ export function scrapeOutbox(text: string, worker: string): Finding[] {
   const out: Finding[] = [];
   for (const l of text.split("\n")) {
     if (!l.trim()) continue;
-    try {
-      const o = JSON.parse(l);
-      if (o.event === "error" || o.event === "question") out.push({ source: "outbox", key: l.trim(), context: `worker=${worker}` });
-      else if (typeof o.note === "string" && /^\s*FLAG:/i.test(o.note)) out.push({ source: "part_note", key: o.note.replace(/^\s*FLAG:\s*/i, "").trim(), context: `worker=${worker}` });
-    }
-    catch { /* skip non-JSON */ }
+    const o = parseEvent(l);
+    if (!o) continue;
+    if (o.event === "error" || o.event === "question") out.push({ source: "outbox", key: l.trim(), context: `worker=${worker}` });
+    else if (typeof o.note === "string" && /^\s*FLAG:/i.test(o.note)) out.push({ source: "part_note", key: o.note.replace(/^\s*FLAG:\s*/i, "").trim(), context: `worker=${worker}` });
   }
   return out;
 }

@@ -2,6 +2,8 @@
 // deep-research.sh (state read/write/reconcile, halt_flag_read). Pure;
 // disk reads/writes happen in the CLI (Phases C/D). JSON.parse, not shell.
 
+import { parseEvent } from "./ipc.js";
+
 /** Parse state.txt KV (first '=' splits; literal \n unescaped back to newlines). */
 export function parseState(text: string): Record<string, string> {
   const kv: Record<string, string> = {};
@@ -38,11 +40,10 @@ export function reconcileFromOutbox(outboxTail: string, doneResultExists: boolea
   for (const line of outboxTail.split("\n")) {
     const t = line.trim();
     if (!t) continue;
-    try {
-      const o = JSON.parse(t) as { event?: string };
-      if (o.event === "done") sawDone = true;
-      else if (o.event === "error") sawError = true;
-    } catch { /* skip non-JSON */ }
+    const o = parseEvent(t);
+    if (!o) continue;
+    if (o.event === "done") sawDone = true;
+    else if (o.event === "error") sawError = true;
   }
   if (sawError) return "failed";
   if (sawDone) return doneResultExists ? "idle" : null;

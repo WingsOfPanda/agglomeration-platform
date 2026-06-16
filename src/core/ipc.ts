@@ -56,8 +56,14 @@ export function identityWrite(i: string, m: string, t: string): void {
 
 export interface OutboxEvent { event: string; ts?: string; [k: string]: unknown; }
 
+/** Parse one outbox JSONL line into a typed event, or null when the line is not JSON. The single
+ *  home of the frozen JSON.parse event-matching mechanism (skip-non-JSON, never an anchored regex). */
+export function parseEvent(line: string): OutboxEvent | null {
+  try { return JSON.parse(line) as OutboxEvent; } catch { return null; }
+}
+
 export function eventMatches(line: string, name: string): boolean {
-  try { return (JSON.parse(line) as OutboxEvent).event === name; } catch { return false; }
+  return parseEvent(line)?.event === name;
 }
 
 export function outboxOffset(path: string): number {
@@ -87,10 +93,8 @@ function lastMatch(text: string, events: string[]): OutboxEvent | null {
   // occurrence. (NOT file-position order.)
   for (const name of events) {
     for (let k = lines.length - 1; k >= 0; k--) {
-      try {
-        const obj = JSON.parse(lines[k]) as OutboxEvent;
-        if (obj.event === name) return obj;
-      } catch { /* skip non-JSON */ }
+      const obj = parseEvent(lines[k]);
+      if (obj && obj.event === name) return obj;
     }
   }
   return null;
@@ -123,28 +127,27 @@ export function paneMetaWrite(i: string, m: string, t: string, paneId: string, o
 
 export interface PaneMeta { agent: string; model: string; paneId: string; }
 
+interface PaneJson { pane_id?: string; agent?: string; model?: string; }
+
+/** Read+parse a worker dir's pane.json, or null when absent/unparseable (the read throwing into
+ *  the catch is equivalent to an existsSync pre-check). */
+function readPaneJson(dir: string): PaneJson | null {
+  try { return JSON.parse(readFileSync(join(dir, "pane.json"), "utf8")) as PaneJson; } catch { return null; }
+}
+
 export function paneMetaReadForDir(dir: string): PaneMeta {
-  const p = join(dir, "pane.json");
-  if (existsSync(p)) {
-    try {
-      const o = JSON.parse(readFileSync(p, "utf8"));
-      if (o.agent && o.model) return { agent: o.agent, model: o.model, paneId: o.pane_id ?? "" };
-    } catch { /* fall through */ }
-  }
+  const o = readPaneJson(dir);
+  if (o && o.agent && o.model) return { agent: o.agent, model: o.model, paneId: o.pane_id ?? "" };
   const name = dir.replace(/\/+$/, "").split("/").pop() ?? "";
   return { agent: name.replace(/-[^-]*$/, ""), model: name.replace(/^.*-/, ""), paneId: "" };
 }
 
 export function paneMetaRead(i: string, m: string, t: string): string | null {
-  const p = paneMetaPath(i, m, t);
-  if (!existsSync(p)) return null;
-  try { return JSON.parse(readFileSync(p, "utf8")).pane_id ?? null; } catch { return null; }
+  return readPaneJson(workerDir(i, m, t))?.pane_id ?? null;
 }
 
 export function paneMetaModel(i: string, modelHint: string, t: string): string {
-  const p = paneMetaPath(i, modelHint, t);
-  if (existsSync(p)) { try { return JSON.parse(readFileSync(p, "utf8")).model ?? modelHint; } catch { /* */ } }
-  return modelHint;
+  return readPaneJson(workerDir(i, modelHint, t))?.model ?? modelHint;
 }
 
 /** Resolve the model segment for an agent's worker on a topic (the on-disk

@@ -1,3 +1,5 @@
+import { parseVerdicts } from "./autoresearchInfeasible.js";
+
 // Independent re-implementation inspector pure logic for /ap:autoresearch (research-validity C1).
 // The cross-family Hub re-runs the experiment from the run-card alone and re-derives the metric;
 // this adjudicates a THREE-WAY verdict. Unlike A1's checkVerify (which returns `mismatch` on a failed
@@ -25,15 +27,10 @@ export function inspectInfeasibleReason(verdict: string | undefined): string | n
   return verdict === "not-reproduced" ? "reimpl-mismatch" : null;
 }
 
-/** inspection.tsv -> agent/exp -> latest verdict (last write wins). Mirrors parseVerdicts. */
+/** inspection.tsv -> agent/exp -> latest verdict (last write wins). Same TSV shape as
+ *  verification.tsv (exp_id/agent/verdict in cols 0-2), so it reuses parseVerdicts. */
 export function parseInspections(tsv: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const line of tsv.split("\n")) {
-    if (!line || line.startsWith("exp_id\t")) continue;
-    const c = line.split("\t");   // exp_id, agent, verdict, reason, reimpl_metric, ts
-    if (c[0] && c[1] && c[2]) out[`${c[1]}/${c[0]}`] = c[2];
-  }
-  return out;
+  return parseVerdicts(tsv);
 }
 
 export interface InspectionRow {

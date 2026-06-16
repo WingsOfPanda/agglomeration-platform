@@ -103,7 +103,9 @@ export function checkCompletion(scoreboardMd: string, metricMd: string): Complet
   const byFam = new Map<string, { exp: string; mv: number }[]>();
   for (const r of okRows) {
     const fam = normalizeFamily(r.approach);
-    (byFam.get(fam) ?? byFam.set(fam, []).get(fam)!).push({ exp: r.exp, mv: parseFloat(r.metric) });
+    let arr = byFam.get(fam);
+    if (!arr) byFam.set(fam, (arr = []));
+    arr.push({ exp: r.exp, mv: parseFloat(r.metric) });
   }
   const familiesActive = byFam.size;
   let familiesImproving = 0;

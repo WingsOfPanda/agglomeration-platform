@@ -32,12 +32,17 @@ export function researchState(ev: OutboxEvent | null, findingsText: string | nul
   return "failed";
 }
 
-/** The LAST `OFFSET=<n>` line in a state file's contents. The question re-arm appends a second
- *  OFFSET= line (bumped past the question event); the re-armed wait must resume from the latest.
- *  null if absent/unparseable. */
-export function parseLatestOffset(stateText: string): number | null {
-  const ms = [...stateText.matchAll(/^OFFSET=(\d+)\s*$/gm)];
+/** The LAST `<KEY>=<n>` integer line in a state file's contents (latest-line-wins). The question
+ *  re-arm appends a second keyed line (bumped past the question event), so the re-armed read must
+ *  resume from the latest. null if absent/unparseable. */
+export function lastKeyedNumber(text: string, key: string): number | null {
+  const ms = [...text.matchAll(new RegExp(`^${key}=(\\d+)\\s*$`, "gm"))];
   return ms.length ? Number(ms[ms.length - 1][1]) : null;
+}
+
+/** The LAST `OFFSET=<n>` line — the re-armed wait resumes from the latest. */
+export function parseLatestOffset(stateText: string): number | null {
+  return lastKeyedNumber(stateText, "OFFSET");
 }
 
 /** Apply a provider's timeout_multiplier to a base timeout, ported from the consult_wait loop's
