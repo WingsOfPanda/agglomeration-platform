@@ -29,13 +29,13 @@ describe("implement scope-check (single-repo path locked)", () => {
       "# d\n\n## Components\n\n| File | Note |\n| --- | --- |\n| `src/a.ts` | x |\n");
     const deps = {
       runnerFor: (_cwd: string): Runner => ({
-        run: (_c: string, _a: string[]): RunResult => ({ code: 0, stdout: "src/a.ts\nsrc/rogue.ts\n" }),
+        run: (_c: string, _a: string[]): RunResult => ({ code: 0, stdout: "src/a.ts\nelsewhere/rogue.ts\n" }),
       }),
     };
     const rc = await scopeCheckWith("scope-s", deps);
     expect(rc).toBe(0);
-    expect(readFileSync(join(art, "diff-paths.txt"), "utf8")).toBe("src/a.ts\nsrc/rogue.ts\n");
-    expect(readFileSync(join(art, "scope-out-of-scope.txt"), "utf8")).toBe("src/rogue.ts\n");
+    expect(readFileSync(join(art, "diff-paths.txt"), "utf8")).toBe("src/a.ts\nelsewhere/rogue.ts\n");
+    expect(readFileSync(join(art, "scope-out-of-scope.txt"), "utf8")).toBe("elsewhere/rogue.ts\n");
     h.cleanup();
   });
 
@@ -77,6 +77,38 @@ describe("implement scope-check (single-repo path locked)", () => {
     expect(out).toContain("SCOPE_DECLARED=0\n");
     expect(out).toContain("OOS_COUNT=1\n");
     expect(err).toContain("0 parseable component paths");
+    h.cleanup();
+  });
+
+  it("prose Components that names paths -> SCOPE_DECLARED>0, OOS is only the genuinely-unlisted file", async () => {
+    const h = freshHome();
+    const art = implementArtDir("scope-prose");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "target_cwd.txt"), "/repo/main\n");
+    writeFileSync(join(art, "branch-base.sha"), "BASE\n");
+    writeFileSync(join(art, "design.md"),
+      "# d\n\n## Components\n\nWe touch `src/a.ts` and `src/b.ts` to add the guard.\n");
+    const deps = { runnerFor: (_cwd: string): Runner => ({ run: (): RunResult => ({ code: 0, stdout: "src/a.ts\nsrc/b.ts\nelsewhere/c.ts\n" }) }) };
+    const { rc, out } = await capture(() => scopeCheckWith("scope-prose", deps));
+    expect(rc).toBe(0);
+    expect(out).toContain("SCOPE_DECLARED=2\n");
+    expect(out).toContain("OOS_COUNT=1\n");
+    expect(readFileSync(join(art, "scope-out-of-scope.txt"), "utf8")).toBe("elsewhere/c.ts\n");
+    h.cleanup();
+  });
+
+  it("same-dir siblings of an exact-file Components entry are in scope (OOS_COUNT=0)", async () => {
+    const h = freshHome();
+    const art = implementArtDir("scope-sibling");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "target_cwd.txt"), "/repo/main\n");
+    writeFileSync(join(art, "branch-base.sha"), "BASE\n");
+    writeFileSync(join(art, "design.md"),
+      "# d\n\n## Components\n\n- `src/core/verifier-receipt.ts` — the receipt module\n");
+    const deps = { runnerFor: (_cwd: string): Runner => ({ run: (): RunResult => ({ code: 0, stdout: "src/core/oracle-guard.ts\nsrc/core/repro-receipt.ts\n" }) }) };
+    const { rc, out } = await capture(() => scopeCheckWith("scope-sibling", deps));
+    expect(rc).toBe(0);
+    expect(out).toContain("OOS_COUNT=0\n");
     h.cleanup();
   });
 });
