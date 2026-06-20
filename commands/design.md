@@ -76,7 +76,9 @@ tool** (atomic single-shot writes), one file per section:
 - `.draft/problem.md` → `## Problem` + 1-3 sentences on the current state.
 - `.draft/goal.md` → `## Goal` + 1 paragraph on the end state. *(audit-required — never empty)*
 - `.draft/architecture.md` → `## Architecture` + the recommended approach (the bulk). *(required)*
-- `.draft/components.md` → `## Components` + bullets of files/functions/classes touched.
+- `.draft/components.md` → `## Components` + bullets of files/functions/classes touched. **Lead each
+  bullet with the file path** (`` - `src/x/foo.ts` — <what changes> ``) so `implement`'s scope-check
+  can read it; a bullet that names only a function/class with no path contributes nothing to scope.
 - `.draft/testing.md` → `## Testing` + bullets of test coverage. *(required)*
 - `.draft/success-criteria.md` → `## Success Criteria` + measurable bullets. *(required)*
 

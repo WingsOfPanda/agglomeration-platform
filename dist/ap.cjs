@@ -19930,6 +19930,14 @@ var init_implement = __esm({
 });
 
 // src/core/implementScope.ts
+function parentOf(p) {
+  const i2 = p.lastIndexOf("/");
+  return i2 < 0 ? "" : p.slice(0, i2);
+}
+function baseOf(p) {
+  const i2 = p.lastIndexOf("/");
+  return i2 < 0 ? p : p.slice(i2 + 1);
+}
 function pathTokensFrom(text) {
   const out = [];
   for (const raw of text.replace(/`/g, "").split(/\s+/)) {
@@ -19961,8 +19969,8 @@ function extractComponentsPaths(docText) {
       line = line.replace(/[ \t]+$/, "");
       if (HEADER_CELL.test(line)) continue;
       if (HAS_SLASH.test(line) || ENDS_WITH_EXT.test(line)) out.push(line);
-    } else if (inSection && BULLET_ROW.test(record)) {
-      out.push(...pathTokensFrom(record.replace(/^[ \t]*[-*+][ \t]+/, "")));
+    } else if (inSection) {
+      out.push(...pathTokensFrom(record.replace(BULLET_MARKER, "")));
     }
   }
   return out;
@@ -19992,12 +20000,22 @@ function matchDiffAgainstComponents(diffPaths, compPaths) {
         inScope = true;
         break;
       }
+      if (ENDS_WITH_EXT.test(c3)) {
+        if (c3.indexOf("/") < 0 && baseOf(path6) === c3) {
+          inScope = true;
+          break;
+        }
+        if (c3.indexOf("/") >= 0 && parentOf(path6) === parentOf(c3)) {
+          inScope = true;
+          break;
+        }
+      }
     }
     if (!inScope) out.push(path6);
   }
   return out;
 }
-var COMPONENTS_HEADER, OTHER_H2, ANY_COMPONENTS_PREFIX, TABLE_ROW, SEPARATOR_ROW, BULLET_ROW, HEADER_CELL, HAS_SLASH, ENDS_WITH_EXT;
+var COMPONENTS_HEADER, OTHER_H2, ANY_COMPONENTS_PREFIX, TABLE_ROW, SEPARATOR_ROW, BULLET_MARKER, HEADER_CELL, HAS_SLASH, ENDS_WITH_EXT;
 var init_implementScope = __esm({
   "src/core/implementScope.ts"() {
     "use strict";
@@ -20006,7 +20024,7 @@ var init_implementScope = __esm({
     ANY_COMPONENTS_PREFIX = /^## Components/;
     TABLE_ROW = /^[ \t]*\|/;
     SEPARATOR_ROW = /^[ \t]*\|([ \t]*[:-]+[ \t]*\|)+[ \t]*$/;
-    BULLET_ROW = /^[ \t]*[-*+][ \t]+/;
+    BULLET_MARKER = /^[ \t]*[-*+][ \t]+/;
     HEADER_CELL = /^(File|Path|Name|Files?[ \t]+(edited|moved|touched))$/;
     HAS_SLASH = /\//;
     ENDS_WITH_EXT = /\.[a-zA-Z]+$/;
