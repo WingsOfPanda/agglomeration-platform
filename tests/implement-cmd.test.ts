@@ -162,11 +162,11 @@ describe("implement scope-check", () => {
     const art = seedArt();
     seedScope(art);
     const r = fakeRunner({
-      "git diff --name-only BASE..HEAD": { code: 0, stdout: "src/a.ts\nsrc/rogue.ts\n" },
+      "git diff --name-only BASE..HEAD": { code: 0, stdout: "src/a.ts\nelsewhere/rogue.ts\n" },
     });
     const { rc, out } = await capture(() => scopeCheckWith2(TOPIC, () => r));
     expect(rc).toBe(0);
-    expect(readFileSync(join(art, "scope-out-of-scope.txt"), "utf8")).toBe("src/rogue.ts\n");
+    expect(readFileSync(join(art, "scope-out-of-scope.txt"), "utf8")).toBe("elsewhere/rogue.ts\n");
     expect(out).toContain("OOS_COUNT=1\n");
     expect(out).toContain(`OOS_PATH=${join(art, "scope-out-of-scope.txt")}\n`);
   });
