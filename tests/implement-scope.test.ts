@@ -77,6 +77,34 @@ describe("extractComponentsPaths", () => {
   it("over-match (accepted): a referenced path in a bullet IS pulled into scope", () => {
     expect(extractComponentsPaths(doc("## Components", "- see docs/DESIGN.md for context"))).toEqual(["docs/DESIGN.md"]);
   });
+  it("prose: extracts backticked paths from a free prose line (no bullet, no table)", () => {
+    expect(extractComponentsPaths(doc("## Components", "We touch `src/a.ts` and `src/b.ts`."))).toEqual(["src/a.ts", "src/b.ts"]);
+  });
+  it("prose: extracts a bare path mid-sentence", () => {
+    expect(extractComponentsPaths(doc("## Components", "add a guard to src/core/foo.ts later"))).toEqual(["src/core/foo.ts"]);
+  });
+  it("prose: extracts a bare filename (basename only) mentioned in prose", () => {
+    expect(extractComponentsPaths(doc("## Components", "the new oracle-guard.ts module"))).toEqual(["oracle-guard.ts"]);
+  });
+  it("prose-only section with a path-like token is no longer empty (the regression this fixes)", () => {
+    expect(extractComponentsPaths(doc("## Components", "everything lives under src/core/scope.ts"))).toEqual(["src/core/scope.ts"]);
+  });
+  it("prose without any path-like token still yields []", () => {
+    expect(extractComponentsPaths(doc("## Components", "this section is just descriptive prose"))).toEqual([]);
+  });
+  it("seed comment and the no-match placeholder contribute nothing", () => {
+    const d = doc("## Components",
+      "<!-- seed: claims tagged [Components] -->",
+      "_(no seed content matched; Hub drafts from scratch in the design walk)_");
+    expect(extractComponentsPaths(d)).toEqual([]);
+  });
+  it("table + bullet + prose mixed in one section, document order", () => {
+    const d = doc("## Components", "intro prose names src/prose.ts here", "- src/bullet.ts", "| File | x |", "| `src/table.ts` | y |");
+    expect(extractComponentsPaths(d)).toEqual(["src/prose.ts", "src/bullet.ts", "src/table.ts"]);
+  });
+  it("prose: section still ends at the next H2 (a path after ## Testing is NOT harvested)", () => {
+    expect(extractComponentsPaths(doc("## Components", "names src/in.ts", "## Testing", "names src/out.ts"))).toEqual(["src/in.ts"]);
+  });
 });
 
 describe("matchDiffAgainstComponents", () => {
@@ -84,7 +112,8 @@ describe("matchDiffAgainstComponents", () => {
     expect(matchDiffAgainstComponents(["src/a.ts", "src/b.ts"], ["src/a.ts", "src/b.ts"])).toEqual([]);
   });
   it("flags diff paths not covered by any comp path", () => {
-    expect(matchDiffAgainstComponents(["src/a.ts", "src/rogue.ts"], ["src/a.ts"])).toEqual(["src/rogue.ts"]);
+    // rogue is in a DIFFERENT directory so it stays out of scope under the same-dir-sibling rule.
+    expect(matchDiffAgainstComponents(["src/a.ts", "other/rogue.ts"], ["src/a.ts"])).toEqual(["other/rogue.ts"]);
   });
   it("explicit dir comp (trailing slash) covers anything beneath it", () => {
     expect(matchDiffAgainstComponents(["src/core/deep/x.ts"], ["src/core/"])).toEqual([]);
@@ -103,5 +132,24 @@ describe("matchDiffAgainstComponents", () => {
   });
   it("returns the out-of-scope paths in diff order", () => {
     expect(matchDiffAgainstComponents(["src/a.ts", "x/z.ts", "src/b.ts", "y/w.ts"], ["src/a.ts", "src/b.ts"])).toEqual(["x/z.ts", "y/w.ts"]);
+  });
+  it("(4) bare filename comp matches a fuller diff path by basename", () => {
+    expect(matchDiffAgainstComponents(["src/x/oracle-guard.ts"], ["oracle-guard.ts"])).toEqual([]);
+  });
+  it("(4) bare filename comp matches only on EXACT basename (not a near-name)", () => {
+    expect(matchDiffAgainstComponents(["src/x/oracle-guards.ts"], ["oracle-guard.ts"])).toEqual(["src/x/oracle-guards.ts"]);
+  });
+  it("(5) full file comp admits a sibling directly in the same directory", () => {
+    expect(matchDiffAgainstComponents(["src/x/oracle-guard.ts"], ["src/x/verifier-receipt.ts"])).toEqual([]);
+  });
+  it("(5) full file comp does NOT admit a deeper file (sibling is one level only)", () => {
+    expect(matchDiffAgainstComponents(["src/x/sub/c.ts"], ["src/x/a.ts"])).toEqual(["src/x/sub/c.ts"]);
+  });
+  it("(5) full file comp does NOT admit a file in a different directory", () => {
+    expect(matchDiffAgainstComponents(["src/y/a.ts"], ["src/x/a.ts"])).toEqual(["src/y/a.ts"]);
+  });
+  it("extension-less comp stays an implicit DIRECTORY, so a clean sibling FILE is still out of scope", () => {
+    // 'src/core' has no extension -> rules 4/5 are gated off; rule 3 (implicit dir) governs.
+    expect(matchDiffAgainstComponents(["src/other.ts"], ["src/core"])).toEqual(["src/other.ts"]);
   });
 });
