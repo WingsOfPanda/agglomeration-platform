@@ -191,6 +191,21 @@ cell MUST contain at least one citation — a file path, URL, or paper-id (this 
 
 Set task `5` → `completed`.
 
+## Phase 5b — annotate (Hub runs; no task row)
+
+`$CS explore annotate <TOPIC>` — a deterministic transparency overlay. It marks **single-source
+citations** (cited by `< 2` workers) with `[unverified]` and **uncited tradeoff rows** with
+`[no citation]`, editing `landscape-draft.md` in place and writing `$ART/annotations.json` (counts,
+for `/ap:review`) + `$ART/annotate-applied.txt` (the idempotency marker). It runs under task `5` (no
+new TaskCreate row).
+
+This pass is **annotation-only and gate-neutral**: by construction it leaves all five confidence
+signals byte-identical, so the Phase 5.5 gate below sees exactly what it would have on the raw draft —
+the markers exist for the final landscape doc and a downstream `/ap:design` reader, not to change the
+gate. **rc 1** if `landscape-draft.md` or any `findings-<agent>.md` is missing/empty; a re-run with
+`annotate-applied.txt` present is a no-op (crash/resume-safe). Citations on `## Approaches` lines are
+recorded in `annotations.json` but **not** inlined (inlining there would perturb signal S1).
+
 ## Phase 5.5 — confidence gate
 
 Set task `5.5` → `in_progress`.

@@ -20,6 +20,7 @@ import { pickAgents } from "../core/agents.js";
 import { agentConsultValidated, consultTimeout, agentTimeoutMultiplier } from "../core/contracts.js";
 import { classifyTopic } from "../core/exploreLit.js";
 import { computeSignals, renderSkipRecord, type Decision } from "../core/exploreConfidence.js";
+import { buildAnnotations } from "../core/exploreAnnotate.js";
 import { outboxOffset, outboxPath, outboxWaitSince, type OutboxEvent } from "../core/ipc.js";
 import { parseLatestOffset, scaledTimeout, researchState, verifyState, gateState } from "../core/designTurn.js";
 import { composeExploreResearchPrompt, composeAdversaryPrompt, litGuidance } from "../core/exploreTurn.js";
@@ -30,7 +31,7 @@ import { readIfExists as readIf, readIfExistsOrNull } from "../core/fsread.js";
 
 function usage(): number {
   log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|wait-gate|synth-preliminary|" +
-    "confidence|adversary-send|adversary-wait|synth-final|forensics|teardown|handoff-extract> ...");
+    "confidence|annotate|adversary-send|adversary-wait|synth-final|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 
@@ -46,6 +47,7 @@ export async function run(args: string[]): Promise<number> {
     case "wait-gate": return exploreWaitGateRun(rest);
     case "synth-preliminary": return synthPreliminaryRun(rest);
     case "confidence": return confidenceRun(rest);
+    case "annotate": return annotateRun(rest);
     case "adversary-send": return adversarySendRun(rest);
     case "adversary-wait": return adversaryWaitRun(rest);
     case "synth-final": return synthFinalRun(rest);
@@ -264,6 +266,43 @@ export async function confidenceRun(rest: string[]): Promise<number> {
     atomicWrite(join(art, "adversary-skip.txt"), renderSkipRecord({ signals: s, decision: "not-offered", now: isoUtc() }));
   }
   // ALL_HOLD=true with no flag: write nothing — the Hub asks, then re-invokes with --decision.
+  return 0;
+}
+
+// ---- annotate (Phase 5b evidence-weakness transparency overlay) ----
+export async function annotateRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: explore annotate <topic>"); return 2; }
+  const art = exploreArtDir(topic);
+  const markerPath = join(art, "annotate-applied.txt");
+  if (existsSync(markerPath)) { log.ok(`explore annotate: already applied (${markerPath}) — no-op`); return 0; }
+  const draftPath = join(art, "landscape-draft.md");
+  const draft = readIf(draftPath);
+  if (!draft.trim()) { log.error(`explore annotate: landscape-draft.md missing/empty at ${art}`); return 1; }
+  const listPath = join(art, "list.txt");
+  if (!existsSync(listPath)) { log.error(`explore annotate: list.txt missing at ${art}`); return 1; }
+  const rows = parseListFile(readIf(listPath));
+  const missing = missingListArtifacts(art, rows, "findings");
+  if (missing.length) {
+    log.error("explore annotate: blocked — missing or empty findings:");
+    for (const m of missing) log.error(`  - ${join(art, m)}`);
+    return 1;
+  }
+  const findings = rows.map((r) => readIf(join(art, `findings-${r.agent}.md`)));
+
+  const { annotatedDraft, plan } = buildAnnotations(draft, findings);
+  const counts = {
+    n_unverified: plan.items.filter((i) => i.kind === "unverified").length,
+    n_no_citation: plan.items.filter((i) => i.kind === "no-citation").length,
+    n_approaches_flagged: plan.items.filter((i) => i.kind === "approaches-flagged").length,
+  };
+  atomicWrite(draftPath, annotatedDraft);
+  atomicWrite(join(art, "annotations.json"), JSON.stringify({ topic, counts, items: plan.items }, null, 2) + "\n");
+  atomicWrite(markerPath,
+    `applied: ${isoUtc()}\nunverified=${counts.n_unverified} no_citation=${counts.n_no_citation} ` +
+    `approaches_flagged=${counts.n_approaches_flagged}\n`);
+  log.ok(`explore annotate: ${counts.n_unverified} unverified, ${counts.n_no_citation} no-citation, ` +
+    `${counts.n_approaches_flagged} approaches-flagged`);
   return 0;
 }
 
