@@ -37,18 +37,21 @@ The annotation pass and the gate's S2 signal must agree exactly on which citatio
 Add to `tests/explore-confidence.test.ts` (import `soloCitations` in the existing top import from `../src/core/exploreConfidence.js`):
 
 ```ts
+// NOTE: keep citation URLs newline-safe in fixtures. draftCitations' URL regex
+// (https?:\/\/[^ )"\\]+) does NOT stop at \n, so a "- url\n- url" list tokenizes the first URL
+// as "url\n-" (mangled). Separate URLs with a space / trailing text, not just a newline.
 describe("soloCitations", () => {
   it("returns only citations present in fewer than 2 findings", () => {
-    const draft = "## Citations\n- https://both.example/p\n- https://solo.example/q";
+    const draft = "Cited: https://both.example/p and https://solo.example/q in the text.";
     const findings = [
       "see https://both.example/p and https://solo.example/q",
-      "also https://both.example/p",
+      "also https://both.example/p only",
     ];
     expect(soloCitations(draft, findings)).toEqual(["https://solo.example/q"]);
   });
   it("empty when every citation is corroborated by >= 2 findings", () => {
-    const draft = "## Citations\n- https://both.example/p";
-    expect(soloCitations(draft, ["https://both.example/p", "https://both.example/p"])).toEqual([]);
+    const draft = "Cited https://both.example/p here.";
+    expect(soloCitations(draft, ["https://both.example/p a", "https://both.example/p b"])).toEqual([]);
   });
 });
 ```
@@ -231,8 +234,8 @@ const DRAFT = [
   "## Tradeoff matrix",
   "| latency | One | it is simply faster |",            // uncited reason cell
   "## Citations",
-  "- https://solo.example/q",
-  "- https://both.example/p",
+  "- https://solo.example/q single-source",             // trailing text -> newline-safe token
+  "- https://both.example/p corroborated",
 ].join("\n");
 
 describe("buildAnnotations", () => {
