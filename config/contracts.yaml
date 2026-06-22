@@ -18,7 +18,13 @@ codex:
     full:      [--dangerously-bypass-approvals-and-sandbox]
     read-only: [--sandbox, read-only]
   default_mode: full
-  ready_timeout_s: 90
+  # 0.3.9: bumped 90 -> 150. bl202 (iris-cortex GPU box) /ap:review 2026-06-23: 3x codex
+  # spawn_failure reason=timeout under concurrent-autoresearch load — codex never emits ready
+  # within 90s when the box is training-saturated and many workers spawn at once. Mirrors the
+  # 0.3.6 claude 60->150 bump (which was claude-only). Warm/idle codex spawns finish well under
+  # 150s (bootstrap_sleep is the floor before the nudge), so the only cost is how long a
+  # genuinely-dead codex worker takes to be declared timed out.
+  ready_timeout_s: 150
   # bootstrap_sleep_s bumped 8 → 20 to absorb codex's cold-start node-modules
   # + auth-handshake. Earlier 8s tripped a race where spawn.sh's identity-read
   # nudge arrived before codex was draining its TTY, leading to silent buffer
