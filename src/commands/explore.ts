@@ -12,8 +12,7 @@ import { extractHandoffData } from "../core/exploreHandoff.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { killNow } from "../core/tmux.js";
 import {
-  type ListRow, formatListFile, parseListFile, spawnListArg, spawnResultsTsv, spawnTally,
-  parsePanesFile, type SpawnResult,
+  type ListRow, formatListFile, parseListFile, parsePanesFile, spawnAllBatch,
 } from "../core/design.js";
 import { readProviderList } from "../core/providers.js";
 import { activeProvidersPath, repoRoot } from "../core/paths.js";
@@ -133,33 +132,7 @@ async function spawnAllRun(rest: string[]): Promise<number> {
 }
 
 export async function spawnAllWith(topic: string, d: ExploreSpawnAllDeps): Promise<number> {
-  const art = exploreArtDir(topic);
-  const listPath = join(art, "list.txt");
-  if (!existsSync(listPath)) { log.error(`explore spawn-all: list.txt missing at ${listPath} (run explore init)`); return 2; }
-  const rows = parseListFile(readFileSync(listPath, "utf8"));
-  if (rows.length < 2) { log.error(`explore spawn-all: need >=2 workers in list.txt, got ${rows.length}`); return 2; }
-
-  const pf = await d.preflight([topic, String(rows.length), "--list", spawnListArg(rows), "--art-dir", art]);
-  if (pf !== 0) { log.error(`explore spawn-all: preflight failed (rc=${pf})`); return 2; }
-
-  const panesPath = join(art, "preflight-panes.txt");
-  if (!existsSync(panesPath)) { log.error(`explore spawn-all: preflight wrote no ${panesPath}`); return 2; }
-  const panes = parsePanesFile(readFileSync(panesPath, "utf8"));
-  const orphans = rows.filter((r) => !panes.has(r.agent));
-  if (orphans.length) { log.error(`explore spawn-all: workers missing a preflight pane: ${orphans.map((r) => r.agent).join(", ")}`); return 2; }
-
-  const cwd = d.repoRoot();
-  const results: SpawnResult[] = await Promise.all(rows.map(async (r) => {
-    const rc = await d.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent)!, "--cwd", cwd, "--preflight-art-dir", art]);
-    return { agent: r.agent, provider: r.provider, rc };
-  }));
-  atomicWrite(join(art, "spawn-results.tsv"), spawnResultsTsv(results));
-
-  const rc = spawnTally(results.map((r) => r.rc));
-  const nOk = results.filter((r) => r.rc === 0).length;
-  if (rc === 0) log.ok(`explore spawn-all: ${nOk}/${rows.length} workers ready`);
-  else log.warn(`explore spawn-all: ${nOk}/${rows.length} workers ready (rc=${rc})`);
-  return rc;
+  return spawnAllBatch("explore", topic, exploreArtDir(topic), d);
 }
 
 // ---- research-send / research-wait ----
