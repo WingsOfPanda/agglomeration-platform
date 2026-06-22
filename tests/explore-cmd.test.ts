@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { freshHome } from "./helpers/tmpHome.js";
-import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, synthPreliminaryRun, confidenceRun, adversarySendWith, adversaryWaitWith, synthFinalRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
+import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
 import { exploreArtDir } from "../src/core/explore.js";
 
 function initDeps(over: Partial<ExploreInitDeps> = {}): ExploreInitDeps {
@@ -190,6 +190,50 @@ describe("explore confidence", () => {
       const rc = await confidenceRun(["x"]);
       expect(rc).toBe(0);
       expect(existsSync(join(art, "adversary-skip.txt"))).toBe(false);
+    } finally { cleanup(); }
+  });
+});
+
+describe("explore annotate", () => {
+  it("annotates a solo citation + uncited row, writes marker + annotations.json", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      // alpha+charlie both cite https://x.test/p (corroborated); https://x.test/solo is solo (alpha only).
+      writeFileSync(join(art, "findings-alpha.md"), "https://x.test/p and https://x.test/solo . uncertain.");
+      writeFileSync(join(art, "findings-charlie.md"), "https://x.test/p only.");
+      writeFileSync(join(art, "landscape-draft.md"), [
+        "## Findings by worker", "See https://x.test/solo here.",
+        "## Tradeoff matrix", "| latency | One | plain prose reason |",
+      ].join("\n"));
+      const rc = await annotateRun(["x"]);
+      expect(rc).toBe(0);
+      const out = readFileSync(join(art, "landscape-draft.md"), "utf8");
+      expect(out).toContain("https://x.test/solo [unverified]");
+      expect(out).toContain("plain prose reason [no citation]");
+      expect(existsSync(join(art, "annotate-applied.txt"))).toBe(true);
+      expect(readFileSync(join(art, "annotations.json"), "utf8")).toContain("\"n_unverified\"");
+    } finally { cleanup(); }
+  });
+  it("is a no-op when annotate-applied.txt already exists", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      await seedFindings(art, DRAFT);
+      writeFileSync(join(art, "annotate-applied.txt"), "applied: earlier\n");
+      const before = readFileSync(join(art, "landscape-draft.md"), "utf8");
+      const rc = await annotateRun(["x"]);
+      expect(rc).toBe(0);
+      expect(readFileSync(join(art, "landscape-draft.md"), "utf8")).toBe(before); // untouched
+    } finally { cleanup(); }
+  });
+  it("rc1 when the draft is missing", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      expect(await annotateRun(["x"])).toBe(1);
     } finally { cleanup(); }
   });
 });
