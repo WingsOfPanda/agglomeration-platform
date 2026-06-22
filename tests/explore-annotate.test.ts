@@ -25,6 +25,14 @@ describe("uncitedMatrixReasons", () => {
     const m = ["## Tradeoff matrix", "| a | b | /p/x.pdf ok |", "## End"].join("\n");
     expect(uncitedMatrixReasons(m)).toEqual([]);
   });
+  it("column-count guard ignores a 4-column row; detects a trailing uncited 3-col row", () => {
+    const m = [
+      "## Tradeoff matrix",
+      "| a | b | c | d |",                  // 4 columns, uncited -> ignored by the cells.length guard
+      "| latency | one | plain prose |",    // trailing 3-col uncited row (last line, no separator after)
+    ].join("\n");
+    expect(uncitedMatrixReasons(m).map((r) => r.lineIndex)).toEqual([2]);
+  });
 });
 
 const FIND_A = "alpha found https://solo.example/q . also https://both.example/p . uncertain about edge.";
@@ -74,5 +82,18 @@ describe("buildAnnotations", () => {
     const once = buildAnnotations(DRAFT, findings).annotatedDraft;
     const twice = buildAnnotations(once, findings).annotatedDraft;
     expect(twice).toBe(once);
+  });
+  it("INVARIANT: a solo path-citation LEADING a matrix Reason cell keeps S4 (and all signals)", () => {
+    // /papers/p.pdf leads the Reason cell (S4-good) and is solo (1 finding). Rule 1 appends
+    // [unverified] INSIDE the cell after the path, so the cell still leads with '/' -> S4 stays good.
+    const d = [
+      "## Approaches", "1. One — x",
+      "## Tradeoff matrix", "| latency | one | /papers/p.pdf proves it |",
+      "## Citations", "- /papers/p.pdf single",
+    ].join("\n");
+    const findings = ["only alpha cites /papers/p.pdf here", "beta cites nothing relevant"];
+    const { annotatedDraft } = buildAnnotations(d, findings);
+    expect(annotatedDraft).toContain("/papers/p.pdf [unverified] proves it");
+    expect(computeSignals(annotatedDraft, findings)).toEqual(computeSignals(d, findings));
   });
 });
