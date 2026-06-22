@@ -24393,17 +24393,15 @@ function matrixBadRows(draft) {
   }
   return bad;
 }
+function soloCitations(draft, findings) {
+  return draftCitations(draft).filter((cite) => findings.filter((f) => f.includes(cite)).length < 2);
+}
 function computeSignals(draft, findings) {
   const n2 = findings.length;
   const top = topApproach(draft);
   const hits = top ? findings.filter((f) => f.toLowerCase().includes(top.toLowerCase())).length : 0;
   const s1 = top !== "" && hits >= n2 - 1;
-  let solo = 0;
-  for (const cite of draftCitations(draft)) {
-    const citers = findings.filter((f) => f.includes(cite)).length;
-    if (citers < 2) solo++;
-  }
-  const s2 = solo === 0;
+  const s2 = soloCitations(draft, findings).length === 0;
   const s3 = !/CONTESTED/i.test(draft);
   const s4 = matrixBadRows(draft) === 0;
   const s5 = findings.some((f) => UNCERTAIN.test(f));
@@ -24532,6 +24530,90 @@ var init_exploreLit = __esm({
       "distillation",
       "pruning"
     ];
+  }
+});
+
+// src/core/exploreAnnotate.ts
+function isSeparatorRow(line) {
+  return /^\|[\s:|-]+\|$/.test(line.trim());
+}
+function uncitedMatrixReasons(draft) {
+  const out = [];
+  const lines = draft.split("\n");
+  let inMatrix = false;
+  for (let i2 = 0; i2 < lines.length; i2++) {
+    const line = lines[i2];
+    if (/^## Tradeoff matrix/.test(line)) {
+      inMatrix = true;
+      continue;
+    }
+    if (/^## /.test(line)) {
+      inMatrix = false;
+      continue;
+    }
+    if (!inMatrix) continue;
+    if (!line.startsWith("| ") || !line.endsWith("|")) continue;
+    if (isSeparatorRow(line)) continue;
+    const cells = line.split("|");
+    if (cells.length !== 5) continue;
+    if (i2 + 1 < lines.length && isSeparatorRow(lines[i2 + 1])) continue;
+    const reason = cells[3];
+    if (draftCitations(reason).length === 0) out.push({ reason: reason.trim(), lineIndex: i2 });
+  }
+  return out;
+}
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function approachesLines(lines) {
+  const set = /* @__PURE__ */ new Set();
+  let inApp = false;
+  for (let i2 = 0; i2 < lines.length; i2++) {
+    if (/^## Approaches/.test(lines[i2])) {
+      inApp = true;
+      continue;
+    }
+    if (/^## /.test(lines[i2])) {
+      inApp = false;
+      continue;
+    }
+    if (inApp) set.add(i2);
+  }
+  return set;
+}
+function buildAnnotations(draft, findings) {
+  const solo = soloCitations(draft, findings);
+  const lines = draft.split("\n");
+  const inApp = approachesLines(lines);
+  const items = [];
+  for (let i2 = 0; i2 < lines.length; i2++) {
+    for (const tok of solo) {
+      if (!lines[i2].includes(tok)) continue;
+      if (inApp.has(i2)) {
+        items.push({ kind: "approaches-flagged", token: tok, lineIndex: i2 });
+        continue;
+      }
+      const re = new RegExp(escapeRegExp(tok) + "(?![A-Za-z0-9_./:-])(?! \\[unverified\\])", "g");
+      if (re.test(lines[i2])) {
+        lines[i2] = lines[i2].replace(
+          new RegExp(escapeRegExp(tok) + "(?![A-Za-z0-9_./:-])(?! \\[unverified\\])", "g"),
+          tok + " [unverified]"
+        );
+        items.push({ kind: "unverified", token: tok, lineIndex: i2 });
+      }
+    }
+  }
+  for (const { lineIndex } of uncitedMatrixReasons(lines.join("\n"))) {
+    if (lines[lineIndex].includes("[no citation]")) continue;
+    lines[lineIndex] = lines[lineIndex].replace(/ \|$/, " [no citation] |");
+    items.push({ kind: "no-citation", lineIndex });
+  }
+  return { annotatedDraft: lines.join("\n"), plan: { items } };
+}
+var init_exploreAnnotate = __esm({
+  "src/core/exploreAnnotate.ts"() {
+    "use strict";
+    init_exploreConfidence();
   }
 });
 
@@ -24675,6 +24757,7 @@ var explore_exports = {};
 __export(explore_exports, {
   adversarySendWith: () => adversarySendWith,
   adversaryWaitWith: () => adversaryWaitWith,
+  annotateRun: () => annotateRun,
   classifyRun: () => classifyRun,
   confidenceRun: () => confidenceRun,
   exploreWaitGateRun: () => exploreWaitGateRun,
@@ -24690,7 +24773,7 @@ __export(explore_exports, {
   teardownWith: () => teardownWith2
 });
 function usage5() {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|wait-gate|synth-preliminary|confidence|adversary-send|adversary-wait|synth-final|forensics|teardown|handoff-extract> ...");
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|synth-final|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 async function run14(args) {
@@ -24713,6 +24796,8 @@ async function run14(args) {
       return synthPreliminaryRun(rest);
     case "confidence":
       return confidenceRun(rest);
+    case "annotate":
+      return annotateRun(rest);
     case "adversary-send":
       return adversarySendRun(rest);
     case "adversary-wait":
@@ -24953,6 +25038,54 @@ async function confidenceRun(rest) {
   }
   return 0;
 }
+async function annotateRun(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("usage: explore annotate <topic>");
+    return 2;
+  }
+  const art = exploreArtDir(topic);
+  const markerPath = (0, import_node_path33.join)(art, "annotate-applied.txt");
+  if ((0, import_node_fs35.existsSync)(markerPath)) {
+    log.ok(`explore annotate: already applied (${markerPath}) \u2014 no-op`);
+    return 0;
+  }
+  const draftPath = (0, import_node_path33.join)(art, "landscape-draft.md");
+  const draft = readIfExists(draftPath);
+  if (!draft.trim()) {
+    log.error(`explore annotate: landscape-draft.md missing/empty at ${art}`);
+    return 1;
+  }
+  const listPath = (0, import_node_path33.join)(art, "list.txt");
+  if (!(0, import_node_fs35.existsSync)(listPath)) {
+    log.error(`explore annotate: list.txt missing at ${art}`);
+    return 1;
+  }
+  const rows = parseListFile(readIfExists(listPath));
+  const missing = missingListArtifacts(art, rows, "findings");
+  if (missing.length) {
+    log.error("explore annotate: blocked \u2014 missing or empty findings:");
+    for (const m of missing) log.error(`  - ${(0, import_node_path33.join)(art, m)}`);
+    return 1;
+  }
+  const findings = rows.map((r) => readIfExists((0, import_node_path33.join)(art, `findings-${r.agent}.md`)));
+  const { annotatedDraft, plan } = buildAnnotations(draft, findings);
+  const counts = {
+    n_unverified: plan.items.filter((i2) => i2.kind === "unverified").length,
+    n_no_citation: plan.items.filter((i2) => i2.kind === "no-citation").length,
+    n_approaches_flagged: plan.items.filter((i2) => i2.kind === "approaches-flagged").length
+  };
+  atomicWrite(draftPath, annotatedDraft);
+  atomicWrite((0, import_node_path33.join)(art, "annotations.json"), JSON.stringify({ topic, counts, items: plan.items }, null, 2) + "\n");
+  atomicWrite(
+    markerPath,
+    `applied: ${isoUtc()}
+unverified=${counts.n_unverified} no_citation=${counts.n_no_citation} approaches_flagged=${counts.n_approaches_flagged}
+`
+  );
+  log.ok(`explore annotate: ${counts.n_unverified} unverified, ${counts.n_no_citation} no-citation, ${counts.n_approaches_flagged} approaches-flagged`);
+  return 0;
+}
 async function adversarySendRun(rest) {
   const [topic, agent, provider] = rest;
   if (!topic || !agent || !provider) {
@@ -25180,6 +25313,7 @@ var init_explore2 = __esm({
     init_contracts();
     init_exploreLit();
     init_exploreConfidence();
+    init_exploreAnnotate();
     init_ipc();
     init_designTurn();
     init_exploreTurn();
