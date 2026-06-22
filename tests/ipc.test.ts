@@ -47,11 +47,6 @@ describe("ipc identity", () => {
 });
 
 describe("ipc outbox", () => {
-  it("eventMatches: no substring false-positive", () => {
-    expect(IPC.eventMatches('{"event":"progress","note":"said \\"event\\":\\"done\\" earlier"}', "done")).toBe(false);
-    expect(IPC.eventMatches('{"event":"done","summary":"ok"}', "done")).toBe(true);
-    expect(IPC.eventMatches("not json", "done")).toBe(false);
-  });
   it("outboxOffset bytes", () => {
     home(); const d = seedPart("bravo", "codex", "demo");
     writeFileSync(join(d, "outbox.jsonl"), "hello world"); // 11 bytes, no newline

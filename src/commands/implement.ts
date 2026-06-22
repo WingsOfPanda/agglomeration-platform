@@ -20,7 +20,7 @@ import { haveCmd } from "../core/deps.js";
 import { implementState, composeRound1Prompt, composeFixPrompt } from "../core/implementTurn.js";
 import { extractQuestionPayload, parseQuestionPayload } from "../core/implementQuestions.js";
 import { outboxOffset, outboxPath, outboxWaitSince, statusPath, resolveModel, type OutboxEvent } from "../core/ipc.js";
-import { readIfExists, readIfExistsOrNull } from "../core/fsread.js";
+import { readField, readIfExists, readIfExistsOrNull } from "../core/fsread.js";
 import { agentTimeoutMultiplier } from "../core/contracts.js";
 import { scaledTimeout, parseLatestOffset, lastKeyedNumber } from "../core/designTurn.js";
 import { run as sendRun } from "./send.js";
@@ -303,8 +303,8 @@ export async function scopeCheckWith(topic: string, d: ScopeDeps): Promise<numbe
   const targetFile = join(art, "target_cwd.txt"), baseFile = join(art, "branch-base.sha");
   if (!existsSync(targetFile) || !existsSync(baseFile)) { log.error(`implement scope-check: target_cwd.txt/branch-base.sha missing under ${art}`); return 1; }
   if (!existsSync(designFile)) { log.error(`implement scope-check: design.md missing under ${art}`); return 1; }
-  const targetCwd = readFileSync(targetFile, "utf8").split("\n")[0].trim();
-  const base = readFileSync(baseFile, "utf8").split("\n")[0].trim();
+  const targetCwd = readField(targetFile);
+  const base = readField(baseFile);
   const diffPaths = d.runnerFor(targetCwd).run("git", ["diff", "--name-only", `${base}..HEAD`]).stdout.split("\n").filter((x) => x.length > 0);
   atomicWrite(join(art, "diff-paths.txt"), diffPaths.length ? diffPaths.join("\n") + "\n" : "");
   const compPaths = extractComponentsPaths(readFileSync(designFile, "utf8"));

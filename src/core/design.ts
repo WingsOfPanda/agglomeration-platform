@@ -2,6 +2,7 @@
 import { join } from "node:path";
 import { existsSync, readdirSync, mkdirSync, readFileSync } from "node:fs";
 import { atomicWrite } from "./atomic.js";
+import { log } from "./log.js";
 import { topicDir } from "./paths.js";
 import { splitNonCommentLines } from "./text.js";
 export { deriveSlug } from "./quick.js"; // identical to consult's slug rule; reused, not duplicated
@@ -42,15 +43,10 @@ export function formatListFile(rows: ListRow[], isoStamp: string): string {
   return `# generated ${isoStamp} by /ap:design\n${body}${rows.length ? "\n" : ""}`;
 }
 
-/** Split text into trimmed, non-blank, non-`#`-comment lines. */
-export function nonCommentLines(text: string): string[] {
-  return splitNonCommentLines(text);
-}
-
 /** Parse list.txt: skip #/blank lines; keep rows with both fields.
  *  Consumed by the ensemble path (Phase C reads list.txt back to spawn the workers); not orphaned. */
 export function parseListFile(text: string): ListRow[] {
-  return nonCommentLines(text)
+  return splitNonCommentLines(text)
     .map((l) => { const [provider, agent] = l.split("\t"); return { provider, agent }; })
     .filter((r) => r.provider && r.agent) as ListRow[];
 }
@@ -80,11 +76,51 @@ export function spawnTally(rcs: number[]): 0 | 1 | 2 {
 /** Parse preflight-panes.txt (TSV `<agent>\t<pane>`; skip #/blank) into a map. */
 export function parsePanesFile(text: string): Map<string, string> {
   const m = new Map<string, string>();
-  for (const t of nonCommentLines(text)) {
+  for (const t of splitNonCommentLines(text)) {
     const [agent, pane] = t.split("\t");
     if (agent && pane) m.set(agent, pane);
   }
   return m;
+}
+
+export interface SpawnAllBatchDeps {
+  preflight(args: string[]): Promise<number>;
+  spawn(args: string[]): Promise<number>;
+  repoRoot(): string;
+}
+
+/** Shared spawn-all batch body for `design` and `explore` — byte-identical between them except the
+ *  art dir and the `label` woven into log/usage strings. Reads list.txt (needs >=2 rows), preflights,
+ *  verifies every row got a preflight pane, spawns all in parallel, writes spawn-results.tsv, and
+ *  returns the spawn-batch tally (0 all-ready / 1 partial / 2 none). The command modules keep their
+ *  own `spawnAllWith(topic, d)` thin wrappers (and their Deps types) so their test surface is intact. */
+export async function spawnAllBatch(label: string, topic: string, art: string, d: SpawnAllBatchDeps): Promise<number> {
+  const listPath = join(art, "list.txt");
+  if (!existsSync(listPath)) { log.error(`${label} spawn-all: list.txt missing at ${listPath} (run ${label} init)`); return 2; }
+  const rows = parseListFile(readFileSync(listPath, "utf8"));
+  if (rows.length < 2) { log.error(`${label} spawn-all: need >=2 workers in list.txt, got ${rows.length}`); return 2; }
+
+  const pf = await d.preflight([topic, String(rows.length), "--list", spawnListArg(rows), "--art-dir", art]);
+  if (pf !== 0) { log.error(`${label} spawn-all: preflight failed (rc=${pf})`); return 2; }
+
+  const panesPath = join(art, "preflight-panes.txt");
+  if (!existsSync(panesPath)) { log.error(`${label} spawn-all: preflight wrote no ${panesPath}`); return 2; }
+  const panes = parsePanesFile(readFileSync(panesPath, "utf8"));
+  const orphans = rows.filter((r) => !panes.has(r.agent));
+  if (orphans.length) { log.error(`${label} spawn-all: workers missing a preflight pane: ${orphans.map((r) => r.agent).join(", ")}`); return 2; }
+
+  const cwd = d.repoRoot();
+  const results: SpawnResult[] = await Promise.all(rows.map(async (r) => {
+    const rc = await d.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent)!, "--cwd", cwd, "--preflight-art-dir", art]);
+    return { agent: r.agent, provider: r.provider, rc };
+  }));
+  atomicWrite(join(art, "spawn-results.tsv"), spawnResultsTsv(results));
+
+  const rc = spawnTally(results.map((r) => r.rc));
+  const nOk = results.filter((r) => r.rc === 0).length;
+  if (rc === 0) log.ok(`${label} spawn-all: ${nOk}/${rows.length} workers ready`);
+  else log.warn(`${label} spawn-all: ${nOk}/${rows.length} workers ready (rc=${rc})`);
+  return rc;
 }
 
 /** True iff <agent>\t<pane> appears as a line in a preflight-panes.txt body. This is the

@@ -845,11 +845,8 @@ function formatListFile(rows, isoStamp) {
   return `# generated ${isoStamp} by /ap:design
 ${body}${rows.length ? "\n" : ""}`;
 }
-function nonCommentLines(text) {
-  return splitNonCommentLines(text);
-}
 function parseListFile(text) {
-  return nonCommentLines(text).map((l) => {
+  return splitNonCommentLines(text).map((l) => {
     const [provider, agent] = l.split("	");
     return { provider, agent };
   }).filter((r) => r.provider && r.agent);
@@ -869,11 +866,50 @@ function spawnTally(rcs) {
 }
 function parsePanesFile(text) {
   const m = /* @__PURE__ */ new Map();
-  for (const t of nonCommentLines(text)) {
+  for (const t of splitNonCommentLines(text)) {
     const [agent, pane] = t.split("	");
     if (agent && pane) m.set(agent, pane);
   }
   return m;
+}
+async function spawnAllBatch(label, topic, art, d) {
+  const listPath = (0, import_node_path5.join)(art, "list.txt");
+  if (!(0, import_node_fs8.existsSync)(listPath)) {
+    log.error(`${label} spawn-all: list.txt missing at ${listPath} (run ${label} init)`);
+    return 2;
+  }
+  const rows = parseListFile((0, import_node_fs8.readFileSync)(listPath, "utf8"));
+  if (rows.length < 2) {
+    log.error(`${label} spawn-all: need >=2 workers in list.txt, got ${rows.length}`);
+    return 2;
+  }
+  const pf = await d.preflight([topic, String(rows.length), "--list", spawnListArg(rows), "--art-dir", art]);
+  if (pf !== 0) {
+    log.error(`${label} spawn-all: preflight failed (rc=${pf})`);
+    return 2;
+  }
+  const panesPath = (0, import_node_path5.join)(art, "preflight-panes.txt");
+  if (!(0, import_node_fs8.existsSync)(panesPath)) {
+    log.error(`${label} spawn-all: preflight wrote no ${panesPath}`);
+    return 2;
+  }
+  const panes = parsePanesFile((0, import_node_fs8.readFileSync)(panesPath, "utf8"));
+  const orphans = rows.filter((r) => !panes.has(r.agent));
+  if (orphans.length) {
+    log.error(`${label} spawn-all: workers missing a preflight pane: ${orphans.map((r) => r.agent).join(", ")}`);
+    return 2;
+  }
+  const cwd = d.repoRoot();
+  const results = await Promise.all(rows.map(async (r) => {
+    const rc2 = await d.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent), "--cwd", cwd, "--preflight-art-dir", art]);
+    return { agent: r.agent, provider: r.provider, rc: rc2 };
+  }));
+  atomicWrite((0, import_node_path5.join)(art, "spawn-results.tsv"), spawnResultsTsv(results));
+  const rc = spawnTally(results.map((r) => r.rc));
+  const nOk = results.filter((r) => r.rc === 0).length;
+  if (rc === 0) log.ok(`${label} spawn-all: ${nOk}/${rows.length} workers ready`);
+  else log.warn(`${label} spawn-all: ${nOk}/${rows.length} workers ready (rc=${rc})`);
+  return rc;
 }
 function paneListedFor(panesTsv, agent, pane) {
   return panesTsv.split("\n").some((l) => l === `${agent}	${pane}`);
@@ -934,6 +970,7 @@ var init_design = __esm({
     import_node_path5 = require("node:path");
     import_node_fs8 = require("node:fs");
     init_atomic();
+    init_log();
     init_paths();
     init_text();
     init_quick();
@@ -16730,6 +16767,10 @@ async function paneAlive(pane) {
   const { stdout } = await execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}"]);
   return stdout.split("\n").includes(pane);
 }
+async function livePanes() {
+  const { stdout } = await execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}"]);
+  return new Set(stdout.split("\n"));
+}
 async function paneSend(pane, line) {
   await execa("tmux", sendKeysLiteralArgs(pane, line));
   await new Promise((r) => setTimeout(r, 300));
@@ -17473,6 +17514,7 @@ async function run4(args) {
   process.stdout.write(`${"-".repeat(32)} ${"-".repeat(8)} ${"-".repeat(12)} ${"-".repeat(9)} -----
 `);
   const threshold = staleThresholdS();
+  const live = await livePanes();
   for (const t of (0, import_node_fs20.readdirSync)(repo, { withFileTypes: true })) {
     if (!t.isDirectory()) continue;
     if (filter && t.name !== filter) continue;
@@ -17484,7 +17526,7 @@ async function run4(args) {
       const pane = meta.paneId || "?";
       const ob = outboxPath(meta.agent, meta.model, t.name);
       let state = "[ORPHAN]";
-      if (pane !== "?" && await paneAlive(pane)) state = classifyStale(deriveState(lastOutboxEvent(ob)), ob, threshold);
+      if (pane !== "?" && live.has(pane)) state = classifyStale(deriveState(lastOutboxEvent(ob)), ob, threshold);
       process.stdout.write(`${W(meta.agent, 32)} ${W(meta.model, 8)} ${W(t.name, 12)} ${W(pane, 9)} ${state}
 `);
     }
@@ -19339,44 +19381,7 @@ async function spawnAllRun(rest) {
   return spawnAllWith(topic, liveSpawnAllDeps);
 }
 async function spawnAllWith(topic, d) {
-  const art = designArtDir(topic);
-  const listPath = (0, import_node_path23.join)(art, "list.txt");
-  if (!(0, import_node_fs28.existsSync)(listPath)) {
-    log.error(`design spawn-all: list.txt missing at ${listPath} (run design init)`);
-    return 2;
-  }
-  const rows = parseListFile((0, import_node_fs28.readFileSync)(listPath, "utf8"));
-  if (rows.length < 2) {
-    log.error(`design spawn-all: need >=2 workers in list.txt, got ${rows.length}`);
-    return 2;
-  }
-  const pf = await d.preflight([topic, String(rows.length), "--list", spawnListArg(rows), "--art-dir", art]);
-  if (pf !== 0) {
-    log.error(`design spawn-all: preflight failed (rc=${pf})`);
-    return 2;
-  }
-  const panesPath = (0, import_node_path23.join)(art, "preflight-panes.txt");
-  if (!(0, import_node_fs28.existsSync)(panesPath)) {
-    log.error(`design spawn-all: preflight wrote no ${panesPath}`);
-    return 2;
-  }
-  const panes = parsePanesFile((0, import_node_fs28.readFileSync)(panesPath, "utf8"));
-  const orphans = rows.filter((r) => !panes.has(r.agent));
-  if (orphans.length) {
-    log.error(`design spawn-all: workers missing a preflight pane: ${orphans.map((r) => r.agent).join(", ")}`);
-    return 2;
-  }
-  const cwd = d.repoRoot();
-  const results = await Promise.all(rows.map(async (r) => {
-    const rc2 = await d.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent), "--cwd", cwd, "--preflight-art-dir", art]);
-    return { agent: r.agent, provider: r.provider, rc: rc2 };
-  }));
-  atomicWrite((0, import_node_path23.join)(art, "spawn-results.tsv"), spawnResultsTsv(results));
-  const rc = spawnTally(results.map((r) => r.rc));
-  const nOk = results.filter((r) => r.rc === 0).length;
-  if (rc === 0) log.ok(`design spawn-all: ${nOk}/${rows.length} workers ready`);
-  else log.warn(`design spawn-all: ${nOk}/${rows.length} workers ready (rc=${rc})`);
-  return rc;
+  return spawnAllBatch("design", topic, designArtDir(topic), d);
 }
 async function researchSendRun(rest) {
   const [topic, agent, provider] = rest;
@@ -20693,8 +20698,8 @@ async function scopeCheckWith(topic, d) {
     log.error(`implement scope-check: design.md missing under ${art}`);
     return 1;
   }
-  const targetCwd = (0, import_node_fs30.readFileSync)(targetFile, "utf8").split("\n")[0].trim();
-  const base = (0, import_node_fs30.readFileSync)(baseFile, "utf8").split("\n")[0].trim();
+  const targetCwd = readField(targetFile);
+  const base = readField(baseFile);
   const diffPaths = d.runnerFor(targetCwd).run("git", ["diff", "--name-only", `${base}..HEAD`]).stdout.split("\n").filter((x) => x.length > 0);
   atomicWrite((0, import_node_path26.join)(art, "diff-paths.txt"), diffPaths.length ? diffPaths.join("\n") + "\n" : "");
   const compPaths = extractComponentsPaths((0, import_node_fs30.readFileSync)(designFile, "utf8"));
@@ -23258,7 +23263,9 @@ async function monitorRun(args, opts) {
   do {
     const buf = (0, import_node_fs33.existsSync)(outbox) ? (0, import_node_fs33.readFileSync)(outbox) : Buffer.alloc(0);
     const size = buf.length;
-    const full = buf.toString("utf8");
+    const now = Math.floor(Date.now() / 1e3);
+    const rescanDue = now - state.lastRescan >= thresholds.rescanEveryS;
+    const full = rescanDue ? buf.toString("utf8") : "";
     const text = buf.subarray(state.offset).toString("utf8");
     const mtime = (0, import_node_fs33.existsSync)(outbox) ? Math.floor((0, import_node_fs33.statSync)(outbox).mtimeMs / 1e3) : 0;
     const phase = ((0, import_node_fs33.existsSync)(stateTxt) ? parseState((0, import_node_fs33.readFileSync)(stateTxt, "utf8")).phase : "") ?? "";
@@ -23268,7 +23275,7 @@ async function monitorRun(args, opts) {
       outboxSize: size,
       outboxMtime: mtime,
       phase,
-      now: Math.floor(Date.now() / 1e3),
+      now,
       nowIso: isoUtc(),
       thresholds
     });
@@ -24800,44 +24807,7 @@ async function spawnAllRun2(rest) {
   return spawnAllWith3(topic, liveExploreSpawnAllDeps);
 }
 async function spawnAllWith3(topic, d) {
-  const art = exploreArtDir(topic);
-  const listPath = (0, import_node_path33.join)(art, "list.txt");
-  if (!(0, import_node_fs35.existsSync)(listPath)) {
-    log.error(`explore spawn-all: list.txt missing at ${listPath} (run explore init)`);
-    return 2;
-  }
-  const rows = parseListFile((0, import_node_fs35.readFileSync)(listPath, "utf8"));
-  if (rows.length < 2) {
-    log.error(`explore spawn-all: need >=2 workers in list.txt, got ${rows.length}`);
-    return 2;
-  }
-  const pf = await d.preflight([topic, String(rows.length), "--list", spawnListArg(rows), "--art-dir", art]);
-  if (pf !== 0) {
-    log.error(`explore spawn-all: preflight failed (rc=${pf})`);
-    return 2;
-  }
-  const panesPath = (0, import_node_path33.join)(art, "preflight-panes.txt");
-  if (!(0, import_node_fs35.existsSync)(panesPath)) {
-    log.error(`explore spawn-all: preflight wrote no ${panesPath}`);
-    return 2;
-  }
-  const panes = parsePanesFile((0, import_node_fs35.readFileSync)(panesPath, "utf8"));
-  const orphans = rows.filter((r) => !panes.has(r.agent));
-  if (orphans.length) {
-    log.error(`explore spawn-all: workers missing a preflight pane: ${orphans.map((r) => r.agent).join(", ")}`);
-    return 2;
-  }
-  const cwd = d.repoRoot();
-  const results = await Promise.all(rows.map(async (r) => {
-    const rc2 = await d.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent), "--cwd", cwd, "--preflight-art-dir", art]);
-    return { agent: r.agent, provider: r.provider, rc: rc2 };
-  }));
-  atomicWrite((0, import_node_path33.join)(art, "spawn-results.tsv"), spawnResultsTsv(results));
-  const rc = spawnTally(results.map((r) => r.rc));
-  const nOk = results.filter((r) => r.rc === 0).length;
-  if (rc === 0) log.ok(`explore spawn-all: ${nOk}/${rows.length} workers ready`);
-  else log.warn(`explore spawn-all: ${nOk}/${rows.length} workers ready (rc=${rc})`);
-  return rc;
+  return spawnAllBatch("explore", topic, exploreArtDir(topic), d);
 }
 async function researchSendRun2(rest) {
   const [topic, agent, provider] = rest;
