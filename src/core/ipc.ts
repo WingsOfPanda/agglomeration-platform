@@ -62,10 +62,6 @@ export function parseEvent(line: string): OutboxEvent | null {
   try { return JSON.parse(line) as OutboxEvent; } catch { return null; }
 }
 
-export function eventMatches(line: string, name: string): boolean {
-  return parseEvent(line)?.event === name;
-}
-
 export function outboxOffset(path: string): number {
   try { return statSync(path).size; } catch { return 0; }
 }

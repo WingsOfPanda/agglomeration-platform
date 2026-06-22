@@ -7,10 +7,10 @@ import { atomicWrite } from "../core/atomic.js";
 import { isoUtc, archiveTopic } from "../core/archive.js";
 import {
   deriveSlug, parseDesignArgs, designArtDir, designDraftDir,
-  formatListFile, designDocPath, parseListFile,
-  spawnListArg, spawnResultsTsv, spawnTally, parsePanesFile, verifyScopeFiles, lastTag,
+  formatListFile, designDocPath, parseListFile, spawnAllBatch,
+  verifyScopeFiles, lastTag,
   resolveDrilldownPath, cascadeTargets, exportDocTo,
-  type ListRow, type SpawnResult, type ResetPhase,
+  type ListRow, type ResetPhase,
 } from "../core/design.js";
 import { assembleDoc, SECTIONS_SINGLE, synthesizeSeeds } from "../core/designDoc.js";
 import { auditDoc } from "../core/audit.js";
@@ -168,33 +168,7 @@ async function spawnAllRun(rest: string[]): Promise<number> {
 }
 
 export async function spawnAllWith(topic: string, d: SpawnAllDeps): Promise<number> {
-  const art = designArtDir(topic);
-  const listPath = join(art, "list.txt");
-  if (!existsSync(listPath)) { log.error(`design spawn-all: list.txt missing at ${listPath} (run design init)`); return 2; }
-  const rows = parseListFile(readFileSync(listPath, "utf8"));
-  if (rows.length < 2) { log.error(`design spawn-all: need >=2 workers in list.txt, got ${rows.length}`); return 2; }
-
-  const pf = await d.preflight([topic, String(rows.length), "--list", spawnListArg(rows), "--art-dir", art]);
-  if (pf !== 0) { log.error(`design spawn-all: preflight failed (rc=${pf})`); return 2; }
-
-  const panesPath = join(art, "preflight-panes.txt");
-  if (!existsSync(panesPath)) { log.error(`design spawn-all: preflight wrote no ${panesPath}`); return 2; }
-  const panes = parsePanesFile(readFileSync(panesPath, "utf8"));
-  const orphans = rows.filter((r) => !panes.has(r.agent));
-  if (orphans.length) { log.error(`design spawn-all: workers missing a preflight pane: ${orphans.map((r) => r.agent).join(", ")}`); return 2; }
-
-  const cwd = d.repoRoot();
-  const results: SpawnResult[] = await Promise.all(rows.map(async (r) => {
-    const rc = await d.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent)!, "--cwd", cwd, "--preflight-art-dir", art]);
-    return { agent: r.agent, provider: r.provider, rc };
-  }));
-  atomicWrite(join(art, "spawn-results.tsv"), spawnResultsTsv(results));
-
-  const rc = spawnTally(results.map((r) => r.rc));
-  const nOk = results.filter((r) => r.rc === 0).length;
-  if (rc === 0) log.ok(`design spawn-all: ${nOk}/${rows.length} workers ready`);
-  else log.warn(`design spawn-all: ${nOk}/${rows.length} workers ready (rc=${rc})`);
-  return rc;
+  return spawnAllBatch("design", topic, designArtDir(topic), d);
 }
 
 export interface SendDeps {
