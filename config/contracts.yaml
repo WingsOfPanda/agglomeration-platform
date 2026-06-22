@@ -58,7 +58,13 @@ claude:
     full:      [--permission-mode, auto]
     read-only: [--permission-mode, plan]     # best-effort; plan mode is read-only-ish
   default_mode: full
-  ready_timeout_s: 60
+  # 0.3.6: bumped 60 -> 150. Opus 4.8 at xhigh thinking reads identity.md slowly;
+  # bl202 spawn forensics (review 2026-06-22: 3x spawn_failure in one night across
+  # the based-on-last-reulst topic) caught a claude worker at "59s, almost done
+  # thinking" when the 60s deadline fired, then a brittle retry cascade. 150s clears
+  # the xhigh identity read; warm / lower-effort starts finish well under it, so the
+  # only cost is how long a genuinely-dead worker takes to be declared timed-out.
+  ready_timeout_s: 150
   bootstrap_sleep_s: 12
 
 opencode:
