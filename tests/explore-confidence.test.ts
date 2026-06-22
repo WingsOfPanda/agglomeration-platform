@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeSignals, renderSkipRecord, matrixBadRows, topApproach } from "../src/core/exploreConfidence.js";
+import { computeSignals, renderSkipRecord, matrixBadRows, topApproach, soloCitations } from "../src/core/exploreConfidence.js";
 
 // NOTE on S4: the ported bash heuristic (grep -cE '^\| [^|]+\| [^|]+\| [^/:][^|]*\|$') flags any
 // matrix row whose Reason (3rd) cell's FIRST char is not '/' or ':'. This is intentionally
@@ -54,6 +54,21 @@ describe("computeSignals", () => {
       FIND_B.replace("confirms it.", "confirms it. https://arxiv.org/abs/2205.14135"),
     ]);
     expect(s.s5).toBe(false);
+  });
+});
+
+describe("soloCitations", () => {
+  it("returns only citations present in fewer than 2 findings", () => {
+    const draft = "Cited: https://both.example/p and https://solo.example/q in the text.";
+    const findings = [
+      "see https://both.example/p and https://solo.example/q",
+      "also https://both.example/p only",
+    ];
+    expect(soloCitations(draft, findings)).toEqual(["https://solo.example/q"]);
+  });
+  it("empty when every citation is corroborated by >= 2 findings", () => {
+    const draft = "Cited https://both.example/p here.";
+    expect(soloCitations(draft, ["https://both.example/p a", "https://both.example/p b"])).toEqual([]);
   });
 });
 

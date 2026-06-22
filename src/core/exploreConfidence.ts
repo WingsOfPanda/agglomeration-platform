@@ -40,6 +40,11 @@ export function matrixBadRows(draft: string): number {
 
 const UNCERTAIN = /uncertain|unclear|depends on|could not determine|not sure|gap in evidence/i;
 
+/** Draft citations corroborated by < 2 findings files (the S2 "solo" set, in draft order). */
+export function soloCitations(draft: string, findings: string[]): string[] {
+  return draftCitations(draft).filter((cite) => findings.filter((f) => f.includes(cite)).length < 2);
+}
+
 export function computeSignals(draft: string, findings: string[]): Signals {
   const n = findings.length;
   // S1: top-approach convergence — >= N-1 findings mention it (case-insensitive literal).
@@ -51,12 +56,7 @@ export function computeSignals(draft: string, findings: string[]): Signals {
   // fail-safe: runs the adversary) reading. Do NOT "restore fidelity" by dropping the `top !== ""` guard.
   const s1 = top !== "" && hits >= n - 1;
   // S2: every draft citation appears in >= 2 findings.
-  let solo = 0;
-  for (const cite of draftCitations(draft)) {
-    const citers = findings.filter((f) => f.includes(cite)).length;
-    if (citers < 2) solo++;
-  }
-  const s2 = solo === 0;
+  const s2 = soloCitations(draft, findings).length === 0;
   // S3: no CONTESTED markers (case-insensitive).
   const s3 = !/CONTESTED/i.test(draft);
   // S4: every matrix Reason cell has a path/URL/paper anchor.
