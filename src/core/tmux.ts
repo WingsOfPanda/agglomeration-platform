@@ -98,6 +98,14 @@ export async function paneAlive(pane: string): Promise<boolean> {
   return stdout.split("\n").includes(pane);
 }
 
+/** One snapshot of every live pane id on the server (single tmux call). Use this when checking
+ *  many panes at once (e.g. `ap list`) instead of calling paneAlive per pane — N panes would
+ *  otherwise re-run the identical full-server scan N times. */
+export async function livePanes(): Promise<Set<string>> {
+  const { stdout } = await execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}"]);
+  return new Set(stdout.split("\n"));
+}
+
 export async function paneSend(pane: string, line: string): Promise<void> {
   await execa("tmux", sendKeysLiteralArgs(pane, line));
   await new Promise((r) => setTimeout(r, 300)); // load-bearing beat before Enter

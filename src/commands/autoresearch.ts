@@ -788,14 +788,20 @@ export async function monitorRun(args: string[], opts?: { home?: string; cwd?: s
   do {
     const buf = existsSync(outbox) ? readFileSync(outbox) : Buffer.alloc(0);
     const size = buf.length;
-    const full = buf.toString("utf8");
+    const now = Math.floor(Date.now() / 1000);
+    // Only the periodic whole-outbox rescan consumes outboxFullText; on the ticks where no rescan is
+    // due (the common case — rescanEveryS >> the poll interval) skip decoding the full buffer. When
+    // not due, monitorScan's rescan guard short-circuits anyway (it needs both the interval AND a
+    // truthy outboxFullText), so passing "" is the exact no-op path.
+    const rescanDue = now - state.lastRescan >= thresholds.rescanEveryS;
+    const full = rescanDue ? buf.toString("utf8") : "";
     const text = buf.subarray(state.offset).toString("utf8");
     const mtime = existsSync(outbox) ? Math.floor(statSync(outbox).mtimeMs / 1000) : 0;
     const phase = (existsSync(stateTxt) ? parseState(readFileSync(stateTxt, "utf8")).phase : "") ?? "";
 
     const r = monitorScan(outbox, agent, state, {
       outboxText: text, outboxFullText: full, outboxSize: size, outboxMtime: mtime,
-      phase, now: Math.floor(Date.now() / 1000), nowIso: isoUtc(), thresholds,
+      phase, now, nowIso: isoUtc(), thresholds,
     });
     for (const n of r.notifications) process.stdout.write(JSON.stringify(n) + "\n");
 
