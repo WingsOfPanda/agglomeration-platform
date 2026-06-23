@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, copyFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -7,7 +7,7 @@ import { haveCmd, inTmuxSession, tmuxVersionOk, tmuxVersionString } from "../cor
 import { paneBorderArgs } from "../core/tmux.js";
 import { globalRoot, pluginRoot } from "../core/paths.js";
 import { atomicWrite } from "../core/atomic.js";
-import { contractsExist, listAgents, agentBinary, agentConsultValidated } from "../core/contracts.js";
+import { contractsExist, contractsPath, listAgents, agentBinary, agentConsultValidated } from "../core/contracts.js";
 import { readProviderList, planList, formatActiveFile, formatProviderFile } from "../core/providers.js";
 import { isoUtc } from "../core/archive.js";
 
@@ -109,6 +109,20 @@ function applyPaneBorders(): void {
   for (const a of paneBorderArgs()) { try { execFileSync("tmux", a, { stdio: "ignore" }); } catch { /* diagnosed below */ } }
 }
 
+/** Self-heal: ~/.ap/<file> config shadows are no longer read (the plugin reads the shipped,
+ *  versioned config directly). Back up + remove any leftover shadow so it can't mask shipped
+ *  updates. Best-effort and idempotent: no shadow -> no-op. */
+function migrateConfigShadow(): void {
+  for (const f of ["contracts.yaml", "agents.yaml"]) {
+    const shadow = join(globalRoot(), f);
+    if (!existsSync(shadow)) continue;
+    try {
+      renameSync(shadow, `${shadow}.bak`);
+      log.ok(`config: removed stale shadow ~/.ap/${f} -> ${f}.bak (now tracking shipped)`);
+    } catch { log.warn(`config: could not back up stale shadow ${shadow}`); }
+  }
+}
+
 function healthCheck(): number {
   let fail = 0, warn = 0, ok = 0, total = 0;
   const root = globalRoot();
@@ -130,14 +144,11 @@ function healthCheck(): number {
   if (existsSync(root)) log.ok(`state dir: ${root} (writable)`);
   else { log.error(`state dir: ${root} cannot be created or is not writable`); fail = 1; }
 
+  migrateConfigShadow();
   for (const f of ["contracts.yaml", "agents.yaml"]) {
-    const dest = join(globalRoot(), f);
-    if (existsSync(dest)) log.ok(`config: ${f}`);
-    else {
-      const shipped = join(pluginRoot(), "config", f);
-      if (existsSync(shipped)) { try { copyFileSync(shipped, dest); log.ok(`config: ${f} (copied default into state dir)`); } catch { log.error(`config: ${f} missing; copy from plugin defaults failed`); fail = 1; } }
-      else { log.error(`config: ${f} not in state dir and not shipped at ${shipped}`); fail = 1; }
-    }
+    const shipped = join(pluginRoot(), "config", f);
+    if (existsSync(shipped)) log.ok(`config: ${f}`);
+    else { log.error(`config: ${f} not shipped at ${shipped} — partial install`); fail = 1; }
   }
 
   const idTpl = join(pluginRoot(), "config", "prompt-templates", "identity.md");
@@ -145,7 +156,7 @@ function healthCheck(): number {
   else { log.error(`config: identity template not found at ${idTpl} — partial install; spawn will fail`); fail = 1; }
 
   const detected: string[] = [];
-  if (!contractsExist()) { log.error(`contracts.yaml not found at ${join(globalRoot(), "contracts.yaml")}`); fail = 1; }
+  if (!contractsExist()) { log.error(`contracts.yaml not found at ${contractsPath()}`); fail = 1; }
   else {
     for (const prov of listAgents()) {
       total++;
