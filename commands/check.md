@@ -42,8 +42,8 @@ Print each `skipped` and `dropped` entry as a `note:` line so the user sees what
 ### Step 5 — Branch on `decision`
 
 - **`skip`** (0 validated providers) — stop here. (Config tracks the installed plugin version
-  automatically — `/ap:check` self-heals any stale `~/.ap/contracts.yaml` shadow to `.bak`; no
-  manual refresh.)
+  automatically — `/ap:check` self-heals any stale `~/.ap/contracts.yaml`/`agents.yaml` shadow to
+  `.bak`; no manual refresh.)
 - **`auto`** (exactly 1) — run `$CS check list-set <auto>` and print its confirmation. Done.
 - **`prompt`** — build the menu from `detected` (use the provider names verbatim — codex / claude /
   agy / opencode). The shape depends on `detected.length`:

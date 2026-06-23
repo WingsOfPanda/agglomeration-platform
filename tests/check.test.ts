@@ -32,15 +32,18 @@ describe("check ensures global config root", () => {
       if (prev === undefined) delete process.env.AP_HOME; else process.env.AP_HOME = prev;
     }
   });
-  it("migrateConfigShadow: a stale ~/.ap/contracts.yaml is backed up to .bak and removed", async () => {
+  it("migrateConfigShadow: stale ~/.ap/contracts.yaml + agents.yaml are backed up to .bak and removed", async () => {
     const home = mkdtempSync(join(tmpdir(), "mg-"));
     const prev = process.env.AP_HOME; process.env.AP_HOME = home;
     process.env.CLAUDE_PLUGIN_ROOT = process.cwd();
     writeFileSync(join(home, "contracts.yaml"), "codex:\n  ready_timeout_s: 999\n"); // stale shadow
+    writeFileSync(join(home, "agents.yaml"), "agents:\n  - ghost\n");                 // stale shadow
     try {
       await check([]);
       expect(exists(join(home, "contracts.yaml"))).toBe(false);    // shadow removed
       expect(exists(join(home, "contracts.yaml.bak"))).toBe(true); // backed up
+      expect(exists(join(home, "agents.yaml"))).toBe(false);       // shadow removed
+      expect(exists(join(home, "agents.yaml.bak"))).toBe(true);    // backed up
     } finally {
       if (prev === undefined) delete process.env.AP_HOME; else process.env.AP_HOME = prev;
     }
