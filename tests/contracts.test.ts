@@ -1,15 +1,17 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as K from "../src/core/contracts.js";
 
-afterEach(() => { delete process.env.AP_HOME; });
+afterEach(() => { delete process.env.CLAUDE_PLUGIN_ROOT; delete process.env.AP_HOME; });
 function withContracts(yaml: string) {
-  const h = mkdtempSync(join(tmpdir(), "ct-"));
-  process.env.AP_HOME = h;
-  writeFileSync(join(h, "contracts.yaml"), yaml);
-  return h;
+  const root = mkdtempSync(join(tmpdir(), "ct-"));
+  mkdirSync(join(root, "config"), { recursive: true });
+  process.env.CLAUDE_PLUGIN_ROOT = root;
+  process.env.AP_HOME = mkdtempSync(join(tmpdir(), "ct-home-")); // empty temp: neutralizes the real ~/.ap shadow
+  writeFileSync(join(root, "config", "contracts.yaml"), yaml);
+  return root;
 }
 const SAMPLE = `
 codex:
@@ -74,5 +76,12 @@ describe("contracts", () => {
     expect(K.consultTimeout("adversary")).toBe(600); // absent → default
     expect(K.consultTimeout("experiment")).toBe(1800);
     expect(() => K.consultTimeout("bogus" as any)).toThrow();
+  });
+  it("ignores a ~/.ap/contracts.yaml shadow; always reads shipped", () => {
+    withContracts(SAMPLE);                                  // shipped: codex ready_timeout_s 90
+    const shadow = mkdtempSync(join(tmpdir(), "shadow-"));
+    process.env.AP_HOME = shadow;
+    writeFileSync(join(shadow, "contracts.yaml"), "codex:\n  binary: codex\n  ready_timeout_s: 999\n");
+    expect(K.agentReadyTimeout("codex")).toBe(90);          // shipped wins, shadow ignored
   });
 });

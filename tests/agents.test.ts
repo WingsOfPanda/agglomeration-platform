@@ -5,11 +5,14 @@ import { join } from "node:path";
 import * as I from "../src/core/agents.js";
 import { workerDir } from "../src/core/paths.js";
 
-afterEach(() => { delete process.env.AP_HOME; delete process.env.CLAUDE_CODE_SESSION_ID; });
+afterEach(() => { delete process.env.AP_HOME; delete process.env.CLAUDE_PLUGIN_ROOT; delete process.env.CLAUDE_CODE_SESSION_ID; });
 function home() {
   const h = mkdtempSync(join(tmpdir(), "in-"));
   process.env.AP_HOME = h;
-  writeFileSync(join(h, "agents.yaml"), "agents:\n  - bravo\n  - alpha\n  - charlie\n");
+  const pr = mkdtempSync(join(tmpdir(), "pr-"));
+  mkdirSync(join(pr, "config"), { recursive: true });
+  process.env.CLAUDE_PLUGIN_ROOT = pr;
+  writeFileSync(join(pr, "config", "agents.yaml"), "agents:\n  - bravo\n  - alpha\n  - charlie\n");
   return h;
 }
 function seed(i: string, m: string, t: string) {
@@ -22,6 +25,11 @@ describe("agents", () => {
   it("loadAgentPool parses list", () => {
     home();
     expect(I.loadAgentPool()).toEqual(["bravo", "alpha", "charlie"]);
+  });
+  it("loadAgentPool ignores a ~/.ap/agents.yaml shadow; reads shipped pool", () => {
+    home();
+    writeFileSync(join(process.env.AP_HOME!, "agents.yaml"), "agents:\n  - ghost\n");
+    expect(I.loadAgentPool()).toEqual(["bravo", "alpha", "charlie"]); // shadow ignored
   });
   it("inUse reads canonical agent field (hyphenated model safe)", () => {
     home(); seed("bravo", "claude-haiku", "demo");

@@ -1,11 +1,10 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
-import { globalRoot, pluginRoot } from "./paths.js";
+import { pluginRoot } from "./paths.js";
 
 export function contractsPath(): string {
-  const user = join(globalRoot(), "contracts.yaml");
-  return existsSync(user) ? user : join(pluginRoot(), "config", "contracts.yaml");
+  return join(pluginRoot(), "config", "contracts.yaml");
 }
 
 export interface Agent {
