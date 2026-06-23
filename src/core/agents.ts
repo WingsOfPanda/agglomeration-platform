@@ -1,12 +1,11 @@
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
-import { globalRoot, repoStateDir, topicDir, workerDir, isArtifactDir, pluginRoot } from "./paths.js";
+import { repoStateDir, topicDir, workerDir, isArtifactDir, pluginRoot } from "./paths.js";
 import { paneMetaReadForDir } from "./ipc.js";
 
 export function agentsPath(): string {
-  const user = join(globalRoot(), "agents.yaml");
-  return existsSync(user) ? user : join(pluginRoot(), "config", "agents.yaml");
+  return join(pluginRoot(), "config", "agents.yaml");
 }
 
 export function loadAgentPool(): string[] {
