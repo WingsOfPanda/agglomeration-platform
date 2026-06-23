@@ -20,14 +20,27 @@ describe("opencode permission check (JSON.parse, not grep)", () => {
 });
 
 describe("check ensures global config root", () => {
-  it("ensures globalRoot and copies config when AP_HOME dir does not pre-exist", async () => {
+  it("does NOT copy config into ~/.ap (reads shipped instead)", async () => {
     const home = join(mkdtempSync(join(tmpdir(), "sc-")), "nested-not-yet"); // does NOT exist
     const prev = process.env.AP_HOME; process.env.AP_HOME = home;
     process.env.CLAUDE_PLUGIN_ROOT = process.cwd();
     try {
-      await check([]);                 // must not throw; must create home + copy config
-      expect(exists(join(home, "contracts.yaml"))).toBe(true);
-      expect(exists(join(home, "agents.yaml"))).toBe(true);
+      await check([]);                                       // must not throw
+      expect(exists(join(home, "contracts.yaml"))).toBe(false); // no longer auto-copied
+      expect(exists(join(home, "agents.yaml"))).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.AP_HOME; else process.env.AP_HOME = prev;
+    }
+  });
+  it("migrateConfigShadow: a stale ~/.ap/contracts.yaml is backed up to .bak and removed", async () => {
+    const home = mkdtempSync(join(tmpdir(), "mg-"));
+    const prev = process.env.AP_HOME; process.env.AP_HOME = home;
+    process.env.CLAUDE_PLUGIN_ROOT = process.cwd();
+    writeFileSync(join(home, "contracts.yaml"), "codex:\n  ready_timeout_s: 999\n"); // stale shadow
+    try {
+      await check([]);
+      expect(exists(join(home, "contracts.yaml"))).toBe(false);    // shadow removed
+      expect(exists(join(home, "contracts.yaml.bak"))).toBe(true); // backed up
     } finally {
       if (prev === undefined) delete process.env.AP_HOME; else process.env.AP_HOME = prev;
     }
