@@ -8306,8 +8306,7 @@ var require_dist = __commonJS({
 
 // src/core/agents.ts
 function agentsPath() {
-  const user = (0, import_node_path6.join)(globalRoot(), "agents.yaml");
-  return (0, import_node_fs9.existsSync)(user) ? user : (0, import_node_path6.join)(pluginRoot(), "config", "agents.yaml");
+  return (0, import_node_path6.join)(pluginRoot(), "config", "agents.yaml");
 }
 function loadAgentPool() {
   const p = agentsPath();
@@ -8385,8 +8384,7 @@ var init_agents = __esm({
 
 // src/core/contracts.ts
 function contractsPath() {
-  const user = (0, import_node_path7.join)(globalRoot(), "contracts.yaml");
-  return (0, import_node_fs10.existsSync)(user) ? user : (0, import_node_path7.join)(pluginRoot(), "config", "contracts.yaml");
+  return (0, import_node_path7.join)(pluginRoot(), "config", "contracts.yaml");
 }
 function load() {
   const p = contractsPath();
@@ -17841,6 +17839,18 @@ function applyPaneBorders() {
     }
   }
 }
+function migrateConfigShadow() {
+  for (const f of ["contracts.yaml", "agents.yaml"]) {
+    const shadow = (0, import_node_path18.join)(globalRoot(), f);
+    if (!(0, import_node_fs23.existsSync)(shadow)) continue;
+    try {
+      (0, import_node_fs23.renameSync)(shadow, `${shadow}.bak`);
+      log.ok(`config: removed stale shadow ~/.ap/${f} -> ${f}.bak (now tracking shipped)`);
+    } catch {
+      log.warn(`config: could not back up stale shadow ${shadow}`);
+    }
+  }
+}
 function healthCheck() {
   let fail = 0, warn = 0, ok = 0, total = 0;
   const root = globalRoot();
@@ -17874,23 +17884,13 @@ function healthCheck() {
     log.error(`state dir: ${root} cannot be created or is not writable`);
     fail = 1;
   }
+  migrateConfigShadow();
   for (const f of ["contracts.yaml", "agents.yaml"]) {
-    const dest = (0, import_node_path18.join)(globalRoot(), f);
-    if ((0, import_node_fs23.existsSync)(dest)) log.ok(`config: ${f}`);
+    const shipped = (0, import_node_path18.join)(pluginRoot(), "config", f);
+    if ((0, import_node_fs23.existsSync)(shipped)) log.ok(`config: ${f}`);
     else {
-      const shipped = (0, import_node_path18.join)(pluginRoot(), "config", f);
-      if ((0, import_node_fs23.existsSync)(shipped)) {
-        try {
-          (0, import_node_fs23.copyFileSync)(shipped, dest);
-          log.ok(`config: ${f} (copied default into state dir)`);
-        } catch {
-          log.error(`config: ${f} missing; copy from plugin defaults failed`);
-          fail = 1;
-        }
-      } else {
-        log.error(`config: ${f} not in state dir and not shipped at ${shipped}`);
-        fail = 1;
-      }
+      log.error(`config: ${f} not shipped at ${shipped} \u2014 partial install`);
+      fail = 1;
     }
   }
   const idTpl = (0, import_node_path18.join)(pluginRoot(), "config", "prompt-templates", "identity.md");
@@ -17901,7 +17901,7 @@ function healthCheck() {
   }
   const detected = [];
   if (!contractsExist()) {
-    log.error(`contracts.yaml not found at ${(0, import_node_path18.join)(globalRoot(), "contracts.yaml")}`);
+    log.error(`contracts.yaml not found at ${contractsPath()}`);
     fail = 1;
   } else {
     for (const prov of listAgents()) {
