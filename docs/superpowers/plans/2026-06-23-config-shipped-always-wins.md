@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `/ap:explore`'s plugin always read the shipped (versioned) `contracts.yaml`/`agents.yaml` so config fixes land on every update, drop the stale `~/.ap` config shadow, and self-heal the existing copies.
+**Goal:** Make the plugin always read the shipped (versioned) `contracts.yaml`/`agents.yaml` so config fixes land on every update, drop the stale `~/.ap` config shadow, and self-heal the existing copies.
 
 **Architecture:** `contractsPath()`/`agentsPath()` return the `pluginRoot()/config/<file>` path unconditionally (no `globalRoot()` shadow). `/ap:check` stops auto-copying config into `~/.ap` and gains an idempotent `migrateConfigShadow()` self-heal that renames any leftover `~/.ap/contracts.yaml`/`agents.yaml` to `.bak`. Test fixtures inject shipped config via `CLAUDE_PLUGIN_ROOT` instead of the removed `AP_HOME` shadow.
 
