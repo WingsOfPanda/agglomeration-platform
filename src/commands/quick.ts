@@ -13,7 +13,7 @@ import { haveCmd } from "../core/deps.js";
 import { pickRandomAgent } from "../core/agents.js";
 import { runnerAt, preSnapshot, createOrResumeBranch, finishBranch } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
-import { outboxOffset, outboxPath, outboxWaitSince, statusPath, type OutboxEvent } from "../core/ipc.js";
+import { outboxOffset, outboxPath, outboxWaitSince, workerBusyState, type OutboxEvent } from "../core/ipc.js";
 import { composeRound1Prompt, composeFixPrompt, classifyTurn } from "../core/turn.js";
 import { parseLatestOffset } from "../core/designTurn.js";
 import { run as sendRun } from "./send.js";
@@ -135,8 +135,8 @@ export async function turnSendWith(topic: string, round: number, d: TurnSendDeps
 
   const outbox = outboxPath(agent, provider, topic);
   if (!existsSync(outbox)) { log.error(`quick turn-send: outbox not found at ${outbox} — was ${agent} spawned?`); return 1; }
-  const sp = statusPath(agent, provider, topic);
-  if (existsSync(sp)) { const m = readFileSync(sp, "utf8").match(/"state":"([^"]*)"/); if (m && m[1] && m[1] !== "idle") { log.error(`quick turn-send: worker not idle (state=${m[1]}); previous turn still in flight`); return 1; } }
+  const busy = workerBusyState(agent, provider, topic);
+  if (busy) { log.error(`quick turn-send: worker not idle (state=${busy}); previous turn still in flight`); return 1; }
 
   const stateFile = join(exec, `turn-${round}.txt`);
   if (existsSync(stateFile)) { log.error(`quick turn-send: ${stateFile} already exists; rm to retry`); return 1; }

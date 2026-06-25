@@ -19,7 +19,7 @@ import type { BridgeSummaryFacts } from "../core/bridge.js";
 import { composeBridgeBrief, composeBridgeFollowup } from "../core/bridgeTurn.js";
 import { classifyTurn } from "../core/turn.js";
 import { parseLatestOffset } from "../core/designTurn.js";
-import { outboxOffset, outboxPath, statusPath, outboxWaitSince } from "../core/ipc.js";
+import { outboxOffset, outboxPath, workerBusyState, outboxWaitSince } from "../core/ipc.js";
 import type { OutboxEvent } from "../core/ipc.js";
 import { run as sendRun } from "./send.js";
 
@@ -153,8 +153,8 @@ export async function roundSendWith(topic: string, round: number, d: TurnSendDep
 
   const outbox = outboxPath(agent, provider, topic);
   if (!existsSync(outbox)) { log.error(`bridge round-send: outbox not found at ${outbox} — was ${agent} spawned?`); return 1; }
-  const sp = statusPath(agent, provider, topic);
-  if (existsSync(sp)) { const m = readFileSync(sp, "utf8").match(/"state":"([^"]*)"/); if (m && m[1] && m[1] !== "idle") { log.error(`bridge round-send: worker not idle (state=${m[1]}); previous round still in flight`); return 1; } }
+  const busy = workerBusyState(agent, provider, topic);
+  if (busy) { log.error(`bridge round-send: worker not idle (state=${busy}); previous round still in flight`); return 1; }
 
   const stateFile = join(exec, `round-${round}.txt`);
   if (existsSync(stateFile)) { log.error(`bridge round-send: ${stateFile} already exists; rm to retry`); return 1; }

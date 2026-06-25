@@ -2,6 +2,8 @@
 // Flags a VALID result as suspect; orthogonal to A1's verify verdict. Pure: FS injected; the score
 // pass applies the rows. A clean result returns no flags.
 
+import { knobsDiffer } from "./autoresearchLineage.js";
+
 export interface SanityFlag { flag: string; detail: string; }
 
 export interface SanityRow { expId: string; agent: string; flag: string; detail: string; ts: string; }
@@ -75,9 +77,7 @@ export function sanityFlags(inp: SanityInput): SanityFlag[] {
   for (const hc of inp.hardConstraints) {
     const actual = inp.audit ? inp.audit[hc.key] : undefined;
     if (actual === undefined || actual === null) continue;
-    const a = parseFloat(String(actual)), v = parseFloat(hc.value);
-    const drift = (!Number.isNaN(a) && !Number.isNaN(v)) ? a !== v : String(actual) !== hc.value;
-    if (drift) flags.push({ flag: "audit-knob-drift", detail: `${hc.key}=${String(actual)} vs mandated ${hc.value}` });
+    if (knobsDiffer(actual, hc.value)) flags.push({ flag: "audit-knob-drift", detail: `${hc.key}=${String(actual)} vs mandated ${hc.value}` });
   }
   return flags;
 }

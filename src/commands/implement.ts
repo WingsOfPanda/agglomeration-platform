@@ -19,8 +19,8 @@ import { runForensics, runFlag } from "../core/forensics.js";
 import { haveCmd } from "../core/deps.js";
 import { implementState, composeRound1Prompt, composeFixPrompt } from "../core/implementTurn.js";
 import { extractQuestionPayload, parseQuestionPayload } from "../core/implementQuestions.js";
-import { outboxOffset, outboxPath, outboxWaitSince, statusPath, resolveModel, type OutboxEvent } from "../core/ipc.js";
-import { readField, readIfExists, readIfExistsOrNull } from "../core/fsread.js";
+import { outboxOffset, outboxPath, outboxWaitSince, statusPath, workerBusyState, resolveModel, type OutboxEvent } from "../core/ipc.js";
+import { kvField, readField, readIfExists, readIfExistsOrNull } from "../core/fsread.js";
 import { agentTimeoutMultiplier } from "../core/contracts.js";
 import { scaledTimeout, parseLatestOffset, lastKeyedNumber } from "../core/designTurn.js";
 import { run as sendRun } from "./send.js";
@@ -164,8 +164,8 @@ export async function turnSendWith(topic: string, round: number, d: ImplementSen
   if (existsSync(stateFile)) { log.error(`implement turn-send: ${stateFile} already exists; rm to retry`); return 1; }
   const outbox = outboxPath(WORKER, model, topic);
   if (!existsSync(outbox)) { log.error(`implement turn-send: outbox not found at ${outbox} — was ${WORKER} spawned?`); return 1; }
-  const sp = statusPath(WORKER, model, topic);
-  if (existsSync(sp)) { const m = readFileSync(sp, "utf8").match(/"state":"([^"]*)"/); if (m && m[1] && m[1] !== "idle") { log.error(`implement turn-send: worker not idle (state=${m[1]}); previous turn still in flight`); return 1; } }
+  const busy = workerBusyState(WORKER, model, topic);
+  if (busy) { log.error(`implement turn-send: worker not idle (state=${busy}); previous turn still in flight`); return 1; }
   const promptFile = join(art, `${WORKER}_turn_prompt_${round}.md`);
   if (round === 1) atomicWrite(promptFile, composeRound1Prompt({ designPath: join(art, "design.md"), planPath: join(art, "plan.md"), verifyPath: join(art, "verify-report-1.md"), round, testCmd }));
   else { const bundle = join(art, `fix-prompt-${round}.md`); if (!existsSync(bundle)) { log.error(`implement turn-send: fix-prompt-${round}.md not found at ${bundle}; the directive must write it first`); return 1; } atomicWrite(promptFile, composeFixPrompt(round, readFileSync(bundle, "utf8"), join(art, `verify-report-${round}.md`), testCmd)); }
@@ -225,12 +225,7 @@ async function resetStatusRun(rest: string[]): Promise<number> {
   return 0;
 }
 
-// ---- key=value baseline reader (port of deploy_kv_file_field) + small helpers ----
-export function kvFileField(file: string, key: string): string {
-  if (!existsSync(file)) return "";
-  for (const line of readFileSync(file, "utf8").split("\n")) { const eq = line.indexOf("="); if (eq > 0 && line.slice(0, eq) === key) return line.slice(eq + 1); }
-  return "";
-}
+// ---- baseline tsv/map readers (port of deploy helpers) ----
 function branchMapField(map: string, slug: string): string {
   if (!existsSync(map)) return "";
   for (const line of readFileSync(map, "utf8").split("\n")) { const [s, b] = line.split("\t"); if (s === slug) return b ?? ""; }
@@ -336,7 +331,7 @@ export async function summaryWith(topic: string, d: SummaryDeps): Promise<number
   return 0;
 }
 function postSweep(r: Runner, topic: string, baseline: string, post: string, ts: string): void {
-  const slug = kvFileField(baseline, "slug"), cwd = kvFileField(baseline, "cwd"), base = kvFileField(baseline, "branch");
+  const slug = kvField(baseline, "slug"), cwd = kvField(baseline, "cwd"), base = kvField(baseline, "branch");
   const postBranch = r.run("git", ["symbolic-ref", "--short", "HEAD"]).stdout.trim() || "(detached)";
   const dirty = r.run("git", ["status", "--porcelain"]).stdout.trim();
   let state: string;
@@ -346,8 +341,8 @@ function postSweep(r: Runner, topic: string, baseline: string, post: string, ts:
   atomicWrite(post, `slug=${slug}\ncwd=${cwd}\nbranch=${postBranch}\npost_sha=${postSha}\nstate=${state}\nbranch_changed=${base === postBranch ? "false" : "true"}\nsweep_ts=${ts}\n`);
 }
 function formatSummaryBlock(r: Runner, baseline: string, post: string): string {
-  const slug = kvFileField(baseline, "slug"), cwd = kvFileField(baseline, "cwd"), baseBranch = kvFileField(baseline, "branch"), baselineSha = kvFileField(baseline, "baseline_sha"), baseState = kvFileField(baseline, "state");
-  const postBranch = kvFileField(post, "branch"), postSha = kvFileField(post, "post_sha"), postState = kvFileField(post, "state"), changed = kvFileField(post, "branch_changed");
+  const slug = kvField(baseline, "slug"), cwd = kvField(baseline, "cwd"), baseBranch = kvField(baseline, "branch"), baselineSha = kvField(baseline, "baseline_sha"), baseState = kvField(baseline, "state");
+  const postBranch = kvField(post, "branch"), postSha = kvField(post, "post_sha"), postState = kvField(post, "state"), changed = kvField(post, "branch_changed");
   const L: string[] = [`=== ${slug} [${cwd}] ===`];
   if (changed === "true") L.push(`  [WARNING: branch changed from ${baseBranch} to ${postBranch}]`);
   if (baseState === "hook-blocked") L.push("  [WARNING: pre-implement snapshot hook-blocked; baseline = pre-attempt HEAD]");
@@ -375,7 +370,7 @@ async function finishRun(rest: string[]): Promise<number> {
 // worker's feat branch + start branch, then delegates the branch action.
 function applyFinish(art: string, t: { slug: string; cwd: string }, action: "merge" | "pr" | "keep" | "discard", d: FinishDeps): string {
   const branch = branchMapField(join(art, "implement-branches.tsv"), t.slug);
-  const startBranch = kvFileField(join(art, "baselines", `${t.slug}.tsv`), "branch");
+  const startBranch = kvField(join(art, "baselines", `${t.slug}.tsv`), "branch");
   return finishBranchAction(d.runnerFor(t.cwd), { branch, startBranch, action, hasGh: d.hasGh });
 }
 export async function finishWith(topic: string, action: "merge" | "pr" | "keep" | "discard", d: FinishDeps): Promise<number> {

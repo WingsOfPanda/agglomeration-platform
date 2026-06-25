@@ -18,9 +18,16 @@ export function lineageRow(r: LineageRow): string {
   return `${r.expId}\t${r.agent}\t${r.parentId}\t${r.knobsChanged}\t${r.verdict}\t${r.ts}\n`;
 }
 
-/** Count mandated knobs that differ (numeric-tolerant) over the union of keys — mirrors the A3
- *  audit-knob-drift compare. Returns null when either audit is missing (cannot diff). A key present
- *  on only one side counts as a difference. */
+/** Numeric-tolerant value compare: differ iff both parse as numbers and are unequal, else compared
+ *  as strings. The single source for the A3 audit-knob-drift compare (shared by sanityFlags). */
+export function knobsDiffer(a: unknown, b: unknown): boolean {
+  const x = parseFloat(String(a)), y = parseFloat(String(b));
+  return (!Number.isNaN(x) && !Number.isNaN(y)) ? x !== y : String(a) !== String(b);
+}
+
+/** Count mandated knobs that differ (numeric-tolerant) over the union of keys — uses the same
+ *  knobsDiffer compare as the A3 audit-knob-drift check. Returns null when either audit is missing
+ *  (cannot diff). A key present on only one side counts as a difference. */
 export function diffAuditKnobs(
   parentAudit: Record<string, unknown> | null,
   childAudit: Record<string, unknown> | null,
@@ -29,10 +36,7 @@ export function diffAuditKnobs(
   const keys = new Set([...Object.keys(parentAudit), ...Object.keys(childAudit)]);
   let n = 0;
   for (const k of keys) {
-    const pa = parentAudit[k], ca = childAudit[k];
-    const p = parseFloat(String(pa)), c = parseFloat(String(ca));
-    const differ = (!Number.isNaN(p) && !Number.isNaN(c)) ? p !== c : String(pa) !== String(ca);
-    if (differ) n += 1;
+    if (knobsDiffer(parentAudit[k], childAudit[k])) n += 1;
   }
   return n;
 }
