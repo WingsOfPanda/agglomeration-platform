@@ -76,26 +76,42 @@ export interface ReaderContext {
  */
 const SENTINELS: RegExp[] = [
   /END_OF_INSTRUCTION/,
-  // IPC header anywhere at a token boundary (fields are space-joined, so a
-  // start-of-line anchor would miss a 'From:' carried mid-blob in risk_tags).
-  /(^|\s)From:/im,
-  /\bignore (the |all )?(prior|previous|above)\b/i,
+  // IPC header anywhere. The 'From:' substring is itself distinctive, so we do
+  // NOT anchor on a preceding whitespace/start char — that missed punctuation-
+  // glued variants like ';From:' '(From:' ']From:'. Match the substring.
+  /From:/im,
+  /\b(ignore|disregard) (the |all )?(prior|previous|preceding|above)\b/i,
   /\balways answer\b/i,
-  /\bskip (the )?(leakage|validation|verify)\b/i,
-  /\bdo not (mention|reveal)\b/i,
+  /\bskip (the )?(leakage|validation|verify|verification)\b/i,
+  /\bdo not (mention|reveal|disclose)\b/i,
 ];
 
-/** True if any free-text lesson field carries an injection token. */
+/**
+ * True if any free-text lesson field carries an injection token.
+ *
+ * Fields are scanned two ways and the SENTINELS are applied to BOTH:
+ *  - a space-joined blob (catches normal cases, preserves word-ish boundaries
+ *    so `\b`-anchored phrasings work), and
+ *  - a no-separator concatenation, so a sentinel split across array elements
+ *    (e.g. risk_tags: ['END_OF_', 'INSTRUCTION']) reforms into a contiguous
+ *    'END_OF_INSTRUCTION' and matches. Neither fragment matches alone, and the
+ *    space-joined blob ('END_OF_ INSTRUCTION') would not match either.
+ *
+ * `operator` and `metric_family` are included (defense-in-depth): both reach
+ * the rendered prompt scope string via renderLesson.
+ */
 function hasInjection(draft: any): boolean {
-  const text = [
+  const fields = [
     draft?.claim,
     draft?.knob,
+    draft?.operator,
+    draft?.metric_family,
     ...(draft?.applicability ?? []),
     ...(draft?.risk_tags ?? []),
-  ]
-    .filter((v) => typeof v === "string")
-    .join(" ");
-  return SENTINELS.some((re) => re.test(text));
+  ].filter((v) => typeof v === "string");
+  const spaceJoined = fields.join(" ");
+  const concatenated = fields.join("");
+  return SENTINELS.some((re) => re.test(spaceJoined) || re.test(concatenated));
 }
 
 /**
