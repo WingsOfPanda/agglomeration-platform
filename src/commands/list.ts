@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { repoStateDir, isArtifactDir } from "../core/paths.js";
+import { readIfExists } from "../core/fsread.js";
 import { paneMetaReadForDir, outboxPath, parseEvent } from "../core/ipc.js";
 import { livePanes } from "../core/tmux.js";
 
@@ -16,10 +17,8 @@ export function deriveState(lastEvent: string | undefined): string {
 }
 
 export function lastOutboxEvent(outbox: string): string | undefined {
-  if (!existsSync(outbox)) return undefined;
-  const lines = readFileSync(outbox, "utf8").split("\n").filter(Boolean);
-  if (lines.length === 0) return undefined;
-  return parseEvent(lines[lines.length - 1])?.event;
+  const lines = readIfExists(outbox).split("\n").filter(Boolean);
+  return lines.length ? parseEvent(lines[lines.length - 1])?.event : undefined;
 }
 
 // Stale-window knob; empty-string falls back to 180 to mirror the sibling shell's `:-` default

@@ -11,6 +11,16 @@ export function identityPath(i: string, m: string, t: string) { return join(work
 export function statusPath(i: string, m: string, t: string) { return join(workerDir(i, m, t), "status.json"); }
 export function paneMetaPath(i: string, m: string, t: string) { return join(workerDir(i, m, t), "pane.json"); }
 
+/** The worker's status.json state when it is NOT idle (a turn/round still in flight), else null
+ *  (absent/unreadable status, no state field, empty state, or idle). Uses the frozen non-JSON-
+ *  tolerant regex read — never JSON.parse — matching the send-before-dispatch idle gate. */
+export function workerBusyState(i: string, m: string, t: string): string | null {
+  const sp = statusPath(i, m, t);
+  if (!existsSync(sp)) return null;
+  const match = readFileSync(sp, "utf8").match(/"state":"([^"]*)"/);
+  return match && match[1] && match[1] !== "idle" ? match[1] : null;
+}
+
 const SENDER_RE = /^[a-zA-Z0-9_-]+$/;
 
 export function inboxWrite(i: string, m: string, t: string, task: string, opts?: { from?: string; noDoneInstruction?: boolean }): void {
@@ -142,10 +152,6 @@ export function paneMetaRead(i: string, m: string, t: string): string | null {
   return readPaneJson(workerDir(i, m, t))?.pane_id ?? null;
 }
 
-export function paneMetaModel(i: string, modelHint: string, t: string): string {
-  return readPaneJson(workerDir(i, modelHint, t))?.model ?? modelHint;
-}
-
 /** Resolve the model segment for an agent's worker on a topic (the on-disk
  *  <agent>-<model> dir name), then the canonical model from pane.json. null if absent. */
 export function resolveModel(agent: string, topic: string): string | null {
@@ -153,5 +159,6 @@ export function resolveModel(agent: string, topic: string): string | null {
   if (!existsSync(td)) return null;
   const d = readdirSync(td, { withFileTypes: true }).find((e) => e.isDirectory() && e.name.startsWith(`${agent}-`));
   if (!d) return null;
-  return paneMetaModel(agent, d.name.slice(agent.length + 1), topic);
+  const model = d.name.slice(agent.length + 1);
+  return readPaneJson(workerDir(agent, model, topic))?.model ?? model;
 }

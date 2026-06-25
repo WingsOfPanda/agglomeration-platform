@@ -149,17 +149,14 @@ export function gracefulRespawnCommand(snap: string, pluginRoot: string, label: 
   return `cat '${snap}'; node '${pluginRoot}/dist/ap.cjs' _banner '${label}' '${color}'; rm -f '${snap}'`;
 }
 
-export async function paneLabel(pane: string): Promise<string> {
-  try { return (await execa("tmux", ["display-message", "-p", "-t", pane, "#{@ap_label}"])).stdout; } catch { return ""; }
-}
-export async function paneColor(pane: string): Promise<string> {
-  try { return (await execa("tmux", ["display-message", "-p", "-t", pane, "#{@ap_color}"])).stdout; } catch { return ""; }
+async function paneOption(pane: string, opt: string): Promise<string> {
+  try { return (await execa("tmux", ["display-message", "-p", "-t", pane, opt])).stdout; } catch { return ""; }
 }
 
 export async function killGraceful(pane: string, pluginRoot: string): Promise<void> {
   if (!(await paneAlive(pane))) return;
-  const label = (await paneLabel(pane)) || "worker";
-  const color = await paneColor(pane);
+  const label = (await paneOption(pane, "#{@ap_label}")) || "worker";
+  const color = await paneOption(pane, "#{@ap_color}");
   const snap = join(mkdtempSync(join(tmpdir(), "cs-snap-")), "snap.txt");
   try {
     const { stdout } = await execa("tmux", ["capture-pane", "-p", "-e", "-t", pane]);

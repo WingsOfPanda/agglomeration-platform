@@ -27,16 +27,21 @@ function uniqueDest(base: string): string {
   throw new Error("too many same-second archive collisions; aborting");
 }
 
+/** Move `src` to a collision-free destination under `base` (mkdir-parent + rename); returns dest. */
+function moveToArchive(src: string, base: string): string {
+  const dest = uniqueDest(base);
+  mkdirSync(dirname(dest), { recursive: true });
+  renameSync(src, dest);
+  return dest;
+}
+
 export function stateArchive(agent: string, model: string, topic: string, suffix?: string, opts?: { now?: Date }): string | null {
   const src = workerDir(agent, model, topic);
   if (!existsSync(src)) return null;
   const ts = archiveTs(opts?.now);
   let base = join(globalRoot(), "archive", repoHash(), topic, `${agent}-${model}-${ts}`);
   if (suffix) base += `-${suffix}`;
-  const dest = uniqueDest(base);
-  mkdirSync(dirname(dest), { recursive: true });
-  renameSync(src, dest);
-  return dest;
+  return moveToArchive(src, base);
 }
 
 export function finalizeArchived(td: string, opts?: { now?: Date }): void {
@@ -64,9 +69,7 @@ export function archiveTopic(
   let dest: string | null = null;
   if (existsSync(art)) {
     const base = join(globalRoot(), "archive", repoHash(), topic, `_${suite}-${archiveTs(opts?.now)}`);
-    dest = uniqueDest(base);
-    mkdirSync(dirname(dest), { recursive: true });
-    renameSync(art, dest);
+    dest = moveToArchive(art, base);
   }
   try { rmSync(td, { recursive: false, force: false }); } catch { /* rmdir-if-empty; tolerate non-empty */ }
   return dest;

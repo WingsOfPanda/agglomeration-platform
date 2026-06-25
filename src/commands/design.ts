@@ -222,6 +222,23 @@ async function researchWaitRun(rest: string[]): Promise<number> {
   return researchWaitWith(topic, agent, provider, liveResearchWaitDeps);
 }
 
+/** Shared wait-tail for research/verify: record the captured question event + bumped offset (or the
+ *  terminal outcome), drop the .done marker, and log. key/phase select FS|VS and research|verify. */
+function recordWaitOutcome(
+  art: string, agent: string, provider: string, topic: string, stateFile: string,
+  ev: OutboxEvent | null, state: string, key: "FS" | "VS", phase: "research" | "verify",
+): void {
+  if (state === "question" && ev) {
+    atomicWrite(join(art, `question-${agent}.txt`), JSON.stringify(ev) + "\n");
+    const bumped = outboxOffset(outboxPath(agent, provider, topic));
+    appendFileSync(stateFile, `OFFSET=${bumped}\n${key}=question\n`);
+  } else {
+    appendFileSync(stateFile, `${key}=${state}\n`);
+  }
+  writeFileSync(join(art, `${phase}-${agent}.done`), "");
+  log.ok(`design ${phase}-wait: ${agent} ${key}=${state}`);
+}
+
 export async function researchWaitWith(topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> {
   const art = designArtDir(topic);
   const stateFile = join(art, `research-${agent}.txt`);
@@ -237,15 +254,7 @@ export async function researchWaitWith(topic: string, agent: string, provider: s
   const findingsText = readIfExistsOrNull(findingsPath);
   const fs = researchState(ev, findingsText);
 
-  if (fs === "question" && ev) {
-    atomicWrite(join(art, `question-${agent}.txt`), JSON.stringify(ev) + "\n");
-    const bumped = outboxOffset(outboxPath(agent, provider, topic));
-    appendFileSync(stateFile, `OFFSET=${bumped}\nFS=question\n`);
-  } else {
-    appendFileSync(stateFile, `FS=${fs}\n`);
-  }
-  writeFileSync(join(art, `research-${agent}.done`), "");
-  log.ok(`design research-wait: ${agent} FS=${fs}`);
+  recordWaitOutcome(art, agent, provider, topic, stateFile, ev, fs, "FS", "research");
   return 0;
 }
 
@@ -352,15 +361,7 @@ export async function verifyWaitWith(topic: string, agent: string, provider: str
   const verifyText = readIfExistsOrNull(verifyPath);
   const vs = verifyState(ev, verifyText);
 
-  if (vs === "question" && ev) {
-    atomicWrite(join(art, `question-${agent}.txt`), JSON.stringify(ev) + "\n");
-    const bumped = outboxOffset(outboxPath(agent, provider, topic));
-    appendFileSync(stateFile, `OFFSET=${bumped}\nVS=question\n`);
-  } else {
-    appendFileSync(stateFile, `VS=${vs}\n`);
-  }
-  writeFileSync(join(art, `verify-${agent}.done`), "");
-  log.ok(`design verify-wait: ${agent} VS=${vs}`);
+  recordWaitOutcome(art, agent, provider, topic, stateFile, ev, vs, "VS", "verify");
   return 0;
 }
 

@@ -61,17 +61,12 @@ function loadArgsFileVerbatim(path: string, valueFlags: Set<string>): string[] {
   return body ? [...flags, body] : flags;
 }
 
-function consumeArgsFile(path: string | undefined): void {
-  if (!path) return;
-  try { rmSync(path, { force: true }); } catch { /* ignore */ }
-}
-
 export function applyArgsFile(argv: string[], opts?: ArgsFileOpts): string[] {
   if (argv[0] !== "--args-file") return [...argv];
   const path = argv[1];
   if (!path) throw new ArgsFileError("--args-file requires a path");
   const tokens = opts ? loadArgsFileVerbatim(path, opts.valueFlags) : loadArgsFile(path);
-  consumeArgsFile(path);
+  try { rmSync(path, { force: true }); } catch { /* ignore */ }   // consume the one-shot args file
   return [...tokens, ...argv.slice(2)];
 }
 

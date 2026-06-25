@@ -967,12 +967,8 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
 
   const { scoreboardMd, completion } = gatherCompletion(art);
 
-  const vrows = readTsvRows(join(art, "verification.tsv"), "exp_id\t");   // exp_id, agent, verdict, ...
-  let verdicts: Record<string, string> | undefined;
-  if (vrows) {
-    verdicts = {};
-    for (const c of vrows) if (c[0] && c[1] && c[2]) verdicts[`${c[1]}/${c[0]}`] = c[2];   // last write wins (latest verdict)
-  }
+  const vraw = readIfExistsOrNull(join(art, "verification.tsv"));        // exp_id, agent, verdict, ...
+  const verdicts = vraw === null ? undefined : parseVerdicts(vraw);     // absent -> undefined; empty -> {} (last write wins)
 
   const srows = readTsvRows(join(art, "sanity.tsv"), "exp_id\t");          // exp_id, agent, flag, ...
   let suspects: Record<string, string[]> | undefined;
@@ -995,12 +991,8 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
     for (const cells of lrows) if (cells[0] && cells[1] && cells[4] === "improve-multi") multiChange[`${cells[1]}/${cells[0]}`] = true;
   }
 
-  const irows = readTsvRows(join(art, "inspection.tsv"), "exp_id\t");      // exp_id, agent, verdict, ...
-  let inspections: Record<string, string> | undefined;
-  if (irows) {
-    inspections = {};
-    for (const cells of irows) if (cells[0] && cells[1] && cells[2]) inspections[`${cells[1]}/${cells[0]}`] = cells[2];
-  }
+  const iraw = readIfExistsOrNull(join(art, "inspection.tsv"));          // exp_id, agent, verdict, ...
+  const inspections = iraw === null ? undefined : parseInspections(iraw);  // absent -> undefined; empty -> {}
 
   const latest = p.latestAgent && p.latestExp ? { agent: p.latestAgent, exp: p.latestExp } : undefined;
   out(buildStatusBrief({ workers, scoreboardMd, completion, latest, verdicts, suspects, coverage, multiChange, inspections }));
