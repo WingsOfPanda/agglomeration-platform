@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>agglomeration-platform — what it is &amp; how it works</title>
+<style>
+  :root{
+    --bg:#fbfbfd; --panel:#ffffff; --ink:#1c2230; --muted:#5b647a; --faint:#8a93a6;
+    --line:#e7e9f0; --line-strong:#d4d8e3;
+    --brand:#4f46e5; --brand-2:#7c3aed; --brand-ink:#312e81;
+    --code-bg:#0f1420; --code-ink:#e6edf6; --code-accent:#9ecbff;
+    /* cluster colors (pane-border families) */
+    --azure:#2563eb; --sage:#16a34a; --amber:#d97706; --slate:#475569;
+    --ivory:#9a8c78; --violet:#7c3aed; --neutral:#6b7280;
+    --radius:14px; --maxw:980px;
+    --mono:"SFMono-Regular",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth; scroll-padding-top:74px}
+  body{margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans);
+       line-height:1.62; font-size:16.5px; -webkit-font-smoothing:antialiased}
+  a{color:var(--brand); text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:var(--mono); font-size:.86em; background:#eef0f6; color:#3a3f55;
+       padding:.12em .42em; border-radius:6px; border:1px solid #e1e4ee}
+  .wrap{max-width:var(--maxw); margin:0 auto; padding:0 22px}
+
+  /* ---- top nav ---- */
+  header.nav{position:sticky; top:0; z-index:50; backdrop-filter:saturate(1.2) blur(8px);
+    background:rgba(251,251,253,.86); border-bottom:1px solid var(--line)}
+  .nav-in{max-width:var(--maxw); margin:0 auto; padding:11px 22px; display:flex;
+    align-items:center; gap:18px; flex-wrap:wrap}
+  .brandmark{display:flex; align-items:center; gap:10px; font-weight:700; letter-spacing:-.01em}
+  .brandmark .dotrow{display:inline-flex; gap:3px}
+  .brandmark .dotrow i{width:9px; height:9px; border-radius:50%; display:block}
+  .nav-links{display:flex; gap:4px; flex-wrap:wrap; margin-left:auto; font-size:14px}
+  .nav-links a{color:var(--muted); padding:5px 9px; border-radius:8px; font-weight:500}
+  .nav-links a:hover{color:var(--ink); background:#eef0f6; text-decoration:none}
+  .nav-links a.active{color:var(--brand-ink); background:#eceaff}
+
+  /* ---- hero ---- */
+  .hero{background:
+      radial-gradient(1100px 420px at 18% -10%, #ede9ff 0%, rgba(237,233,255,0) 60%),
+      radial-gradient(900px 400px at 95% 0%, #e6f0ff 0%, rgba(230,240,255,0) 55%);
+    border-bottom:1px solid var(--line)}
+  .hero-in{padding:62px 0 50px}
+  .eyebrow{font-family:var(--mono); font-size:12.5px; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--brand); font-weight:600; margin:0 0 14px}
+  h1{font-size:clamp(34px,5.4vw,52px); line-height:1.05; letter-spacing:-.025em; margin:0 0 16px;
+    font-weight:800}
+  h1 .grad{background:linear-gradient(95deg,var(--brand),var(--brand-2)); -webkit-background-clip:text;
+    background-clip:text; color:transparent}
+  .lede{font-size:clamp(17px,2.3vw,20px); color:var(--muted); max-width:46ch; margin:0 0 26px}
+  .hero-cta{display:flex; gap:10px; flex-wrap:wrap}
+  .pill{display:inline-flex; align-items:center; gap:8px; font-size:13.5px; font-weight:600;
+    padding:8px 14px; border-radius:999px; border:1px solid var(--line-strong); background:#fff; color:var(--ink)}
+  .pill b{color:var(--brand)}
+
+  /* ---- sections ---- */
+  section{padding:54px 0; border-bottom:1px solid var(--line)}
+  section:last-of-type{border-bottom:0}
+  .kicker{font-family:var(--mono); font-size:12px; letter-spacing:.12em; text-transform:uppercase;
+    color:var(--faint); font-weight:600; margin:0 0 8px}
+  h2{font-size:clamp(24px,3.4vw,32px); letter-spacing:-.02em; margin:0 0 14px; font-weight:760}
+  h3{font-size:19px; letter-spacing:-.01em; margin:30px 0 8px; font-weight:700}
+  p{margin:0 0 15px}
+  .sub{color:var(--muted); max-width:64ch}
+
+  /* ---- generic cards ---- */
+  .grid{display:grid; gap:16px}
+  @media(min-width:680px){ .grid.two{grid-template-columns:1fr 1fr} .grid.three{grid-template-columns:repeat(3,1fr)} }
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:18px 20px}
+  .card h4{margin:0 0 6px; font-size:16.5px; font-weight:700}
+  .card p{margin:0; color:var(--muted); font-size:15px}
+
+  /* ---- vocabulary ---- */
+  .vocab{display:grid; gap:14px}
+  @media(min-width:680px){ .vocab{grid-template-columns:1fr 1fr} }
+  .term{border:1px solid var(--line); border-radius:var(--radius); padding:16px 18px; background:#fff;
+    border-left-width:5px}
+  .term .t{font-weight:750; font-size:17px; display:flex; align-items:center; gap:9px}
+  .term .t .tag{font-family:var(--mono); font-size:11px; color:var(--faint); font-weight:600;
+    border:1px solid var(--line); border-radius:6px; padding:1px 6px}
+  .term p{margin:7px 0 0; color:var(--muted); font-size:14.5px}
+
+  /* ---- pipeline ---- */
+  .flow{display:grid; gap:14px; margin-top:6px}
+  @media(min-width:760px){ .flow{grid-template-columns:repeat(3,1fr); align-items:stretch} }
+  .step{position:relative; background:#fff; border:1px solid var(--line); border-radius:var(--radius);
+    padding:18px 18px 16px}
+  .step .n{font-family:var(--mono); font-size:12px; color:#fff; background:var(--brand);
+    width:24px; height:24px; border-radius:7px; display:grid; place-items:center; font-weight:700; margin-bottom:10px}
+  .step h4{margin:0 0 4px; font-size:17px}
+  .step code{font-size:.8em}
+  .step p{margin:6px 0 0; color:var(--muted); font-size:14px}
+  .flow .arrow{display:none}
+  @media(min-width:760px){
+    .step:not(:last-child)::after{content:"→"; position:absolute; right:-19px; top:50%;
+      transform:translateY(-50%); color:var(--line-strong); font-size:22px; z-index:2}
+  }
+  .lane{margin-top:16px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;
+    font-size:14px; color:var(--muted)}
+  .lane .chip{font-family:var(--mono); font-size:12.5px; background:#f1f2f8; border:1px solid var(--line);
+    border-radius:8px; padding:4px 10px; color:#3a3f55}
+
+  /* ---- command catalogue ---- */
+  .cmd{border:1px solid var(--line); border-radius:var(--radius); background:#fff; padding:18px 20px;
+    margin-bottom:14px}
+  .cmd-head{display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:8px}
+  .cmd-name{font-family:var(--mono); font-weight:700; font-size:16px; color:var(--brand-ink)}
+  .cmd-role{font-size:12.5px; font-weight:600; text-transform:uppercase; letter-spacing:.06em;
+    color:#fff; padding:2px 9px; border-radius:999px}
+  .role-build{background:var(--azure)} .role-research{background:var(--violet)}
+  .role-ops{background:var(--slate)} .role-cross{background:var(--amber)}
+  .cmd p{margin:0 0 9px; color:var(--muted); font-size:15px}
+  .cmd .when{font-size:14.5px; color:var(--ink)}
+  .cmd .when b{color:var(--brand-ink)}
+  .ex{font-family:var(--mono); font-size:13px; background:#0f1420; color:#e6edf6; border-radius:10px;
+    padding:11px 14px; margin-top:11px; overflow-x:auto; white-space:pre; line-height:1.5}
+  .ex .c{color:#9ecbff}
+  .ex .d{color:#7f8aa3}
+
+  /* ---- under-the-hood details ---- */
+  details.uh{border:1px solid var(--line); border-radius:var(--radius); background:#fff; margin:14px 0;
+    overflow:hidden}
+  details.uh>summary{cursor:pointer; list-style:none; padding:16px 20px; font-weight:700;
+    display:flex; align-items:center; gap:10px; user-select:none}
+  details.uh>summary::-webkit-details-marker{display:none}
+  details.uh>summary .ar{margin-left:auto; color:var(--faint); transition:transform .18s ease}
+  details.uh[open]>summary .ar{transform:rotate(90deg)}
+  details.uh>summary:hover{background:#fafbff}
+  .uh-body{padding:2px 20px 18px; border-top:1px solid var(--line)}
+  .uh-body p{color:var(--muted); font-size:15px}
+  .kv{font-family:var(--mono); font-size:13px; color:#3a3f55}
+
+  /* ---- providers table ---- */
+  .ptable{width:100%; border-collapse:collapse; font-size:14.5px; margin-top:4px}
+  .ptable th,.ptable td{text-align:left; padding:11px 12px; border-bottom:1px solid var(--line)}
+  .ptable th{font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--faint); font-weight:600}
+  .ptable td:first-child{font-family:var(--mono); font-weight:600; color:var(--brand-ink)}
+  .ptable .badge{font-family:var(--mono); font-size:11.5px; background:#eafaf0; color:#15803d;
+    border:1px solid #bbe9cc; border-radius:6px; padding:1px 7px}
+
+  /* ---- principles ---- */
+  ul.clean{list-style:none; padding:0; margin:0; display:grid; gap:12px}
+  ul.clean li{padding-left:26px; position:relative; color:var(--muted); font-size:15px}
+  ul.clean li::before{content:""; position:absolute; left:6px; top:9px; width:8px; height:8px;
+    border-radius:50%; background:var(--brand)}
+  ul.clean li b{color:var(--ink)}
+
+  /* ---- callout ---- */
+  .callout{border:1px solid #f3d9a8; background:linear-gradient(180deg,#fffaf0,#fff7e6);
+    border-radius:var(--radius); padding:16px 18px; color:#7a531a; font-size:14.5px}
+  .callout b{color:#5c3d12}
+
+  /* ---- autoresearch deep dive ---- */
+  .ar-hero{border:1px solid var(--line); border-left:5px solid var(--violet);
+    background:linear-gradient(180deg,#faf8ff,#fff); border-radius:var(--radius); padding:18px 22px; margin:8px 0 6px}
+  .ar-hero .quote{font-size:19px; font-weight:680; letter-spacing:-.015em; color:var(--brand-ink); margin:0 0 9px; line-height:1.35}
+  .ar-hero .quote em{font-style:italic; color:var(--brand-2)}
+  .ar-hero p{margin:0; color:var(--muted); font-size:15px}
+  .stages{display:grid; gap:12px; margin:14px 0 6px}
+  @media(min-width:780px){ .stages{grid-template-columns:repeat(4,1fr)} }
+  .stage2{border:1px solid var(--line); border-radius:12px; background:#fff; padding:14px 15px}
+  .stage2 .lbl{font-family:var(--mono); font-size:11px; letter-spacing:.07em; text-transform:uppercase; color:var(--violet); font-weight:700}
+  .stage2 h4{margin:6px 0 3px; font-size:15.5px}
+  .stage2 p{margin:0; font-size:13.5px; color:var(--muted)}
+  .loop{border:1px solid var(--line); border-radius:var(--radius); background:#fff; padding:4px 6px; margin:14px 0}
+  .loop ol{margin:0; padding:12px 22px 12px 42px}
+  .loop li{margin:9px 0; font-size:14.5px; color:var(--muted)}
+  .loop li b{color:var(--ink)}
+  .loop li code{font-size:.82em}
+  .gates{display:grid; gap:14px; margin-top:10px}
+  @media(min-width:740px){ .gates{grid-template-columns:1fr 1fr} }
+  .gate{border:1px solid var(--line); border-radius:var(--radius); background:#fff; padding:16px 18px; border-top:3px solid var(--brand)}
+  .gate .gh{display:flex; align-items:center; gap:10px; margin-bottom:7px}
+  .gate .code{font-family:var(--mono); font-size:12px; font-weight:700; color:#fff; background:var(--brand); border-radius:6px; padding:2px 8px}
+  .gate h4{margin:0; font-size:16px}
+  .gate .def{font-size:12.5px; color:#b45309; font-weight:600; margin:0 0 7px}
+  .gate p:last-child{margin:0; font-size:14px; color:var(--muted)}
+
+  footer{padding:40px 0 60px; color:var(--faint); font-size:13.5px}
+  footer .wrap{display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; align-items:center}
+  .mono{font-family:var(--mono)}
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="nav-in">
+    <span class="brandmark">
+      <span class="dotrow" aria-hidden="true">
+        <i style="background:var(--azure)"></i><i style="background:var(--sage)"></i>
+        <i style="background:var(--amber)"></i><i style="background:var(--violet)"></i>
+      </span>
+      agglomeration-platform
+    </span>
+    <nav class="nav-links">
+      <a href="#idea">The idea</a>
+      <a href="#vocab">Vocabulary</a>
+      <a href="#workflow">Workflow</a>
+      <a href="#commands">Commands</a>
+      <a href="#autoresearch">Autoresearch</a>
+      <a href="#providers">Providers</a>
+      <a href="#under-hood">Under the hood</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="wrap hero-in">
+    <p class="eyebrow">A Claude Code plugin</p>
+    <h1>One session that puts<br><span class="grad">many AI models to work</span><br>side by side.</h1>
+    <p class="lede">agglomeration-platform turns a single Claude Code session into a <b>hub</b> that
+      spawns real model command-line tools — codex, claude, agy, opencode — as live terminal panes,
+      then coordinates them to research, design, and build software together.</p>
+    <div class="hero-cta">
+      <span class="pill"><b>10</b>&nbsp;slash commands</span>
+      <span class="pill"><b>4</b>&nbsp;model providers</span>
+      <span class="pill">explore&nbsp;→&nbsp;design&nbsp;→&nbsp;implement</span>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== THE IDEA ===================== -->
+<section id="idea">
+  <div class="wrap">
+    <p class="kicker">The idea</p>
+    <h2>Stop talking to one model. Run a team of them.</h2>
+    <p class="sub">A normal AI coding session is a conversation with a single model. agglomeration-platform
+      asks a different question: <b>what if one orchestrator could run several different AI models at once,
+      give each a job, and combine their answers?</b> Different models have different strengths and blind
+      spots — so a panel of them, cross-checking each other, is more reliable than any one alone.</p>
+
+    <div class="grid three" style="margin-top:22px">
+      <div class="card">
+        <h4>A hub that orchestrates</h4>
+        <p>Your Claude Code session becomes the <b>hub</b> — the conductor. It never does the grunt
+          research or coding itself; it briefs, dispatches, verifies, and synthesizes.</p>
+      </div>
+      <div class="card">
+        <h4>Real tools, not API calls</h4>
+        <p>Each worker is a genuine interactive model CLI running in its own terminal pane. You can
+          watch any of them work, or attach and take over.</p>
+      </div>
+      <div class="card">
+        <h4>Agglomerate &amp; cross-check</h4>
+        <p>The platform <b>agglomerates</b> many agents onto a problem, then has them attack each
+          other's conclusions — an adversarial pass that catches what a single model misses.</p>
+      </div>
+    </div>
+
+    <p style="margin-top:24px" class="sub">The name says it: it's a <b>platform</b> that
+      <b>agglomerates</b> — clusters many independent AI agents into a coordinated whole. Everything is
+      driven from one place with <code>/ap:*</code> commands, and every worker is something you can see,
+      attach to, and inspect.</p>
+  </div>
+</section>
+
+<!-- ===================== VOCABULARY ===================== -->
+<section id="vocab">
+  <div class="wrap">
+    <p class="kicker">Vocabulary</p>
+    <h2>Four words that explain the whole system.</h2>
+    <p class="sub">Once these four terms click, every command below reads naturally.</p>
+
+    <div class="vocab" style="margin-top:20px">
+      <div class="term" style="border-left-color:var(--brand)">
+        <div class="t">Hub <span class="tag">your session</span></div>
+        <p>The orchestrating Claude Code session running the <code>/ap:*</code> commands. It plans,
+          dispatches work, verifies results, and writes the final artifacts. In messages it identifies
+          itself as <code>From: hub</code>.</p>
+      </div>
+      <div class="term" style="border-left-color:var(--azure)">
+        <div class="t">Agent <span class="tag">a configured role</span></div>
+        <p>A model role defined in config, given a call-sign from the NATO phonetic alphabet —
+          <code>alpha</code>, <code>bravo</code>, <code>charlie</code> … <code>zulu</code>. An agent is
+          the <em>identity</em>; it isn't doing anything yet.</p>
+      </div>
+      <div class="term" style="border-left-color:var(--sage)">
+        <div class="t">Worker <span class="tag">an agent at work</span></div>
+        <p>A spawned agent actively working a task — a live model TUI in its own tmux pane. This is the
+          thing you can attach to and watch type. Workers do <em>all</em> the retrieval and coding; the
+          hub never does.</p>
+      </div>
+      <div class="term" style="border-left-color:var(--violet)">
+        <div class="t">Cluster <span class="tag">a color family</span></div>
+        <p>A color grouping of agents, shown as the pane-border color so you can tell crews apart at a
+          glance: <span style="color:var(--azure)">azure</span>,
+          <span style="color:var(--sage)">sage</span>, <span style="color:var(--amber)">amber</span>,
+          <span style="color:var(--slate)">slate</span>, <span style="color:var(--ivory)">ivory</span>,
+          <span style="color:var(--violet)">violet</span>.</p>
+      </div>
+    </div>
+
+    <p class="sub" style="margin-top:18px">So a full sentence in this world reads:
+      <em>“the <b>hub</b> spawned <b>agent</b> <code>bravo</code> as a <b>worker</b>, with a
+      <span style="color:var(--sage)">sage</span> pane border because <code>bravo</code> is in the
+      <span style="color:var(--sage)">sage</span> <b>cluster</b>.”</em></p>
+  </div>
+</section>
+
+<!-- ===================== WORKFLOW ===================== -->
+<section id="workflow">
+  <div class="wrap">
+    <p class="kicker">The core workflow</p>
+    <h2>Explore → Design → Implement.</h2>
+    <p class="sub">The platform's main pipeline takes an idea from open question all the way to a merged
+      pull request. Each stage hands a concrete artifact to the next.</p>
+
+    <div class="flow">
+      <div class="step">
+        <div class="n">1</div>
+        <h4>Explore</h4>
+        <p><code>/ap:explore</code> surveys a hard topic from multiple angles — several workers research
+          in parallel, then attack the synthesis as adversaries. Produces a <b>landscape doc</b> and a
+          <b>design hand-off</b>.</p>
+      </div>
+      <div class="step">
+        <div class="n">2</div>
+        <h4>Design</h4>
+        <p><code>/ap:design</code> turns a topic (or that hand-off) into a single buildable
+          <b>design doc</b> — Problem, Goal, Architecture, Components, Testing, Success Criteria —
+          cross-verified across models.</p>
+      </div>
+      <div class="step">
+        <div class="n">3</div>
+        <h4>Implement</h4>
+        <p><code>/ap:implement</code> consumes that design doc: a worker plans, builds, and self-verifies
+          on its own branch while the hub cross-verifies and runs a fix-loop, finishing with a <b>PR</b>.</p>
+      </div>
+    </div>
+
+    <div class="lane">
+      <span>Other entry points:</span>
+      <span class="chip">/ap:quick — skip straight to a small change</span>
+      <span class="chip">/ap:autoresearch — run real experiments</span>
+      <span class="chip">/ap:review — learn from what happened</span>
+    </div>
+
+    <p class="sub" style="margin-top:20px">You don't have to run the whole pipeline. Need a quick, clearly
+      specified change? Jump straight to <code>/ap:quick</code>. Want to empirically test ideas rather
+      than just read about them? <code>/ap:autoresearch</code> runs an adaptive loop of real experiments.
+      The pipeline is the backbone; the other commands are on-ramps and side-quests.</p>
+  </div>
+</section>
+
+<!-- ===================== COMMANDS ===================== -->
+<section id="commands">
+  <div class="wrap">
+    <p class="kicker">The commands</p>
+    <h2>Every command, and when to reach for it.</h2>
+    <p class="sub">All commands are namespaced <code>/ap:</code> and run from the hub session. They fall
+      into three families: <b style="color:var(--azure)">build &amp; research</b>,
+      <b style="color:var(--slate)">operations</b>, and <b style="color:var(--amber)">cross-repo</b>.</p>
+
+    <h3 style="margin-top:26px">Build &amp; research</h3>
+
+    <div class="cmd">
+      <div class="cmd-head"><span class="cmd-name">/ap:explore</span><span class="cmd-role role-research">research</span></div>
+      <p>Deep, multi-angle survey of a topic. 2–3 workers research in parallel; the hub synthesizes a
+        landscape, runs a confidence gate, then dispatches the same workers as <b>adversaries</b> to
+        challenge the synthesis before writing a final landscape doc + design hand-off.</p>
+      <p class="when"><b>When:</b> you want to understand a space — SOTA approaches, architectures, a hard
+        research question — <b>without</b> committing to a buildable plan yet.</p>
+      <div class="ex"><span class="d"># survey a landscape from several angles</span>
+/ap:explore <span class="c">survey current approaches to retrieval-augmented agents</span></div>
+    </div>
+
+    <div class="cmd">
+      <div class="cmd-head"><span class="cmd-name">/ap:design</span><span class="cmd-role role-build">build</span></div>
+      <p>Cross-verified multi-model investigation that produces one <b>deploy-schema design doc</b>
+        (Problem / Goal / Architecture / Components / Testing / Success Criteria) which passes an audit
+        gate. Runs a fast hub-only path for simple topics, or escalates to a 2–3 worker ensemble.</p>
+      <p class="when"><b>When:</b> you know roughly what you want to build and need a rigorous, buildable
+        spec — the exact artifact <code>/ap:implement</code> consumes.</p>
+      <div class="ex"><span class="d"># produce a buildable design doc</span>
+/ap:design <span class="c">Design a token-bucket rate limiter for the API gateway</span></div>
+    </div>
+
+    <div class="cmd">
+      <div class="cmd-head"><span class="cmd-name">/ap:implement</span><span class="cmd-role role-build">build</span></div>
+      <p>Consumes a design doc: audits it, spawns one worker to plan / implement / self-verify on its own
+        <code>feat/implement-&lt;topic&gt;</code> branch, then the hub cross-verifies and runs a bounded
+        fix-loop. Ends with a finish menu + teardown — push and open a PR. Single-repo.</p>
+      <p class="when"><b>When:</b> you have a design doc (usually from <code>/ap:design</code>) and want it
+        built and verified hands-off.</p>
+      <div class="ex"><span class="d"># build the design doc that design produced</span>
+/ap:implement <span class="c">docs/specs/2026-06-23-rate-limiter-design.md</span></div>
+    </div>
+
+    <div class="cmd">
+      <div class="cmd-head"><span class="cmd-name">/ap:quick</span><span class="cmd-role role-build">build</span></div>
+      <p>The light, autonomous path. One worker (default <b>codex</b>) implements a small, clearly
+        specified single-repo change unattended on its own <code>feat/quick-&lt;topic&gt;</code> branch;
+        the hub briefs, runs one implement turn, does a light verify, and finishes by default. <b>No
+        research, no design doc, no interactive gates.</b></p>
+      <p class="when"><b>When:</b> the change is small and the spec is obvious — a flag, a helper, a
+        focused fix — and you don't need the full pipeline.</p>
+      <div class="ex"><span class="d"># one worker, no ceremony</span>
+/ap:quick <span class="c">add a --json flag to the status command</span></div>
+    </div>
+
+    <div class="cmd">
+      <div class="cmd-head"><span class="cmd-name">/ap:autoresearch</span><span class="cmd-role role-research">research</span></div>
+      <p>An <b>executable</b> research session. You and the hub lock a measurable metric, sweep the SOTA,
+        spawn 2–3 persistent codex workers, then adaptively dispatch single-config <b>experiments</b>
+        until a target, plateau, or budget stop fires. Ships a full research-validity layer (verify by
+        re-execution, sanity checks, coverage, lineage, an independent inspector). Explore-only — it
+        never touches your real source.</p>
+      <p class="when"><b>When:</b> you want to empirically test ideas and measure outcomes, not just
+        survey the literature.</p>
+      <div class="ex"><span class="d"># lock a metric, then run experiments toward it</span>
+/ap:autoresearch <span class="c">minimize val loss on a CIFAR-10 subset under a 5-min train budget</span></div>
+      <p style="margin:11px 0 0; font-size:13.5px"><a href="#autoresearch">↓ Full deep dive — how autoresearch is designed, how it works, and what it can achieve</a></p>
+    </div>
+
+    <div class="cmd">
+      <div class="cmd-head"><span class="cmd-name">/ap:review</span><span class="cmd-role role-research">research</span></div>
+      <p>The feedback loop. Every command writes <b>forensics</b> at teardown; <code>/ap:review</code>
+        surveys what's new since you last ran it, shows how often each pattern has recurred over the life
+        of the project, suggests one next action per cluster, then archives what it showed you so the next
+        run starts clean. Zero arguments.</p>
+      <p class="when"><b>When:</b> periodically — to spot recurring failures, flaky providers, or
+        patterns worth turning into a fix.</p>
+      <div class="ex"><span class="d"># what went wrong (or right) lately?</span>
+/ap:review</div>
+    </div>
+
+    <h3 style="margin-top:30px">Operations</h3>
+    <div class="grid two">
+      <div class="cmd" style="margin:0">
+        <div class="cmd-head"><span class="cmd-name">/ap:check</span><span class="cmd-role role-ops">ops</span></div>
+        <p>Health check — tmux, pane borders, state dir, config, and which providers are installed — plus
+          an interactive picker to choose the active provider ensemble for <code>/ap:design</code>.</p>
+        <p class="when"><b>When:</b> first-time setup, or to confirm the environment is sane.</p>
+      </div>
+      <div class="cmd" style="margin:0">
+        <div class="cmd-head"><span class="cmd-name">/ap:list</span><span class="cmd-role role-ops">ops</span></div>
+        <p>Show every active worker across topics — its pane and state — or scope to a single topic.</p>
+        <p class="when"><b>When:</b> you want to see what's currently running.</p>
+      </div>
+      <div class="cmd" style="margin:0">
+        <div class="cmd-head"><span class="cmd-name">/ap:stop</span><span class="cmd-role role-ops">ops</span></div>
+        <p>Gracefully end workers — a <b>DONE</b> banner, then archive their state. Stop one, a topic, or
+          everything with <code>--all --yes</code>.</p>
+        <p class="when"><b>When:</b> a run is finished or stuck and you want a clean teardown.</p>
+      </div>
+      <div class="cmd" style="margin:0; border-style:dashed; background:#fcfcff">
+        <div class="cmd-head"><span class="cmd-name">spawn · send · collect · preflight</span></div>
+        <p>The internal <b>primitives</b> — the plumbing the high-level commands are built from. Not
+          slash commands; you rarely call them directly, but they're the moving parts underneath.</p>
+      </div>
+    </div>
+
+    <h3 style="margin-top:30px">Cross-repo</h3>
+    <div class="cmd">
+      <div class="cmd-head"><span class="cmd-name">/ap:bridge</span><span class="cmd-role role-cross">cross-repo</span></div>
+      <p>When a task needs changes in a <b>different</b> git repository than the one you're in, bridge
+        opens one persistent worker inside that other repo and co-develops with it over open-ended rounds
+        — relaying real decisions back to you, answering trivia from context — and finishes as a PR there.
+        All without your hub session leaving its current repo.</p>
+      <p class="when"><b>When:</b> a change belongs in repo B, but you're working in repo A and don't want
+        to context-switch away.</p>
+      <div class="ex"><span class="d"># co-develop in another repo, finish as a PR there</span>
+/ap:bridge --repo <span class="c">/path/to/other-repo</span> <span class="c">"add OAuth login to the gateway"</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== AUTORESEARCH DEEP DIVE ===================== -->
+<section id="autoresearch">
+  <div class="wrap">
+    <p class="kicker">Deep dive · /ap:autoresearch</p>
+    <h2>The research engine, in full.</h2>
+    <p class="sub">Most commands move <em>information</em> around. <code>/ap:autoresearch</code> is
+      different: it runs <b>real experiments</b> — code that executes, trains, and measures — and steers a
+      fleet of workers toward a number you defined. Because the workers report their own scores, the whole
+      system is built around one uncomfortable premise:</p>
+
+    <div class="ar-hero">
+      <p class="quote">“A worker's self-reported metric is a <em>claim</em>, not evidence.”</p>
+      <p>Earlier versions trusted the number a worker printed. This one doesn't. Every reported result is
+        re-executed, sanity-checked, and — for any new record — independently re-implemented by a
+        <em>different</em> model before it is allowed to win. That verification layer is most of what makes
+        autoresearch worth the machinery.</p>
+    </div>
+
+    <!-- HOW IT'S DESIGNED -->
+    <h3 style="margin-top:30px">How it's designed</h3>
+    <p class="sub">Four principles shape everything below.</p>
+    <div class="grid two" style="margin-top:14px">
+      <div class="card"><h4>Advisor-driven, metric-locked</h4><p>You and the hub lock a <b>measurable</b>
+        metric up front — direction, floor, target, how many corroborating runs count as done. Completion
+        is then judged <em>numerically</em>, never by a worker saying “this looks good.” Even in hands-off
+        mode the hub always stops to confirm the metric with you first.</p></div>
+      <div class="card"><h4>Explore-only, with a promotion gate</h4><p>Workers run in throwaway branch
+        directories and <b>never touch your real source</b>. The only path to production code is an
+        explicit hand-off into <code>/ap:design</code> → <code>/ap:implement</code>. Research and shipping
+        are deliberately separate steps.</p></div>
+      <div class="card"><h4>Idea quality ≠ execution quality</h4><p>A bad number can mean a bad idea — or a
+        buggy, leaky, under-trained <em>run</em>. The system separates the two, so a broken execution gets
+        retried, not mistaken for a refuted idea. Only an <em>execution-verified</em> bad result retires an
+        approach.</p></div>
+      <div class="card"><h4>Trust nothing; verify mechanically</h4><p>Six task-agnostic gates (below)
+        replace honor-system trust with re-execution, numeric bounds, and independent reproduction. None of
+        them needs to understand your specific problem to catch a faked, leaky, or over-fit result.</p></div>
+    </div>
+
+    <!-- HOW IT WORKS: lifecycle -->
+    <h3 style="margin-top:34px">How it works — the session lifecycle</h3>
+    <p class="sub">A run moves through four stages. You're involved at the start — locking the metric and
+      the budget; after that it's an autonomous loop until a stop condition fires.</p>
+
+    <div class="stages">
+      <div class="stage2"><div class="lbl">Stage 1 · Setup</div><h4>Lock the target</h4>
+        <p>The hub confirms a measurable metric with you (floor, target, corroboration count), sweeps
+          current SOTA into a reference doc, and sizes the run: 2–3 workers + a time budget.</p></div>
+      <div class="stage2"><div class="lbl">Stage 2 · Spawn</div><h4>Launch the executors</h4>
+        <p>2–3 persistent <b>codex</b> workers spawn once into their own panes. Each is handed a
+          <em>different</em> approach family, so they explore in parallel rather than in lockstep.</p></div>
+      <div class="stage2"><div class="lbl">Stage 3 · Adaptive loop</div><h4>Experiment &amp; steer</h4>
+        <p>Workers run single-config experiments; the hub scores each result, verifies it, updates a
+          leaderboard, and dispatches the next experiment — until a stop condition fires.</p></div>
+      <div class="stage2"><div class="lbl">Stage 4 · Wind-down</div><h4>Synthesize &amp; hand off</h4>
+        <p>The hub writes a landscape doc, preserves every experiment's code and logs, and emits a hand-off
+          naming the winner — ready to promote via <code>/ap:design</code>.</p></div>
+    </div>
+
+    <h3 style="margin-top:26px; font-size:18px">Inside the adaptive loop</h3>
+    <p class="sub">Each pass is mechanical. The hub never asks “should I keep going?” — stopping is owned by
+      exactly two checkpoints (the budget gate and the completion check), and nothing else may halt it.</p>
+    <div class="loop">
+      <ol>
+        <li><b>Wait</b> for a worker to finish an experiment (it writes one <code>result.json</code>).</li>
+        <li><b>Budget gate</b> — if the time budget is spent or you asked to halt, stop and finalize.</li>
+        <li><b>Score</b> the result into the leaderboard, then <b>verify</b> it: re-execute, sanity-check,
+          and — for a new best — independently re-implement.</li>
+        <li><b>Completion check</b> — is the floor + target met with enough corroborating runs, or has the
+          search plateaued across enough approaches? If so, stop.</li>
+        <li><b>Dispatch the next experiment</b> to any idle worker — either a <b>Draft</b> (open a new
+          approach family) or an <b>Improve</b> (change exactly one variable on a named parent run, so the
+          gain is attributable). Then loop.</li>
+      </ol>
+    </div>
+    <div class="lane">
+      <span>Two move types:</span>
+      <span class="chip">DRAFT — open a new, orthogonal approach family</span>
+      <span class="chip">IMPROVE — change one variable on a parent run</span>
+    </div>
+
+    <!-- THE VALIDITY LAYER -->
+    <h3 style="margin-top:36px">The validity layer — six gates against a faked win</h3>
+    <p class="sub">This is what separates autoresearch from “ask three models to optimize something.” Every
+      reported result runs this gauntlet; only survivors can lead the board or trigger a stop. The first
+      three ask <em>“is this result real?”</em>; the next two ask <em>“are we exploring well?”</em>; the
+      last is the anti-gaming capstone.</p>
+
+    <div class="gates">
+      <div class="gate" style="border-top-color:var(--azure)">
+        <div class="gh"><span class="code" style="background:var(--azure)">A1</span><h4>Verify by re-execution</h4></div>
+        <p class="def">Defends against: fabricated or un-reproducible numbers.</p>
+        <p>The hub re-runs the worker's <em>own</em> declared scoring command <b>outside</b> its pane and
+          recomputes the metric. Input files are sha256-snapshotted at score time, so a worker that edits
+          its inputs before verification is caught. Verdict: <code>verified</code> / <code>mismatch</code>
+          / <code>unavailable</code> / <code>pending</code>.</p>
+      </div>
+      <div class="gate" style="border-top-color:var(--azure)">
+        <div class="gh"><span class="code" style="background:var(--azure)">A3</span><h4>Sanity &amp; integrity</h4></div>
+        <p class="def">Defends against: buggy / leaky / under-trained runs that still look valid.</p>
+        <p>Task-agnostic flags: <b>too-good</b> (beats a known ceiling), <b>too-fast</b> (ran quicker than
+          real training could), <b>log-contradiction</b> (status “ok” but the logs show a crash or OOM),
+          <b>missing integrity attestation</b> (never affirmed there was no train/test leakage), and
+          <b>knob-drift</b> (quietly changed a locked hyperparameter).</p>
+      </div>
+      <div class="gate" style="border-top-color:var(--azure)">
+        <div class="gh"><span class="code" style="background:var(--azure)">A2</span><h4>Infeasible vs refuted</h4></div>
+        <p class="def">Defends against: mistaking a broken run for a disproven idea.</p>
+        <p>A result that <em>couldn't be validly executed</em> (an A1 mismatch or a hard sanity flag) is
+          quarantined into a separate non-ranked group — it can't win and can't trigger an early stop — and
+          the idea is <b>re-dispatched</b>. A result that ran cleanly but simply lost is real evidence and
+          steers the search normally.</p>
+      </div>
+      <div class="gate" style="border-top-color:var(--sage)">
+        <div class="gh"><span class="code" style="background:var(--sage)">B1</span><h4>Coverage &amp; diversity</h4></div>
+        <p class="def">Defends against: premature convergence on one approach.</p>
+        <p>Experiments are bucketed into approach <b>families</b>. The plateau-stop won't fire until enough
+          distinct families have produced valid results <em>and</em> none is still improving — so the loop
+          can't declare victory after merely over-tuning a single idea.</p>
+      </div>
+      <div class="gate" style="border-top-color:var(--sage)">
+        <div class="gh"><span class="code" style="background:var(--sage)">B2</span><h4>Operators &amp; lineage</h4></div>
+        <p class="def">Defends against: wins you can't attribute.</p>
+        <p>Every experiment is typed: a <b>Draft</b> opens a new family; an <b>Improve</b> changes exactly
+          one knob versus a named parent. Lineage records what changed, so a metric gain traces to a single
+          variable — and a leader that quietly moved several knobs at once is flagged
+          <code>[multi-change]</code>.</p>
+      </div>
+      <div class="gate" style="border-top-color:var(--violet)">
+        <div class="gh"><span class="code" style="background:var(--violet)">C1</span><h4>Independent re-implementation <span style="font-weight:600;color:var(--faint);font-size:11.5px">· capstone</span></h4></div>
+        <p class="def">Defends against: reward-hacking baked into the worker's own scoring code.</p>
+        <p>When a worker sets a <b>new record</b>, a <em>different model family</em> (the Claude hub)
+          rebuilds the experiment from the worker's run-card <b>alone</b> — never reading the worker's code
+          — and re-derives the metric. A confident <code>not-reproduced</code> demotes it; an honest run
+          that's merely hard to reproduce is marked <code>inconclusive</code> and never punished.</p>
+      </div>
+    </div>
+
+    <!-- STOP CONDITIONS -->
+    <h3 style="margin-top:36px">When does it stop?</h3>
+    <p class="sub">Three conditions, and only three — the loop is otherwise unbounded by design.</p>
+    <div class="grid three" style="margin-top:12px">
+      <div class="card"><h4>Target reached</h4><p>The floor and target metric are met and corroborated by
+        the required number of independent at-target experiments.</p></div>
+      <div class="card"><h4>Plateau</h4><p>Enough distinct approach families have been explored and every
+        one has stalled — there is no obvious next gain to chase.</p></div>
+      <div class="card"><h4>Budget / halt</h4><p>The time budget is exhausted, or you say “stop.” The hub
+        finalizes whatever it has into a clean, archived result.</p></div>
+    </div>
+
+    <!-- WHAT IT CAN ACHIEVE -->
+    <h3 style="margin-top:36px">What it can achieve</h3>
+    <ul class="clean" style="margin-top:12px">
+      <li><b>A number you can actually trust.</b> Every reported win has survived re-execution, mechanical
+        sanity checks, and — if it's a record — independent re-implementation by a different model.</li>
+      <li><b>A defensible stopping point.</b> The decision to stop is numeric and reproducible — floor +
+        target + corroboration, an approach-aware plateau, or a budget — not a vibe.</li>
+      <li><b>A fully auditable trail.</b> Every experiment's code, result, and logs are preserved; a
+        landscape doc records what was tried, what won, and why the search stopped.</li>
+      <li><b>Honest negatives.</b> Because broken executions are quarantined and retried, an idea is retired
+        only when it genuinely lost a valid run — the search doesn't discard good ideas over bad plumbing.</li>
+      <li><b>A clean path to production.</b> The winner is handed off as <code>score-handoff.md</code> →
+        <code>/ap:design</code> → <code>/ap:implement</code>, the only route from experiment to real code.</li>
+    </ul>
+
+    <div class="callout" style="margin-top:22px">
+      <b>Honest limits.</b> Workers run with their sandbox <b>disabled</b>
+      (<code>--dangerously-bypass-approvals-and-sandbox</code>) and network access on — isolation is
+      honor-system, so run it on a scratch machine or worktree, never anywhere with secrets or production
+      data. And “corroboration” today means several <em>distinct</em> at-target experiments, not the same
+      config across many random seeds — so a genuinely lucky seed can still satisfy completion. A
+      statistical multi-seed gate is designed but not yet shipped.
+    </div>
+
+    <!-- UNDER THE HOOD -->
+    <h3 style="margin-top:32px">Under the hood</h3>
+    <details class="uh">
+      <summary>The result every worker writes<span class="ar">▸</span></summary>
+      <div class="uh-body">
+        <p>Each experiment ends with a single frozen-schema <code>result.json</code>: branch id, approach
+          label, metric name + value, status (<code>ok / fail / timeout / cost_blown</code>), runtime, log
+          paths, checkpoint, and notes — plus optional <b>integrity attestations</b> (no train/test
+          overlap, target not in features, trained steps, seed) and a <b>run-card</b> (data spec + metric
+          formula) that the C1 inspector rebuilds from. A result is only valid if its metric is non-null
+          exactly when the status is <code>ok</code>.</p>
+      </div>
+    </details>
+    <details class="uh">
+      <summary>The leaderboard, and how a winner is chosen<span class="ar">▸</span></summary>
+      <div class="uh-body">
+        <p>Results are scored into a ranked <code>scoreboard.md</code>. Valid <code>ok</code> rows get
+          integer ranks (sorted by the metric's direction, with deterministic tie-breaks); infeasible runs
+          are demoted to a visible-but-excluded <code>x-rank</code> group; failures sit below. Rank&nbsp;1
+          is always a valid result — an invalid one can never be crowned, and the completion check reads
+          only integer ranks, so a quarantined “win” can't trigger a stop.</p>
+      </div>
+    </details>
+    <details class="uh">
+      <summary>Pure core, side-effecting shell<span class="ar">▸</span></summary>
+      <div class="uh-body">
+        <p>All the decision logic — metric parsing, scoring, the completion check, and the six validity
+          gates — is written as pure functions with the filesystem injected, so it is unit-tested without
+          spawning a single pane. The actual experiment dispatch, tmux nudges, and disk writes live only in
+          the command layer. It's a faithful TypeScript port of the original research shell scripts, with
+          the worker wire-format frozen for drop-in compatibility.</p>
+      </div>
+    </details>
+    <details class="uh">
+      <summary>Worker liveness &amp; recovery<span class="ar">▸</span></summary>
+      <div class="uh-body">
+        <p>A persistent monitor watches each worker's event stream and flags it <code>stale</code> or
+          <code>stuck</code> if it goes quiet, so the hub can probe or abort a hung run. If the hub itself
+          restarts, it reconstructs each worker's state from disk — a crashed run is reconciled from its
+          last events, not lost. And a worker that produces three valid-but-far-from-leader results in a
+          row is automatically retired so effort flows to the promising approaches.</p>
+      </div>
+    </details>
+  </div>
+</section>
+
+<!-- ===================== PROVIDERS ===================== -->
+<section id="providers">
+  <div class="wrap">
+    <p class="kicker">Providers</p>
+    <h2>Four interchangeable model back-ends.</h2>
+    <p class="sub">A <b>provider</b> is the model CLI a worker runs. The set is deliberately closed —
+      adding one is a config row plus a real-world test, not an open free-for-all — so every worker
+      behaves predictably. Each provider runs in a permission <b>mode</b>: <code>full</code> (acts freely)
+      or <code>read-only</code> (best-effort sandbox).</p>
+
+    <table class="ptable">
+      <thead><tr><th>Provider</th><th>What it runs</th><th>Typical role</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>codex</td><td>OpenAI Codex CLI</td><td>Default worker &amp; autoresearch executor</td><td><span class="badge">validated</span></td></tr>
+        <tr><td>claude</td><td>Claude Code CLI</td><td>Strong reasoning / synthesis worker</td><td><span class="badge">validated</span></td></tr>
+        <tr><td>agy</td><td>agy CLI</td><td>Fast ensemble member</td><td><span class="badge">validated</span></td></tr>
+        <tr><td>opencode</td><td>opencode CLI (DeepSeek)</td><td>Diverse third opinion</td><td><span class="badge">validated</span></td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout" style="margin-top:18px">
+      <b>Why a panel beats a soloist.</b> Spawning codex, claude, and a third model on the same question
+      and having them cross-check — and then adversarially attack — each other's answers is the whole
+      point. Independent models fail in different ways, so agreement across them is real signal, and
+      disagreement flags exactly where to look harder.
+    </div>
+  </div>
+</section>
+
+<!-- ===================== UNDER THE HOOD ===================== -->
+<section id="under-hood">
+  <div class="wrap">
+    <p class="kicker">Under the hood</p>
+    <h2>How the coordination actually works.</h2>
+    <p class="sub">You don't need any of this to use the platform — but if you're curious how one session
+      drives a fleet of independent programs reliably, here's the machinery.</p>
+
+    <details class="uh">
+      <summary>Coordination is files, not in-process messaging<span class="ar">▸</span></summary>
+      <div class="uh-body">
+        <p>The hub and workers never share memory or call each other directly. They talk through files in
+          a per-worker state directory — simple, crash-safe, and inspectable. The core files:</p>
+        <ul class="clean" style="margin-top:6px">
+          <li><b><span class="kv">inbox.md</span></b> — the task the hub hands the worker.</li>
+          <li><b><span class="kv">outbox.jsonl</span></b> — a stream of events the worker emits:
+            <span class="kv">ready</span>, <span class="kv">ack</span>, <span class="kv">progress</span>,
+            <span class="kv">done</span>, <span class="kv">error</span>, <span class="kv">question</span>.</li>
+          <li><b><span class="kv">status.json</span></b> / <b><span class="kv">pane.json</span></b> —
+            the worker's current state and which tmux pane it lives in.</li>
+        </ul>
+        <p style="margin-top:10px">The hub regains control between every step, reads the outbox, and
+          decides what to do next. A worker that asks a <span class="kv">question</span> pauses; the hub
+          answers (sometimes after asking you) and the worker resumes.</p>
+      </div>
+    </details>
+
+    <details class="uh">
+      <summary>tmux is the only place subprocesses live<span class="ar">▸</span></summary>
+      <div class="uh-body">
+        <p>Every worker is a real interactive model TUI running in a tmux pane. That's what makes them
+          <em>attachable</em>: you can <code>tmux select-pane</code> to watch any worker think and type,
+          or jump in and take over. The pane border is colored by the worker's cluster so a screen full
+          of crews stays legible. tmux is the single subprocess surface — nothing else shells out.</p>
+      </div>
+    </details>
+
+    <details class="uh">
+      <summary>The wire protocol is frozen so models are drop-in<span class="ar">▸</span></summary>
+      <div class="uh-body">
+        <p>The event names, the JSON field names, the sentinel that marks the end of an instruction, and
+          the state file layout are <b>frozen</b> — deliberately never renamed. That's what lets a new
+          external model binary slot in as just another provider without touching the orchestration
+          logic. Adding a provider is a config row plus a live test, by design.</p>
+      </div>
+    </details>
+
+    <details class="uh">
+      <summary>Atomic writes, absolute paths, single-repo<span class="ar">▸</span></summary>
+      <div class="uh-body">
+        <p>State files are written atomically — to a temp file in the same directory, then renamed — so a
+          crash never leaves a half-written status. All state paths are absolute and keyed to the repo, so
+          runs in different repos never collide. The platform is intentionally <b>single-repo</b>: each
+          run operates on one repository, and cross-repo work is the explicit job of
+          <code>/ap:bridge</code>.</p>
+      </div>
+    </details>
+
+    <details class="uh">
+      <summary>Zero-build install<span class="ar">▸</span></summary>
+      <div class="uh-body">
+        <p>The whole plugin ships as one committed bundle dispatched by subcommand, so installing it
+          requires no build step — add the marketplace, install the plugin, and the <code>/ap:*</code>
+          commands are available in your next session.</p>
+      </div>
+    </details>
+  </div>
+</section>
+
+<!-- ===================== PRINCIPLES / CLOSE ===================== -->
+<section id="why">
+  <div class="wrap">
+    <p class="kicker">In one breath</p>
+    <h2>What makes it worth the machinery.</h2>
+    <ul class="clean" style="margin-top:14px">
+      <li><b>One conductor, many specialists.</b> A single session orchestrates a panel of different AI
+        models instead of leaning on one.</li>
+      <li><b>Adversarial by default.</b> Workers don't just answer — they attack each other's answers, so
+        weak conclusions get caught before they reach you.</li>
+      <li><b>Everything is visible.</b> Workers are real terminal panes you can attach to, and every run
+        leaves forensics you can review later.</li>
+      <li><b>A clear path from question to PR.</b> explore → design → implement takes an open question all
+        the way to merged code, with on-ramps for quick fixes and real experiments.</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>agglomeration-platform — a Claude Code plugin for multi-model orchestration.</span>
+    <span class="mono">github.com/WingsOfPanda/agglomeration-platform</span>
+  </div>
+</footer>
+
+<script>
+  // active-section highlighting in the top nav
+  (function(){
+    var links = Array.prototype.slice.call(document.querySelectorAll('.nav-links a'));
+    var map = {};
+    links.forEach(function(a){ map[a.getAttribute('href').slice(1)] = a; });
+    var sections = Object.keys(map).map(function(id){ return document.getElementById(id); }).filter(Boolean);
+    var obs = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if(e.isIntersecting){
+          links.forEach(function(a){ a.classList.remove('active'); });
+          var a = map[e.target.id];
+          if(a) a.classList.add('active');
+        }
+      });
+    }, { rootMargin: '-45% 0px -50% 0px', threshold: 0 });
+    sections.forEach(function(s){ obs.observe(s); });
+  })();
+</script>
+</body>
+</html>
