@@ -1,11 +1,14 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  METRIC_FAMILIES,
+  canReadLesson,
   decayWeight,
   filterLesson,
   isExpired,
   mergeLesson,
   renderLesson,
+  scopeKey,
   semanticFingerprint,
   type Lesson,
   type MemoryPolicy,
@@ -368,5 +371,55 @@ describe("mergeLesson — dedup-merge collapses a re-write", () => {
       policy,
     );
     expect(merged.score).toBeGreaterThanOrEqual(base.score);
+  });
+});
+
+describe("scopeKey — composite cross-repo + cross-family isolation", () => {
+  test("is deterministic for the same repo+family", () => {
+    expect(scopeKey("repoA", "accuracy")).toBe(scopeKey("repoA", "accuracy"));
+  });
+
+  test("a different repo hash yields a different key (cross-repo isolation)", () => {
+    expect(scopeKey("repoA", "accuracy")).not.toBe(scopeKey("repoB", "accuracy"));
+  });
+
+  test("a different family yields a different key (cross-family isolation)", () => {
+    expect(scopeKey("repoA", "accuracy")).not.toBe(scopeKey("repoA", "loss"));
+  });
+
+  test("embeds repo hash and family under the v1 namespace", () => {
+    expect(scopeKey("repoA", "accuracy")).toBe("v1/repoA/accuracy");
+  });
+
+  test("throws on an unknown metric family (not in METRIC_FAMILIES)", () => {
+    expect(() => scopeKey("repoA", "made-up-family")).toThrow();
+  });
+
+  test("accepts every declared metric family", () => {
+    for (const fam of METRIC_FAMILIES) {
+      expect(scopeKey("repoA", fam)).toBe(`v1/repoA/${fam}`);
+    }
+  });
+});
+
+describe("canReadLesson — same-family ABAC read gate", () => {
+  const lesson = { metric_family: "accuracy", provenance: {} } as unknown as Lesson;
+
+  test("permits a read when the reader's family matches the lesson family", () => {
+    expect(
+      canReadLesson(
+        { repoHash: "repoA", metricFamily: "accuracy", objective: "x", direction: "maximize" },
+        lesson,
+      ),
+    ).toBe(true);
+  });
+
+  test("blocks a cross-family read", () => {
+    expect(
+      canReadLesson(
+        { repoHash: "repoA", metricFamily: "loss", objective: "x", direction: "minimize" },
+        lesson,
+      ),
+    ).toBe(false);
   });
 });
