@@ -51,6 +51,13 @@ function str(v: unknown): string {
   return v === null || v === undefined ? "" : String(v);
 }
 
+/** Parse an already-read audit.json body into an object; null on absence (null/empty) or malformed
+ *  JSON. The single guarded parse shared by the branch + parent audit reads. */
+function parseAudit(raw: string | null): Record<string, unknown> | null {
+  if (!raw) return null;
+  try { return JSON.parse(raw) as Record<string, unknown>; } catch { return null; }
+}
+
 /** Compute the full score plan for a autoresearch art dir. now() stamps sidecar/last_event_ts. */
 export function computeScore(art: string, fs: ScoreFs, now: () => string): ScoreComputation {
   const metricMd = fs.read(join(art, "metric.md"));
@@ -105,9 +112,7 @@ export function computeScore(art: string, fs: ScoreFs, now: () => string): Score
         }
       }
       const promptMd = fs.read(join(branchDir, "prompt.md"));
-      let auditObj: Record<string, unknown> | null = null;
-      const auditRaw = fs.read(join(branchDir, "audit.json"));
-      if (auditRaw) { try { auditObj = JSON.parse(auditRaw) as Record<string, unknown>; } catch { auditObj = null; } }
+      const auditObj = parseAudit(fs.read(join(branchDir, "audit.json")));
       const flags = sanityFlags({
         result: o,
         direction: parsed?.direction,
@@ -126,9 +131,7 @@ export function computeScore(art: string, fs: ScoreFs, now: () => string): Score
       const parentId = lineageTxt ? (parseState(lineageTxt).parent_id ?? "") : "";
       let knobs: number | null = null;
       if (parentId) {
-        const parentAuditRaw = fs.read(join(experimentDir(art, agent, parentId), "audit.json"));
-        let parentAudit: Record<string, unknown> | null = null;
-        if (parentAuditRaw) { try { parentAudit = JSON.parse(parentAuditRaw) as Record<string, unknown>; } catch { parentAudit = null; } }
+        const parentAudit = parseAudit(fs.read(join(experimentDir(art, agent, parentId), "audit.json")));
         knobs = diffAuditKnobs(parentAudit, auditObj);
       }
       lineageRows.push({ expId, agent, parentId,

@@ -16,7 +16,6 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { atomicWrite } from "./atomic.js";
-import { globalRoot } from "./paths.js";
 import {
   filterLesson,
   mergeLesson,
@@ -52,11 +51,6 @@ export const liveMemoryIo: MemoryIo = {
   mkdir: (p) => mkdirSync(p, { recursive: true }),
   writeAtomic: (dest, content) => atomicWrite(dest, content),
 };
-
-/** The real on-disk store root: `~/.ap/autoresearch-memory` (or under AP_HOME). */
-export function liveStoreRoot(home?: string): string {
-  return join(globalRoot(home), "autoresearch-memory");
-}
 
 /** Absolute path to the lessons.jsonl for one (repo, family) scope. */
 function lessonsPath(storeRoot: string, repoHash: string, metricFamily: string): string {

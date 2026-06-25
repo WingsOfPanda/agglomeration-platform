@@ -71,11 +71,9 @@ export function buildAnnotations(draft: string, findings: string[]): { annotated
       }
       // (?![A-Za-z0-9_./:-]) = not a prefix of a longer token; (?! \[unverified\]) = idempotent.
       const re = new RegExp(escapeRegExp(tok) + "(?![A-Za-z0-9_./:-])(?! \\[unverified\\])", "g");
-      if (re.test(lines[i])) {
-        lines[i] = lines[i].replace(
-          new RegExp(escapeRegExp(tok) + "(?![A-Za-z0-9_./:-])(?! \\[unverified\\])", "g"),
-          tok + " [unverified]",
-        );
+      const replaced = lines[i].replace(re, tok + " [unverified]");
+      if (replaced !== lines[i]) {
+        lines[i] = replaced;
         items.push({ kind: "unverified", token: tok, lineIndex: i });
       }
     }
