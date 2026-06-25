@@ -21177,6 +21177,15 @@ function parseMetricMd(text) {
   let minFamilies = 2;
   let c1Epsilon;
   let c1Budget;
+  let selectK;
+  let selectSignal;
+  let maxWorkers;
+  let memoryHalfLifeDays;
+  let memoryMaxAgeDays;
+  let memoryMinCorroboration;
+  let memoryScope;
+  let memoryWriteRateMax;
+  let marginalGainThreshold;
   const opVal = (s) => {
     const workers = s.trim().split(/\s+/);
     return [workers[0] ?? "", workers.slice(1).join(" ")];
@@ -21219,9 +21228,34 @@ function parseMetricMd(text) {
     } else if (m = line.match(/^\*\*c1_budget:\*\*\s+(.*)$/)) {
       const n2 = parseInt(m[1].trim(), 10);
       if (!Number.isNaN(n2)) c1Budget = n2;
+    } else if (m = line.match(/^\*\*select_k:\*\*\s+(.*)$/)) {
+      const n2 = parseInt(m[1].trim(), 10);
+      if (!Number.isNaN(n2)) selectK = n2;
+    } else if (m = line.match(/^\*\*select_signal:\*\*\s+(.*)$/)) {
+      selectSignal = m[1].trim();
+    } else if (m = line.match(/^\*\*max_workers:\*\*\s+(.*)$/)) {
+      const n2 = parseInt(m[1].trim(), 10);
+      if (!Number.isNaN(n2)) maxWorkers = n2;
+    } else if (m = line.match(/^\*\*memory_half_life_days:\*\*\s+(.*)$/)) {
+      const n2 = parseFloat(m[1].trim());
+      if (!Number.isNaN(n2)) memoryHalfLifeDays = n2;
+    } else if (m = line.match(/^\*\*memory_max_age_days:\*\*\s+(.*)$/)) {
+      const n2 = parseFloat(m[1].trim());
+      if (!Number.isNaN(n2)) memoryMaxAgeDays = n2;
+    } else if (m = line.match(/^\*\*memory_min_corroboration:\*\*\s+(.*)$/)) {
+      const n2 = parseInt(m[1].trim(), 10);
+      if (!Number.isNaN(n2)) memoryMinCorroboration = n2;
+    } else if (m = line.match(/^\*\*memory_scope:\*\*\s+(.*)$/)) {
+      memoryScope = m[1].trim();
+    } else if (m = line.match(/^\*\*memory_write_rate_max:\*\*\s+(.*)$/)) {
+      const n2 = parseFloat(m[1].trim());
+      if (!Number.isNaN(n2)) memoryWriteRateMax = n2;
+    } else if (m = line.match(/^\*\*marginal_gain_threshold:\*\*\s+(.*)$/)) {
+      const n2 = parseFloat(m[1].trim());
+      if (!Number.isNaN(n2)) marginalGainThreshold = n2;
     }
   }
-  return { primaryMetric, direction, minOp, minVal, tgtOp, tgtVal, kRequired, plateauWindow, plateauThreshold, verifyEpsilon, ceiling, minRuntimeS, maxDebugAttempts, minFamilies, c1Epsilon, c1Budget };
+  return { primaryMetric, direction, minOp, minVal, tgtOp, tgtVal, kRequired, plateauWindow, plateauThreshold, verifyEpsilon, ceiling, minRuntimeS, maxDebugAttempts, minFamilies, c1Epsilon, c1Budget, selectK, selectSignal, maxWorkers, memoryHalfLifeDays, memoryMaxAgeDays, memoryMinCorroboration, memoryScope, memoryWriteRateMax, marginalGainThreshold };
 }
 function formatSotaBlock(input) {
   if (!input.topic) throw new Error("missing required key: topic");
