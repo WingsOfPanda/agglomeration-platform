@@ -21422,6 +21422,9 @@ function formatPeersBlock(peers) {
   }
   return lines.join("\n");
 }
+function buildStaggeredSpawns(agents, bootstrapSleepS) {
+  return agents.map((agent, i2) => ({ agent, delayS: i2 * bootstrapSleepS }));
+}
 function buildDispatchState(existing, expId, nowIso) {
   const prevCounter = existing?.split("\n").find((l) => l.startsWith("exp_counter="))?.slice("exp_counter=".length) ?? "";
   const n2 = /^[0-9]+$/.test(prevCounter.trim()) ? parseInt(prevCounter, 10) : 0;
@@ -22782,11 +22785,17 @@ async function spawnAllWith2(args, deps, opts) {
     return 3;
   }
   const cwd = deps.repoRoot();
-  const results = await Promise.all(rows.map(async (r) => ({
-    agent: r.agent,
-    provider: r.provider,
-    rc: await deps.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent), "--cwd", cwd, "--preflight-art-dir", art])
-  })));
+  const schedule = buildStaggeredSpawns(rows.map((r) => r.agent), deps.bootstrapSleepS());
+  const delayFor = new Map(schedule.map((s) => [s.agent, s.delayS]));
+  const results = await Promise.all(rows.map(async (r) => {
+    const delayS = delayFor.get(r.agent) ?? 0;
+    if (delayS > 0) await deps.sleep(delayS * 1e3);
+    return {
+      agent: r.agent,
+      provider: r.provider,
+      rc: await deps.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent), "--cwd", cwd, "--preflight-art-dir", art])
+    };
+  }));
   atomicWrite((0, import_node_path30.join)(art, "spawn-results.tsv"), spawnResultsTsv(results));
   const rc = spawnTally(results.map((r) => r.rc));
   const nOk = results.filter((r) => r.rc === 0).length;
@@ -24258,7 +24267,14 @@ var init_autoresearch2 = __esm({
       now: () => isoUtc(),
       configRoot: () => pluginRoot()
     };
-    liveSpawnAllDeps2 = { preflight: run7, spawn: run, repoRoot, pickAgents };
+    liveSpawnAllDeps2 = {
+      preflight: run7,
+      spawn: run,
+      repoRoot,
+      pickAgents,
+      bootstrapSleepS: () => agentBootstrapSleep("codex"),
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms))
+    };
     liveDropWorkerDeps = { killPane: (p) => killNow(p) };
     liveExperimentSendDeps = {
       now: () => isoUtc(),

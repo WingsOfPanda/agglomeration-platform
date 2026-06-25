@@ -115,6 +115,13 @@ export function formatPeersBlock(peers: PeerRow[]): string {
   return lines.join("\n");
 }
 
+/** Stagger schedule for batch-spawning workers: each agent starts after `index * bootstrapSleepS`
+ *  seconds so cold-start (codex node-modules warm-up) is spaced rather than concurrent. Pure builder;
+ *  the verb sleeps `delayS` before each `spawn`. First agent has delayS=0 (immediate). */
+export function buildStaggeredSpawns(agents: string[], bootstrapSleepS: number): { agent: string; delayS: number }[] {
+  return agents.map((agent, i) => ({ agent, delayS: i * bootstrapSleepS }));
+}
+
 /** Dispatch state transition: phase=working, current_exp_id=<expId>, exp_counter=+1 (0 if
  *  non-numeric), last_event=dispatched, last_event_ts=<nowIso>. Merges over existing KV. */
 export function buildDispatchState(existing: string | null, expId: string, nowIso: string): string {
