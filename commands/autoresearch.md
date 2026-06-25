@@ -21,6 +21,48 @@ source. This directive covers Phases 0-4 (setup + spawn + the adaptive experimen
 
 Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
 
+## Autonomous mode (`--autonomous`)
+
+The **interactive path documented in the rest of this directive is the default.** When the session is
+launched with `--autonomous` (or `AP_AUTORESEARCH_AUTONOMOUS=1` in the environment), `init` machine-seeds
+the setup files so the run can proceed without the Hub stopping for the user. Nothing below changes the
+interactive flow — autonomous mode only adds branches gated on it.
+
+**Wired automatically (no directive logic change beyond what is noted):**
+- **Setup questions auto-skip.** `--autonomous` seeds `$ART/metric.md`, `$ART/time-budget.txt`,
+  `$ART/session-start.txt`, and an `$ART/autonomous.txt` marker at `init`. The directive's **existing**
+  skip-guards then fire on their own: Phase 1 "Metric discussion" skips the whole phase because
+  `metric.md` already exists (Phase 1, opening sentence), and Phase 2's time-budget AskUserQuestion skips
+  because `time-budget.txt` already exists (Phase 2 step 2). No new logic — those AskUserQuestions simply
+  do not fire when the files are pre-seeded.
+- **Staggered spawns.** `spawn-all` (Phase 3) spaces the codex spawns by `bootstrap_sleep` automatically,
+  so a batch spawn under load does not race the cold-start handshake. No directive action required.
+- **Data-leakage gate (A3).** The data-leakage sanity check is automatic in the score pass and routes a
+  leaking result to the `x<rank>` (INFEASIBLE) group. This depends on each `result.json` carrying the
+  `data_spec` + `integrity` blocks (see the experiment template).
+- **Top-k handoff line.** `handoff-extract` already records a `finalists=` (top-k) line in
+  `handoff-data.kv`.
+
+**Autonomous-mode branches the Hub APPLIES (gated on `$ART/autonomous.txt`):**
+- **Worker questions auto-triage** — in autonomous mode a `question` event must NOT set `phase=blocked`
+  (that would idle the lane waiting on a user who is not watching). Instead the Hub applies an
+  answer-or-fail-closed policy: answer the worker from session context via `$CS send`, or — if the
+  question cannot be answered safely from context — fail closed by routing that experiment to the
+  INFEASIBLE/abandon path. See the autonomous branch on the Step 3 `question` handler.
+- **Degraded-spawn auto-policy** — in autonomous mode the post-retry degraded-spawn decision is made
+  WITHOUT an AskUserQuestion: proceed if **≥ 2** workers are ready (dropping the failed lanes), else fail
+  closed (teardown + archive + exit). See the autonomous branch on the Phase 3 degraded-spawn step.
+
+**Available cores at the integration frontier (NOT yet auto-invoked — the Hub applies them by judgment;
+none fire automatically at finalize/dispatch):**
+- **Cross-run memory** — retrieving/writing prior-session findings is a Hub-invoked core, not an automatic
+  step in this directive.
+- **Marginal-gain stop** — an adaptive "diminishing-returns" budget stop is available as a core but is not
+  wired into the Step 4 decision policy; the frozen completion-check policy (floor/target/K/plateau) is
+  what actually fires.
+- **Reliability-winner selection** — a top-k / reliability-weighted winner pick is available as a core but
+  is not auto-applied at finalize; the winner is the scoreboard's rank-1 leader as documented in Phase 5.
+
 ## Flagging suspicions
 
 At any point in the run, if something looks weird, surprising, or suspicious — even a likely false
@@ -118,6 +160,10 @@ panes off your pane (main-vertical), batch-spawns them as codex, and writes `$AR
   degraded (<k>/<N>)** / **Abort**. On **Proceed degraded**, for EACH agent whose `spawn-results.tsv`
   row has rc ≠ 0, run `$CS autoresearch drop-worker <TOPIC> <agent>` (prunes its `workers.txt` row and kills
   its preflight pane) **before** Phase 4, so Phase 4 seeds state + a Monitor only for live workers.
+  - **Autonomous mode (`$ART/autonomous.txt` present):** make this decision WITHOUT the AskUserQuestion.
+    Apply the policy directly — if **≥ 2** workers have rc 0, proceed degraded (run `drop-worker` for each
+    rc ≠ 0 agent exactly as above, then continue to Phase 4); if **< 2**, fail closed (teardown + archive +
+    exit). Same threshold as the interactive path; the only difference is no user prompt.
 
 ## Phase 4 — Initial dispatch (runs ONCE, before the loop)
 
@@ -206,6 +252,15 @@ Initialize `RAN_SCORE=0`, `LAST_AGENT=`, `LAST_EXP=`. Route each queued notifica
   non-empty `probe_sent_ts` in its `state.txt`, clear it (the worker recovered — the pending probe is stale).
 - **`question`** → surface the worker's question to the user in chat; set that worker's `phase=blocked`. Do
   **NOT** auto-dispatch it — wait for user direction.
+  - **Autonomous mode (`$ART/autonomous.txt` present):** do **NOT** set `phase=blocked` (no user is
+    watching). Apply the `decideQuestion` answer-or-fail-closed policy instead: if the question is grounded
+    by the locked run context (a multiple-choice pick, or a closed factual question the
+    objective/metric/budget already answers), **answer the worker from context** —
+    `$CS send --from hub <agent> <TOPIC> "<answer>"`, then set `phase=working` and continue. If the
+    question cannot be answered safely from context (it asks for an open-ended design decision the run
+    context does not settle), **fail closed**: route that experiment to the INFEASIBLE/abandon path
+    (record it INFEASIBLE in `## Recent decisions`, let the worker move on), never `phase=blocked`. The
+    decision is deterministic — same question + context yields the same routing.
 - **`stale`** → send a probe: `$CS send --from hub <agent> <TOPIC> "status? brief update on the
   current experiment please"`; set that worker's `phase=stale, probe_sent_ts=<now UTC ISO>`. **Debounce:**
   skip the probe if `probe_sent_ts` was already set within the stuck window.
