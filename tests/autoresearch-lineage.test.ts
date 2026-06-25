@@ -31,6 +31,12 @@ describe("classifyLineage", () => {
     expect(classifyLineage("exp-001", 0)).toBe("improve-unverified");
     expect(classifyLineage("exp-001", null)).toBe("improve-unverified");
   });
+  it("guard: expanded one-variable operators still resolve via parent+knob count", () => {
+    // The new operators (replicate/ablate/crossover/...) carry one variable each and
+    // classify through the unchanged parent/knob logic -- no operator-specific verdict.
+    expect(classifyLineage("exp-1", 1)).toBe("improve-single");
+    expect(classifyLineage(undefined, null)).toBe("draft");
+  });
 });
 
 describe("lineageRow + header", () => {
