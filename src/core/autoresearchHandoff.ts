@@ -48,6 +48,13 @@ export function buildHandoffKv(i: HandoffInput): string {
   if (w.checkpoint) L.push(`winner_checkpoint=${w.checkpoint}`);
   if (w.notes) L.push(`winner_notes=${w.notes}`);
   L.push(`winner_code_dir=${w.codeDir}`);
+  // Top-k finalists (winner + runner-ups, already rank-ordered ok rows), formatted agent/exp:metric.
+  const FINALISTS_K = 3;
+  const finalists = [w, ...i.runnerUps]
+    .slice(0, FINALISTS_K)
+    .map((r) => `${r.agent}/${r.exp}:${r.metric}`)
+    .join(";");
+  L.push(`finalists=${finalists}`);
   i.runnerUps.forEach((r, n) => L.push(`runner_up_${n + 1}=${r.agent}/${r.exp}:${r.metric}:${r.approach || "unknown"}`));
   if (i.hasMetricMd) L.push("mandates_block_path=metric.md");
   L.push("session_path=.", "topic_txt_path=topic.txt", `generated_ts=${i.generatedTs}`);

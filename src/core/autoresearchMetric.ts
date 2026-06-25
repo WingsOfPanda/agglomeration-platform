@@ -77,6 +77,24 @@ export interface MetricThresholds {
   c1Epsilon?: number;
   /** optional metric.md `**c1_budget:**` max C1 inspections per session; caller defaults to 2. */
   c1Budget?: number;
+  /** optional metric.md `**select_k:**` worker-selection breadth; caller supplies default. */
+  selectK?: number;
+  /** optional metric.md `**select_signal:**` selection signal (e.g. "held-out"); caller supplies default. */
+  selectSignal?: string;
+  /** optional metric.md `**max_workers:**` concurrent worker cap; caller supplies default. */
+  maxWorkers?: number;
+  /** optional metric.md `**memory_half_life_days:**` memory decay half-life; caller supplies default. */
+  memoryHalfLifeDays?: number;
+  /** optional metric.md `**memory_max_age_days:**` hard memory age cutoff; caller supplies default. */
+  memoryMaxAgeDays?: number;
+  /** optional metric.md `**memory_min_corroboration:**` corroboration floor for memory reuse; caller supplies default. */
+  memoryMinCorroboration?: number;
+  /** optional metric.md `**memory_scope:**` memory scope (e.g. "repo+family"); caller supplies default. */
+  memoryScope?: string;
+  /** optional metric.md `**memory_write_rate_max:**` max memory writes per window; caller supplies default. */
+  memoryWriteRateMax?: number;
+  /** optional metric.md `**marginal_gain_threshold:**` min marginal gain to keep dispatching; caller supplies default. */
+  marginalGainThreshold?: number;
   minOp?: string; minVal?: string;
   tgtOp?: string; tgtVal?: string;
   kRequired: number; plateauWindow: number; plateauThreshold: number;
@@ -95,6 +113,12 @@ export function parseMetricMd(text: string): MetricThresholds {
   let maxDebugAttempts: number | undefined;
   let minFamilies = 2;
   let c1Epsilon: number | undefined; let c1Budget: number | undefined;
+  let selectK: number | undefined; let selectSignal: string | undefined;
+  let maxWorkers: number | undefined;
+  let memoryHalfLifeDays: number | undefined; let memoryMaxAgeDays: number | undefined;
+  let memoryMinCorroboration: number | undefined;
+  let memoryScope: string | undefined; let memoryWriteRateMax: number | undefined;
+  let marginalGainThreshold: number | undefined;
   const opVal = (s: string): [string, string] => {
     const workers = s.trim().split(/\s+/);
     return [workers[0] ?? "", workers.slice(1).join(" ")];
@@ -115,8 +139,17 @@ export function parseMetricMd(text: string): MetricThresholds {
     else if ((m = line.match(/^\*\*min_families:\*\*\s+(.*)$/))) { const n = parseInt(m[1].trim(), 10); if (!Number.isNaN(n)) minFamilies = Math.max(1, n); }
     else if ((m = line.match(/^\*\*c1_epsilon:\*\*\s+(.*)$/))) { const n = parseFloat(m[1].trim()); if (!Number.isNaN(n)) c1Epsilon = n; }
     else if ((m = line.match(/^\*\*c1_budget:\*\*\s+(.*)$/))) { const n = parseInt(m[1].trim(), 10); if (!Number.isNaN(n)) c1Budget = n; }
+    else if ((m = line.match(/^\*\*select_k:\*\*\s+(.*)$/))) { const n = parseInt(m[1].trim(), 10); if (!Number.isNaN(n)) selectK = n; }
+    else if ((m = line.match(/^\*\*select_signal:\*\*\s+(.*)$/))) { selectSignal = m[1].trim(); }
+    else if ((m = line.match(/^\*\*max_workers:\*\*\s+(.*)$/))) { const n = parseInt(m[1].trim(), 10); if (!Number.isNaN(n)) maxWorkers = n; }
+    else if ((m = line.match(/^\*\*memory_half_life_days:\*\*\s+(.*)$/))) { const n = parseFloat(m[1].trim()); if (!Number.isNaN(n)) memoryHalfLifeDays = n; }
+    else if ((m = line.match(/^\*\*memory_max_age_days:\*\*\s+(.*)$/))) { const n = parseFloat(m[1].trim()); if (!Number.isNaN(n)) memoryMaxAgeDays = n; }
+    else if ((m = line.match(/^\*\*memory_min_corroboration:\*\*\s+(.*)$/))) { const n = parseInt(m[1].trim(), 10); if (!Number.isNaN(n)) memoryMinCorroboration = n; }
+    else if ((m = line.match(/^\*\*memory_scope:\*\*\s+(.*)$/))) { memoryScope = m[1].trim(); }
+    else if ((m = line.match(/^\*\*memory_write_rate_max:\*\*\s+(.*)$/))) { const n = parseFloat(m[1].trim()); if (!Number.isNaN(n)) memoryWriteRateMax = n; }
+    else if ((m = line.match(/^\*\*marginal_gain_threshold:\*\*\s+(.*)$/))) { const n = parseFloat(m[1].trim()); if (!Number.isNaN(n)) marginalGainThreshold = n; }
   }
-  return { primaryMetric, direction, minOp, minVal, tgtOp, tgtVal, kRequired, plateauWindow, plateauThreshold, verifyEpsilon, ceiling, minRuntimeS, maxDebugAttempts, minFamilies, c1Epsilon, c1Budget };
+  return { primaryMetric, direction, minOp, minVal, tgtOp, tgtVal, kRequired, plateauWindow, plateauThreshold, verifyEpsilon, ceiling, minRuntimeS, maxDebugAttempts, minFamilies, c1Epsilon, c1Budget, selectK, selectSignal, maxWorkers, memoryHalfLifeDays, memoryMaxAgeDays, memoryMinCorroboration, memoryScope, memoryWriteRateMax, marginalGainThreshold };
 }
 
 export interface SotaInput {

@@ -57,6 +57,23 @@ describe("sanityFlags", () => {
       integrity: { split_before_fit: true, no_train_test_overlap: true, target_not_in_features: true, trained_steps: 1, seed: 1 } };
     expect(sanityFlags(base({ result: r, ceiling: 0.1, readLog: () => "Traceback (most recent call last)" }))).toEqual([]);
   });
+  it("data-leakage when target_not_in_features is false", () => {
+    const f = sanityFlags(base({ result: okResult({ integrity: { split_before_fit: true, no_train_test_overlap: true, target_not_in_features: false, trained_steps: 10, seed: 1 } }) }));
+    expect(f.map((x) => x.flag)).toContain("data-leakage");
+    const leak = f.find((x) => x.flag === "data-leakage")!;
+    expect(leak.detail).toContain("target_not_in_features");
+  });
+  it("data-leakage on train/test split overlap (no_train_test_overlap false)", () => {
+    const f = sanityFlags(base({ result: okResult({ integrity: { split_before_fit: true, no_train_test_overlap: false, target_not_in_features: true, trained_steps: 10, seed: 1 } }) }));
+    expect(f.map((x) => x.flag)).toContain("data-leakage");
+  });
+  it("data-leakage when split_before_fit is false", () => {
+    const f = sanityFlags(base({ result: okResult({ integrity: { split_before_fit: false, no_train_test_overlap: true, target_not_in_features: true, trained_steps: 10, seed: 1 } }) }));
+    expect(f.map((x) => x.flag)).toContain("data-leakage");
+  });
+  it("clean run-card raises no data-leakage flag", () => {
+    expect(sanityFlags(base()).map((x) => x.flag)).not.toContain("data-leakage");
+  });
 });
 
 describe("sanityRow", () => {

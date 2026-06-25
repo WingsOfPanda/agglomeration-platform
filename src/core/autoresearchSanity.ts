@@ -58,6 +58,19 @@ export function sanityFlags(inp: SanityInput): SanityFlag[] {
   const integrity = (r.integrity && typeof r.integrity === "object" && !Array.isArray(r.integrity)) ? r.integrity as Record<string, unknown> : null;
   const missing = INTEGRITY_KEYS.filter((k) => integrity === null || integrity[k] === undefined || integrity[k] === null);
   if (missing.length) flags.push({ flag: "integrity-attestation-incomplete", detail: `missing=${missing.join(",")}` });
+  // data-leakage: any of the three integrity invariants explicitly attested false (split_before_fit /
+  // no_train_test_overlap / target_not_in_features). A split-hash collision is represented by
+  // no_train_test_overlap=false in the run-card contract. Missing/absent attestation is covered above.
+  if (integrity !== null) {
+    const leak =
+      integrity.target_not_in_features === false ||
+      integrity.no_train_test_overlap === false ||
+      integrity.split_before_fit === false;
+    if (leak) flags.push({ flag: "data-leakage", detail: `integrity inconsistent: ${JSON.stringify({
+      target_not_in_features: integrity.target_not_in_features,
+      no_train_test_overlap: integrity.no_train_test_overlap,
+      split_before_fit: integrity.split_before_fit })}` });
+  }
   // audit knob drift (numeric-tolerant compare; skip keys absent from audit.json)
   for (const hc of inp.hardConstraints) {
     const actual = inp.audit ? inp.audit[hc.key] : undefined;

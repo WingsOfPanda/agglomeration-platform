@@ -24,6 +24,36 @@ parent), change exactly ONE variable vs that parent so the metric delta
 is attributable — isolate first, combine only after each change is
 attributed. State the single variable you changed in `notes`.
 
+## Operators (the move your approach brief encodes)
+
+The Hub frames each dispatch as exactly ONE of these operators; the
+approach brief names which. Whichever it is, change exactly ONE
+measurable variable for this experiment and name it in `notes` so the
+metric delta stays attributable — one experiment is one config, never a
+sweep:
+
+  - **draft**      — open a NEW orthogonal approach family (a fresh
+                     mechanism / representation / objective). The one
+                     variable IS the family choice vs the avoid-set.
+  - **improve**    — a single-variable refinement on a named `--parent`
+                     (one hyperparameter / one component swap).
+  - **debug**      — fix the ONE thing that made a prior attempt
+                     INFEASIBLE (e.g. restore a mandated knob, fix a
+                     leak) and re-run; the variable is that fix.
+  - **ablate**     — remove/disable exactly ONE component of a parent to
+                     measure its contribution.
+  - **replicate**  — re-run a parent's config unchanged to test
+                     run-to-run stability; the "variable" is the seed.
+  - **crossover**  — combine the ONE decisive ingredient of one family
+                     into another; name the single transplanted element.
+  - **literature-refresh** — apply ONE specific technique surfaced from
+                     the SOTA/docs to a parent; the variable is that
+                     technique.
+
+If the brief is ambiguous about the operator, default to the most
+conservative reading (improve on the named parent, else draft) and state
+your interpretation in `notes`.
+
 {{TASK_CONTEXT}}
 
 {{SOTA_BLOCK}}
@@ -171,8 +201,9 @@ In ONE turn, do all of the following:
        a JSON file `{"metric_value": <n>}` and set metric_from to its path.
      - "inputs" lists every file the command reads; the Hub hashes them now
        and re-checks before re-running (tamper detection).
-   - Also emit an "integrity" block attesting how you avoided leakage/under-training
-     (recorded now, cross-checked later; an incomplete block is flagged as suspect):
+   - **REQUIRED — emit an "integrity" block** attesting how you avoided leakage/under-training
+     (recorded now, cross-checked later; the data-leakage sanity gate reads it, so it is NOT
+     optional — an absent or incomplete block is flagged as suspect):
 
        "integrity": {
          "split_before_fit": true,
@@ -186,14 +217,18 @@ In ONE turn, do all of the following:
      - For a task where a key is genuinely N/A (e.g. a generative run with no
        labels), still set it (e.g. "target_not_in_features": true) and explain in
        "notes". Be honest — these are cross-checked by a later verification pass.
-   - **Run-card for inspection (write this if you expect to be a leader).** Also emit
-     a "data_spec" — enough for an independent implementer to obtain the SAME data +
-     split: `{ "source": "<dataset id / url / builtin name>", "split_seed": <int>,
+   - **REQUIRED — emit a "data_spec" block** (not just for leaders). The data-leakage gate
+     and the cross-family inspector both read it, so EVERY result.json must carry it — enough
+     for an independent implementer to obtain the SAME data + split:
+     `{ "source": "<dataset id / url / builtin name>", "split_seed": <int>,
      "split_hash": "<hash of the test-split indices>", "target_column": "<name>",
-     "feature_columns": ["..."] }` — and a "metric_formula" — a precise computation
+     "feature_columns": ["..."] }`. Also emit a "metric_formula" — a precise computation
      string (e.g. "macro-F1, positive class = 1"). A cross-family inspector re-runs your
      experiment from these ALONE (not your code) and re-derives the metric; write them so
-     an independent implementer could reproduce your result.
+     an independent implementer could reproduce your result. For a task where a field is
+     genuinely N/A (e.g. a synthetic generator with no fixed split), still set the key with
+     an honest placeholder (e.g. "split_hash": "n/a — generated per-seed") and explain in
+     "notes" rather than omitting it.
 
 5. **THIS IS THE TERMINAL STEP.** Immediately after `result.json` is on
    disk (via tmp+rename), emit ONE outbox event and STOP. Do not explore,
