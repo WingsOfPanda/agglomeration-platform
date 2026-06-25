@@ -22456,6 +22456,9 @@ function buildHandoffKv(i2) {
   if (w.checkpoint) L.push(`winner_checkpoint=${w.checkpoint}`);
   if (w.notes) L.push(`winner_notes=${w.notes}`);
   L.push(`winner_code_dir=${w.codeDir}`);
+  const FINALISTS_K = 3;
+  const finalists = [w, ...i2.runnerUps].slice(0, FINALISTS_K).map((r) => `${r.agent}/${r.exp}:${r.metric}`).join(";");
+  L.push(`finalists=${finalists}`);
   i2.runnerUps.forEach((r, n2) => L.push(`runner_up_${n2 + 1}=${r.agent}/${r.exp}:${r.metric}:${r.approach || "unknown"}`));
   if (i2.hasMetricMd) L.push("mandates_block_path=metric.md");
   L.push("session_path=.", "topic_txt_path=topic.txt", `generated_ts=${i2.generatedTs}`);
