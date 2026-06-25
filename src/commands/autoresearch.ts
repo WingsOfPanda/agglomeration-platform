@@ -36,7 +36,7 @@ import { parseVerifyBlock, planVerify, checkVerify, recomputedFromOutput, verifi
 import { classifyInspect, inspectionRow, parseInspections, INSPECTION_TSV_HEADER, type InspectVerdict, type InspectionRow } from "../core/autoresearchInspect.js";
 import { parseVerdicts } from "../core/autoresearchInfeasible.js";
 import { metricFamilyOf, lessonVerdictOf, policyFromMetric, buildLessonDraft, type LessonDraft } from "../core/autoresearchLessonMap.js";
-import { writeLessonsAtFinalize, liveMemoryIo, type MemoryIo } from "../core/autoresearchMemoryStore.js";
+import { writeLessonsAtFinalize, retrieveForDispatch, liveMemoryIo, type MemoryIo } from "../core/autoresearchMemoryStore.js";
 import { type LessonVerdict } from "../core/autoresearchMemory.js";
 import { agentBinary, agentBootstrapSleep, consultTimeout } from "../core/contracts.js";
 import { inboxWrite, inboxPath, outboxPath, paneMetaRead, resolveModel } from "../core/ipc.js";
@@ -56,7 +56,7 @@ type PathOpts = { home?: string; cwd?: string };
 const stdoutLine = (l: string): void => { process.stdout.write(l + "\n"); };
 
 function usage(): number {
-  log.error("usage: autoresearch <init|metric|sota|spawn-all|drop-worker|verify-plan|verify-check|inspect-plan|inspect-check|experiment-send|score|monitor|status-brief|finalize|refine|handoff-extract|teardown|fresh-worker|forensics|abort|consensus> ...");
+  log.error("usage: autoresearch <init|metric|sota|spawn-all|drop-worker|verify-plan|verify-check|inspect-plan|inspect-check|experiment-send|score|monitor|status-brief|finalize|refine|handoff-extract|teardown|fresh-worker|forensics|abort|consensus|memory-retrieve> ...");
   return 2;
 }
 
@@ -1884,6 +1884,55 @@ export async function consensusWith(args: string[], deps: AutoresearchConsensusD
 
 const liveConsensusDeps: AutoresearchConsensusDeps = { now: () => isoUtc() };
 
+// ---------------------------------------------------------------------------
+// memory-retrieve: Hub-invoked cross-run lessons retrieve (capability B, read).
+// Resolves the topic's art dir, parses metric.md for the metric family + policy,
+// and prints each governed, rendered prior-run lesson on its own stdout line so
+// the Hub can fold them (as DATA, not instruction) into a dispatch direction.
+// Fail-closed + tolerant: a missing/unknown metric.md, or a missing/empty store,
+// prints nothing and returns rc 0 (never throws on a missing file). All policy
+// (decay/expiry/relevance/diversity/render) lives in the reviewed pure cores.
+// ---------------------------------------------------------------------------
+export interface MemoryRetrieveDeps {
+  now(): string;
+  opts?: PathOpts;
+  stdout?: (line: string) => void;
+  memoryIo?: MemoryIo;
+  memoryStoreRoot?: string;
+  repoHash?: string;
+}
+
+export async function memoryRetrieveWith(args: string[], deps: MemoryRetrieveDeps): Promise<number> {
+  const out = deps.stdout ?? stdoutLine;
+  const topic = args.find((a) => !a.startsWith("-")) ?? "";
+  if (!topic) { log.error("autoresearch memory-retrieve: topic required"); return 2; }
+
+  const art = autoresearchArtDir(topic, deps.opts);
+  const metricPath = join(art, "metric.md");
+  if (!existsSync(metricPath)) return 0; // no metric.md yet -> nothing to retrieve against
+
+  const thresholds = parseMetricMd(readFileSync(metricPath, "utf8"));
+  const family = metricFamilyOf(thresholds.primaryMetric);
+  if (family === null) return 0; // out-of-taxonomy metric -> no lessons (never let scopeKey throw)
+
+  // Objective = the topic prose (richer relevance signal); fall back to the metric name.
+  const objective = readIfExists(join(art, "topic.txt")).trim() || thresholds.primaryMetric;
+
+  const lessons = retrieveForDispatch(deps.memoryIo ?? liveMemoryIo, {
+    storeRoot: deps.memoryStoreRoot ?? join(globalRoot(), "autoresearch-memory"),
+    repoHash: deps.repoHash ?? repoHash(),
+    metricFamily: family,
+    objective,
+    direction: thresholds.direction ?? "maximize",
+    policy: policyFromMetric(thresholds),
+    now: deps.now(),
+  });
+  for (const line of lessons) out(line);
+  return 0;
+}
+
+const liveMemoryRetrieveDeps: MemoryRetrieveDeps = { now: () => isoUtc() };
+
 function appendVerificationRow(art: string, agent: string, expId: string, row: VerificationRow): void {
   const tsv = join(art, "verification.tsv");
   const prior = existsSync(tsv) ? readFileSync(tsv, "utf8") : VERIFICATION_TSV_HEADER;
@@ -1956,6 +2005,7 @@ export async function run(args: string[]): Promise<number> {
     case "flag": return runFlag("autoresearch", rest[0], rest.slice(1).join(" "));
     case "abort": return abortWith(applyArgsFile(rest), liveAbortDeps);
     case "consensus": return consensusWith(rest, liveConsensusDeps);
+    case "memory-retrieve": return memoryRetrieveWith(rest, liveMemoryRetrieveDeps);
     default: return usage();
   }
 }
