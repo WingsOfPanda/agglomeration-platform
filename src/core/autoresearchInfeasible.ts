@@ -3,7 +3,7 @@
 // sanity flags include a core-unambiguous invalidating flag. ceiling-exceeded /
 // integrity-attestation-incomplete stay advisory (do NOT make a result infeasible). Pure.
 
-export const INFEASIBLE_FLAGS = ["under-run", "log-contradiction", "audit-knob-drift"] as const;
+export const INFEASIBLE_FLAGS = ["under-run", "log-contradiction", "audit-knob-drift", "data-leakage"] as const;
 
 /** Returns the trigger reason (verdict or flag name) when infeasible, else null. */
 export function classifyInfeasible(verdict: string | undefined, flags: string[]): string | null {

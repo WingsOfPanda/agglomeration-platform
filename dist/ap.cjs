@@ -21177,6 +21177,15 @@ function parseMetricMd(text) {
   let minFamilies = 2;
   let c1Epsilon;
   let c1Budget;
+  let selectK;
+  let selectSignal;
+  let maxWorkers;
+  let memoryHalfLifeDays;
+  let memoryMaxAgeDays;
+  let memoryMinCorroboration;
+  let memoryScope;
+  let memoryWriteRateMax;
+  let marginalGainThreshold;
   const opVal = (s) => {
     const workers = s.trim().split(/\s+/);
     return [workers[0] ?? "", workers.slice(1).join(" ")];
@@ -21219,9 +21228,34 @@ function parseMetricMd(text) {
     } else if (m = line.match(/^\*\*c1_budget:\*\*\s+(.*)$/)) {
       const n2 = parseInt(m[1].trim(), 10);
       if (!Number.isNaN(n2)) c1Budget = n2;
+    } else if (m = line.match(/^\*\*select_k:\*\*\s+(.*)$/)) {
+      const n2 = parseInt(m[1].trim(), 10);
+      if (!Number.isNaN(n2)) selectK = n2;
+    } else if (m = line.match(/^\*\*select_signal:\*\*\s+(.*)$/)) {
+      selectSignal = m[1].trim();
+    } else if (m = line.match(/^\*\*max_workers:\*\*\s+(.*)$/)) {
+      const n2 = parseInt(m[1].trim(), 10);
+      if (!Number.isNaN(n2)) maxWorkers = n2;
+    } else if (m = line.match(/^\*\*memory_half_life_days:\*\*\s+(.*)$/)) {
+      const n2 = parseFloat(m[1].trim());
+      if (!Number.isNaN(n2)) memoryHalfLifeDays = n2;
+    } else if (m = line.match(/^\*\*memory_max_age_days:\*\*\s+(.*)$/)) {
+      const n2 = parseFloat(m[1].trim());
+      if (!Number.isNaN(n2)) memoryMaxAgeDays = n2;
+    } else if (m = line.match(/^\*\*memory_min_corroboration:\*\*\s+(.*)$/)) {
+      const n2 = parseInt(m[1].trim(), 10);
+      if (!Number.isNaN(n2)) memoryMinCorroboration = n2;
+    } else if (m = line.match(/^\*\*memory_scope:\*\*\s+(.*)$/)) {
+      memoryScope = m[1].trim();
+    } else if (m = line.match(/^\*\*memory_write_rate_max:\*\*\s+(.*)$/)) {
+      const n2 = parseFloat(m[1].trim());
+      if (!Number.isNaN(n2)) memoryWriteRateMax = n2;
+    } else if (m = line.match(/^\*\*marginal_gain_threshold:\*\*\s+(.*)$/)) {
+      const n2 = parseFloat(m[1].trim());
+      if (!Number.isNaN(n2)) marginalGainThreshold = n2;
     }
   }
-  return { primaryMetric, direction, minOp, minVal, tgtOp, tgtVal, kRequired, plateauWindow, plateauThreshold, verifyEpsilon, ceiling, minRuntimeS, maxDebugAttempts, minFamilies, c1Epsilon, c1Budget };
+  return { primaryMetric, direction, minOp, minVal, tgtOp, tgtVal, kRequired, plateauWindow, plateauThreshold, verifyEpsilon, ceiling, minRuntimeS, maxDebugAttempts, minFamilies, c1Epsilon, c1Budget, selectK, selectSignal, maxWorkers, memoryHalfLifeDays, memoryMaxAgeDays, memoryMinCorroboration, memoryScope, memoryWriteRateMax, marginalGainThreshold };
 }
 function formatSotaBlock(input) {
   if (!input.topic) throw new Error("missing required key: topic");
@@ -21387,6 +21421,9 @@ function formatPeersBlock(peers) {
     lines.push(`| ${p.agent} | ${p.phase} | ${p.currentExp} | ${p.approach} | ${metric} | ${notes} |`);
   }
   return lines.join("\n");
+}
+function buildStaggeredSpawns(agents, bootstrapSleepS) {
+  return agents.map((agent, i2) => ({ agent, delayS: i2 * bootstrapSleepS }));
 }
 function buildDispatchState(existing, expId, nowIso) {
   const prevCounter = existing?.split("\n").find((l) => l.startsWith("exp_counter="))?.slice("exp_counter=".length) ?? "";
@@ -21687,6 +21724,14 @@ function sanityFlags(inp) {
   const integrity = r.integrity && typeof r.integrity === "object" && !Array.isArray(r.integrity) ? r.integrity : null;
   const missing = INTEGRITY_KEYS.filter((k) => integrity === null || integrity[k] === void 0 || integrity[k] === null);
   if (missing.length) flags.push({ flag: "integrity-attestation-incomplete", detail: `missing=${missing.join(",")}` });
+  if (integrity !== null) {
+    const leak = integrity.target_not_in_features === false || integrity.no_train_test_overlap === false || integrity.split_before_fit === false;
+    if (leak) flags.push({ flag: "data-leakage", detail: `integrity inconsistent: ${JSON.stringify({
+      target_not_in_features: integrity.target_not_in_features,
+      no_train_test_overlap: integrity.no_train_test_overlap,
+      split_before_fit: integrity.split_before_fit
+    })}` });
+  }
   for (const hc of inp.hardConstraints) {
     const actual = inp.audit ? inp.audit[hc.key] : void 0;
     if (actual === void 0 || actual === null) continue;
@@ -21796,7 +21841,7 @@ var INFEASIBLE_FLAGS;
 var init_autoresearchInfeasible = __esm({
   "src/core/autoresearchInfeasible.ts"() {
     "use strict";
-    INFEASIBLE_FLAGS = ["under-run", "log-contradiction", "audit-knob-drift"];
+    INFEASIBLE_FLAGS = ["under-run", "log-contradiction", "audit-knob-drift", "data-leakage"];
   }
 });
 
@@ -22414,6 +22459,9 @@ function buildHandoffKv(i2) {
   if (w.checkpoint) L.push(`winner_checkpoint=${w.checkpoint}`);
   if (w.notes) L.push(`winner_notes=${w.notes}`);
   L.push(`winner_code_dir=${w.codeDir}`);
+  const FINALISTS_K = 3;
+  const finalists = [w, ...i2.runnerUps].slice(0, FINALISTS_K).map((r) => `${r.agent}/${r.exp}:${r.metric}`).join(";");
+  L.push(`finalists=${finalists}`);
   i2.runnerUps.forEach((r, n2) => L.push(`runner_up_${n2 + 1}=${r.agent}/${r.exp}:${r.metric}:${r.approach || "unknown"}`));
   if (i2.hasMetricMd) L.push("mandates_block_path=metric.md");
   L.push("session_path=.", "topic_txt_path=topic.txt", `generated_ts=${i2.generatedTs}`);
@@ -22514,6 +22562,29 @@ var init_autoresearchConsensus = __esm({
   }
 });
 
+// src/core/autoresearchArbiter.ts
+function frameMetric(objective, _opts) {
+  const metric = extractMetric(objective) || "accuracy";
+  const minimize = MINIMIZE_METRICS.has(metric) || MINIMIZE_WORDS.test(objective);
+  return {
+    primary_metric: metric,
+    direction: minimize ? "minimize" : "maximize",
+    min_acceptable: "(not set)"
+  };
+}
+function defaultTimeBudget(_objective) {
+  return "none";
+}
+var MINIMIZE_METRICS, MINIMIZE_WORDS;
+var init_autoresearchArbiter = __esm({
+  "src/core/autoresearchArbiter.ts"() {
+    "use strict";
+    init_autoresearchMetric();
+    MINIMIZE_METRICS = /* @__PURE__ */ new Set(["loss", "latency", "cost", "memory", "params"]);
+    MINIMIZE_WORDS = /\b(minimi[sz]e|reduce|lower|decrease|down)\b/i;
+  }
+});
+
 // src/commands/autoresearch.ts
 var autoresearch_exports = {};
 __export(autoresearch_exports, {
@@ -22549,6 +22620,7 @@ function usage4() {
 function parseInitArgs(args) {
   let topic = "";
   let seedFrom, timeBudget, metric, slug, badFlag;
+  let autonomous = false;
   for (let i2 = 0; i2 < args.length; i2++) {
     const a2 = args[i2];
     if (a2.startsWith("--")) {
@@ -22561,6 +22633,8 @@ function parseInitArgs(args) {
         else if (flag === "--time-budget") timeBudget = r.value;
         else if (flag === "--metric") metric = r.value;
         else slug = r.value;
+      } else if (flag === "--autonomous") {
+        autonomous = true;
       } else {
         badFlag = a2;
       }
@@ -22569,7 +22643,7 @@ function parseInitArgs(args) {
       break;
     }
   }
-  return { topic, seedFrom, timeBudget, metric, slug, badFlag };
+  return { topic, seedFrom, timeBudget, metric, slug, autonomous, badFlag };
 }
 function resolveTimeBudget(v) {
   if (v === "none") return "none";
@@ -22589,6 +22663,7 @@ async function initWith4(args, deps) {
     log.error("autoresearch init: topic required");
     return 2;
   }
+  const autonomous = p.autonomous || process.env.AP_AUTORESEARCH_AUTONOMOUS === "1";
   let resolvedBudget;
   if (p.timeBudget !== void 0) {
     try {
@@ -22644,11 +22719,17 @@ async function initWith4(args, deps) {
       log.error(`autoresearch init: --metric: ${e.message}`);
       return 2;
     }
+  } else if (autonomous) {
+    atomicWrite((0, import_node_path30.join)(art, "metric.md"), formatMetricBlock(frameMetric(p.topic)));
+  }
+  if (resolvedBudget === void 0 && autonomous) {
+    resolvedBudget = resolveTimeBudget(defaultTimeBudget(p.topic));
   }
   if (resolvedBudget !== void 0) {
     atomicWrite((0, import_node_path30.join)(art, "time-budget.txt"), resolvedBudget + "\n");
     atomicWrite((0, import_node_path30.join)(art, "session-start.txt"), deps.now() + "\n");
   }
+  if (autonomous) atomicWrite((0, import_node_path30.join)(art, "autonomous.txt"), "1\n");
   out(`TOPIC=${slug}`);
   out(`ART=${art}`);
   return 0;
@@ -22737,11 +22818,17 @@ async function spawnAllWith2(args, deps, opts) {
     return 3;
   }
   const cwd = deps.repoRoot();
-  const results = await Promise.all(rows.map(async (r) => ({
-    agent: r.agent,
-    provider: r.provider,
-    rc: await deps.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent), "--cwd", cwd, "--preflight-art-dir", art])
-  })));
+  const schedule = buildStaggeredSpawns(rows.map((r) => r.agent), deps.bootstrapSleepS());
+  const delayFor = new Map(schedule.map((s) => [s.agent, s.delayS]));
+  const results = await Promise.all(rows.map(async (r) => {
+    const delayS = delayFor.get(r.agent) ?? 0;
+    if (delayS > 0) await deps.sleep(delayS * 1e3);
+    return {
+      agent: r.agent,
+      provider: r.provider,
+      rc: await deps.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent), "--cwd", cwd, "--preflight-art-dir", art])
+    };
+  }));
   atomicWrite((0, import_node_path30.join)(art, "spawn-results.tsv"), spawnResultsTsv(results));
   const rc = spawnTally(results.map((r) => r.rc));
   const nOk = results.filter((r) => r.rc === 0).length;
@@ -24191,6 +24278,7 @@ var init_autoresearch2 = __esm({
     init_forensics();
     init_autoresearchHandoff();
     init_autoresearchConsensus();
+    init_autoresearchArbiter();
     init_autoresearchVerify();
     init_autoresearchInspect();
     init_contracts();
@@ -24213,7 +24301,14 @@ var init_autoresearch2 = __esm({
       now: () => isoUtc(),
       configRoot: () => pluginRoot()
     };
-    liveSpawnAllDeps2 = { preflight: run7, spawn: run, repoRoot, pickAgents };
+    liveSpawnAllDeps2 = {
+      preflight: run7,
+      spawn: run,
+      repoRoot,
+      pickAgents,
+      bootstrapSleepS: () => agentBootstrapSleep("codex"),
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms))
+    };
     liveDropWorkerDeps = { killPane: (p) => killNow(p) };
     liveExperimentSendDeps = {
       now: () => isoUtc(),

@@ -9,6 +9,7 @@ describe("classifyInfeasible", () => {
     expect(classifyInfeasible(undefined, ["under-run"])).toBe("under-run");
     expect(classifyInfeasible(undefined, ["audit-knob-drift"])).toBe("audit-knob-drift");
     expect(classifyInfeasible(undefined, ["log-contradiction"])).toBe("log-contradiction");
+    expect(classifyInfeasible(undefined, ["data-leakage"])).toBe("data-leakage");
     expect(classifyInfeasible("mismatch", ["under-run"])).toBe("mismatch");
   });
   it("advisory-only flags / verified / none -> null", () => {
@@ -18,7 +19,7 @@ describe("classifyInfeasible", () => {
     expect(classifyInfeasible(undefined, ["ceiling-exceeded", "integrity-attestation-incomplete"])).toBeNull();
   });
   it("INFEASIBLE_FLAGS is the core-unambiguous set", () => {
-    expect([...INFEASIBLE_FLAGS].sort()).toEqual(["audit-knob-drift", "log-contradiction", "under-run"]);
+    expect([...INFEASIBLE_FLAGS].sort()).toEqual(["audit-knob-drift", "data-leakage", "log-contradiction", "under-run"]);
   });
 });
 
