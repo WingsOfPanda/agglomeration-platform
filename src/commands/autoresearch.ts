@@ -31,6 +31,7 @@ import {
 import { runForensics, runFlag } from "../core/forensics.js";
 import { parseScoreboard, buildHandoffKv, type HandoffInput } from "../core/autoresearchHandoff.js";
 import { buildConsensus } from "../core/autoresearchConsensus.js";
+import { frameMetric, defaultTimeBudget } from "../core/autoresearchArbiter.js";
 import { parseVerifyBlock, planVerify, checkVerify, recomputedFromOutput, verificationRow, VERIFICATION_TSV_HEADER, type VerifyManifest, type VerificationRow } from "../core/autoresearchVerify.js";
 import { classifyInspect, inspectionRow, INSPECTION_TSV_HEADER, type InspectVerdict, type InspectionRow } from "../core/autoresearchInspect.js";
 import { agentBinary, agentBootstrapSleep, consultTimeout } from "../core/contracts.js";
@@ -71,12 +72,14 @@ interface InitArgs {
   timeBudget?: string;
   metric?: string;
   slug?: string;
+  autonomous: boolean;
   badFlag?: string;
 }
 
 function parseInitArgs(args: string[]): InitArgs {
   let topic = "";
   let seedFrom: string | undefined, timeBudget: string | undefined, metric: string | undefined, slug: string | undefined, badFlag: string | undefined;
+  let autonomous = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a.startsWith("--")) {
@@ -89,10 +92,11 @@ function parseInitArgs(args: string[]): InitArgs {
         else if (flag === "--time-budget") timeBudget = r.value;
         else if (flag === "--metric") metric = r.value;
         else slug = r.value;
-      } else { badFlag = a; }
+      } else if (flag === "--autonomous") { autonomous = true; }   // boolean flag: consumes no value
+      else { badFlag = a; }
     } else { topic = args.slice(i).join(" "); break; }
   }
-  return { topic, seedFrom, timeBudget, metric, slug, badFlag };
+  return { topic, seedFrom, timeBudget, metric, slug, autonomous, badFlag };
 }
 
 /** Resolve a --time-budget token to whole seconds (or the literal "none"). */
@@ -109,6 +113,8 @@ export async function initWith(args: string[], deps: AutoresearchInitDeps): Prom
   const p = parseInitArgs(args);
   if (p.badFlag) { log.error(`autoresearch init: unknown flag: ${p.badFlag}`); return 2; }
   if (!p.topic) { log.error("autoresearch init: topic required"); return 2; }
+
+  const autonomous = p.autonomous || process.env.AP_AUTORESEARCH_AUTONOMOUS === "1";
 
   let resolvedBudget: string | undefined;
   if (p.timeBudget !== undefined) {
@@ -141,11 +147,17 @@ export async function initWith(args: string[], deps: AutoresearchInitDeps): Prom
   if (p.metric !== undefined) {
     try { atomicWrite(join(art, "metric.md"), formatMetricBlock(parseKv(p.metric))); }
     catch (e) { log.error(`autoresearch init: --metric: ${(e as Error).message}`); return 2; }
+  } else if (autonomous) {
+    atomicWrite(join(art, "metric.md"), formatMetricBlock(frameMetric(p.topic)));
+  }
+  if (resolvedBudget === undefined && autonomous) {
+    resolvedBudget = resolveTimeBudget(defaultTimeBudget(p.topic));
   }
   if (resolvedBudget !== undefined) {
     atomicWrite(join(art, "time-budget.txt"), resolvedBudget + "\n");
     atomicWrite(join(art, "session-start.txt"), deps.now() + "\n");
   }
+  if (autonomous) atomicWrite(join(art, "autonomous.txt"), "1\n");
 
   out(`TOPIC=${slug}`);
   out(`ART=${art}`);
