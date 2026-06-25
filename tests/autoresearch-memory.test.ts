@@ -1,8 +1,12 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  decayWeight,
   filterLesson,
+  isExpired,
+  mergeLesson,
   renderLesson,
+  semanticFingerprint,
   type Lesson,
   type MemoryPolicy,
 } from "../src/core/autoresearchMemory.js";
@@ -217,5 +221,152 @@ describe("renderLesson — data-only template", () => {
     const out = renderLesson(lesson);
     expect(out).toContain("delta=n/a");
     expect(out).toContain("Applicability: accuracy/improve.");
+  });
+});
+
+describe("decayWeight — immutable-origin time decay", () => {
+  const t0 = "2026-01-01T00:00:00Z";
+  const t30 = "2026-01-31T00:00:00Z"; // 30 days after t0
+
+  test("halves at exactly one half-life", () => {
+    expect(decayWeight(1, t0, t30, 30)).toBeCloseTo(0.5, 2);
+  });
+
+  test("doubles half-life quarters the weight (two half-lives)", () => {
+    const t60 = "2026-03-02T00:00:00Z"; // 60 days after t0
+    expect(decayWeight(1, t0, t60, 30)).toBeCloseTo(0.25, 2);
+  });
+
+  test("is monotonic decreasing in elapsed time", () => {
+    const t15 = "2026-01-16T00:00:00Z";
+    expect(decayWeight(1, t0, t15, 30)).toBeGreaterThan(decayWeight(1, t0, t30, 30));
+    expect(decayWeight(1, t0, t0, 30)).toBeGreaterThan(decayWeight(1, t0, t15, 30));
+  });
+
+  test("at the origin the weight equals the base score (no decay yet)", () => {
+    expect(decayWeight(2, t0, t0, 30)).toBeCloseTo(2, 6);
+  });
+
+  test("keys off createdTs (the immutable origin), not now-as-origin", () => {
+    // Same elapsed span (30 days) anchored at two different origins -> same factor.
+    const aOrigin = "2026-01-01T00:00:00Z";
+    const aNow = "2026-01-31T00:00:00Z";
+    const bOrigin = "2026-05-01T00:00:00Z";
+    const bNow = "2026-05-31T00:00:00Z";
+    expect(decayWeight(1, aOrigin, aNow, 30)).toBeCloseTo(decayWeight(1, bOrigin, bNow, 30), 6);
+  });
+
+  test("clamps a future createdTs to zero elapsed (no growth above base)", () => {
+    // now before createdTs -> Δdays negative -> max(0, .) -> factor 1.
+    expect(decayWeight(1, "2026-02-01T00:00:00Z", "2026-01-01T00:00:00Z", 30)).toBeCloseTo(1, 6);
+  });
+});
+
+describe("isExpired — hard age cutoff", () => {
+  test("purges past max age", () => {
+    expect(isExpired("2026-01-01T00:00:00Z", "2026-04-01T00:00:00Z", 60)).toBe(true);
+  });
+
+  test("retains within max age", () => {
+    expect(isExpired("2026-01-01T00:00:00Z", "2026-01-15T00:00:00Z", 60)).toBe(false);
+  });
+
+  test("is inclusive at exactly max age (>=)", () => {
+    expect(isExpired("2026-01-01T00:00:00Z", "2026-03-02T00:00:00Z", 60)).toBe(true);
+  });
+});
+
+describe("semanticFingerprint — re-derivation dedup id", () => {
+  test("equals the id filterLesson assigns to the same draft", () => {
+    const id = filterLesson(draft, "a1-verified", policy, "2026-06-24T00:00:00Z").normalized!.id;
+    expect(semanticFingerprint(draft)).toBe(id);
+  });
+
+  test("is stable regardless of now / prose claim wording", () => {
+    const a = semanticFingerprint(draft);
+    const b = semanticFingerprint({ ...draft, claim: "a completely different wording" });
+    expect(a).toBe(b);
+  });
+});
+
+describe("mergeLesson — dedup-merge collapses a re-write", () => {
+  const base: Lesson = {
+    id: "l1",
+    schema_version: 1,
+    claim: "dropout 0.5 helped",
+    operator: "improve",
+    knob: "dropout",
+    direction: "maximize",
+    delta: 0.02,
+    metric_family: "accuracy",
+    applicability: ["image"],
+    risk_tags: [],
+    provenance: {
+      run_id: "r1",
+      exp_id: "exp-1",
+      verdict: "a1-verified",
+      metric_family: "accuracy",
+      source: "experiment",
+      created_ts: "2026-01-01T00:00:00Z",
+    },
+    score: 1,
+    promotion_state: "quarantine",
+    created_ts: "2026-01-01T00:00:00Z",
+    write_count: 1,
+    reinforcement_count: 1,
+    corroborating_runs: ["r1"],
+    hits: 0,
+    misses: 0,
+  };
+
+  test("keeps the original created_ts (no ts-refresh immortality)", () => {
+    const merged = mergeLesson(
+      base,
+      { provenance: { run_id: "r2" }, score: 1 },
+      "2026-02-01T00:00:00Z",
+      policy,
+    );
+    expect(merged.created_ts).toBe("2026-01-01T00:00:00Z"); // immutable decay origin
+    expect(merged.provenance.created_ts).toBe("2026-01-01T00:00:00Z");
+    expect(merged.corroborating_runs).toContain("r2");
+    expect(merged.reinforcement_count).toBe(2);
+    expect(merged.write_count).toBe(2);
+  });
+
+  test("dedups a re-derivation from an already-seen run", () => {
+    const merged = mergeLesson(
+      base,
+      { provenance: { run_id: "r1" }, score: 1 },
+      "2026-02-01T00:00:00Z",
+      policy,
+    );
+    expect(merged.corroborating_runs).toEqual(["r1"]); // unchanged
+    expect(merged.reinforcement_count).toBe(1);
+    expect(merged.write_count).toBe(2); // write still counted
+  });
+
+  test("raises score under a cap (one writer cannot grow it unbounded)", () => {
+    let lesson = base;
+    for (let i = 0; i < 100; i++) {
+      lesson = mergeLesson(
+        lesson,
+        { provenance: { run_id: "r1" }, score: 1 },
+        "2026-02-01T00:00:00Z",
+        policy,
+      );
+    }
+    // Same single run re-writing 100x must not blow the score past the cap.
+    expect(lesson.score).toBeLessThanOrEqual(base.score + policy.writeRateMax);
+    expect(lesson.score).toBeGreaterThan(base.score);
+  });
+
+  test("never reduces the score on merge", () => {
+    const merged = mergeLesson(
+      base,
+      { provenance: { run_id: "r2" }, score: 1 },
+      "2026-02-01T00:00:00Z",
+      policy,
+    );
+    expect(merged.score).toBeGreaterThanOrEqual(base.score);
   });
 });
