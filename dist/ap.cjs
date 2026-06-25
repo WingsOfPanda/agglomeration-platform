@@ -21721,6 +21721,14 @@ function sanityFlags(inp) {
   const integrity = r.integrity && typeof r.integrity === "object" && !Array.isArray(r.integrity) ? r.integrity : null;
   const missing = INTEGRITY_KEYS.filter((k) => integrity === null || integrity[k] === void 0 || integrity[k] === null);
   if (missing.length) flags.push({ flag: "integrity-attestation-incomplete", detail: `missing=${missing.join(",")}` });
+  if (integrity !== null) {
+    const leak = integrity.target_not_in_features === false || integrity.no_train_test_overlap === false || integrity.split_before_fit === false;
+    if (leak) flags.push({ flag: "data-leakage", detail: `integrity inconsistent: ${JSON.stringify({
+      target_not_in_features: integrity.target_not_in_features,
+      no_train_test_overlap: integrity.no_train_test_overlap,
+      split_before_fit: integrity.split_before_fit
+    })}` });
+  }
   for (const hc of inp.hardConstraints) {
     const actual = inp.audit ? inp.audit[hc.key] : void 0;
     if (actual === void 0 || actual === null) continue;
@@ -21830,7 +21838,7 @@ var INFEASIBLE_FLAGS;
 var init_autoresearchInfeasible = __esm({
   "src/core/autoresearchInfeasible.ts"() {
     "use strict";
-    INFEASIBLE_FLAGS = ["under-run", "log-contradiction", "audit-knob-drift"];
+    INFEASIBLE_FLAGS = ["under-run", "log-contradiction", "audit-knob-drift", "data-leakage"];
   }
 });
 
