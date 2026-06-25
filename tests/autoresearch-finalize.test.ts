@@ -1,11 +1,15 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { finalizePhase, parseHardConstraints } from "../src/core/autoresearchFinalize.js";
 import { finalizeWith, type AutoresearchFinalizeDeps } from "../src/commands/autoresearch.js";
 import { autoresearchArtDir, workerStateDir, experimentDir } from "../src/core/autoresearch.js";
-import { workerDir } from "../src/core/paths.js";
+import { workerDir, repoHash as repoHashOf } from "../src/core/paths.js";
+import { liveMemoryIo, retrieveForDispatch, type MemoryIo } from "../src/core/autoresearchMemoryStore.js";
+import { policyFromMetric } from "../src/core/autoresearchLessonMap.js";
+import { parseMetricMd } from "../src/core/autoresearchMetric.js";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => { while (cleanups.length) cleanups.pop()!(); });
@@ -276,5 +280,86 @@ describe("autoresearch finalize", () => {
     const h = home();
     const rc = await finalizeWith([], deps(h));
     expect(rc).toBe(2);
+  });
+
+  // ---- M2: cross-run memory WRITE at finalize (best-effort tail step) ----
+
+  /** Fresh temp store root (own dir, cleaned up). */
+  function tempStore(): string {
+    const d = mkdtempSync(join(tmpdir(), "ap-memstore-"));
+    cleanups.push(() => rmSync(d, { recursive: true, force: true }));
+    return d;
+  }
+
+  it("WRITE: two ok+verified experiments of one approach corroborate into a retrievable lesson", async () => {
+    const h = home();
+    const { art } = scaffoldArt(h, ["india"]);
+    scaffoldPart(h, art, "india", "phase=idle\n", "");
+    // metric.md -> family `accuracy`, direction maximize.
+    writeFileSync(join(art, "metric.md"),
+      "# Research goal\n\n**Primary metric:** accuracy\n**Direction:** maximize\n");
+    // Two ok experiments of the SAME approach (so they share a fingerprint and merge).
+    for (const exp of ["exp-001", "exp-002"]) {
+      writeResult(art, "india", exp, {
+        branch_id: exp, approach_label: "resnet50", metric_name: "accuracy", metric_value: 0.91,
+        status: "ok", runtime_s: 1, log_paths: [], checkpoint_path: null, notes: "",
+      });
+    }
+    // Both verified in A1 verification.tsv.
+    writeFileSync(join(art, "verification.tsv"),
+      "exp_id\tagent\tverdict\tts\n" +
+      "exp-001\tindia\tverified\tT\n" +
+      "exp-002\tindia\tverified\tT\n");
+
+    const storeRoot = tempStore();
+    const rc = await finalizeWith([TOPIC], deps(h, {
+      memoryStoreRoot: storeRoot,
+      // real liveMemoryIo (node fs) against the temp store
+    }));
+    expect(rc).toBe(0);
+
+    // The per-family lessons.jsonl exists.
+    const rh = repoHashOf(process.cwd());
+    const lessonsFile = join(storeRoot, "v1", rh, "accuracy", "lessons.jsonl");
+    expect(existsSync(lessonsFile)).toBe(true);
+
+    // Corroboration (2 distinct runs >= minCorroboration) -> retrievable.
+    const thresholds = parseMetricMd(readFileSync(join(art, "metric.md"), "utf8"));
+    const rendered = retrieveForDispatch(liveMemoryIo, {
+      storeRoot, repoHash: rh, metricFamily: "accuracy",
+      objective: "resnet50 accuracy", direction: "maximize",
+      policy: policyFromMetric(thresholds), now: "2026-05-30T12:00:00Z",
+    });
+    expect(rendered.length).toBeGreaterThan(0);
+    expect(rendered.join("\n")).toContain("resnet50");
+  });
+
+  it("NON-REGRESSION: a throwing memoryIo cannot change finalize rc or its artifacts", async () => {
+    const h = home();
+    const { art } = scaffoldArt(h, ["juliet"]);
+    scaffoldPart(h, art, "juliet", "phase=idle\n", "");
+    writeFileSync(join(art, "metric.md"),
+      "# Research goal\n\n**Primary metric:** accuracy\n**Direction:** maximize\n");
+    writeResult(art, "juliet", "exp-001", {
+      branch_id: "exp-001", approach_label: "a", metric_name: "accuracy", metric_value: 0.9,
+      status: "ok", runtime_s: 1, log_paths: [], checkpoint_path: null, notes: "",
+    });
+    writeFileSync(join(art, "verification.tsv"),
+      "exp_id\tagent\tverdict\tts\nexp-001\tjuliet\tverified\tT\n");
+
+    const throwing: MemoryIo = {
+      exists() { throw new Error("boom-exists"); },
+      readFile() { throw new Error("boom-read"); },
+      mkdir() { throw new Error("boom-mkdir"); },
+      writeAtomic() { throw new Error("boom-write"); },
+    };
+    const storeRoot = tempStore();
+    const rc = await finalizeWith([TOPIC], deps(h, { memoryIo: throwing, memoryStoreRoot: storeRoot }));
+    // finalize returns its normal rc despite the lesson-write throwing.
+    expect(rc).toBe(0);
+    // ...and still produced its normal artifacts.
+    expect(existsSync(join(art, "session-summary.md"))).toBe(true);
+    const st = readFileSync(join(workerStateDir(art, "juliet"), "state.txt"), "utf8");
+    expect(st).toContain("phase=complete");
   });
 });

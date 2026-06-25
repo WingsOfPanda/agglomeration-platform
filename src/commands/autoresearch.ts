@@ -33,14 +33,18 @@ import { parseScoreboard, buildHandoffKv, type HandoffInput } from "../core/auto
 import { buildConsensus } from "../core/autoresearchConsensus.js";
 import { frameMetric, defaultTimeBudget } from "../core/autoresearchArbiter.js";
 import { parseVerifyBlock, planVerify, checkVerify, recomputedFromOutput, verificationRow, VERIFICATION_TSV_HEADER, type VerifyManifest, type VerificationRow } from "../core/autoresearchVerify.js";
-import { classifyInspect, inspectionRow, INSPECTION_TSV_HEADER, type InspectVerdict, type InspectionRow } from "../core/autoresearchInspect.js";
+import { classifyInspect, inspectionRow, parseInspections, INSPECTION_TSV_HEADER, type InspectVerdict, type InspectionRow } from "../core/autoresearchInspect.js";
+import { parseVerdicts } from "../core/autoresearchInfeasible.js";
+import { metricFamilyOf, lessonVerdictOf, policyFromMetric, buildLessonDraft, type LessonDraft } from "../core/autoresearchLessonMap.js";
+import { writeLessonsAtFinalize, retrieveForDispatch, liveMemoryIo, type MemoryIo } from "../core/autoresearchMemoryStore.js";
+import { type LessonVerdict } from "../core/autoresearchMemory.js";
 import { agentBinary, agentBootstrapSleep, consultTimeout } from "../core/contracts.js";
 import { inboxWrite, inboxPath, outboxPath, paneMetaRead, resolveModel } from "../core/ipc.js";
 import { paneSend, killNow } from "../core/tmux.js";
 import { haveCmd } from "../core/deps.js";
 import { spawnListArg, parsePanesFile, spawnResultsTsv, spawnTally, type SpawnResult } from "../core/design.js";
 import { pickAgents } from "../core/agents.js";
-import { repoRoot, pluginRoot } from "../core/paths.js";
+import { repoRoot, pluginRoot, globalRoot, repoHash } from "../core/paths.js";
 import { run as spawnRun } from "./spawn.js";
 import { run as preflightRun } from "./preflight.js";
 import { run as sendRun } from "./send.js";
@@ -52,7 +56,7 @@ type PathOpts = { home?: string; cwd?: string };
 const stdoutLine = (l: string): void => { process.stdout.write(l + "\n"); };
 
 function usage(): number {
-  log.error("usage: autoresearch <init|metric|sota|spawn-all|drop-worker|verify-plan|verify-check|inspect-plan|inspect-check|experiment-send|score|monitor|status-brief|finalize|refine|handoff-extract|teardown|fresh-worker|forensics|abort|consensus> ...");
+  log.error("usage: autoresearch <init|metric|sota|spawn-all|drop-worker|verify-plan|verify-check|inspect-plan|inspect-check|experiment-send|score|monitor|status-brief|finalize|refine|handoff-extract|teardown|fresh-worker|forensics|abort|consensus|memory-retrieve> ...");
   return 2;
 }
 
@@ -1016,6 +1020,12 @@ export interface AutoresearchFinalizeDeps {
   sizeWarnGb?: number;
   stdout?: (l: string) => void;
   opts?: PathOpts;
+  // M2 cross-run memory WRITE seams (best-effort tail step). All optional; the live
+  // path leaves them undefined so the node-fs defaults apply. A test injects a temp
+  // store root (+ optionally a throwing io) to exercise the write without touching ~/.ap.
+  memoryIo?: MemoryIo;
+  memoryStoreRoot?: string;
+  repoHash?: string;
 }
 
 const GIB = 1073741824;
@@ -1172,6 +1182,87 @@ function computeAuditWarnings(art: string, agents: string[], warningsPath: strin
   }
 }
 
+/**
+ * M2 — finalize-time cross-run memory WRITE (best-effort, NON-FATAL).
+ *
+ * Walks `agents x listExpDirs` (mirroring computeAuditWarnings), turning each ok
+ * experiment whose A1/C1 verifier confirmed a positive into a lesson draft, then
+ * does ONE governed `writeLessonsAtFinalize` per metric family. EVERY error is
+ * swallowed: this helper can NEVER throw into finalize, change its return code,
+ * or touch any existing finalize output. An unknown metric family or an empty
+ * draft set is a silent no-op. The whole body is inside one try/catch.
+ */
+function writeFinalizeLessons(art: string, agents: string[], deps: AutoresearchFinalizeDeps): void {
+  try {
+    const thresholds = parseMetricMd(readOr(join(art, "metric.md")));
+    const family = metricFamilyOf(thresholds.primaryMetric);
+    if (!family) return; // unknown / outside taxonomy -> skip (fail-closed, no lessons)
+
+    const direction: "maximize" | "minimize" = thresholds.direction ?? "maximize";
+    const a1 = parseVerdicts(readOr(join(art, "verification.tsv")));
+    const c1 = parseInspections(readOr(join(art, "inspection.tsv")));
+    const now = deps.now();
+
+    const drafts: LessonDraft[] = [];
+    const verdicts: LessonVerdict[] = [];
+
+    for (const agent of agents) {
+      const expsRoot = experimentsDir(art, agent);
+      for (const expId of listExpDirs(expsRoot)) {
+        const expDir = join(expsRoot, expId);
+        const resultPath = join(expDir, "result.json");
+        if (!existsSync(resultPath)) continue;
+        let r: ResultJson;
+        try { r = JSON.parse(readFileSync(resultPath, "utf8")) as ResultJson; } catch { continue; }
+        if (r.status !== "ok" || r.metric_value == null) continue;
+
+        const key = `${agent}/${expId}`;
+        const verdict = lessonVerdictOf(a1[key], c1[key]);
+        if (!verdict) continue; // not a confirmed positive -> no lesson
+
+        // Resolve the parent (baseline) metric from this exp's lineage.txt parent_id.
+        let parentMetric: number | null = null;
+        const parentId = (parseState(readOr(join(expDir, "lineage.txt"))).parent_id ?? "").trim();
+        if (parentId) {
+          try {
+            const pr = JSON.parse(readFileSync(join(expsRoot, parentId, "result.json"), "utf8")) as ResultJson;
+            if (pr.metric_value != null) parentMetric = pr.metric_value;
+          } catch { /* no parent result -> rootless draft */ }
+        }
+
+        drafts.push(buildLessonDraft({
+          approachLabel: r.approach_label,
+          metricName: r.metric_name,
+          metricValue: r.metric_value,
+          parentMetric,
+          direction,
+          family,
+          runId: expId,   // result.json has no run_id; the exp-id is the per-run identity
+          expId,
+          verdict,
+          createdTs: now,
+        }));
+        verdicts.push(verdict);
+      }
+    }
+
+    if (!drafts.length) return;
+
+    writeLessonsAtFinalize(deps.memoryIo ?? liveMemoryIo, {
+      storeRoot: deps.memoryStoreRoot ?? join(globalRoot(), "autoresearch-memory"),
+      repoHash: deps.repoHash ?? repoHash(),
+      metricFamily: family,
+      drafts,
+      verdicts,
+      policy: policyFromMetric(thresholds),
+      now,
+    });
+  } catch (e) {
+    // best-effort: a memory-write failure must NEVER fail finalize.
+    log.error(`finalize: lesson-write skipped (best-effort): ${String(e)}`);
+  }
+}
+
 export async function finalizeWith(args: string[], deps: AutoresearchFinalizeDeps): Promise<number> {
   const opts = deps.opts;
   // Argument parse: finalize [--keep-intermediate] <topic>.
@@ -1238,6 +1329,11 @@ export async function finalizeWith(args: string[], deps: AutoresearchFinalizeDep
 
   // 8. audit diff: append audit_warn rows for prompt/audit knob mismatches (AFTER size).
   computeAuditWarnings(art, agents, warningsPath);
+
+  // M2 (best-effort tail): write verifier-passing lessons to the cross-run memory store.
+  // Self-contained try/catch inside the helper — can NEVER throw into finalize or alter
+  // any existing finalize step, output, or return value.
+  writeFinalizeLessons(art, agents, deps);
 
   // A3: fold non-audit sanity flags into warnings.txt (audit-knob-drift already covered by audit_warn).
   const sanityExtra: string[] = [];
@@ -1788,6 +1884,55 @@ export async function consensusWith(args: string[], deps: AutoresearchConsensusD
 
 const liveConsensusDeps: AutoresearchConsensusDeps = { now: () => isoUtc() };
 
+// ---------------------------------------------------------------------------
+// memory-retrieve: Hub-invoked cross-run lessons retrieve (capability B, read).
+// Resolves the topic's art dir, parses metric.md for the metric family + policy,
+// and prints each governed, rendered prior-run lesson on its own stdout line so
+// the Hub can fold them (as DATA, not instruction) into a dispatch direction.
+// Fail-closed + tolerant: a missing/unknown metric.md, or a missing/empty store,
+// prints nothing and returns rc 0 (never throws on a missing file). All policy
+// (decay/expiry/relevance/diversity/render) lives in the reviewed pure cores.
+// ---------------------------------------------------------------------------
+export interface MemoryRetrieveDeps {
+  now(): string;
+  opts?: PathOpts;
+  stdout?: (line: string) => void;
+  memoryIo?: MemoryIo;
+  memoryStoreRoot?: string;
+  repoHash?: string;
+}
+
+export async function memoryRetrieveWith(args: string[], deps: MemoryRetrieveDeps): Promise<number> {
+  const out = deps.stdout ?? stdoutLine;
+  const topic = args.find((a) => !a.startsWith("-")) ?? "";
+  if (!topic) { log.error("autoresearch memory-retrieve: topic required"); return 2; }
+
+  const art = autoresearchArtDir(topic, deps.opts);
+  const metricPath = join(art, "metric.md");
+  if (!existsSync(metricPath)) return 0; // no metric.md yet -> nothing to retrieve against
+
+  const thresholds = parseMetricMd(readFileSync(metricPath, "utf8"));
+  const family = metricFamilyOf(thresholds.primaryMetric);
+  if (family === null) return 0; // out-of-taxonomy metric -> no lessons (never let scopeKey throw)
+
+  // Objective = the topic prose (richer relevance signal); fall back to the metric name.
+  const objective = readIfExists(join(art, "topic.txt")).trim() || thresholds.primaryMetric;
+
+  const lessons = retrieveForDispatch(deps.memoryIo ?? liveMemoryIo, {
+    storeRoot: deps.memoryStoreRoot ?? join(globalRoot(), "autoresearch-memory"),
+    repoHash: deps.repoHash ?? repoHash(),
+    metricFamily: family,
+    objective,
+    direction: thresholds.direction ?? "maximize",
+    policy: policyFromMetric(thresholds),
+    now: deps.now(),
+  });
+  for (const line of lessons) out(line);
+  return 0;
+}
+
+const liveMemoryRetrieveDeps: MemoryRetrieveDeps = { now: () => isoUtc() };
+
 function appendVerificationRow(art: string, agent: string, expId: string, row: VerificationRow): void {
   const tsv = join(art, "verification.tsv");
   const prior = existsSync(tsv) ? readFileSync(tsv, "utf8") : VERIFICATION_TSV_HEADER;
@@ -1860,6 +2005,7 @@ export async function run(args: string[]): Promise<number> {
     case "flag": return runFlag("autoresearch", rest[0], rest.slice(1).join(" "));
     case "abort": return abortWith(applyArgsFile(rest), liveAbortDeps);
     case "consensus": return consensusWith(rest, liveConsensusDeps);
+    case "memory-retrieve": return memoryRetrieveWith(rest, liveMemoryRetrieveDeps);
     default: return usage();
   }
 }
