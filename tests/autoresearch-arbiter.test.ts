@@ -3,6 +3,7 @@ import {
   frameMetric,
   defaultTimeBudget,
   triageQuestion,
+  decideQuestion,
 } from "../src/core/autoresearchArbiter.js";
 import { formatMetricBlock } from "../src/core/autoresearchMetric.js";
 
@@ -122,5 +123,59 @@ describe("triageQuestion", () => {
     const q = { message: "Which split?", options: ["train", "test"] };
     const ctx = { objective: "x", metric: "accuracy" };
     expect(triageQuestion(q, ctx)).toEqual(triageQuestion(q, ctx));
+  });
+});
+
+describe("decideQuestion", () => {
+  test("autonomous: a multiple-choice question replies, never blocks", () => {
+    const a = decideQuestion(
+      { message: "Which split?", options: ["train", "test"] },
+      { objective: "x", metric: "accuracy" },
+      true,
+    );
+    expect(a.blocked).toBeFalsy();
+    expect(a.infeasible).toBeFalsy();
+    expect(a.reply).toBeTruthy();
+    expect(typeof a.reply).toBe("string");
+  });
+
+  test("autonomous: an open-ended/no-signal question fails closed, never blocks", () => {
+    const b = decideQuestion(
+      { message: "What novel architecture should I invent?" },
+      { objective: "x", metric: "accuracy" },
+      true,
+    );
+    expect(b.infeasible).toBe(true);
+    expect(b.blocked).toBeFalsy();
+    expect(b.reply).toBeFalsy();
+  });
+
+  test("interactive (autonomous=false): any question blocks, no reply/infeasible", () => {
+    const r = decideQuestion(
+      { message: "q" },
+      { objective: "x", metric: "m" },
+      false,
+    );
+    expect(r.blocked).toBe(true);
+    expect(r.reply).toBeFalsy();
+    expect(r.infeasible).toBeFalsy();
+  });
+
+  test("interactive blocks even a triageable multiple-choice question", () => {
+    const r = decideQuestion(
+      { message: "Which split?", options: ["train", "test"] },
+      { objective: "x", metric: "accuracy" },
+      false,
+    );
+    expect(r.blocked).toBe(true);
+    expect(r.reply).toBeFalsy();
+    expect(r.infeasible).toBeFalsy();
+  });
+
+  test("is deterministic", () => {
+    const q = { message: "Which split?", options: ["train", "test"] };
+    const ctx = { objective: "x", metric: "accuracy" };
+    expect(decideQuestion(q, ctx, true)).toEqual(decideQuestion(q, ctx, true));
+    expect(decideQuestion(q, ctx, false)).toEqual(decideQuestion(q, ctx, false));
   });
 });

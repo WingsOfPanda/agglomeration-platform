@@ -87,6 +87,30 @@ export function triageQuestion(
   return { action: "fail-closed" };
 }
 
+/**
+ * Decide what to do with a worker's clarifying question, given whether the run
+ * is autonomous. Pure wrapper over triageQuestion that encodes the loop's
+ * never-`phase=blocked` policy for autonomous runs while preserving the
+ * interactive blocking behavior. Same (question, context, autonomous) -> same
+ * result.
+ *
+ * - `!autonomous` -> `{ blocked: true }` (interactive: the hub surfaces the
+ *   question to a human; no auto-answer).
+ * - `autonomous` -> triageQuestion(question, context):
+ *     - `{ action: 'answer', answer }` -> `{ reply: answer }` (auto-answer).
+ *     - `{ action: 'fail-closed' }` -> `{ infeasible: true }` (route the
+ *       experiment to INFEASIBLE/abandon; never blocks).
+ */
+export function decideQuestion(
+  question: { message: string; options?: string[] },
+  context: { objective: string; metric: string; sota?: string; lessons?: string[] },
+  autonomous: boolean,
+): { reply?: string; infeasible?: boolean; blocked?: boolean } {
+  if (!autonomous) return { blocked: true };
+  const t = triageQuestion(question, context);
+  return t.action === "answer" ? { reply: t.answer } : { infeasible: true };
+}
+
 /** Count option words present in the lowercased objective+metric haystack. */
 function score(opt: string, lc: string): number {
   return opt
