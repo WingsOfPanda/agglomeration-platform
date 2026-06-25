@@ -22562,6 +22562,29 @@ var init_autoresearchConsensus = __esm({
   }
 });
 
+// src/core/autoresearchArbiter.ts
+function frameMetric(objective, _opts) {
+  const metric = extractMetric(objective) || "accuracy";
+  const minimize = MINIMIZE_METRICS.has(metric) || MINIMIZE_WORDS.test(objective);
+  return {
+    primary_metric: metric,
+    direction: minimize ? "minimize" : "maximize",
+    min_acceptable: "(not set)"
+  };
+}
+function defaultTimeBudget(_objective) {
+  return "none";
+}
+var MINIMIZE_METRICS, MINIMIZE_WORDS;
+var init_autoresearchArbiter = __esm({
+  "src/core/autoresearchArbiter.ts"() {
+    "use strict";
+    init_autoresearchMetric();
+    MINIMIZE_METRICS = /* @__PURE__ */ new Set(["loss", "latency", "cost", "memory", "params"]);
+    MINIMIZE_WORDS = /\b(minimi[sz]e|reduce|lower|decrease|down)\b/i;
+  }
+});
+
 // src/commands/autoresearch.ts
 var autoresearch_exports = {};
 __export(autoresearch_exports, {
@@ -22597,6 +22620,7 @@ function usage4() {
 function parseInitArgs(args) {
   let topic = "";
   let seedFrom, timeBudget, metric, slug, badFlag;
+  let autonomous = false;
   for (let i2 = 0; i2 < args.length; i2++) {
     const a2 = args[i2];
     if (a2.startsWith("--")) {
@@ -22609,6 +22633,8 @@ function parseInitArgs(args) {
         else if (flag === "--time-budget") timeBudget = r.value;
         else if (flag === "--metric") metric = r.value;
         else slug = r.value;
+      } else if (flag === "--autonomous") {
+        autonomous = true;
       } else {
         badFlag = a2;
       }
@@ -22617,7 +22643,7 @@ function parseInitArgs(args) {
       break;
     }
   }
-  return { topic, seedFrom, timeBudget, metric, slug, badFlag };
+  return { topic, seedFrom, timeBudget, metric, slug, autonomous, badFlag };
 }
 function resolveTimeBudget(v) {
   if (v === "none") return "none";
@@ -22637,6 +22663,7 @@ async function initWith4(args, deps) {
     log.error("autoresearch init: topic required");
     return 2;
   }
+  const autonomous = p.autonomous || process.env.AP_AUTORESEARCH_AUTONOMOUS === "1";
   let resolvedBudget;
   if (p.timeBudget !== void 0) {
     try {
@@ -22692,11 +22719,17 @@ async function initWith4(args, deps) {
       log.error(`autoresearch init: --metric: ${e.message}`);
       return 2;
     }
+  } else if (autonomous) {
+    atomicWrite((0, import_node_path30.join)(art, "metric.md"), formatMetricBlock(frameMetric(p.topic)));
+  }
+  if (resolvedBudget === void 0 && autonomous) {
+    resolvedBudget = resolveTimeBudget(defaultTimeBudget(p.topic));
   }
   if (resolvedBudget !== void 0) {
     atomicWrite((0, import_node_path30.join)(art, "time-budget.txt"), resolvedBudget + "\n");
     atomicWrite((0, import_node_path30.join)(art, "session-start.txt"), deps.now() + "\n");
   }
+  if (autonomous) atomicWrite((0, import_node_path30.join)(art, "autonomous.txt"), "1\n");
   out(`TOPIC=${slug}`);
   out(`ART=${art}`);
   return 0;
@@ -24245,6 +24278,7 @@ var init_autoresearch2 = __esm({
     init_forensics();
     init_autoresearchHandoff();
     init_autoresearchConsensus();
+    init_autoresearchArbiter();
     init_autoresearchVerify();
     init_autoresearchInspect();
     init_contracts();
