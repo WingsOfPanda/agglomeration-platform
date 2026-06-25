@@ -50,3 +50,47 @@ export function frameMetric(
 export function defaultTimeBudget(_objective: string): string {
   return "none";
 }
+
+/**
+ * Conservatively triage a worker's clarifying question against the locked run
+ * context: answer it ONLY when the answer is grounded by the context, else fail
+ * closed. Never fabricates an open-ended design decision and never makes a silent
+ * guess. Pure + deterministic: same (question, context) -> same result.
+ *
+ * Policy:
+ * - Multiple-choice (`options` non-empty): pick the option most consistent with
+ *   the locked metric/objective (most option-words present in the lowercased
+ *   objective+metric); deterministic tie-break = first option.
+ * - Closed factual question whose answer the context carries (message mentions
+ *   metric/objective/budget/direction): answer from context.
+ * - Otherwise: { action: 'fail-closed' } — the hub must surface it to a human.
+ */
+export function triageQuestion(
+  question: { message: string; options?: string[] },
+  context: { objective: string; metric: string; sota?: string; lessons?: string[] },
+): { action: "answer"; answer: string } | { action: "fail-closed" } {
+  const opts = question.options ?? [];
+  if (opts.length > 0) {
+    // Pick the option most consistent with the locked metric/objective;
+    // tie -> first option (deterministic).
+    const lc = `${context.objective} ${context.metric}`.toLowerCase();
+    const ranked = [...opts].sort((a, b) => score(b, lc) - score(a, lc));
+    return { action: "answer", answer: ranked[0] };
+  }
+  // Closed factual questions the context already answers.
+  if (/\b(metric|objective|budget|direction)\b/i.test(question.message)) {
+    return {
+      action: "answer",
+      answer: `Optimize ${context.metric}; objective: ${context.objective}.`,
+    };
+  }
+  return { action: "fail-closed" };
+}
+
+/** Count option words present in the lowercased objective+metric haystack. */
+function score(opt: string, lc: string): number {
+  return opt
+    .toLowerCase()
+    .split(/\W+/)
+    .filter((w) => w && lc.includes(w)).length;
+}
