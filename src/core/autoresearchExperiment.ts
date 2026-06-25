@@ -3,6 +3,15 @@
 // assembly, dispatch state transition). Pure; FS/subprocess happen in the verb.
 import { mergeState } from "./autoresearchState.js";
 
+/** Expanded one-variable operator set. Each operator carries a single variable and resolves
+ *  through the unchanged parent/knob lineage classification (see autoresearchLineage.ts) — the
+ *  label is carried on the dispatch, not derived here. */
+export const OPERATORS = ["draft", "improve", "debug", "ablate", "replicate", "crossover", "literature-refresh"] as const;
+export type Operator = typeof OPERATORS[number];
+export function isOperator(s: string): boolean {
+  return (OPERATORS as readonly string[]).includes(s);
+}
+
 /** ^exp-[0-9]+$ — 1+ digit experiment id (bash experiment-send.sh:61). */
 export const EXP_ID_RE = /^exp-[0-9]+$/;
 /** ^[a-z][a-z0-9-]*$ — agent name (bash experiment-send.sh:64). */
