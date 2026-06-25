@@ -190,6 +190,99 @@ export function filterLesson(
   return { decision, normalized };
 }
 
+// --- Task 9: immutable-origin decay, hard expiration, dedup-merge -----------
+
+const DAY_MS = 86_400_000;
+
+/** Elapsed days from ISO `a` to ISO `b` (may be negative if b precedes a). */
+function elapsedDays(a: string, b: string): number {
+  return (Date.parse(b) - Date.parse(a)) / DAY_MS;
+}
+
+/**
+ * Salience after exponential time decay. Keys off `createdTs` — the IMMUTABLE
+ * decay origin — never off a freshened write timestamp, so a re-write cannot
+ * buy back salience (anti-immortality). Halves at exactly one half-life and is
+ * monotonically decreasing in elapsed time. A future `createdTs` (now < origin)
+ * clamps to zero elapsed, so the weight never exceeds the base score.
+ */
+export function decayWeight(
+  score: number,
+  createdTs: string,
+  now: string,
+  halfLifeDays: number,
+): number {
+  const dt = Math.max(0, elapsedDays(createdTs, now));
+  return score * Math.exp((-Math.LN2 * dt) / halfLifeDays);
+}
+
+/**
+ * Hard age cutoff (independent of decay). True once the lesson is at least
+ * `maxAgeDays` old, measured from the IMMUTABLE `createdTs`. Inclusive at the
+ * boundary (>=). A re-write cannot defer this because `createdTs` never moves.
+ */
+export function isExpired(createdTs: string, now: string, maxAgeDays: number): boolean {
+  return elapsedDays(createdTs, now) >= maxAgeDays;
+}
+
+/**
+ * Exported wrapper over the SAME internal `fingerprint` used by filterLesson to
+ * assign a lesson `id`. A re-derivation of the same finding therefore hashes to
+ * the same id and dedup-merges into the existing record rather than spawning a
+ * duplicate. Hashes the scope (metric_family|operator|knob|direction|delta),
+ * not the prose claim — wording changes do not fork the id.
+ */
+export function semanticFingerprint(draft: any): string {
+  return fingerprint(draft);
+}
+
+/**
+ * Collapse a re-derivation (`draft`) into the `existing` record:
+ *  - add `draft.provenance.run_id` to `corroborating_runs` (deduped),
+ *  - set `reinforcement_count` to the count of distinct corroborating runs,
+ *  - bump `write_count` (every write counts, even a re-derivation from a run
+ *    already seen),
+ *  - raise `score` by a fixed increment but clamp it under an absolute ceiling
+ *    so a SINGLE writer re-running cannot grow salience without bound — the
+ *    ceiling rises only with independent corroboration (reinforcement_count),
+ *  - keep `created_ts` (and `provenance.created_ts`) UNCHANGED. This is the
+ *    load-bearing anti-`ts`-refresh-immortality property: the decay origin must
+ *    NEVER reset on a re-write, otherwise a lesson could evade decay/expiry by
+ *    being re-derived forever. `now` is accepted for signature symmetry with the
+ *    other time-aware helpers but is intentionally NOT written into the record.
+ */
+export function mergeLesson(
+  existing: Lesson,
+  draft: any,
+  _now: string,
+  policy: MemoryPolicy,
+): Lesson {
+  const runId = draft?.provenance?.run_id;
+  const seen = runId == null || existing.corroborating_runs.includes(runId);
+  const corroborating = seen
+    ? existing.corroborating_runs
+    : [...existing.corroborating_runs, runId];
+
+  const writeRateMax = policy.writeRateMax ?? 5;
+  // Absolute ceiling anchored to independent corroboration, not to the moving
+  // `existing.score`. One writer (reinforcement_count stuck at its current
+  // value) tops out at this ceiling no matter how many times it re-writes; only
+  // distinct corroborating runs raise the ceiling. The +1 gives a single-run
+  // lesson a non-zero ceiling headroom.
+  const ceiling = corroborating.length + writeRateMax;
+  const score = Math.min(existing.score + 0.5, ceiling);
+
+  return {
+    ...existing,
+    score,
+    write_count: existing.write_count + 1,
+    corroborating_runs: corroborating,
+    reinforcement_count: corroborating.length,
+    created_ts: existing.created_ts, // IMMUTABLE decay origin — never reset
+    provenance: { ...existing.provenance, created_ts: existing.provenance.created_ts },
+  };
+}
+
 /**
  * The ONLY path from the store to a prompt. Emits a FIXED, data-only template
  * that frames the stored claim as observed data, never as an instruction. Raw
