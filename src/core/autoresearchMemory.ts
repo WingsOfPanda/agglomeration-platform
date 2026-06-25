@@ -341,3 +341,147 @@ export function scopeKey(repoHash: string, metricFamily: string): string {
 export function canReadLesson(ctx: ReaderContext, lesson: Lesson): boolean {
   return lesson.metric_family === ctx.metricFamily;
 }
+
+// --- Task 11: promotion gate, outcome weight, retrieval, run revocation ------
+
+/**
+ * May a lesson leave quarantine and reach a worker prompt?
+ *
+ * A negative lesson is promotable on a single run: one verified failure is
+ * enough actionable signal ("this knob made it worse"), and a negative cannot
+ * be reward-hacked into a false win. A POSITIVE lesson must be independently
+ * corroborated by at least `minCorroboration` distinct runs before it can be
+ * trusted — this is the anti-single-run-fluke / anti-gaming gate, since a lone
+ * writer cannot manufacture corroboration without genuinely distinct run_ids.
+ */
+export function promotable(l: Lesson, policy: MemoryPolicy): boolean {
+  if (l.provenance.verdict === "negative") return true;
+  return l.reinforcement_count >= policy.minCorroboration;
+}
+
+/**
+ * Laplace-smoothed success rate of a lesson's downstream uses:
+ * `(hits + 1) / (hits + misses + 2)`. The +1/+2 prior pins an unused lesson at
+ * 0.5 (no evidence either way) and bounds the weight strictly inside (0, 1) so
+ * it can never zero out a still-decaying lesson nor dominate the ranking. More
+ * hits than misses -> > 0.5; more misses -> < 0.5.
+ */
+export function outcomeWeight(l: Lesson): number {
+  return (l.hits + 1) / (l.hits + l.misses + 2);
+}
+
+/**
+ * Objective relevance in [0,1]: the fraction of a lesson's distinct
+ * claim/knob/operator words that also appear in the lowercased objective. A
+ * cheap bag-of-words gate that keeps a retrieval focused on the current
+ * objective without any model call. Empty word set -> 0 (cannot establish
+ * relevance, so it falls below any positive floor).
+ */
+function objectiveRelevance(l: Lesson, objective: string): number {
+  const obj = objective.toLowerCase();
+  const words = Array.from(
+    new Set(
+      `${l.claim} ${l.knob} ${l.operator}`
+        .toLowerCase()
+        .split(/\W+/)
+        .filter(Boolean),
+    ),
+  );
+  if (words.length === 0) return 0;
+  const hit = words.filter((w) => obj.includes(w)).length;
+  return hit / words.length;
+}
+
+/**
+ * Retrieve up to `policy.k` lessons for a worker prompt, governed.
+ *
+ * Eligibility (all must hold): not retired; `promotable` (corroborated positive
+ * or any negative); not `isExpired`; passes the same-family ABAC `canReadLesson`
+ * gate; objective relevance >= `policy.relevanceFloor`. Eligible lessons are
+ * ranked by `decayWeight(score, created_ts, now, halfLifeDays) * outcomeWeight`
+ * (recency * downstream success), highest first.
+ *
+ * Two aggregate guards shape the selection:
+ *  - RISK BUDGET: at most `ctx.riskBudget ?? 1` lessons whose `risk_tags` is
+ *    non-empty may be returned, so a retrieval cannot be flooded with risky
+ *    (reward-hacking / leakage / scope-drift) findings.
+ *  - DIVERSITY FLOOR: the returned set must span at least
+ *    `min(policy.diversityFloor, <distinct eligible operators>)` distinct
+ *    `operator` values. A naive weight-only fill could return `k` lessons all of
+ *    one operator; the floor forces representation of other operators when they
+ *    exist. Implemented (not stubbed): greedily seat the highest-weight lesson
+ *    of each not-yet-represented operator until the floor (or the supply of
+ *    distinct operators) is met, then fill the remaining slots by weight. The
+ *    risk budget is enforced in BOTH phases.
+ */
+export function retrieveLessons(
+  store: Lesson[],
+  ctx: ReaderContext,
+  policy: MemoryPolicy,
+  now: string,
+): Lesson[] {
+  const ranked = store
+    .filter((l) => l.promotion_state !== "retired")
+    .filter((l) => promotable(l, policy))
+    .filter((l) => !isExpired(l.created_ts, now, policy.maxAgeDays))
+    .filter((l) => canReadLesson(ctx, l))
+    .filter((l) => objectiveRelevance(l, ctx.objective) >= policy.relevanceFloor)
+    .map((l) => ({
+      l,
+      w: decayWeight(l.score, l.created_ts, now, policy.halfLifeDays) * outcomeWeight(l),
+    }))
+    .sort((a, b) => b.w - a.w)
+    .map((x) => x.l);
+
+  const k = policy.k;
+  const riskBudget = ctx.riskBudget ?? 1;
+  const distinctOps = new Set(ranked.map((l) => l.operator)).size;
+  const floor = Math.min(policy.diversityFloor, distinctOps);
+
+  const out: Lesson[] = [];
+  const chosen = new Set<string>(); // lesson ids already seated
+  const ops = new Set<string>(); // operators represented in `out`
+  let risky = 0;
+
+  const tryAdd = (l: Lesson): boolean => {
+    if (out.length >= k) return false;
+    if (chosen.has(l.id)) return false;
+    const isRisky = l.risk_tags.length > 0;
+    if (isRisky && risky >= riskBudget) return false;
+    out.push(l);
+    chosen.add(l.id);
+    ops.add(l.operator);
+    if (isRisky) risky++;
+    return true;
+  };
+
+  // Phase 1 — diversity floor: seat the highest-weight lesson of each
+  // not-yet-represented operator (ranked is already weight-descending) until we
+  // span `floor` operators or run out of slots. Risk budget still applies.
+  for (const l of ranked) {
+    if (ops.size >= floor || out.length >= k) break;
+    if (ops.has(l.operator)) continue;
+    tryAdd(l);
+  }
+
+  // Phase 2 — fill remaining slots by weight, skipping already-seated lessons.
+  for (const l of ranked) {
+    if (out.length >= k) break;
+    tryAdd(l);
+  }
+
+  return out;
+}
+
+/**
+ * Run revocation: drop every lesson that the named run touched. A run found to
+ * be gamed/invalid taints the lessons it produced OR corroborated, so a lesson
+ * is removed if `runId` appears in its `corroborating_runs` OR is its
+ * originating `provenance.run_id`. Returns a new store with those lessons gone;
+ * input is not mutated.
+ */
+export function revokeByRun(store: Lesson[], runId: string): Lesson[] {
+  return store.filter(
+    (l) => !l.corroborating_runs.includes(runId) && l.provenance.run_id !== runId,
+  );
+}
