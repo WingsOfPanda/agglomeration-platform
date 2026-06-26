@@ -178,8 +178,6 @@ describe("autoresearch spawn-all", () => {
       spawn: async () => 0,
       repoRoot: () => "/repo",
       pickAgents: (_t, n) => Array.from({ length: n }, (_, i) => `inst${i + 1}`),
-      bootstrapSleepS: () => 20,
-      sleep: async () => {}, // tests don't wait real time
       ...over,
     };
   }
@@ -204,22 +202,17 @@ describe("autoresearch spawn-all", () => {
     const rc = await spawnAllWith(["s3", "2"], deps({ pickAgents: () => ["only1"] }), { home: h.home, cwd: h.home });
     expect(rc).toBe(3);
   });
-  it("staggers worker starts by bootstrap_sleep_s but still spawns every worker", async () => {
+  it("spawns every worker in parallel (no per-worker stagger delay)", async () => {
     const h = home();
     await initWith(["--slug", "s5", "spawn topic 5"], okDeps({ opts: { home: h.home, cwd: h.home } }));
-    const sleeps: number[] = [];
     const spawned: string[] = [];
     const d = deps({
-      bootstrapSleepS: () => 20,
-      sleep: async (ms) => { sleeps.push(ms); },
       spawn: async (a) => { spawned.push(a[0]); return 0; },
     });
     const rc = await spawnAllWith(["s5", "3"], d, { home: h.home, cwd: h.home });
     expect(rc).toBe(0);
-    // Every picked worker is spawned (order-independent — they race after their offset).
+    // Every picked worker is spawned concurrently (mirrors design/explore spawn-all).
     expect(spawned.sort()).toEqual(["inst1", "inst2", "inst3"]);
-    // First worker is immediate (no sleep); the other two are offset by 20s and 40s.
-    expect(sleeps.sort((x, y) => x - y)).toEqual([20000, 40000]);
   });
   it("rc 3 when preflight omits a pane for some worker (orphan guard)", async () => {
     const h = home();

@@ -26,7 +26,7 @@ import { buildStatusBrief, type WorkerBrief } from "../core/autoresearchBrief.js
 import { initScanState, monitorScan, type MonitorScanState } from "../core/autoresearchMonitor.js";
 import {
   renderExperimentPrompt, buildSotaBlock, assembleHardwareBlock, hardwareDiffAlert,
-  formatPeersBlock, buildDispatchState, buildStaggeredSpawns, EXP_ID_RE, AGENT_RE, type PeerRow,
+  formatPeersBlock, buildDispatchState, EXP_ID_RE, AGENT_RE, type PeerRow,
 } from "../core/autoresearchExperiment.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { parseScoreboard, buildHandoffKv, type HandoffInput } from "../core/autoresearchHandoff.js";
@@ -38,7 +38,7 @@ import { parseVerdicts } from "../core/autoresearchInfeasible.js";
 import { metricFamilyOf, lessonVerdictOf, policyFromMetric, buildLessonDraft, type LessonDraft } from "../core/autoresearchLessonMap.js";
 import { writeLessonsAtFinalize, retrieveForDispatch, liveMemoryIo, type MemoryIo } from "../core/autoresearchMemoryStore.js";
 import { type LessonVerdict } from "../core/autoresearchMemory.js";
-import { agentBinary, agentBootstrapSleep, consultTimeout } from "../core/contracts.js";
+import { agentBinary, consultTimeout } from "../core/contracts.js";
 import { inboxWrite, inboxPath, outboxPath, paneMetaRead, resolveModel } from "../core/ipc.js";
 import { paneSend, killNow } from "../core/tmux.js";
 import { haveCmd } from "../core/deps.js";
@@ -221,15 +221,9 @@ export interface SpawnAllDeps {
   spawn(args: string[]): Promise<number>;
   repoRoot(): string;
   pickAgents(topic: string, n: number): string[];
-  /** Seconds each spawn is staggered behind the prior one (codex bootstrap_sleep_s). */
-  bootstrapSleepS(): number;
-  /** Pause ms before a staggered spawn. Default real timer; injectable for tests. */
-  sleep(ms: number): Promise<void>;
 }
 const liveSpawnAllDeps: SpawnAllDeps = {
   preflight: preflightRun, spawn: spawnRun, repoRoot, pickAgents,
-  bootstrapSleepS: () => agentBootstrapSleep("codex"),
-  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
 };
 
 /** Pick N distinct codex workers for <topic>, preflight + batch-spawn them (port of score spawn-all,
@@ -258,19 +252,14 @@ export async function spawnAllWith(args: string[], deps: SpawnAllDeps, opts?: Pa
   if (orphans.length) { log.error(`autoresearch spawn-all: workers missing a preflight pane: ${orphans.map((r) => r.agent).join(", ")}`); return 3; }
 
   const cwd = deps.repoRoot();
-  // Stagger each worker's start by codex's bootstrap_sleep_s so cold-start (node-modules warm-up)
-  // is spaced rather than concurrent — first worker is immediate (delayS=0). Every worker still
-  // gets spawned; only the start times are offset, so rows/results/tally are unchanged.
-  const schedule = buildStaggeredSpawns(rows.map((r) => r.agent), deps.bootstrapSleepS());
-  const delayFor = new Map(schedule.map((s) => [s.agent, s.delayS]));
-  const results: SpawnResult[] = await Promise.all(rows.map(async (r) => {
-    const delayS = delayFor.get(r.agent) ?? 0;
-    if (delayS > 0) await deps.sleep(delayS * 1000);
-    return {
-      agent: r.agent, provider: r.provider,
-      rc: await deps.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent)!, "--cwd", cwd, "--preflight-art-dir", art]),
-    };
-  }));
+  // Spawn all workers in parallel (mirrors design/explore spawn-all). The earlier per-worker
+  // bootstrap_sleep stagger was removed: it did not address the real cold-start hang — codex's
+  // interactive "upgrade available" prompt blocks the ready handshake regardless of spacing — and
+  // only added (N-1) x bootstrap_sleep_s of startup latency.
+  const results: SpawnResult[] = await Promise.all(rows.map(async (r) => ({
+    agent: r.agent, provider: r.provider,
+    rc: await deps.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent)!, "--cwd", cwd, "--preflight-art-dir", art]),
+  })));
   atomicWrite(join(art, "spawn-results.tsv"), spawnResultsTsv(results));
 
   const rc = spawnTally(results.map((r) => r.rc));
