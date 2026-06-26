@@ -35,8 +35,6 @@ interactive flow — autonomous mode only adds branches gated on it.
   `metric.md` already exists (Phase 1, opening sentence), and Phase 2's time-budget AskUserQuestion skips
   because `time-budget.txt` already exists (Phase 2 step 2). No new logic — those AskUserQuestions simply
   do not fire when the files are pre-seeded.
-- **Staggered spawns.** `spawn-all` (Phase 3) spaces the codex spawns by `bootstrap_sleep` automatically,
-  so a batch spawn under load does not race the cold-start handshake. No directive action required.
 - **Data-leakage gate (A3).** The data-leakage sanity check is automatic in the score pass and routes a
   leaking result to the `x<rank>` (INFEASIBLE) group. This depends on each `result.json` carrying the
   `data_spec` + `integrity` blocks (see the experiment template).
