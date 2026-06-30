@@ -25,6 +25,7 @@ import { agentTimeoutMultiplier } from "../core/contracts.js";
 import { scaledTimeout, parseLatestOffset, lastKeyedNumber } from "../core/designTurn.js";
 import { run as sendRun } from "./send.js";
 import { detectTestCommand } from "../core/quick.js";
+import { classifyTestRun, liveTestRunner, type TestRunner } from "../core/implementVerifyTests.js";
 
 const WORKER = "lead";
 const IMPLEMENT_TURN_TIMEOUT = (): number => Number(process.env.AP_IMPLEMENT_TURN_TIMEOUT_S) || 14400;
@@ -41,7 +42,7 @@ function latestObjections(stateFile: string): number {
   return lastKeyedNumber(readFileSync(stateFile, "utf8"), "OBJECTIONS") ?? 0;
 }
 function usage(): number {
-  log.error("usage: implement <init|audit|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|summary|finish|forensics|archive|find-latest-doc> ...");
+  log.error("usage: implement <init|audit|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|verify-tests|summary|finish|forensics|archive|find-latest-doc> ...");
   return 2;
 }
 
@@ -94,6 +95,7 @@ export async function run(args: string[]): Promise<number> {
     case "pre-snapshot": return preSnapshotRun(rest);
     case "branch":       return branchRun(applyArgsFile(rest));
     case "scope-check":  return scopeCheckRun(rest);
+    case "verify-tests": return verifyTestsRun(rest);
     case "summary":      return summaryRun(rest);
     case "finish":       return finishRun(rest);
     case "forensics":    return forensicsRun(rest);
@@ -310,6 +312,42 @@ export async function scopeCheckWith(topic: string, d: ScopeDeps): Promise<numbe
   atomicWrite(oosPath, oos.length ? oos.join("\n") + "\n" : "");
   if (oos.length > 0) log.warn(`scope conformance: ${oos.length} out-of-scope path(s) detected`);
   process.stdout.write(`SCOPE_DECLARED=${compPaths.length}\nOOS_COUNT=${oos.length}\nOOS_PATH=${oosPath}\n`); return 0;
+}
+
+// ---- verify-tests (v1 hub-side independent test re-run, IN-PLACE in target_cwd) ----
+export interface VerifyTestsDeps { runner: TestRunner; detect(root: string): string; now(): string; }
+const liveVerifyTestsDeps: VerifyTestsDeps = { runner: liveTestRunner, detect: detectTestCommand, now: isoUtc };
+function implementTestTimeout(): number { return Number(process.env.AP_IMPLEMENT_TEST_TIMEOUT_S) || 1800; }
+async function verifyTestsRun(rest: string[]): Promise<number> {
+  const [topic, roundStr] = rest;
+  if (!topic || !roundStr) { log.error("usage: implement verify-tests <topic> <round>"); return 2; }
+  if (!/^[1-9][0-9]*$/.test(roundStr)) { log.error(`implement verify-tests: round must be a positive integer (got: ${roundStr})`); return 2; }
+  return verifyTestsWith(topic, Number(roundStr), liveVerifyTestsDeps);
+}
+/** Hub-side independent test re-run for round <round>. Runs the repo's detected test command in
+ *  target_cwd (the worker's branch, in place) and classifies the hub's OWN exit code. Writes
+ *  hub-test-output-<round>.log (only when a command ran) + hub-verify-<round>.tsv; prints
+ *  TESTCMD=/HUB_RC=/VERDICT= to stdout for the Stage 2 directive. rc 0 always on a completed run;
+ *  rc 1 only when the art-dir / target_cwd.txt is missing. */
+export async function verifyTestsWith(topic: string, round: number, d: VerifyTestsDeps): Promise<number> {
+  const art = implementArtDir(topic);
+  if (!existsSync(art)) { log.error(`implement verify-tests: art-dir missing: ${art}`); return 1; }
+  const targetFile = join(art, "target_cwd.txt");
+  if (!existsSync(targetFile)) { log.error(`implement verify-tests: target_cwd.txt missing under ${art}`); return 1; }
+  const targetCwd = readField(targetFile);
+  const testCmd = d.detect(targetCwd);
+  let code: number | null = null;
+  if (testCmd !== "") {
+    const r = d.runner.run(targetCwd, testCmd, implementTestTimeout());
+    code = r.code;
+    atomicWrite(join(art, `hub-test-output-${round}.log`), r.output);
+  }
+  const verdict = classifyTestRun(testCmd, code);
+  atomicWrite(join(art, `hub-verify-${round}.tsv`),
+    `round=${round}\ntest_cmd=${testCmd}\nhub_rc=${code === null ? "" : code}\nverdict=${verdict}\nverified_ts=${d.now()}\n`);
+  process.stdout.write(`TESTCMD=${testCmd || "none"}\nHUB_RC=${code === null ? "" : code}\nVERDICT=${verdict}\n`);
+  log.ok(`implement verify-tests: round=${round} verdict=${verdict}${testCmd ? ` (rc=${code})` : ""}`);
+  return 0;
 }
 
 // ---- summary (deploy-summary.sh) ----
