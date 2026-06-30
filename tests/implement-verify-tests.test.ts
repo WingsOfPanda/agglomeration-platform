@@ -1,0 +1,115 @@
+// tests/implement-verify-tests.test.ts — hub-side independent test re-run (v1, in-place).
+import { describe, it, expect } from "vitest";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { freshHome } from "./helpers/tmpHome.js";
+import { implementArtDir } from "../src/core/implement.js";
+import { classifyTestRun } from "../src/core/implementVerifyTests.js";
+import { verifyTestsWith, type VerifyTestsDeps } from "../src/commands/implement.js";
+import type { TestRunner } from "../src/core/implementVerifyTests.js";
+
+async function capture(fn: () => Promise<number>): Promise<{ rc: number; out: string; err: string }> {
+  const out: string[] = []; const err: string[] = [];
+  const so = process.stdout.write.bind(process.stdout);
+  const se = process.stderr.write.bind(process.stderr);
+  process.stdout.write = ((s: string | Uint8Array) => { out.push(String(s)); return true; }) as typeof process.stdout.write;
+  process.stderr.write = ((s: string | Uint8Array) => { err.push(String(s)); return true; }) as typeof process.stderr.write;
+  try { const rc = await fn(); return { rc, out: out.join(""), err: err.join("") }; }
+  finally { process.stdout.write = so; process.stderr.write = se; }
+}
+
+function deps(runner: TestRunner, testCmd: string): VerifyTestsDeps {
+  return { runner, detect: (_root: string) => testCmd, now: () => "2026-06-30T00:00:00Z" };
+}
+
+describe("classifyTestRun (pure)", () => {
+  it("no command detected -> none", () => {
+    expect(classifyTestRun("", 0)).toBe("none");
+    expect(classifyTestRun("", null)).toBe("none");
+  });
+  it("exit 0 -> pass", () => {
+    expect(classifyTestRun("npm test", 0)).toBe("pass");
+  });
+  it("exit 124 (timeout) -> unverifiable", () => {
+    expect(classifyTestRun("npm test", 124)).toBe("unverifiable");
+  });
+  it("any other non-zero (incl. null) -> fail", () => {
+    expect(classifyTestRun("npm test", 1)).toBe("fail");
+    expect(classifyTestRun("npm test", 127)).toBe("fail");
+    expect(classifyTestRun("npm test", null)).toBe("fail");
+  });
+});
+
+describe("implement verify-tests (in-place hub re-run)", () => {
+  it("green run -> VERDICT=pass, writes hub-test-output + hub-verify.tsv, rc 0", async () => {
+    const h = freshHome();
+    const art = implementArtDir("vt-pass");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "target_cwd.txt"), "/repo/main\n");
+    const runner: TestRunner = { run: (_cwd, _cmd, _to) => ({ code: 0, output: "Test Files 10 passed\n" }) };
+    const { rc, out } = await capture(() => verifyTestsWith("vt-pass", 1, deps(runner, "npm test")));
+    expect(rc).toBe(0);
+    expect(out).toContain("TESTCMD=npm test\n");
+    expect(out).toContain("HUB_RC=0\n");
+    expect(out).toContain("VERDICT=pass\n");
+    expect(readFileSync(join(art, "hub-test-output-1.log"), "utf8")).toBe("Test Files 10 passed\n");
+    expect(readFileSync(join(art, "hub-verify-1.tsv"), "utf8")).toContain("verdict=pass");
+    h.cleanup();
+  });
+
+  it("failing run -> VERDICT=fail, HUB_RC carries the code", async () => {
+    const h = freshHome();
+    const art = implementArtDir("vt-fail");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "target_cwd.txt"), "/repo/main\n");
+    const runner: TestRunner = { run: () => ({ code: 1, output: "1 failed\n" }) };
+    const { rc, out } = await capture(() => verifyTestsWith("vt-fail", 2, deps(runner, "npm test")));
+    expect(rc).toBe(0);
+    expect(out).toContain("HUB_RC=1\n");
+    expect(out).toContain("VERDICT=fail\n");
+    expect(readFileSync(join(art, "hub-test-output-2.log"), "utf8")).toBe("1 failed\n");
+    h.cleanup();
+  });
+
+  it("timeout (124) -> VERDICT=unverifiable", async () => {
+    const h = freshHome();
+    const art = implementArtDir("vt-timeout");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "target_cwd.txt"), "/repo/main\n");
+    const runner: TestRunner = { run: () => ({ code: 124, output: "...partial...\n" }) };
+    const { out } = await capture(() => verifyTestsWith("vt-timeout", 1, deps(runner, "npm test")));
+    expect(out).toContain("VERDICT=unverifiable\n");
+    h.cleanup();
+  });
+
+  it("no test command -> VERDICT=none, no hub-test-output, runner NOT called", async () => {
+    const h = freshHome();
+    const art = implementArtDir("vt-none");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "target_cwd.txt"), "/repo/main\n");
+    let called = false;
+    const runner: TestRunner = { run: () => { called = true; return { code: 0, output: "" }; } };
+    const { out } = await capture(() => verifyTestsWith("vt-none", 1, deps(runner, "")));
+    expect(out).toContain("TESTCMD=none\n");
+    expect(out).toContain("VERDICT=none\n");
+    expect(called).toBe(false);
+    expect(existsSync(join(art, "hub-test-output-1.log"))).toBe(false);
+    h.cleanup();
+  });
+
+  it("missing target_cwd.txt -> rc 1", async () => {
+    const h = freshHome();
+    const art = implementArtDir("vt-notarget");
+    mkdirSync(art, { recursive: true });
+    const runner: TestRunner = { run: () => ({ code: 0, output: "" }) };
+    expect(await verifyTestsWith("vt-notarget", 1, deps(runner, "npm test"))).toBe(1);
+    h.cleanup();
+  });
+
+  it("missing art-dir -> rc 1", async () => {
+    const h = freshHome();
+    const runner: TestRunner = { run: () => ({ code: 0, output: "" }) };
+    expect(await verifyTestsWith("vt-noart", 1, deps(runner, "npm test"))).toBe(1);
+    h.cleanup();
+  });
+});
