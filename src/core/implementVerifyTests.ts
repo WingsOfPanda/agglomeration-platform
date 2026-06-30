@@ -29,7 +29,7 @@ export interface TestRunner { run(cwd: string, testCmd: string, timeoutS: number
 export const liveTestRunner: TestRunner = {
   run(cwd, testCmd, timeoutS) {
     try {
-      const output = execFileSync("timeout", [String(timeoutS), "bash", "-c", "--", testCmd], {
+      const output = execFileSync("timeout", [String(timeoutS), "bash", "-c", "--", `${testCmd} 2>&1`], {
         cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024,
       });
       return { code: 0, output };
