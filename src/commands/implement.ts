@@ -25,7 +25,7 @@ import { agentTimeoutMultiplier } from "../core/contracts.js";
 import { scaledTimeout, parseLatestOffset, lastKeyedNumber } from "../core/designTurn.js";
 import { run as sendRun } from "./send.js";
 import { detectTestCommand } from "../core/quick.js";
-import { classifyTestRun, liveTestRunner, type TestRunner } from "../core/implementVerifyTests.js";
+import { classifyTestRun, liveTestRunner, parseWorkerDuration, shouldSkipVerify, type TestRunner, type TestVerdict } from "../core/implementVerifyTests.js";
 
 const WORKER = "lead";
 const IMPLEMENT_TURN_TIMEOUT = (): number => Number(process.env.AP_IMPLEMENT_TURN_TIMEOUT_S) || 14400;
@@ -318,6 +318,7 @@ export async function scopeCheckWith(topic: string, d: ScopeDeps): Promise<numbe
 export interface VerifyTestsDeps { runner: TestRunner; detect(root: string): string; now(): string; }
 const liveVerifyTestsDeps: VerifyTestsDeps = { runner: liveTestRunner, detect: detectTestCommand, now: isoUtc };
 function implementTestTimeout(): number { return Number(process.env.AP_IMPLEMENT_TEST_TIMEOUT_S) || 1800; }
+function maxVerifyS(): number { return Number(process.env.AP_IMPLEMENT_VERIFY_MAX_S) || implementTestTimeout(); }
 async function verifyTestsRun(rest: string[]): Promise<number> {
   const [topic, roundStr] = rest;
   if (!topic || !roundStr) { log.error("usage: implement verify-tests <topic> <round>"); return 2; }
@@ -325,10 +326,14 @@ async function verifyTestsRun(rest: string[]): Promise<number> {
   return verifyTestsWith(topic, Number(roundStr), liveVerifyTestsDeps);
 }
 /** Hub-side independent test re-run for round <round>. Runs the repo's detected test command in
- *  target_cwd (the worker's branch, in place) and classifies the hub's OWN exit code. Writes
- *  hub-test-output-<round>.log (only when a command ran) + hub-verify-<round>.tsv; prints
- *  TESTCMD=/HUB_RC=/VERDICT= to stdout for the Stage 2 directive. rc 0 always on a completed run;
- *  rc 1 only when the art-dir / target_cwd.txt is missing. */
+ *  target_cwd (the worker's branch, in place) and classifies the hub's OWN exit code — UNLESS the
+ *  worker's self-reported duration (worker-test-duration-<round>.txt) exceeds the verify budget
+ *  (AP_IMPLEMENT_VERIFY_MAX_S, default = the run timeout), in which case it emits VERDICT=skipped
+ *  without running (the hub trusts the worker's report rather than ~doubling the wall-clock). A
+ *  missing/unparseable duration never skips (fail-safe: verify). Writes hub-test-output-<round>.log
+ *  (only when a command actually ran) + hub-verify-<round>.tsv; prints
+ *  TESTCMD=/HUB_RC=/WORKER_DURATION_S=/VERDICT= to stdout for the Stage 2 directive. rc 0 always on a
+ *  completed run; rc 1 only when the art-dir / target_cwd.txt is missing. */
 export async function verifyTestsWith(topic: string, round: number, d: VerifyTestsDeps): Promise<number> {
   const art = implementArtDir(topic);
   if (!existsSync(art)) { log.error(`implement verify-tests: art-dir missing: ${art}`); return 1; }
@@ -336,17 +341,24 @@ export async function verifyTestsWith(topic: string, round: number, d: VerifyTes
   if (!existsSync(targetFile)) { log.error(`implement verify-tests: target_cwd.txt missing under ${art}`); return 1; }
   const targetCwd = readField(targetFile);
   const testCmd = d.detect(targetCwd);
+  const durFile = join(art, `worker-test-duration-${round}.txt`);
+  const workerDur = existsSync(durFile) ? parseWorkerDuration(readFileSync(durFile, "utf8")) : null;
   let code: number | null = null;
-  if (testCmd !== "") {
+  let verdict: TestVerdict;
+  if (testCmd === "") {
+    verdict = "none";                                   // no suite detected — nothing to run or skip
+  } else if (shouldSkipVerify(workerDur, maxVerifyS())) {
+    verdict = "skipped";                                // worker's suite over budget — trust its report
+  } else {
     const r = d.runner.run(targetCwd, testCmd, implementTestTimeout());
     code = r.code;
     atomicWrite(join(art, `hub-test-output-${round}.log`), r.output);
+    verdict = classifyTestRun(testCmd, code);
   }
-  const verdict = classifyTestRun(testCmd, code);
   atomicWrite(join(art, `hub-verify-${round}.tsv`),
-    `round=${round}\ntest_cmd=${testCmd}\nhub_rc=${code === null ? "" : code}\nverdict=${verdict}\nverified_ts=${d.now()}\n`);
-  process.stdout.write(`TESTCMD=${testCmd || "none"}\nHUB_RC=${code === null ? "" : code}\nVERDICT=${verdict}\n`);
-  log.ok(`implement verify-tests: round=${round} verdict=${verdict}${testCmd ? ` (rc=${code})` : ""}`);
+    `round=${round}\ntest_cmd=${testCmd}\nhub_rc=${code === null ? "" : code}\nworker_duration_s=${workerDur === null ? "" : workerDur}\nverdict=${verdict}\nverified_ts=${d.now()}\n`);
+  process.stdout.write(`TESTCMD=${testCmd || "none"}\nHUB_RC=${code === null ? "" : code}\nWORKER_DURATION_S=${workerDur === null ? "" : workerDur}\nVERDICT=${verdict}\n`);
+  log.ok(`implement verify-tests: round=${round} verdict=${verdict}${verdict === "skipped" ? ` (worker=${workerDur}s > ${maxVerifyS()}s)` : testCmd ? ` (rc=${code})` : ""}`);
   return 0;
 }
 

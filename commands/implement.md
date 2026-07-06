@@ -168,7 +168,8 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
 **Step A — independent test re-run (do this FIRST; the hub runs the tests itself).** Run
 `$CS implement verify-tests <TOPIC> <ROUND>`. It runs the repo's own test command
 (`detectTestCommand`) **in `TARGET_CWD` on the worker's branch** and prints `TESTCMD=`/`HUB_RC=`/
-`VERDICT=` (and writes `$ART/hub-test-output-<ROUND>.log`). The default suite budget is 30 min
+`VERDICT=` (plus `WORKER_DURATION_S=`, the worker's own reported test time) (and writes
+`$ART/hub-test-output-<ROUND>.log`). The default suite budget is 30 min
 (`AP_IMPLEMENT_TEST_TIMEOUT_S=1800`). Branch on `VERDICT`:
 - **`fail`** — the worker's green claim is contradicted by the hub's OWN run. This is authoritative
   over the worker's `test-output-<ROUND>.log`: read the `$ART/hub-test-output-<ROUND>.log` tail to
@@ -182,6 +183,13 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
   read-based checks, and record "tests not independently verified" in the cross-verify doc.
 - **`pass`** — the suite is green on the hub's own run; continue to the read-based checks below for
   spec/scope coverage.
+- **`skipped`** — the worker reported (in `worker-test-duration-<ROUND>.txt`) that its own suite took
+  longer than the hub's verify budget (`AP_IMPLEMENT_VERIFY_MAX_S`, default = `AP_IMPLEMENT_TEST_TIMEOUT_S`
+  = 30 min), so the hub did NOT re-run — re-running would roughly double the wall-clock. Fall through
+  to the read-based checks below using the worker's `test-output-<ROUND>.log`; do **not** auto-FAIL.
+  Record in the cross-verify doc: "independent re-run skipped — worker suite took `WORKER_DURATION_S` s
+  (> budget); relying on the worker's reported results." (A worker cannot force this to hide a failure
+  beyond what trusting its log already does — the fallback is the pre-existing read-based path.)
 
 **Step B — read-based cross-verify.** Invoke `superpowers:verification-before-completion`. Read (capped):
 - `$ART/verify-report-<ROUND>.md` (the worker's self-verify),
