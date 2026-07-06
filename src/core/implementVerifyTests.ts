@@ -6,7 +6,7 @@
 // does NOT sandbox a committed test-code trojan (that needs containerization — out of v1 scope).
 import { execFileSync } from "node:child_process";
 
-export type TestVerdict = "pass" | "fail" | "unverifiable" | "none";
+export type TestVerdict = "pass" | "fail" | "unverifiable" | "none" | "skipped";
 
 /** Map a hub test re-run to a verdict. Pure.
  *  - testCmd === "" (no suite detected) -> "none"  (Stage 2 falls back to the worker's report)
@@ -18,6 +18,22 @@ export function classifyTestRun(testCmd: string, code: number | null): TestVerdi
   if (code === 0) return "pass";
   if (code === 124) return "unverifiable";
   return "fail";
+}
+
+/** Parse `TEST_DURATION_S=<int>` (the worker's self-reported test-suite wall-clock seconds) from a
+ *  duration-file body. Returns the integer, or null when the marker is absent or unparseable — null
+ *  is the fail-safe (the hub then verifies rather than skipping). Pure. */
+export function parseWorkerDuration(body: string): number | null {
+  const m = body.match(/^TEST_DURATION_S=([0-9]+)[ \t]*$/m);
+  return m ? Number(m[1]) : null;
+}
+
+/** Decide whether the hub should SKIP its own re-run because the worker's suite already took longer
+ *  than we are willing to spend (re-running would ~double the wall-clock and likely just hit the
+ *  timeout). Skip iff a duration was reported (non-null) AND strictly exceeds maxS. A null duration
+ *  NEVER skips (fail-safe: verify by default). Pure. */
+export function shouldSkipVerify(workerDurationS: number | null, maxS: number): boolean {
+  return workerDurationS !== null && workerDurationS > maxS;
 }
 
 export interface TestRunResult { code: number; output: string; }
