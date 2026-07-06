@@ -19,16 +19,17 @@ import { runForensics, runFlag } from "../core/forensics.js";
 import { haveCmd } from "../core/deps.js";
 import { implementState, composeRound1Prompt, composeFixPrompt } from "../core/implementTurn.js";
 import { extractQuestionPayload, parseQuestionPayload } from "../core/implementQuestions.js";
-import { outboxOffset, outboxPath, outboxWaitSince, statusPath, workerBusyState, resolveModel, type OutboxEvent } from "../core/ipc.js";
+import { outboxOffset, outboxPath, outboxWaitSince, statusPath, workerSendGate, TERMINAL_EVENTS, resolveModel, type OutboxEvent } from "../core/ipc.js";
 import { kvField, readField, readIfExists, readIfExistsOrNull } from "../core/fsread.js";
 import { agentTimeoutMultiplier } from "../core/contracts.js";
-import { scaledTimeout, parseLatestOffset, lastKeyedNumber } from "../core/designTurn.js";
+import { scaledTimeout, parseLatestOffset, lastKeyedNumber, recordWaitOutcome } from "../core/designTurn.js";
+import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
 import { run as sendRun } from "./send.js";
 import { detectTestCommand } from "../core/quick.js";
 import { classifyTestRun, liveTestRunner, parseWorkerDuration, shouldSkipVerify, type TestRunner, type TestVerdict } from "../core/implementVerifyTests.js";
 
 const WORKER = "lead";
-const IMPLEMENT_TURN_TIMEOUT = (): number => Number(process.env.AP_IMPLEMENT_TURN_TIMEOUT_S) || 14400;
+const IMPLEMENT_TURN_TIMEOUT = (): number => envNum("AP_IMPLEMENT_TURN_TIMEOUT_S", DEFAULT_TURN_BUDGET_S);
 
 /** model for the lead worker = the resolved provider (codex|claude). Reads provider.txt; default codex. */
 function workerModel(art: string): string {
@@ -164,10 +165,7 @@ export async function turnSendWith(topic: string, round: number, d: ImplementSen
   const testCmd = targetCwd ? detectTestCommand(targetCwd) : "";
   const stateFile = join(art, `turn-${WORKER}-${round}.txt`);
   if (existsSync(stateFile)) { log.error(`implement turn-send: ${stateFile} already exists; rm to retry`); return 1; }
-  const outbox = outboxPath(WORKER, model, topic);
-  if (!existsSync(outbox)) { log.error(`implement turn-send: outbox not found at ${outbox} — was ${WORKER} spawned?`); return 1; }
-  const busy = workerBusyState(WORKER, model, topic);
-  if (busy) { log.error(`implement turn-send: worker not idle (state=${busy}); previous turn still in flight`); return 1; }
+  if (!workerSendGate(WORKER, model, topic, "implement turn-send", "turn")) return 1;
   const promptFile = join(art, `${WORKER}_turn_prompt_${round}.md`);
   if (round === 1) atomicWrite(promptFile, composeRound1Prompt({ designPath: join(art, "design.md"), planPath: join(art, "plan.md"), verifyPath: join(art, "verify-report-1.md"), round, testCmd }));
   else { const bundle = join(art, `fix-prompt-${round}.md`); if (!existsSync(bundle)) { log.error(`implement turn-send: fix-prompt-${round}.md not found at ${bundle}; the directive must write it first`); return 1; } atomicWrite(promptFile, composeFixPrompt(round, readFileSync(bundle, "utf8"), join(art, `verify-report-${round}.md`), testCmd)); }
@@ -196,20 +194,20 @@ export async function turnWaitWith(topic: string, round: number, d: ImplementWai
   if (offset === null) { log.error(`implement turn-wait: OFFSET not set in ${stateFile}`); return 1; }
   const timeout = scaledTimeout(IMPLEMENT_TURN_TIMEOUT(), d.multiplier(model));
   log.info(`[turn-wait] ${WORKER} round=${round} offset=${offset} timeout=${timeout}s`);
-  const ev = await d.wait(WORKER, model, topic, offset, ["done", "error", "question"], timeout);
+  const ev = await d.wait(WORKER, model, topic, offset, TERMINAL_EVENTS, timeout);
   const verifyPath = join(art, `verify-report-${round}.md`);
   const verifyText = readIfExistsOrNull(verifyPath);
   let ts = implementState(ev, verifyText);
+  let question: { file: string; body: string; extraLines?: string } | undefined;
   if (ts === "question" && ev) {
     const payload = extractQuestionPayload(ev, d.now());
     if (payload !== null) {
-      atomicWrite(join(art, `question-${WORKER}-${round}.txt`), payload);
-      const bumped = outboxOffset(outboxPath(WORKER, model, topic));
       const objLine = parseQuestionPayload(payload).route === "objection"
         ? `OBJECTIONS=${latestObjections(stateFile) + 1}\n` : "";
-      appendFileSync(stateFile, `OFFSET=${bumped}\nTS=question\n${objLine}`);
-    } else { ts = "failed"; appendFileSync(stateFile, "TS=failed\n"); log.warn("[turn-wait] malformed question (no message); downgraded to failed"); }
-  } else appendFileSync(stateFile, `TS=${ts}\n`);
+      question = { file: join(art, `question-${WORKER}-${round}.txt`), body: payload, extraLines: objLine };
+    } else { ts = "failed"; log.warn("[turn-wait] malformed question (no message); downgraded to failed"); }
+  }
+  recordWaitOutcome(WORKER, model, topic, stateFile, ts, "TS", question);
   writeFileSync(join(art, `turn-${WORKER}-${round}.done`), "");
   log.ok(`[turn-wait] ${WORKER} round=${round} TS=${ts}`); return 0;
 }
@@ -317,8 +315,8 @@ export async function scopeCheckWith(topic: string, d: ScopeDeps): Promise<numbe
 // ---- verify-tests (v1 hub-side independent test re-run, IN-PLACE in target_cwd) ----
 export interface VerifyTestsDeps { runner: TestRunner; detect(root: string): string; now(): string; }
 const liveVerifyTestsDeps: VerifyTestsDeps = { runner: liveTestRunner, detect: detectTestCommand, now: isoUtc };
-function implementTestTimeout(): number { return Number(process.env.AP_IMPLEMENT_TEST_TIMEOUT_S) || 1800; }
-function maxVerifyS(): number { return Number(process.env.AP_IMPLEMENT_VERIFY_MAX_S) || implementTestTimeout(); }
+function implementTestTimeout(): number { return envNum("AP_IMPLEMENT_TEST_TIMEOUT_S", 1800); }
+function maxVerifyS(): number { return envNum("AP_IMPLEMENT_VERIFY_MAX_S", implementTestTimeout()); }
 async function verifyTestsRun(rest: string[]): Promise<number> {
   const [topic, roundStr] = rest;
   if (!topic || !roundStr) { log.error("usage: implement verify-tests <topic> <round>"); return 2; }

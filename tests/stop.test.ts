@@ -7,7 +7,7 @@ function deps(alive: Record<string, boolean>) {
     calls,
     d: {
       paneMetaRead: (i: string, _m: string, _t: string) => `%${i}`,
-      paneAlive: async (p: string) => alive[p] ?? false,
+      livePanes: async () => new Set(Object.keys(alive).filter((p) => alive[p])),
       killGraceful: async () => { calls.graceful++; },
       killNow: async () => { calls.killNow++; },
       stateArchive: (i: string, m: string) => { calls.archive++; return `/archive/${i}-${m}`; },

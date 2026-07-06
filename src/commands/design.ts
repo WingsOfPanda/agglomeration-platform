@@ -1,5 +1,5 @@
 // src/commands/design.ts
-import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync, rmSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile } from "../args.js";
@@ -17,9 +17,10 @@ import { auditDoc } from "../core/audit.js";
 import { readProviderList } from "../core/providers.js";
 import { activeProvidersPath, workerDir, repoRoot, topicDir } from "../core/paths.js";
 import { pickAgents } from "../core/agents.js";
-import { outboxOffset, outboxPath, outboxWaitSince, type OutboxEvent } from "../core/ipc.js";
+import { outboxOffset, outboxPath, outboxWaitSince, TERMINAL_EVENTS, type OutboxEvent } from "../core/ipc.js";
 import { agentConsultValidated, consultTimeout, agentTimeoutMultiplier } from "../core/contracts.js";
-import { composeResearchPrompt, researchState, parseLatestOffset, scaledTimeout, composeVerifyPrompt, verifyState, composeDrilldownPrompt, drilldownState, gateState } from "../core/designTurn.js";
+import { composeResearchPrompt, researchState, parseLatestOffset, scaledTimeout, composeVerifyPrompt, verifyState, composeDrilldownPrompt, drilldownState, gateState, recordWaitOutcome } from "../core/designTurn.js";
+import { envNum } from "../core/env.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { diffFindings, type DiffPart } from "../core/designDiff.js";
 import { adjudicate, type AdjudicateInput } from "../core/designAdjudicate.js";
@@ -222,23 +223,6 @@ async function researchWaitRun(rest: string[]): Promise<number> {
   return researchWaitWith(topic, agent, provider, liveResearchWaitDeps);
 }
 
-/** Shared wait-tail for research/verify: record the captured question event + bumped offset (or the
- *  terminal outcome), drop the .done marker, and log. key/phase select FS|VS and research|verify. */
-function recordWaitOutcome(
-  art: string, agent: string, provider: string, topic: string, stateFile: string,
-  ev: OutboxEvent | null, state: string, key: "FS" | "VS", phase: "research" | "verify",
-): void {
-  if (state === "question" && ev) {
-    atomicWrite(join(art, `question-${agent}.txt`), JSON.stringify(ev) + "\n");
-    const bumped = outboxOffset(outboxPath(agent, provider, topic));
-    appendFileSync(stateFile, `OFFSET=${bumped}\n${key}=question\n`);
-  } else {
-    appendFileSync(stateFile, `${key}=${state}\n`);
-  }
-  writeFileSync(join(art, `${phase}-${agent}.done`), "");
-  log.ok(`design ${phase}-wait: ${agent} ${key}=${state}`);
-}
-
 export async function researchWaitWith(topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> {
   const art = designArtDir(topic);
   const stateFile = join(art, `research-${agent}.txt`);
@@ -248,13 +232,16 @@ export async function researchWaitWith(topic: string, agent: string, provider: s
 
   const timeout = scaledTimeout(consultTimeout("research"), d.multiplier(provider));
   log.info(`design research-wait: ${agent} offset=${offset} timeout=${timeout}s`);
-  const ev = await d.wait(agent, provider, topic, offset, ["done", "error", "question"], timeout);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
 
   const findingsPath = join(workerDir(agent, provider, topic), "findings.md");
   const findingsText = readIfExistsOrNull(findingsPath);
   const fs = researchState(ev, findingsText);
 
-  recordWaitOutcome(art, agent, provider, topic, stateFile, ev, fs, "FS", "research");
+  recordWaitOutcome(agent, provider, topic, stateFile, fs, "FS",
+    ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
+  writeFileSync(join(art, `research-${agent}.done`), "");
+  log.ok(`design research-wait: ${agent} FS=${fs}`);
   return 0;
 }
 
@@ -355,13 +342,16 @@ export async function verifyWaitWith(topic: string, agent: string, provider: str
 
   const timeout = scaledTimeout(consultTimeout("verify"), d.multiplier(provider));
   log.info(`design verify-wait: ${agent} offset=${offset} timeout=${timeout}s`);
-  const ev = await d.wait(agent, provider, topic, offset, ["done", "error", "question"], timeout);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
 
   const verifyPath = join(workerDir(agent, provider, topic), "verify.md");
   const verifyText = readIfExistsOrNull(verifyPath);
   const vs = verifyState(ev, verifyText);
 
-  recordWaitOutcome(art, agent, provider, topic, stateFile, ev, vs, "VS", "verify");
+  recordWaitOutcome(agent, provider, topic, stateFile, vs, "VS",
+    ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
+  writeFileSync(join(art, `verify-${agent}.done`), "");
+  log.ok(`design verify-wait: ${agent} VS=${vs}`);
   return 0;
 }
 
@@ -452,7 +442,7 @@ interface DrilldownTestHooks { writeProbe?: (outPath: string) => void; }
 // Default to the research turn timeout (the bash predecessor's findings_timeout_s, ~600s) — a real
 // drill turn (read the doc + write cited notes) routinely exceeds 90s; env-overridable. The wait
 // returns as soon as done/error appears, so a generous ceiling only bounds the hang case.
-const DRILLDOWN_TIMEOUT = (): number => Number(process.env.AP_DRILLDOWN_TIMEOUT_S) || consultTimeout("research");
+const DRILLDOWN_TIMEOUT = (): number => envNum("AP_DRILLDOWN_TIMEOUT_S", consultTimeout("research"));
 
 async function drilldownRun(rest: string[]): Promise<number> {
   return drilldownWith(rest, { ...liveResearchSendDeps, ...liveResearchWaitDeps }, {});

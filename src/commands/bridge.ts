@@ -18,8 +18,9 @@ import { parseBridgeArgs, deriveSlug, bridgeArtDir, bridgeExecDir, renderBridgeS
 import type { BridgeSummaryFacts } from "../core/bridge.js";
 import { composeBridgeBrief, composeBridgeFollowup } from "../core/bridgeTurn.js";
 import { classifyTurn } from "../core/turn.js";
-import { parseLatestOffset } from "../core/designTurn.js";
-import { outboxOffset, outboxPath, workerBusyState, outboxWaitSince } from "../core/ipc.js";
+import { parseLatestOffset, recordWaitOutcome } from "../core/designTurn.js";
+import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
+import { outboxOffset, outboxPath, workerSendGate, TERMINAL_EVENTS, outboxWaitSince } from "../core/ipc.js";
 import type { OutboxEvent } from "../core/ipc.js";
 import { run as sendRun } from "./send.js";
 
@@ -132,7 +133,7 @@ export interface TurnSendDeps {
   offsetFor(agent: string, model: string, topic: string): number;
   send(args: string[]): Promise<number>;
 }
-const DUET_TURN_TIMEOUT = Number(process.env.AP_DUET_TURN_TIMEOUT) || 14400;
+const DUET_TURN_TIMEOUT = envNum("AP_DUET_TURN_TIMEOUT", DEFAULT_TURN_BUDGET_S);
 
 async function roundSendRun(rest: string[]): Promise<number> {
   const [topic, roundStr] = rest;
@@ -151,10 +152,7 @@ export async function roundSendWith(topic: string, round: number, d: TurnSendDep
   const provider = readField(join(art, "selected-provider.txt"));
   if (!agent || !provider) { log.error("bridge round-send: missing agent.txt/selected-provider.txt (run bridge init)"); return 1; }
 
-  const outbox = outboxPath(agent, provider, topic);
-  if (!existsSync(outbox)) { log.error(`bridge round-send: outbox not found at ${outbox} — was ${agent} spawned?`); return 1; }
-  const busy = workerBusyState(agent, provider, topic);
-  if (busy) { log.error(`bridge round-send: worker not idle (state=${busy}); previous round still in flight`); return 1; }
+  if (!workerSendGate(agent, provider, topic, "bridge round-send", "round")) return 1;
 
   const stateFile = join(exec, `round-${round}.txt`);
   if (existsSync(stateFile)) { log.error(`bridge round-send: ${stateFile} already exists; rm to retry`); return 1; }
@@ -205,15 +203,10 @@ export async function roundWaitWith(topic: string, round: number, d: TurnWaitDep
   if (offset === null) { log.error(`bridge round-wait: OFFSET not set in ${stateFile}`); return 1; }
 
   log.info(`bridge round-wait: round=${round} offset=${offset} timeout=${DUET_TURN_TIMEOUT}s`);
-  const ev = await d.wait(agent, provider, topic, offset, ["done", "error", "question"], DUET_TURN_TIMEOUT);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, DUET_TURN_TIMEOUT);
   const ts = classifyTurn(ev);
-  if (ts === "question" && ev) {
-    atomicWrite(join(exec, `question-${round}.txt`), JSON.stringify(ev) + "\n");
-    const bumped = outboxOffset(outboxPath(agent, provider, topic));
-    appendFileSync(stateFile, `OFFSET=${bumped}\nTS=question\n`);
-  } else {
-    appendFileSync(stateFile, `TS=${ts}\n`);
-  }
+  recordWaitOutcome(agent, provider, topic, stateFile, ts, "TS",
+    ev ? { file: join(exec, `question-${round}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
   log.ok(`bridge round-wait: round=${round} TS=${ts}`);
   return 0;
 }
