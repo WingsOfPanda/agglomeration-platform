@@ -1,7 +1,7 @@
 ---
 description: Deep multi-aspect exploration — SOTA surveys, multi-angle thinking, adversary-tested landscape doc that feeds /ap:design
 argument-hint: <topic>
-allowed-tools: Bash, Write, Read, Edit, AskUserQuestion, WebSearch, WebFetch, Skill
+allowed-tools: Bash, Write, Read, Edit, AskUserQuestion, WebSearch, WebFetch, Skill, TaskCreate, TaskUpdate
 ---
 
 # /ap:explore

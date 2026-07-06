@@ -140,6 +140,30 @@ var init_args = __esm({
   }
 });
 
+// src/core/atomic.ts
+function atomicWrite(dest, content) {
+  if (!dest) throw new Error("atomicWrite: missing dest path");
+  const tmp = `${dest}.tmp.${process.pid}.${(0, import_node_crypto.randomBytes)(4).toString("hex")}`;
+  try {
+    (0, import_node_fs2.writeFileSync)(tmp, content);
+    (0, import_node_fs2.renameSync)(tmp, dest);
+  } catch (e) {
+    try {
+      (0, import_node_fs2.rmSync)(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
+var import_node_fs2, import_node_crypto;
+var init_atomic = __esm({
+  "src/core/atomic.ts"() {
+    "use strict";
+    import_node_fs2 = require("node:fs");
+    import_node_crypto = require("node:crypto");
+  }
+});
+
 // src/core/paths.ts
 function globalRoot(home) {
   return home ?? process.env.AP_HOME ?? (0, import_node_path.join)((0, import_node_os.homedir)(), ".ap");
@@ -147,8 +171,8 @@ function globalRoot(home) {
 function pluginRoot() {
   if (process.env.CLAUDE_PLUGIN_ROOT) return process.env.CLAUDE_PLUGIN_ROOT;
   try {
-    const root = (0, import_node_path.dirname)((0, import_node_path.dirname)((0, import_node_fs2.realpathSync)(process.argv[1])));
-    if ((0, import_node_fs2.existsSync)((0, import_node_path.join)(root, "config", "prompt-templates", "identity.md"))) return root;
+    const root = (0, import_node_path.dirname)((0, import_node_path.dirname)((0, import_node_fs3.realpathSync)(process.argv[1])));
+    if ((0, import_node_fs3.existsSync)((0, import_node_path.join)(root, "config", "prompt-templates", "identity.md"))) return root;
   } catch {
   }
   return process.cwd();
@@ -160,23 +184,23 @@ function stateRoot(opts) {
 }
 function ensureGitignore(dir) {
   const gi = (0, import_node_path.join)(dir, ".gitignore");
-  if (!(0, import_node_fs2.existsSync)(gi)) (0, import_node_fs2.writeFileSync)(gi, "*\n");
+  if (!(0, import_node_fs3.existsSync)(gi)) (0, import_node_fs3.writeFileSync)(gi, "*\n");
 }
 function stateEnsure() {
   const root = stateRoot();
-  (0, import_node_fs2.mkdirSync)((0, import_node_path.join)(root, "state"), { recursive: true });
-  (0, import_node_fs2.mkdirSync)((0, import_node_path.join)(root, "archive"), { recursive: true });
+  (0, import_node_fs3.mkdirSync)((0, import_node_path.join)(root, "state"), { recursive: true });
+  (0, import_node_fs3.mkdirSync)((0, import_node_path.join)(root, "archive"), { recursive: true });
   ensureGitignore(root);
   return root;
 }
 function repoHash(cwd = process.cwd()) {
   let real;
   try {
-    real = (0, import_node_fs2.realpathSync)(cwd);
+    real = (0, import_node_fs3.realpathSync)(cwd);
   } catch {
     real = cwd;
   }
-  return (0, import_node_crypto.createHash)("sha256").update(real, "utf8").digest("hex");
+  return (0, import_node_crypto2.createHash)("sha256").update(real, "utf8").digest("hex");
 }
 function repoStateDir(opts) {
   return (0, import_node_path.join)(stateRoot(opts), "state", repoHash(opts?.cwd));
@@ -201,43 +225,44 @@ function runDir(command, opts) {
   if (!command) throw new Error("runDir: missing <command> arg");
   const root = stateEnsure();
   const runRoot = (0, import_node_path.join)(root, "_run");
-  (0, import_node_fs2.mkdirSync)(runRoot, { recursive: true });
+  (0, import_node_fs3.mkdirSync)(runRoot, { recursive: true });
   ensureGitignore(runRoot);
   const sweepMs = (opts?.sweepSecs ?? 86400) * 1e3;
-  for (const name of (0, import_node_fs2.readdirSync)(runRoot)) {
+  for (const name of (0, import_node_fs3.readdirSync)(runRoot)) {
     const child = (0, import_node_path.join)(runRoot, name);
     try {
-      const st = (0, import_node_fs2.statSync)(child);
-      if (st.isDirectory() && Date.now() - st.mtimeMs > sweepMs) (0, import_node_fs2.rmSync)(child, { recursive: true, force: true });
+      const st = (0, import_node_fs3.statSync)(child);
+      if (st.isDirectory() && Date.now() - st.mtimeMs > sweepMs) (0, import_node_fs3.rmSync)(child, { recursive: true, force: true });
     } catch {
     }
   }
-  const dir = (0, import_node_fs2.mkdtempSync)((0, import_node_path.join)(runRoot, `${command}.`));
-  (0, import_node_fs2.writeFileSync)((0, import_node_path.join)(runRoot, ".last"), dir);
+  const dir = (0, import_node_fs3.mkdtempSync)((0, import_node_path.join)(runRoot, `${command}.`));
+  atomicWrite((0, import_node_path.join)(runRoot, ".last"), dir);
   return dir;
 }
 function runArgsFile(command, prefix) {
   const dir = runDir(command);
   const argsDir = (0, import_node_path.join)(stateRoot(), "_args");
-  (0, import_node_fs2.mkdirSync)(argsDir, { recursive: true });
-  const f = (0, import_node_fs2.mkdtempSync)((0, import_node_path.join)(argsDir, `${prefix ?? command}.`)) + "/args";
-  (0, import_node_fs2.writeFileSync)(f, "");
-  (0, import_node_fs2.writeFileSync)((0, import_node_path.join)(dir, "args-path.txt"), f);
+  (0, import_node_fs3.mkdirSync)(argsDir, { recursive: true });
+  const f = (0, import_node_fs3.mkdtempSync)((0, import_node_path.join)(argsDir, `${prefix ?? command}.`)) + "/args";
+  (0, import_node_fs3.writeFileSync)(f, "");
+  atomicWrite((0, import_node_path.join)(dir, "args-path.txt"), f);
   return f;
 }
 function activeProvidersPath(gRoot = globalRoot()) {
   const active = (0, import_node_path.join)(gRoot, "providers-active.txt");
-  return (0, import_node_fs2.existsSync)(active) ? active : (0, import_node_path.join)(gRoot, "providers-available.txt");
+  return (0, import_node_fs3.existsSync)(active) ? active : (0, import_node_path.join)(gRoot, "providers-available.txt");
 }
-var import_node_crypto, import_node_fs2, import_node_os, import_node_path, import_node_child_process;
+var import_node_crypto2, import_node_fs3, import_node_os, import_node_path, import_node_child_process;
 var init_paths = __esm({
   "src/core/paths.ts"() {
     "use strict";
-    import_node_crypto = require("node:crypto");
-    import_node_fs2 = require("node:fs");
+    import_node_crypto2 = require("node:crypto");
+    import_node_fs3 = require("node:fs");
     import_node_os = require("node:os");
     import_node_path = require("node:path");
     import_node_child_process = require("node:child_process");
+    init_atomic();
   }
 });
 
@@ -386,30 +411,6 @@ var init_deps = __esm({
   }
 });
 
-// src/core/atomic.ts
-function atomicWrite(dest, content) {
-  if (!dest) throw new Error("atomicWrite: missing dest path");
-  const tmp = `${dest}.tmp.${process.pid}.${(0, import_node_crypto2.randomBytes)(4).toString("hex")}`;
-  try {
-    (0, import_node_fs3.writeFileSync)(tmp, content);
-    (0, import_node_fs3.renameSync)(tmp, dest);
-  } catch (e) {
-    try {
-      (0, import_node_fs3.rmSync)(tmp, { force: true });
-    } catch {
-    }
-    throw e;
-  }
-}
-var import_node_fs3, import_node_crypto2;
-var init_atomic = __esm({
-  "src/core/atomic.ts"() {
-    "use strict";
-    import_node_fs3 = require("node:fs");
-    import_node_crypto2 = require("node:crypto");
-  }
-});
-
 // src/core/archive.ts
 function archiveTs(now = /* @__PURE__ */ new Date()) {
   return isoUtc(now).replace(/[-:]/g, "");
@@ -422,7 +423,7 @@ function stateInit(agent, model, topic) {
   (0, import_node_fs4.mkdirSync)(dir, { recursive: true });
   for (const f of STALE) (0, import_node_fs4.rmSync)((0, import_node_path2.join)(dir, f), { force: true });
   (0, import_node_fs4.closeSync)((0, import_node_fs4.openSync)((0, import_node_path2.join)(dir, "outbox.jsonl"), "w"));
-  (0, import_node_fs4.writeFileSync)((0, import_node_path2.join)(dir, ".session_id"), `${process.env.CLAUDE_CODE_SESSION_ID ?? "unknown"}
+  atomicWrite((0, import_node_path2.join)(dir, ".session_id"), `${process.env.CLAUDE_CODE_SESSION_ID ?? "unknown"}
 `);
 }
 function uniqueDest(base) {
@@ -17292,7 +17293,7 @@ async function run(args) {
       else pane = await splitRight(launch, void 0, startDir);
       await paneLabelSet(pane, agent, model, topic);
       (0, import_node_fs18.mkdirSync)(topicDir(topic), { recursive: true });
-      (0, import_node_fs18.writeFileSync)(lastFile, pane + "\n");
+      atomicWrite(lastFile, pane + "\n");
     }
     if (!await ensureWindowBorderStatus(pane)) log.warn(`could not force pane-border-status on the spawn window; '${labelFor(agent, model, topic)}' label may not render`);
     paneMetaWrite(agent, model, topic, pane);
@@ -17355,6 +17356,7 @@ var init_spawn = __esm({
     init_paths();
     init_archive();
     init_fsread();
+    init_atomic();
     init_ipc();
     init_design();
     init_agents();
@@ -23818,8 +23820,8 @@ async function monitorRun(args, opts) {
     rescanEveryS: Number(process.env.AP_RESCAN_EVERY_S ?? 30)
   };
   const persist = (state2) => {
-    (0, import_node_fs35.writeFileSync)(cursorFile, String(state2.offset));
-    (0, import_node_fs35.writeFileSync)(rescanFile, [...state2.rescanEmitted].join("\n"));
+    atomicWrite(cursorFile, String(state2.offset));
+    atomicWrite(rescanFile, [...state2.rescanEmitted].join("\n"));
   };
   const initBuf = (0, import_node_fs35.existsSync)(outbox) ? (0, import_node_fs35.readFileSync)(outbox) : Buffer.alloc(0);
   let state = initScanState(
@@ -23829,6 +23831,11 @@ async function monitorRun(args, opts) {
     readIfExistsOrNull(rescanFile)
   );
   persist(state);
+  const probePane = opts?.paneAlive ?? paneAlive;
+  const paneCheckEvery = opts?.paneCheckEveryTicks ?? 15;
+  const tickMs = opts?.sleepMs ?? 2e3;
+  const paneId = paneMetaRead(agent, model, topic);
+  let deadPolls = 0, tick = 0;
   do {
     let size = 0, mtime = 0;
     try {
@@ -23856,7 +23863,18 @@ async function monitorRun(args, opts) {
     state = r.state;
     persist(state);
     if (once9) break;
-    await sleep4(2e3);
+    tick++;
+    if (paneId && tick % paneCheckEvery === 0) {
+      let alive = true;
+      try {
+        alive = await probePane(paneId);
+      } catch {
+        alive = false;
+      }
+      if (alive) deadPolls = 0;
+      else if (++deadPolls >= 2) break;
+    }
+    await sleep4(tickMs);
   } while (!once9);
   return 0;
 }
