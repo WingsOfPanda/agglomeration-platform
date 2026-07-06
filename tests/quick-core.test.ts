@@ -65,6 +65,20 @@ describe("detectTestCommand (precedence)", () => {
     const r = fresh(); writeFileSync(join(r, "pyproject.toml"), ""); mkdirSync(join(r, "tests"));
     expect(detectTestCommand(r)).toBe("pytest");
   });
+  it("then cargo test when Cargo.toml exists", () => {
+    const r = fresh(); writeFileSync(join(r, "Cargo.toml"), "[package]\nname = \"x\"\n");
+    expect(detectTestCommand(r)).toBe("cargo test");
+  });
+  it("then go test when go.mod exists", () => {
+    const r = fresh(); writeFileSync(join(r, "go.mod"), "module example.com/x\n");
+    expect(detectTestCommand(r)).toBe("go test ./...");
+  });
+  it("npm test still wins over a co-present Cargo.toml (precedence unchanged)", () => {
+    const r = fresh();
+    writeFileSync(join(r, "Cargo.toml"), "[package]\n");
+    writeFileSync(join(r, "package.json"), JSON.stringify({ scripts: { test: "x" } }));
+    expect(detectTestCommand(r)).toBe("npm test");
+  });
   it("empty string when nothing detected", () => {
     expect(detectTestCommand(fresh())).toBe("");
   });

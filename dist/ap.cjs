@@ -785,6 +785,8 @@ function detectTestCommand(root) {
     }
   }
   if (((0, import_node_fs7.existsSync)((0, import_node_path4.join)(root, "pyproject.toml")) || (0, import_node_fs7.existsSync)((0, import_node_path4.join)(root, "setup.cfg"))) && (0, import_node_fs7.existsSync)((0, import_node_path4.join)(root, "tests"))) return "pytest";
+  if ((0, import_node_fs7.existsSync)((0, import_node_path4.join)(root, "Cargo.toml"))) return "cargo test";
+  if ((0, import_node_fs7.existsSync)((0, import_node_path4.join)(root, "go.mod"))) return "go test ./...";
   return "";
 }
 function renderSummary(f) {
@@ -20312,7 +20314,7 @@ var init_implementQuestions = __esm({
 function classifyTestRun(testCmd, code) {
   if (testCmd === "") return "none";
   if (code === 0) return "pass";
-  if (code === 124) return "unverifiable";
+  if (code === 124 || code === 137) return "unverifiable";
   return "fail";
 }
 function parseWorkerDuration(body) {
@@ -20330,7 +20332,7 @@ var init_implementVerifyTests = __esm({
     liveTestRunner = {
       run(cwd, testCmd, timeoutS) {
         try {
-          const output = (0, import_node_child_process10.execFileSync)("timeout", [String(timeoutS), "bash", "-c", "--", `${testCmd} 2>&1`], {
+          const output = (0, import_node_child_process10.execFileSync)("timeout", ["--kill-after=5", String(timeoutS), "bash", "-c", "--", `${testCmd} 2>&1`], {
             cwd,
             encoding: "utf8",
             stdio: ["ignore", "pipe", "pipe"],
