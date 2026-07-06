@@ -20051,6 +20051,7 @@ function composeRound1Prompt2(args) {
   const { designPath, planPath, verifyPath, testCmd } = args;
   const round = args.round ?? 1;
   const testLog = `${(0, import_node_path25.dirname)(verifyPath)}/test-output-${round}.log`;
+  const durationLog = `${(0, import_node_path25.dirname)(verifyPath)}/worker-test-duration-${round}.txt`;
   return [
     `You are entering ROUND ${round} of /ap:implement.`,
     "",
@@ -20089,12 +20090,20 @@ function composeRound1Prompt2(args) {
     "  line, followed by per-requirement evidence (file:line citations) and a",
     "  short summary.",
     "",
+    "  Also record how long the test suite itself took, in whole wall-clock",
+    "  seconds, and write it as `TEST_DURATION_S=<seconds>` (one line) to:",
+    `    ${durationLog}`,
+    "  The Hub reads this: if your suite ran longer than its verify budget it",
+    "  trusts your report instead of independently re-running \u2014 so measure the",
+    "  actual suite run.",
+    "",
     BRANCH_DISCIPLINE2,
     blockers(testCmd)
   ].join("\n");
 }
 function composeFixPrompt2(round, bundleText, verifyPath, testCmd) {
   const testLog = `${(0, import_node_path25.dirname)(verifyPath)}/test-output-${round}.log`;
+  const durationLog = `${(0, import_node_path25.dirname)(verifyPath)}/worker-test-duration-${round}.txt`;
   return [
     `You are entering ROUND ${round} of /ap:implement (fix loop).`,
     "",
@@ -20134,6 +20143,8 @@ function composeFixPrompt2(round, bundleText, verifyPath, testCmd) {
     "  Write the verify report to:",
     `    ${verifyPath}`,
     "  The report MUST start with `VERDICT: PASS|PARTIAL|FAIL`.",
+    "  Also record the suite's wall-clock seconds as `TEST_DURATION_S=<seconds>`",
+    `  (one line) to: ${durationLog}`,
     "",
     BRANCH_DISCIPLINE2,
     blockers(testCmd)
@@ -20229,6 +20240,13 @@ function classifyTestRun(testCmd, code) {
   if (code === 0) return "pass";
   if (code === 124) return "unverifiable";
   return "fail";
+}
+function parseWorkerDuration(body) {
+  const m = body.match(/^TEST_DURATION_S=([0-9]+)[ \t]*$/m);
+  return m ? Number(m[1]) : null;
+}
+function shouldSkipVerify(workerDurationS, maxS) {
+  return workerDurationS !== null && workerDurationS > maxS;
 }
 var import_node_child_process10, liveTestRunner;
 var init_implementVerifyTests = __esm({
@@ -20723,6 +20741,9 @@ OOS_PATH=${oosPath}
 function implementTestTimeout() {
   return Number(process.env.AP_IMPLEMENT_TEST_TIMEOUT_S) || 1800;
 }
+function maxVerifyS() {
+  return Number(process.env.AP_IMPLEMENT_VERIFY_MAX_S) || implementTestTimeout();
+}
 async function verifyTestsRun(rest) {
   const [topic, roundStr] = rest;
   if (!topic || !roundStr) {
@@ -20748,27 +20769,36 @@ async function verifyTestsWith(topic, round, d) {
   }
   const targetCwd = readField(targetFile);
   const testCmd = d.detect(targetCwd);
+  const durFile = (0, import_node_path26.join)(art, `worker-test-duration-${round}.txt`);
+  const workerDur = (0, import_node_fs30.existsSync)(durFile) ? parseWorkerDuration((0, import_node_fs30.readFileSync)(durFile, "utf8")) : null;
   let code = null;
-  if (testCmd !== "") {
+  let verdict;
+  if (testCmd === "") {
+    verdict = "none";
+  } else if (shouldSkipVerify(workerDur, maxVerifyS())) {
+    verdict = "skipped";
+  } else {
     const r = d.runner.run(targetCwd, testCmd, implementTestTimeout());
     code = r.code;
     atomicWrite((0, import_node_path26.join)(art, `hub-test-output-${round}.log`), r.output);
+    verdict = classifyTestRun(testCmd, code);
   }
-  const verdict = classifyTestRun(testCmd, code);
   atomicWrite(
     (0, import_node_path26.join)(art, `hub-verify-${round}.tsv`),
     `round=${round}
 test_cmd=${testCmd}
 hub_rc=${code === null ? "" : code}
+worker_duration_s=${workerDur === null ? "" : workerDur}
 verdict=${verdict}
 verified_ts=${d.now()}
 `
   );
   process.stdout.write(`TESTCMD=${testCmd || "none"}
 HUB_RC=${code === null ? "" : code}
+WORKER_DURATION_S=${workerDur === null ? "" : workerDur}
 VERDICT=${verdict}
 `);
-  log.ok(`implement verify-tests: round=${round} verdict=${verdict}${testCmd ? ` (rc=${code})` : ""}`);
+  log.ok(`implement verify-tests: round=${round} verdict=${verdict}${verdict === "skipped" ? ` (worker=${workerDur}s > ${maxVerifyS()}s)` : testCmd ? ` (rc=${code})` : ""}`);
   return 0;
 }
 async function summaryRun2(rest) {
