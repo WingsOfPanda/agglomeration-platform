@@ -165,9 +165,28 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
 
 ## Stage 2 — cross-verify (Hub)
 
-Invoke `superpowers:verification-before-completion`. Read (capped):
+**Step A — independent test re-run (do this FIRST; the hub runs the tests itself).** Run
+`$CS implement verify-tests <TOPIC> <ROUND>`. It runs the repo's own test command
+(`detectTestCommand`) **in `TARGET_CWD` on the worker's branch** and prints `TESTCMD=`/`HUB_RC=`/
+`VERDICT=` (and writes `$ART/hub-test-output-<ROUND>.log`). The default suite budget is 30 min
+(`AP_IMPLEMENT_TEST_TIMEOUT_S=1800`). Branch on `VERDICT`:
+- **`fail`** — the worker's green claim is contradicted by the hub's OWN run. This is authoritative
+  over the worker's `test-output-<ROUND>.log`: read the `$ART/hub-test-output-<ROUND>.log` tail to
+  identify the failing tests, set `VERDICT: FAIL`, and go to Stage 3 with one `[bug]` per failing
+  test. (Exception — judgment: if the hub log shows an **environment** error such as
+  `command not found` / missing toolchain rather than real test failures, treat it as `unverifiable`
+  below, not a FAIL, to avoid a needless fix round.)
+- **`unverifiable`** (`HUB_RC=124` timeout, or an environment error) — note it in the cross-verify
+  doc; fall through to the read-based checks below, do **not** auto-FAIL.
+- **`none`** (`TESTCMD=none`, no suite detected) — no hub re-run is possible; fall through to the
+  read-based checks, and record "tests not independently verified" in the cross-verify doc.
+- **`pass`** — the suite is green on the hub's own run; continue to the read-based checks below for
+  spec/scope coverage.
+
+**Step B — read-based cross-verify.** Invoke `superpowers:verification-before-completion`. Read (capped):
 - `$ART/verify-report-<ROUND>.md` (the worker's self-verify),
-- `$ART/test-output-<ROUND>.log` (tail for pass/fail counts),
+- `$ART/hub-test-output-<ROUND>.log` (the HUB's own run — authoritative) and, only as the worker's
+  claim, `$ART/test-output-<ROUND>.log`,
 - `git -C "$TARGET_CWD" log --oneline "$(cat "$ART/branch-base.sha")"..HEAD` and
   `git -C "$TARGET_CWD" diff --stat "$(cat "$ART/branch-base.sha")"..HEAD`,
 - up to 3 spot-checks: Read the highest-stakes diff hunk per critical requirement (paths from
