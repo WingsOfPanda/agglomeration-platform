@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run build
+      # dist/ap.cjs is committed (zero-build install). Fail if it drifts from a fresh build of src —
+      # a contributor must run `npm run build` and commit the result. (tests/dist-fresh.test.ts
+      # enforces the same invariant locally; this is the clean CI-level signal.)
+      - name: dist/ap.cjs is in sync with src
+        run: git diff --exit-code -- dist/ap.cjs
