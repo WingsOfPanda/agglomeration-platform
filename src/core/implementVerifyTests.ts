@@ -6,7 +6,11 @@
 // does NOT sandbox a committed test-code trojan (that needs containerization — out of v1 scope).
 import { execFileSync } from "node:child_process";
 
-export type TestVerdict = "pass" | "fail" | "unverifiable" | "none" | "skipped";
+/** Every verdict the hub verify-tests verb can emit on stdout as `VERDICT=<v>`. Runtime-enumerable
+ *  (not just a type) so a test can assert commands/implement.md documents a branch for each — the
+ *  producer<->directive contract that guards against a silently-added verdict. */
+export const TEST_VERDICTS = ["pass", "fail", "unverifiable", "none", "skipped"] as const;
+export type TestVerdict = typeof TEST_VERDICTS[number];
 
 /** Map a hub test re-run to a verdict. Pure.
  *  - testCmd === "" (no suite detected) -> "none"  (Stage 2 falls back to the worker's report)
