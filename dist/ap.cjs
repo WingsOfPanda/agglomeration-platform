@@ -644,11 +644,23 @@ function lastMatch(text, events) {
   }
   return null;
 }
-async function outboxWaitSince(i2, m, t, offset, events, timeoutSec) {
+async function outboxWaitSince(i2, m, t, offset, events, timeoutSec, live) {
   const path6 = outboxPath(i2, m, t);
+  const everyS = live?.everyS ?? 15;
+  let deadPolls = 0;
   for (let n2 = 0; n2 < timeoutSec; n2++) {
     const hit = lastMatch(readFrom(path6, offset), events);
     if (hit) return hit;
+    if (live && live.paneId && n2 > 0 && n2 % everyS === 0) {
+      let alive = true;
+      try {
+        alive = await live.paneAlive(live.paneId);
+      } catch {
+        alive = false;
+      }
+      if (alive) deadPolls = 0;
+      else if (++deadPolls >= 2) return { event: "error", note: "pane-died", ts: isoUtc() };
+    }
     await sleep(1e3);
   }
   return null;
@@ -18213,6 +18225,18 @@ var init_gitwork = __esm({
   }
 });
 
+// src/core/waitLive.ts
+function liveOutboxWait(i2, m, t, offset, events, timeoutSec) {
+  return outboxWaitSince(i2, m, t, offset, events, timeoutSec, { paneAlive, paneId: paneMetaRead(i2, m, t) });
+}
+var init_waitLive = __esm({
+  "src/core/waitLive.ts"() {
+    "use strict";
+    init_ipc();
+    init_tmux();
+  }
+});
+
 // src/core/turn.ts
 function composeRound1Prompt(briefText, branch) {
   return [
@@ -18749,9 +18773,7 @@ async function turnWaitRun(rest) {
     log.error("usage: quick turn-wait <topic> <round>=1..");
     return 2;
   }
-  return turnWaitWith(topic, round, {
-    wait: (i2, m, t, off, ev, to) => outboxWaitSince(i2, m, t, off, ev, to)
-  });
+  return turnWaitWith(topic, round, { wait: liveOutboxWait });
 }
 async function turnWaitWith(topic, round, d) {
   const art = quickArtDir(topic);
@@ -18902,6 +18924,7 @@ var init_quick2 = __esm({
     init_agents();
     init_gitwork();
     init_ipc();
+    init_waitLive();
     init_turn();
     init_designTurn();
     init_env();
@@ -19855,6 +19878,7 @@ var init_design2 = __esm({
     init_paths();
     init_agents();
     init_ipc();
+    init_waitLive();
     init_contracts();
     init_designTurn();
     init_env();
@@ -19878,7 +19902,7 @@ var init_design2 = __esm({
       send: run2
     };
     liveResearchWaitDeps = {
-      wait: (i2, m, t, off, ev, to) => outboxWaitSince(i2, m, t, off, ev, to),
+      wait: liveOutboxWait,
       multiplier: agentTimeoutMultiplier
     };
     DRILLDOWN_TIMEOUT = () => envNum("AP_DRILLDOWN_TIMEOUT_S", consultTimeout("research"));
@@ -20976,6 +21000,7 @@ var init_implement2 = __esm({
     init_implementTurn();
     init_implementQuestions();
     init_ipc();
+    init_waitLive();
     init_fsread();
     init_contracts();
     init_designTurn();
@@ -20987,7 +21012,7 @@ var init_implement2 = __esm({
     IMPLEMENT_TURN_TIMEOUT = () => envNum("AP_IMPLEMENT_TURN_TIMEOUT_S", DEFAULT_TURN_BUDGET_S);
     liveInitDeps3 = { repoRoot };
     liveSendDeps = { offsetFor: (i2, m, t) => outboxOffset(outboxPath(i2, m, t)), send: run2 };
-    liveWaitDeps = { wait: outboxWaitSince, multiplier: agentTimeoutMultiplier, now: () => Math.floor(Date.now() / 1e3) };
+    liveWaitDeps = { wait: liveOutboxWait, multiplier: agentTimeoutMultiplier, now: () => Math.floor(Date.now() / 1e3) };
     liveScopeDeps = { runnerFor: runnerAt };
     liveVerifyTestsDeps = { runner: liveTestRunner, detect: detectTestCommand, now: isoUtc };
     liveSummaryDeps = { runnerFor: runnerAt, now: () => isoUtc() };
@@ -25953,6 +25978,7 @@ var init_explore2 = __esm({
     init_exploreConfidence();
     init_exploreAnnotate();
     init_ipc();
+    init_waitLive();
     init_designTurn();
     init_exploreTurn();
     init_send2();
@@ -25970,7 +25996,7 @@ var init_explore2 = __esm({
       send: run2
     };
     liveResearchWaitDeps2 = {
-      wait: (i2, m, t, off, ev, to) => outboxWaitSince(i2, m, t, off, ev, to),
+      wait: liveOutboxWait,
       multiplier: agentTimeoutMultiplier
     };
     liveExploreTeardownDeps = {
@@ -26340,7 +26366,7 @@ async function roundWaitRun(rest) {
     log.error("usage: bridge round-wait <topic> <round>=1..");
     return 2;
   }
-  return roundWaitWith(topic, round, { wait: (i2, m, t, off, ev, to) => outboxWaitSince(i2, m, t, off, ev, to) });
+  return roundWaitWith(topic, round, { wait: liveOutboxWait });
 }
 async function roundWaitWith(topic, round, d) {
   const art = bridgeArtDir(topic);
@@ -26535,6 +26561,7 @@ var init_bridge2 = __esm({
     init_designTurn();
     init_env();
     init_ipc();
+    init_waitLive();
     init_send2();
     liveInitDeps5 = {
       haveCmd,

@@ -109,6 +109,50 @@ describe("ipc outbox", () => {
   });
 });
 
+describe("ipc outbox pane-liveness escape hatch", () => {
+  it("returns a synthetic pane-died error after two consecutive dead polls", async () => {
+    home(); seedPart("bravo", "codex", "demo");
+    const ev = await IPC.outboxWaitSince("bravo", "codex", "demo", 0, ["done"], 5, {
+      paneAlive: async () => false, paneId: "%1", everyS: 1,
+    });
+    expect(ev?.event).toBe("error");
+    expect(ev?.note).toBe("pane-died");
+  });
+  it("a single dead poll then a live one does NOT short-circuit (no false kill)", async () => {
+    home(); seedPart("bravo", "codex", "demo");
+    let call = 0;
+    const ev = await IPC.outboxWaitSince("bravo", "codex", "demo", 0, ["done"], 3, {
+      paneAlive: async () => (++call === 1 ? false : true), paneId: "%1", everyS: 1,
+    });
+    expect(ev).toBeNull();   // recovered before two consecutive dead polls -> times out normally
+  });
+  it("a probe that throws (tmux server gone) counts as dead", async () => {
+    home(); seedPart("bravo", "codex", "demo");
+    const ev = await IPC.outboxWaitSince("bravo", "codex", "demo", 0, ["done"], 5, {
+      paneAlive: async () => { throw new Error("no server running"); }, paneId: "%1", everyS: 1,
+    });
+    expect(ev?.note).toBe("pane-died");
+  });
+  it("a null paneId disables the check (never probes; degrades to plain wait)", async () => {
+    home(); seedPart("bravo", "codex", "demo");
+    let probed = false;
+    const ev = await IPC.outboxWaitSince("bravo", "codex", "demo", 0, ["done"], 1, {
+      paneAlive: async () => { probed = true; return false; }, paneId: null, everyS: 1,
+    });
+    expect(ev).toBeNull();
+    expect(probed).toBe(false);
+  });
+  it("a terminal event in the outbox wins over a dead pane", async () => {
+    home(); const d = seedPart("bravo", "codex", "demo");
+    writeFileSync(join(d, "outbox.jsonl"), `{"event":"done","summary":"finished"}\n`);
+    const ev = await IPC.outboxWaitSince("bravo", "codex", "demo", 0, ["done"], 5, {
+      paneAlive: async () => false, paneId: "%1", everyS: 1,
+    });
+    expect(ev?.event).toBe("done");
+    expect(ev?.summary).toBe("finished");
+  });
+});
+
 describe("ipc pane meta", () => {
   it("paneMeta round-trips hyphenated model via JSON, not dir parse", () => {
     home(); seedPart("bravo", "claude-haiku", "demo");

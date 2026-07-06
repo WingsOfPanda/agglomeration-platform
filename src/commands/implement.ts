@@ -19,7 +19,8 @@ import { runForensics, runFlag } from "../core/forensics.js";
 import { haveCmd } from "../core/deps.js";
 import { implementState, composeRound1Prompt, composeFixPrompt } from "../core/implementTurn.js";
 import { extractQuestionPayload, parseQuestionPayload } from "../core/implementQuestions.js";
-import { outboxOffset, outboxPath, outboxWaitSince, statusPath, workerSendGate, TERMINAL_EVENTS, resolveModel, type OutboxEvent } from "../core/ipc.js";
+import { outboxOffset, outboxPath, statusPath, workerSendGate, TERMINAL_EVENTS, resolveModel, type OutboxEvent } from "../core/ipc.js";
+import { liveOutboxWait } from "../core/waitLive.js";
 import { kvField, readField, readIfExists, readIfExistsOrNull } from "../core/fsread.js";
 import { agentTimeoutMultiplier } from "../core/contracts.js";
 import { scaledTimeout, parseLatestOffset, lastKeyedNumber, recordWaitOutcome } from "../core/designTurn.js";
@@ -178,7 +179,7 @@ export async function turnSendWith(topic: string, round: number, d: ImplementSen
 
 // ---- turn-wait (deploy-turn-wait.sh) — rc 0 ALWAYS; TS= carries outcome ----
 export interface ImplementWaitDeps { wait(i: string, m: string, t: string, off: number, ev: string[], to: number): Promise<OutboxEvent | null>; multiplier(model: string): string; now(): number; }
-const liveWaitDeps: ImplementWaitDeps = { wait: outboxWaitSince, multiplier: agentTimeoutMultiplier, now: () => Math.floor(Date.now() / 1000) };
+const liveWaitDeps: ImplementWaitDeps = { wait: liveOutboxWait, multiplier: agentTimeoutMultiplier, now: () => Math.floor(Date.now() / 1000) };
 async function turnWaitRun(rest: string[]): Promise<number> {
   const [topic, roundStr] = rest;
   if (!topic || !roundStr) { log.error("usage: implement turn-wait <topic> <round>"); return 2; }

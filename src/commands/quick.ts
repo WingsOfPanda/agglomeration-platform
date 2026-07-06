@@ -13,7 +13,8 @@ import { haveCmd } from "../core/deps.js";
 import { pickRandomAgent } from "../core/agents.js";
 import { runnerAt, preSnapshot, createOrResumeBranch, finishBranch } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
-import { outboxOffset, outboxPath, outboxWaitSince, workerSendGate, TERMINAL_EVENTS, type OutboxEvent } from "../core/ipc.js";
+import { outboxOffset, outboxPath, workerSendGate, TERMINAL_EVENTS, type OutboxEvent } from "../core/ipc.js";
+import { liveOutboxWait } from "../core/waitLive.js";
 import { composeRound1Prompt, composeFixPrompt, classifyTurn } from "../core/turn.js";
 import { parseLatestOffset, recordWaitOutcome } from "../core/designTurn.js";
 import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
@@ -171,9 +172,7 @@ async function turnWaitRun(rest: string[]): Promise<number> {
   const [topic, roundStr] = rest;
   const round = Number(roundStr);
   if (!topic || !Number.isInteger(round) || round < 1) { log.error("usage: quick turn-wait <topic> <round>=1.."); return 2; }
-  return turnWaitWith(topic, round, {
-    wait: (i, m, t, off, ev, to) => outboxWaitSince(i, m, t, off, ev, to),
-  });
+  return turnWaitWith(topic, round, { wait: liveOutboxWait });
 }
 
 export async function turnWaitWith(topic: string, round: number, d: TurnWaitDeps): Promise<number> {
