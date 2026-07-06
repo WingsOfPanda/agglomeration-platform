@@ -21,7 +21,8 @@ import { agentConsultValidated, consultTimeout, agentTimeoutMultiplier } from ".
 import { classifyTopic } from "../core/exploreLit.js";
 import { computeSignals, renderSkipRecord, type Decision } from "../core/exploreConfidence.js";
 import { buildAnnotations } from "../core/exploreAnnotate.js";
-import { outboxOffset, outboxPath, outboxWaitSince, TERMINAL_EVENTS, type OutboxEvent } from "../core/ipc.js";
+import { outboxOffset, outboxPath, TERMINAL_EVENTS, type OutboxEvent } from "../core/ipc.js";
+import { liveOutboxWait } from "../core/waitLive.js";
 import { parseLatestOffset, scaledTimeout, researchState, verifyState, gateState, recordWaitOutcome } from "../core/designTurn.js";
 import { composeExploreResearchPrompt, composeAdversaryPrompt, litGuidance } from "../core/exploreTurn.js";
 import { run as sendRun } from "./send.js";
@@ -176,7 +177,7 @@ export interface ResearchWaitDeps {
   multiplier(provider: string): string;
 }
 const liveResearchWaitDeps: ResearchWaitDeps = {
-  wait: (i, m, t, off, ev, to) => outboxWaitSince(i, m, t, off, ev, to),
+  wait: liveOutboxWait,
   multiplier: agentTimeoutMultiplier,
 };
 async function researchWaitRun(rest: string[]): Promise<number> {

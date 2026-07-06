@@ -124,11 +124,31 @@ function lastMatch(text: string, events: string[]): OutboxEvent | null {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export async function outboxWaitSince(i: string, m: string, t: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null> {
+/** Optional pane-liveness escape hatch for outboxWaitSince. A worker whose tmux pane has died will
+ *  never emit a terminal event, so without this the wait blocks out the entire (up to 4h) turn
+ *  budget. When supplied, the loop polls the pane every `everyS` seconds and, once the pane is
+ *  confirmed gone on TWO consecutive polls (a transient probe blip must not false-kill a live turn),
+ *  returns a synthetic `error` event so the turn fails fast. `paneAlive` is injected so the wait
+ *  stays testable and ipc.ts stays free of the tmux/execa dependency. */
+export interface WaitLivenessOpts {
+  paneAlive: (pane: string) => Promise<boolean>;
+  paneId: string | null;   // the worker's pane id (pane.json); null (absent) disables the check
+  everyS?: number;         // liveness poll cadence in seconds (default 15)
+}
+
+export async function outboxWaitSince(i: string, m: string, t: string, offset: number, events: string[], timeoutSec: number, live?: WaitLivenessOpts): Promise<OutboxEvent | null> {
   const path = outboxPath(i, m, t);
+  const everyS = live?.everyS ?? 15;
+  let deadPolls = 0;
   for (let n = 0; n < timeoutSec; n++) {
     const hit = lastMatch(readFrom(path, offset), events);
-    if (hit) return hit;
+    if (hit) return hit;   // a terminal event in the outbox always wins over a liveness check
+    if (live && live.paneId && n > 0 && n % everyS === 0) {
+      let alive = true;
+      try { alive = await live.paneAlive(live.paneId); } catch { alive = false; } // tmux server gone -> dead
+      if (alive) deadPolls = 0;
+      else if (++deadPolls >= 2) return { event: "error", note: "pane-died", ts: isoUtc() };
+    }
     await sleep(1000);
   }
   return null;

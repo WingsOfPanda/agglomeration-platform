@@ -17,7 +17,8 @@ import { auditDoc } from "../core/audit.js";
 import { readProviderList } from "../core/providers.js";
 import { activeProvidersPath, workerDir, repoRoot, topicDir } from "../core/paths.js";
 import { pickAgents } from "../core/agents.js";
-import { outboxOffset, outboxPath, outboxWaitSince, TERMINAL_EVENTS, type OutboxEvent } from "../core/ipc.js";
+import { outboxOffset, outboxPath, TERMINAL_EVENTS, type OutboxEvent } from "../core/ipc.js";
+import { liveOutboxWait } from "../core/waitLive.js";
 import { agentConsultValidated, consultTimeout, agentTimeoutMultiplier } from "../core/contracts.js";
 import { composeResearchPrompt, researchState, parseLatestOffset, scaledTimeout, composeVerifyPrompt, verifyState, composeDrilldownPrompt, drilldownState, gateState, recordWaitOutcome } from "../core/designTurn.js";
 import { envNum } from "../core/env.js";
@@ -213,7 +214,7 @@ export interface WaitDeps {
   multiplier(provider: string): string;
 }
 const liveResearchWaitDeps: WaitDeps = {
-  wait: (i, m, t, off, ev, to) => outboxWaitSince(i, m, t, off, ev, to),
+  wait: liveOutboxWait,
   multiplier: agentTimeoutMultiplier,
 };
 
