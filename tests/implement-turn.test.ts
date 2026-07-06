@@ -94,6 +94,11 @@ describe("composeRound1Prompt", () => {
     expect(r3).toContain("ROUND 3 of /ap:implement");
     expect(r3).toContain("/v/test-output-3.log");
   });
+  it("round-1 prompt tells the worker to log TEST_DURATION_S to the duration file", () => {
+    const p = composeRound1Prompt({ designPath: "/a/design.md", planPath: "/a/plan.md", verifyPath: "/a/verify-report-1.md", round: 1, testCmd: "npm test" });
+    expect(p).toContain("TEST_DURATION_S");
+    expect(p).toContain("/a/worker-test-duration-1.txt");
+  });
 });
 
 describe("composeFixPrompt", () => {
