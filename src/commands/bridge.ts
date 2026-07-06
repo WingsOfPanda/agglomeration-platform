@@ -20,7 +20,8 @@ import { composeBridgeBrief, composeBridgeFollowup } from "../core/bridgeTurn.js
 import { classifyTurn } from "../core/turn.js";
 import { parseLatestOffset, recordWaitOutcome } from "../core/designTurn.js";
 import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
-import { outboxOffset, outboxPath, workerSendGate, TERMINAL_EVENTS, outboxWaitSince } from "../core/ipc.js";
+import { outboxOffset, outboxPath, workerSendGate, TERMINAL_EVENTS } from "../core/ipc.js";
+import { liveOutboxWait } from "../core/waitLive.js";
 import type { OutboxEvent } from "../core/ipc.js";
 import { run as sendRun } from "./send.js";
 
@@ -188,7 +189,7 @@ async function roundWaitRun(rest: string[]): Promise<number> {
   const [topic, roundStr] = rest;
   const round = Number(roundStr);
   if (!topic || !Number.isInteger(round) || round < 1) { log.error("usage: bridge round-wait <topic> <round>=1.."); return 2; }
-  return roundWaitWith(topic, round, { wait: (i, m, t, off, ev, to) => outboxWaitSince(i, m, t, off, ev, to) });
+  return roundWaitWith(topic, round, { wait: liveOutboxWait });
 }
 
 export async function roundWaitWith(topic: string, round: number, d: TurnWaitDeps): Promise<number> {
