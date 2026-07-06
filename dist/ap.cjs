@@ -20223,6 +20223,38 @@ var init_implementQuestions = __esm({
   }
 });
 
+// src/core/implementVerifyTests.ts
+function classifyTestRun(testCmd, code) {
+  if (testCmd === "") return "none";
+  if (code === 0) return "pass";
+  if (code === 124) return "unverifiable";
+  return "fail";
+}
+var import_node_child_process10, liveTestRunner;
+var init_implementVerifyTests = __esm({
+  "src/core/implementVerifyTests.ts"() {
+    "use strict";
+    import_node_child_process10 = require("node:child_process");
+    liveTestRunner = {
+      run(cwd, testCmd, timeoutS) {
+        try {
+          const output = (0, import_node_child_process10.execFileSync)("timeout", [String(timeoutS), "bash", "-c", "--", `${testCmd} 2>&1`], {
+            cwd,
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+            maxBuffer: 64 * 1024 * 1024
+          });
+          return { code: 0, output };
+        } catch (e) {
+          const err = e;
+          const output = (err.stdout != null ? String(err.stdout) : "") + (err.stderr != null ? String(err.stderr) : "");
+          return { code: typeof err.status === "number" ? err.status : 1, output };
+        }
+      }
+    };
+  }
+});
+
 // src/commands/implement.ts
 var implement_exports = {};
 __export(implement_exports, {
@@ -20235,7 +20267,8 @@ __export(implement_exports, {
   scopeCheckWith: () => scopeCheckWith,
   summaryWith: () => summaryWith,
   turnSendWith: () => turnSendWith2,
-  turnWaitWith: () => turnWaitWith2
+  turnWaitWith: () => turnWaitWith2,
+  verifyTestsWith: () => verifyTestsWith
 });
 function workerModel(art) {
   return readIfExists((0, import_node_path26.join)(art, "provider.txt")).trim() || "codex";
@@ -20245,7 +20278,7 @@ function latestObjections(stateFile) {
   return lastKeyedNumber((0, import_node_fs30.readFileSync)(stateFile, "utf8"), "OBJECTIONS") ?? 0;
 }
 function usage3() {
-  log.error("usage: implement <init|audit|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|summary|finish|forensics|archive|find-latest-doc> ...");
+  log.error("usage: implement <init|audit|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|verify-tests|summary|finish|forensics|archive|find-latest-doc> ...");
   return 2;
 }
 async function findLatestDocRun(rest) {
@@ -20329,6 +20362,8 @@ async function run11(args) {
       return branchRun2(applyArgsFile(rest));
     case "scope-check":
       return scopeCheckRun(rest);
+    case "verify-tests":
+      return verifyTestsRun(rest);
     case "summary":
       return summaryRun2(rest);
     case "finish":
@@ -20685,6 +20720,57 @@ OOS_PATH=${oosPath}
 `);
   return 0;
 }
+function implementTestTimeout() {
+  return Number(process.env.AP_IMPLEMENT_TEST_TIMEOUT_S) || 1800;
+}
+async function verifyTestsRun(rest) {
+  const [topic, roundStr] = rest;
+  if (!topic || !roundStr) {
+    log.error("usage: implement verify-tests <topic> <round>");
+    return 2;
+  }
+  if (!/^[1-9][0-9]*$/.test(roundStr)) {
+    log.error(`implement verify-tests: round must be a positive integer (got: ${roundStr})`);
+    return 2;
+  }
+  return verifyTestsWith(topic, Number(roundStr), liveVerifyTestsDeps);
+}
+async function verifyTestsWith(topic, round, d) {
+  const art = implementArtDir(topic);
+  if (!(0, import_node_fs30.existsSync)(art)) {
+    log.error(`implement verify-tests: art-dir missing: ${art}`);
+    return 1;
+  }
+  const targetFile = (0, import_node_path26.join)(art, "target_cwd.txt");
+  if (!(0, import_node_fs30.existsSync)(targetFile)) {
+    log.error(`implement verify-tests: target_cwd.txt missing under ${art}`);
+    return 1;
+  }
+  const targetCwd = readField(targetFile);
+  const testCmd = d.detect(targetCwd);
+  let code = null;
+  if (testCmd !== "") {
+    const r = d.runner.run(targetCwd, testCmd, implementTestTimeout());
+    code = r.code;
+    atomicWrite((0, import_node_path26.join)(art, `hub-test-output-${round}.log`), r.output);
+  }
+  const verdict = classifyTestRun(testCmd, code);
+  atomicWrite(
+    (0, import_node_path26.join)(art, `hub-verify-${round}.tsv`),
+    `round=${round}
+test_cmd=${testCmd}
+hub_rc=${code === null ? "" : code}
+verdict=${verdict}
+verified_ts=${d.now()}
+`
+  );
+  process.stdout.write(`TESTCMD=${testCmd || "none"}
+HUB_RC=${code === null ? "" : code}
+VERDICT=${verdict}
+`);
+  log.ok(`implement verify-tests: round=${round} verdict=${verdict}${testCmd ? ` (rc=${code})` : ""}`);
+  return 0;
+}
 async function summaryRun2(rest) {
   const topic = rest[0];
   if (!topic) {
@@ -20805,7 +20891,7 @@ async function archiveRun2(rest) {
   log.ok(`implement archive: archived _implement for ${topic}`);
   return 0;
 }
-var import_node_fs30, import_node_path26, WORKER, IMPLEMENT_TURN_TIMEOUT, liveInitDeps3, liveSendDeps, liveWaitDeps, liveScopeDeps, liveSummaryDeps, liveFinishDeps;
+var import_node_fs30, import_node_path26, WORKER, IMPLEMENT_TURN_TIMEOUT, liveInitDeps3, liveSendDeps, liveWaitDeps, liveScopeDeps, liveVerifyTestsDeps, liveSummaryDeps, liveFinishDeps;
 var init_implement2 = __esm({
   "src/commands/implement.ts"() {
     "use strict";
@@ -20830,12 +20916,14 @@ var init_implement2 = __esm({
     init_designTurn();
     init_send2();
     init_quick();
+    init_implementVerifyTests();
     WORKER = "lead";
     IMPLEMENT_TURN_TIMEOUT = () => Number(process.env.AP_IMPLEMENT_TURN_TIMEOUT_S) || 14400;
     liveInitDeps3 = { repoRoot };
     liveSendDeps = { offsetFor: (i2, m, t) => outboxOffset(outboxPath(i2, m, t)), send: run2 };
     liveWaitDeps = { wait: outboxWaitSince, multiplier: agentTimeoutMultiplier, now: () => Math.floor(Date.now() / 1e3) };
     liveScopeDeps = { runnerFor: runnerAt };
+    liveVerifyTestsDeps = { runner: liveTestRunner, detect: detectTestCommand, now: isoUtc };
     liveSummaryDeps = { runnerFor: runnerAt, now: () => isoUtc() };
     liveFinishDeps = { runnerFor: runnerAt, hasGh: haveCmd("gh") };
   }
@@ -23553,7 +23641,7 @@ function experimentTimeoutDefault() {
 }
 function liveProbeHardware() {
   try {
-    const csv = (0, import_node_child_process10.execFileSync)("nvidia-smi", [
+    const csv = (0, import_node_child_process11.execFileSync)("nvidia-smi", [
       "--query-gpu=name,memory.total,memory.free,driver_version",
       "--format=csv,noheader,nounits"
     ], { encoding: "utf8" }).trim();
@@ -24622,12 +24710,12 @@ async function run13(args) {
       return usage4();
   }
 }
-var import_node_fs34, import_node_child_process10, import_node_path31, stdoutLine, liveInitDeps4, liveSpawnAllDeps2, liveDropWorkerDeps, liveExperimentSendDeps, liveScoreDeps, sleep4, GIB, liveFinalizeDeps, liveRefineDeps, liveHandoffDeps, liveTeardownDeps, liveFreshWorkerDeps, liveAbortDeps, liveConsensusDeps, liveMemoryRetrieveDeps, liveVerifyPlanDeps, liveVerifyCheckDeps, liveInspectPlanDeps, liveInspectCheckDeps;
+var import_node_fs34, import_node_child_process11, import_node_path31, stdoutLine, liveInitDeps4, liveSpawnAllDeps2, liveDropWorkerDeps, liveExperimentSendDeps, liveScoreDeps, sleep4, GIB, liveFinalizeDeps, liveRefineDeps, liveHandoffDeps, liveTeardownDeps, liveFreshWorkerDeps, liveAbortDeps, liveConsensusDeps, liveMemoryRetrieveDeps, liveVerifyPlanDeps, liveVerifyCheckDeps, liveInspectPlanDeps, liveInspectCheckDeps;
 var init_autoresearch2 = __esm({
   "src/commands/autoresearch.ts"() {
     "use strict";
     import_node_fs34 = require("node:fs");
-    import_node_child_process10 = require("node:child_process");
+    import_node_child_process11 = require("node:child_process");
     import_node_path31 = require("node:path");
     init_log();
     init_args();
@@ -24693,7 +24781,7 @@ var init_autoresearch2 = __esm({
       consultTimeout: () => experimentTimeoutDefault(),
       runSmokeTest: (script, cwd, timeoutSec) => {
         try {
-          (0, import_node_child_process10.execFileSync)(script, [], { cwd, timeout: timeoutSec * 1e3, encoding: "utf8" });
+          (0, import_node_child_process11.execFileSync)(script, [], { cwd, timeout: timeoutSec * 1e3, encoding: "utf8" });
           return { ok: true, stderr: "" };
         } catch (e) {
           const err = e;
