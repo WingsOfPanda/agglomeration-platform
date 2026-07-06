@@ -62,6 +62,7 @@ export function composeRound1Prompt(args: { designPath: string; planPath: string
   const { designPath, planPath, verifyPath, testCmd } = args;
   const round = args.round ?? 1;
   const testLog = `${dirname(verifyPath)}/test-output-${round}.log`;
+  const durationLog = `${dirname(verifyPath)}/worker-test-duration-${round}.txt`;
   return [
     `You are entering ROUND ${round} of /ap:implement.`,
     "",
@@ -102,6 +103,13 @@ export function composeRound1Prompt(args: { designPath: string; planPath: string
     "  line, followed by per-requirement evidence (file:line citations) and a",
     "  short summary.",
     "",
+    "  Also record how long the test suite itself took, in whole wall-clock",
+    "  seconds, and write it as `TEST_DURATION_S=<seconds>` (one line) to:",
+    `    ${durationLog}`,
+    "  The Hub reads this: if your suite ran longer than its verify budget it",
+    "  trusts your report instead of independently re-running — so measure the",
+    "  actual suite run.",
+    "",
     BRANCH_DISCIPLINE,
     blockers(testCmd),
   ].join("\n");
@@ -111,6 +119,7 @@ export function composeRound1Prompt(args: { designPath: string; planPath: string
  *  on-disk fix bundle, embedded VERBATIM (the bash `cat`s it raw). Same fence-omission note. */
 export function composeFixPrompt(round: number, bundleText: string, verifyPath: string, testCmd: string): string {
   const testLog = `${dirname(verifyPath)}/test-output-${round}.log`;
+  const durationLog = `${dirname(verifyPath)}/worker-test-duration-${round}.txt`;
   return [
     `You are entering ROUND ${round} of /ap:implement (fix loop).`,
     "",
@@ -150,6 +159,8 @@ export function composeFixPrompt(round: number, bundleText: string, verifyPath: 
     "  Write the verify report to:",
     `    ${verifyPath}`,
     "  The report MUST start with `VERDICT: PASS|PARTIAL|FAIL`.",
+    "  Also record the suite's wall-clock seconds as `TEST_DURATION_S=<seconds>`",
+    `  (one line) to: ${durationLog}`,
     "",
     BRANCH_DISCIPLINE,
     blockers(testCmd),
