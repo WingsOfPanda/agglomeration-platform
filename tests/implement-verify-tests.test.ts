@@ -30,12 +30,16 @@ describe("classifyTestRun (pure)", () => {
   it("exit 0 -> pass", () => {
     expect(classifyTestRun("npm test", 0)).toBe("pass");
   });
-  it("exit 124 (timeout) -> unverifiable", () => {
+  it("exit 124 (timeout SIGTERM) -> unverifiable", () => {
     expect(classifyTestRun("npm test", 124)).toBe("unverifiable");
+  });
+  it("exit 137 (timeout --kill-after SIGKILL) -> unverifiable (a kill-on-timeout is a timeout)", () => {
+    expect(classifyTestRun("npm test", 137)).toBe("unverifiable");
   });
   it("any other non-zero (incl. null) -> fail", () => {
     expect(classifyTestRun("npm test", 1)).toBe("fail");
     expect(classifyTestRun("npm test", 127)).toBe("fail");
+    expect(classifyTestRun("npm test", 143)).toBe("fail");   // external SIGTERM (not a timeout signal)
     expect(classifyTestRun("npm test", null)).toBe("fail");
   });
 });

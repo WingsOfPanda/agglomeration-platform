@@ -15,12 +15,14 @@ export type TestVerdict = typeof TEST_VERDICTS[number];
 /** Map a hub test re-run to a verdict. Pure.
  *  - testCmd === "" (no suite detected) -> "none"  (Stage 2 falls back to the worker's report)
  *  - exit 0                              -> "pass"
- *  - exit 124 (GNU timeout killed it)    -> "unverifiable"
+ *  - exit 124 (GNU timeout sent SIGTERM) -> "unverifiable"
+ *  - exit 137 (timeout's --kill-after escalated to SIGKILL on a suite that ignored SIGTERM) ->
+ *      "unverifiable" too — a killed-on-timeout run is a timeout, not a genuine test failure
  *  - any other non-zero (incl. null)     -> "fail" */
 export function classifyTestRun(testCmd: string, code: number | null): TestVerdict {
   if (testCmd === "") return "none";
   if (code === 0) return "pass";
-  if (code === 124) return "unverifiable";
+  if (code === 124 || code === 137) return "unverifiable";
   return "fail";
 }
 
@@ -43,13 +45,16 @@ export function shouldSkipVerify(workerDurationS: number | null, maxS: number): 
 export interface TestRunResult { code: number; output: string; }
 export interface TestRunner { run(cwd: string, testCmd: string, timeoutS: number): TestRunResult; }
 
-/** Live runner: `timeout <timeoutS> bash -c -- "<testCmd>"` in cwd; combined stdout+stderr captured,
- *  exit code returned (124 on timeout). Large maxBuffer — a full suite's output can exceed 1MB.
- *  Never throws: a non-zero exit is returned as {code, output}, not raised. */
+/** Live runner: `timeout --kill-after=5 <timeoutS> bash -c -- "<testCmd> 2>&1"` in cwd; combined
+ *  stdout+stderr captured, exit code returned. GNU timeout signals the spawned command's whole
+ *  process group, so same-group test children (vitest workers, pytest-xdist, ...) are reaped on
+ *  timeout; `--kill-after=5` escalates SIGTERM -> SIGKILL after 5s so a suite that ignores SIGTERM
+ *  (exit 124 -> 137) can't linger. Large maxBuffer — a full suite's output can exceed 1MB. Never
+ *  throws: a non-zero exit is returned as {code, output}, not raised. */
 export const liveTestRunner: TestRunner = {
   run(cwd, testCmd, timeoutS) {
     try {
-      const output = execFileSync("timeout", [String(timeoutS), "bash", "-c", "--", `${testCmd} 2>&1`], {
+      const output = execFileSync("timeout", ["--kill-after=5", String(timeoutS), "bash", "-c", "--", `${testCmd} 2>&1`], {
         cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024,
       });
       return { code: 0, output };
