@@ -52,3 +52,14 @@ describe("send error paths", () => {
     expect(await send(["bravo", "demo", "hello"])).toBe(1);
   });
 });
+
+describe("send/collect reject unsafe agent/topic slugs (path-segment gate)", () => {
+  it("send rejects a traversal topic or agent (rc 2, before any state read)", async () => {
+    expect(await send(["alpha", "../evil", "hi"])).toBe(2);
+    expect(await send(["../x", "demo", "hi"])).toBe(2);
+  });
+  it("collect rejects a traversal topic or agent (rc 2)", async () => {
+    expect(await collect(["alpha", "../evil"])).toBe(2);
+    expect(await collect(["../x", "demo"])).toBe(2);
+  });
+});
