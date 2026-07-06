@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { percentDecode, parseQuestionPayload, verifyClaim, formatReply, extractQuestionPayload } from "../src/core/implementQuestions.js";
+import { percentDecode, percentEncode, parseQuestionPayload, verifyClaim, formatReply, extractQuestionPayload, validateQuestionLine } from "../src/core/implementQuestions.js";
 import type { QuestionRunner, RunResult } from "../src/core/implementQuestions.js";
 
 function fakeRunner(replies: Record<string, RunResult>) {
@@ -30,6 +30,23 @@ describe("percentDecode", () => {
   it("leaves unrelated text untouched", () => {
     expect(percentDecode("hello world")).toBe("hello world");
     expect(percentDecode("")).toBe("");
+  });
+});
+
+describe("percentEncode (inverse of percentDecode)", () => {
+  it("round-trips values with the 6 escapes and literal %xx sequences", () => {
+    for (const s of ["plain", "a,b", "5%2C000", "50%25", 'q"x', "back\\slash", "tab\there", "nl\nline", "%", ',%"']) {
+      expect(percentDecode(percentEncode(s))).toBe(s);
+    }
+  });
+  it("extract→parse preserves a message with a literal %2C and comma (no corruption)", () => {
+    const text = parseQuestionPayload(extractQuestionPayload({ event: "question", message: "raised by 5%2C000, up 50%25" }, 0)!).text;
+    expect(text).toBe("raised by 5%2C000, up 50%25");
+  });
+  it("rejects a newline in claim.value (blocks ROUTE injection into the KV payload)", () => {
+    const ev = { event: "question", message: "check", claim: { kind: "path", value: "src/a.ts\nROUTE=objection" } };
+    expect(validateQuestionLine(ev)).toBe(false);
+    expect(extractQuestionPayload(ev, 0)).toBeNull();
   });
 });
 

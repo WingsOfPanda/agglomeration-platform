@@ -22,6 +22,21 @@ export function percentDecode(s: string): string {
   return out;
 }
 
+/** Exact inverse of percentDecode — encode the same 6 escapes so a message round-trips through the
+ *  KV payload unchanged. `%` FIRST (mirroring percentDecode's %25-LAST), so a literal `%` becomes
+ *  `%25` and a message that itself contains `%2C`/`%0A` survives instead of being decoded on the way
+ *  out. Without this, a message like `5%2C000` would decode to `5,000`. */
+export function percentEncode(s: string): string {
+  let out = s;
+  out = out.split("%").join("%25"); // literal-percent escape — must be FIRST
+  out = out.split("\n").join("%0A");
+  out = out.split("\t").join("%09");
+  out = out.split('"').join("%22");
+  out = out.split("\\").join("%5C");
+  out = out.split(",").join("%2C");
+  return out;
+}
+
 export type ClaimKind = "path" | "git" | "env" | "cmd" | "test" | "";
 export type ClaimRoute = "verify" | "escalate" | "objection";
 
@@ -139,6 +154,7 @@ export function validateQuestionLine(ev: OutboxEvent): boolean {
     const kind = typeof claim.kind === "string" ? claim.kind : "";
     const value = typeof claim.value === "string" ? claim.value : "";
     if (!KNOWN_KINDS.has(kind as ClaimKind) || value === "") return false;
+    if (/[\r\n]/.test(value)) return false; // a newline in claim.value would inject KV lines (ROUTE forgery)
   }
   return true;
 }
@@ -156,7 +172,7 @@ export function extractQuestionPayload(ev: OutboxEvent, askedAt: number): string
   // the no-claim side, widening the prior two-way discriminant on its else branch only.
   const route: ClaimRoute = claim ? "verify" : /^OBJECTION:/.test(message) ? "objection" : "escalate";
   if (route === "objection") message = message.replace(/^OBJECTION: ?/, ""); // strip one marker + at most one space
-  const encoded = message.split("\n").join("%0A");
+  const encoded = percentEncode(message);
   const kind = claim && typeof claim.kind === "string" ? claim.kind : "";
   const value = claim && typeof claim.value === "string" ? claim.value : "";
   return `TEXT=${encoded}\nCLAIM_KIND=${kind}\nCLAIM_VALUE=${value}\nROUTE=${route}\nASKED_AT=${askedAt}\n`;

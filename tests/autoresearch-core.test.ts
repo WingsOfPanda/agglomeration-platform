@@ -200,6 +200,11 @@ describe("renderScoreboardRow", () => {
     expect(renderScoreboardRow("n/a", "3", "accuracy", "fail", "mlp"))
       .toBe("n/a | fail | 3.00s | mlp | accuracy");
   });
+  it("scrubs a `|` in a worker-controlled cell so the column count survives", () => {
+    const row = renderScoreboardRow("0.9", "1", "acc", "ok", "a|b|c");
+    expect(row.split("|").length).toBe(5);                 // still 5 cells, not shifted to 7
+    expect(row).toBe("0.9000 | ok | 1.00s | a b c | acc"); // the injected pipes became spaces
+  });
 });
 
 describe("buildScoreboard", () => {
