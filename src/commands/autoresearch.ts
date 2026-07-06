@@ -41,7 +41,7 @@ import { writeLessonsAtFinalize, retrieveForDispatch, liveMemoryIo, type MemoryI
 import { type LessonVerdict } from "../core/autoresearchMemory.js";
 import { agentBinary, consultTimeout } from "../core/contracts.js";
 import { inboxWrite, inboxPath, outboxPath, paneMetaRead, resolveModel } from "../core/ipc.js";
-import { paneSend, killNow } from "../core/tmux.js";
+import { paneSend, killNow, paneAlive } from "../core/tmux.js";
 import { haveCmd } from "../core/deps.js";
 import { spawnListArg, parsePanesFile, spawnResultsTsv, spawnTally, type SpawnResult } from "../core/design.js";
 import { pickAgents } from "../core/agents.js";
@@ -783,7 +783,7 @@ function readSlice(path: string, start: number, end: number): string {
   } catch { return ""; }
 }
 
-export async function monitorRun(args: string[], opts?: { home?: string; cwd?: string }): Promise<number> {
+export async function monitorRun(args: string[], opts?: { home?: string; cwd?: string; paneAlive?: (p: string) => Promise<boolean>; sleepMs?: number; paneCheckEveryTicks?: number }): Promise<number> {
   // Strip --once anywhere so it's position-independent; the rest are the 2 positionals.
   const once = args.includes("--once");
   const pos = args.filter((a) => a !== "--once");
@@ -810,8 +810,8 @@ export async function monitorRun(args: string[], opts?: { home?: string; cwd?: s
   };
 
   const persist = (state: MonitorScanState): void => {
-    writeFileSync(cursorFile, String(state.offset));            // NO trailing newline
-    writeFileSync(rescanFile, [...state.rescanEmitted].join("\n"));
+    atomicWrite(cursorFile, String(state.offset));            // NO trailing newline; atomic so a torn
+    atomicWrite(rescanFile, [...state.rescanEmitted].join("\n")); // write can't rewind the resume cursor
   };
 
   // Initial cursor restore + pre-seed from the whole outbox (size = BYTES).
@@ -822,6 +822,18 @@ export async function monitorRun(args: string[], opts?: { home?: string; cwd?: s
     readIfExistsOrNull(rescanFile),
   );
   persist(state);
+
+  // Bounded-loop escape hatch (non-once path only): once the worker's tmux pane is gone (its session
+  // was torn down or killed) the monitor has nothing left to watch, so stop instead of polling a
+  // static outbox forever. Probe the pane every paneCheckEvery ticks and exit after two consecutive
+  // dead probes (a transient probe blip must not stop a live monitor). A null pane id (pane.json
+  // absent) keeps the legacy unbounded loop — a real spawned worker always has one. Probe, cadence,
+  // and sleep are injectable so this is testable without real tmux or 2s waits.
+  const probePane = opts?.paneAlive ?? paneAlive;
+  const paneCheckEvery = opts?.paneCheckEveryTicks ?? 15;
+  const tickMs = opts?.sleepMs ?? 2000;
+  const paneId = paneMetaRead(agent, model, topic);
+  let deadPolls = 0, tick = 0;
 
   do {
     let size = 0, mtime = 0;
@@ -847,7 +859,14 @@ export async function monitorRun(args: string[], opts?: { home?: string; cwd?: s
     persist(state);
 
     if (once) break;
-    await sleep(2000);
+    tick++;
+    if (paneId && tick % paneCheckEvery === 0) {
+      let alive = true;
+      try { alive = await probePane(paneId); } catch { alive = false; } // tmux server gone -> pane gone
+      if (alive) deadPolls = 0;
+      else if (++deadPolls >= 2) break;
+    }
+    await sleep(tickMs);
   } while (!once);
 
   return 0;
