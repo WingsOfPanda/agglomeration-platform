@@ -1,10 +1,11 @@
 // tests/implement-verify-tests.test.ts — hub-side independent test re-run (v1, in-place).
 import { describe, it, expect } from "vitest";
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { implementArtDir } from "../src/core/implement.js";
-import { classifyTestRun, parseWorkerDuration, shouldSkipVerify, type TestRunner } from "../src/core/implementVerifyTests.js";
+import { classifyTestRun, parseWorkerDuration, shouldSkipVerify, liveTestRunner, TEST_VERDICTS, type TestRunner } from "../src/core/implementVerifyTests.js";
 import { verifyTestsWith, type VerifyTestsDeps } from "../src/commands/implement.js";
 
 async function capture(fn: () => Promise<number>): Promise<{ rc: number; out: string; err: string }> {
@@ -109,6 +110,76 @@ describe("implement verify-tests (in-place hub re-run)", () => {
     const h = freshHome();
     const runner: TestRunner = { run: () => ({ code: 0, output: "" }) };
     expect(await verifyTestsWith("vt-noart", 1, deps(runner, "npm test"))).toBe(1);
+    h.cleanup();
+  });
+});
+
+// The LIVE runner (real `timeout bash -c` exec) is what actually gates every implement verdict; the
+// verb tests above all inject a fake, so these exercise the exit-code capture, timeout (124) contract,
+// missing-command degradation, and stdout+stderr concatenation for real. Requires GNU `timeout` on
+// PATH (present on Linux + the CI runner).
+describe("liveTestRunner (real exec)", () => {
+  const cwd = () => mkdtempSync(join(tmpdir(), "ltr-"));
+
+  it("exit 0 -> code 0, empty output", () => {
+    expect(liveTestRunner.run(cwd(), "true", 10)).toEqual({ code: 0, output: "" });
+  });
+  it("non-zero exit code is carried faithfully (not flattened to 1)", () => {
+    expect(liveTestRunner.run(cwd(), "exit 3", 10).code).toBe(3);
+  });
+  it("captures stdout on the success path", () => {
+    const r = liveTestRunner.run(cwd(), "echo HELLO", 10);
+    expect(r.code).toBe(0);
+    expect(r.output).toContain("HELLO");
+  });
+  it("captures BOTH stdout and stderr on the failure path", () => {
+    const r = liveTestRunner.run(cwd(), "echo OUT; echo ERR >&2; exit 1", 10);
+    expect(r.code).toBe(1);
+    expect(r.output).toContain("OUT");
+    expect(r.output).toContain("ERR");
+  });
+  it("timeout maps to code 124 (the GNU-timeout contract classifyTestRun relies on)", () => {
+    const r = liveTestRunner.run(cwd(), "sleep 5", 1);
+    expect(r.code).toBe(124);
+    expect(classifyTestRun("sleep 5", r.code)).toBe("unverifiable");
+  });
+  it("a missing test command degrades to 127 (distinct from timeout, never throws)", () => {
+    const r = liveTestRunner.run(cwd(), "definitely_not_a_real_command_zzz", 10);
+    expect(r.code).toBe(127);
+    expect(r.code).not.toBe(124);
+    expect(classifyTestRun("x", r.code)).toBe("fail");
+  });
+  it("runs in the given cwd", () => {
+    const d = cwd();
+    writeFileSync(join(d, "marker.txt"), "");
+    expect(liveTestRunner.run(d, "test -f marker.txt && echo FOUND", 10).output).toContain("FOUND");
+  });
+});
+
+// Producer<->consumer contract: the machine-readable stdout the verb prints must stay in lockstep with
+// the commands/implement.md directive that greps it. Renaming a key or adding a verdict passes every
+// other test while silently breaking the directive — this project's recurring drift bug class.
+describe("verify-tests stdout <-> implement.md directive contract", () => {
+  const md = readFileSync(join(process.cwd(), "commands", "implement.md"), "utf8");
+
+  it("every TestVerdict value is documented as a branch in implement.md Stage 2", () => {
+    for (const v of TEST_VERDICTS) {
+      expect(md, `implement.md has no branch for VERDICT=${v}`).toContain(`\`${v}\``);
+    }
+  });
+
+  it("every KEY= token the verb prints is referenced in implement.md", async () => {
+    const h = freshHome();
+    const art = implementArtDir("vt-contract");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "target_cwd.txt"), "/repo/main\n");
+    const runner: TestRunner = { run: () => ({ code: 0, output: "ok\n" }) };
+    const { out } = await capture(() => verifyTestsWith("vt-contract", 1, deps(runner, "npm test")));
+    const keys = [...out.matchAll(/^([A-Z_]+)=/gm)].map((m) => m[1]);
+    expect(keys).toContain("VERDICT");   // sanity: the verb actually emitted keyed lines
+    for (const k of new Set(keys)) {
+      expect(md, `implement.md never references the verb's ${k}= stdout key`).toContain(`${k}=`);
+    }
     h.cleanup();
   });
 });
