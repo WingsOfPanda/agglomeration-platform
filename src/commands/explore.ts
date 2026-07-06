@@ -1,7 +1,7 @@
 // src/commands/explore.ts — /ap:explore CLI verbs (port of meditate). Built on design's DI
 // pattern + IPC/wait/archive helpers; meditate-specific logic lives in src/core/explore*.ts.
 // NOTE: verbs are added task-by-task; the dispatcher's switch grows as each verb lands.
-import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync, statSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile } from "../args.js";
@@ -21,8 +21,8 @@ import { agentConsultValidated, consultTimeout, agentTimeoutMultiplier } from ".
 import { classifyTopic } from "../core/exploreLit.js";
 import { computeSignals, renderSkipRecord, type Decision } from "../core/exploreConfidence.js";
 import { buildAnnotations } from "../core/exploreAnnotate.js";
-import { outboxOffset, outboxPath, outboxWaitSince, type OutboxEvent } from "../core/ipc.js";
-import { parseLatestOffset, scaledTimeout, researchState, verifyState, gateState } from "../core/designTurn.js";
+import { outboxOffset, outboxPath, outboxWaitSince, TERMINAL_EVENTS, type OutboxEvent } from "../core/ipc.js";
+import { parseLatestOffset, scaledTimeout, researchState, verifyState, gateState, recordWaitOutcome } from "../core/designTurn.js";
 import { composeExploreResearchPrompt, composeAdversaryPrompt, litGuidance } from "../core/exploreTurn.js";
 import { run as sendRun } from "./send.js";
 import { run as spawnRun } from "./spawn.js";
@@ -193,18 +193,13 @@ export async function researchWaitWith(topic: string, agent: string, provider: s
 
   const timeout = scaledTimeout(consultTimeout("research"), d.multiplier(provider));
   log.info(`explore research-wait: ${agent} offset=${offset} timeout=${timeout}s`);
-  const ev = await d.wait(agent, provider, topic, offset, ["done", "error", "question"], timeout);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
 
   const findingsPath = join(art, `findings-${agent}.md`);
   const findingsText = readIfExistsOrNull(findingsPath);
   const fs = researchState(ev, findingsText);
-  if (fs === "question" && ev) {
-    atomicWrite(join(art, `question-${agent}.txt`), JSON.stringify(ev) + "\n");
-    const bumped = outboxOffset(outboxPath(agent, provider, topic));
-    appendFileSync(stateFile, `OFFSET=${bumped}\nFS=question\n`);
-  } else {
-    appendFileSync(stateFile, `FS=${fs}\n`);
-  }
+  recordWaitOutcome(agent, provider, topic, stateFile, fs, "FS",
+    ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
   writeFileSync(join(art, `research-${agent}.done`), "");
   log.ok(`explore research-wait: ${agent} FS=${fs}`);
   return 0;
@@ -345,18 +340,13 @@ export async function adversaryWaitWith(topic: string, agent: string, provider: 
 
   const timeout = scaledTimeout(consultTimeout("adversary"), d.multiplier(provider));
   log.info(`explore adversary-wait: ${agent} offset=${offset} timeout=${timeout}s`);
-  const ev = await d.wait(agent, provider, topic, offset, ["done", "error", "question"], timeout);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
 
   const outPath = join(art, `adversary-${agent}.md`);
   const text = readIfExistsOrNull(outPath);
   const as = verifyState(ev, text); // done -> ok iff non-empty; mirrors the adversary wait's -s check
-  if (as === "question" && ev) {
-    atomicWrite(join(art, `question-${agent}.txt`), JSON.stringify(ev) + "\n");
-    const bumped = outboxOffset(outboxPath(agent, provider, topic));
-    appendFileSync(stateFile, `OFFSET=${bumped}\nAS=question\n`);
-  } else {
-    appendFileSync(stateFile, `AS=${as}\n`);
-  }
+  recordWaitOutcome(agent, provider, topic, stateFile, as, "AS",
+    ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
   writeFileSync(join(art, `adversary-${agent}.done`), "");
   log.ok(`explore adversary-wait: ${agent} AS=${as}`);
   return 0;
