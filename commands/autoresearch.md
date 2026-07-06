@@ -1,7 +1,7 @@
 ---
 description: Advisor-driven autoresearch — lock a measurable metric, sweep SOTA, spawn 2-3 persistent codex workers, and adaptively dispatch experiments until a target/plateau/budget stop. Explore-only; promotion to real code is /ap:implement.
 argument-hint: <objective-text> [--metric k=v,...] [--time-budget none|<N>h|<N>s] [--slug s] [--seed-from path]
-allowed-tools: Bash, Write, Read, Edit, AskUserQuestion, WebSearch, Skill
+allowed-tools: Bash, Write, Read, Edit, AskUserQuestion, WebSearch, Skill, TaskCreate, TaskUpdate, TaskStop, Monitor
 ---
 
 # /ap:autoresearch

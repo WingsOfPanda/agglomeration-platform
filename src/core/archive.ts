@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync, renameSync, rmSync, readdirSync, readFileSync, openSync, closeSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync, readdirSync, readFileSync, openSync, closeSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { workerDir, topicDir, globalRoot, repoHash } from "./paths.js";
 import { atomicWrite } from "./atomic.js";
@@ -18,7 +18,7 @@ export function stateInit(agent: string, model: string, topic: string): void {
   mkdirSync(dir, { recursive: true });
   for (const f of STALE) rmSync(join(dir, f), { force: true });
   closeSync(openSync(join(dir, "outbox.jsonl"), "w")); // touch fresh empty
-  writeFileSync(join(dir, ".session_id"), `${process.env.CLAUDE_CODE_SESSION_ID ?? "unknown"}\n`);
+  atomicWrite(join(dir, ".session_id"), `${process.env.CLAUDE_CODE_SESSION_ID ?? "unknown"}\n`);
 }
 
 function uniqueDest(base: string): string {

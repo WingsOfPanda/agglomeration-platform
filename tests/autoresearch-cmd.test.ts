@@ -753,6 +753,30 @@ describe("autoresearch monitor", () => {
     const { rc } = await capture(() => monitorRun(["--once", TOPIC, INST], opts(h)));
     expect(rc).toBe(0);
   });
+
+  it("non-once loop exits (does not hang) once the worker pane is gone", async () => {
+    const h = home();
+    scaffold(h);   // pane.json pane_id "%1" is present, so paneMetaRead resolves
+    // Inject a probe that reports the pane dead + a 0ms tick + per-tick checks: the loop must exit
+    // after two consecutive dead probes instead of polling forever. (Fails via the vitest timeout.)
+    const { rc } = await capture(() => monitorRun([TOPIC, INST], {
+      ...opts(h), paneAlive: async () => false, sleepMs: 0, paneCheckEveryTicks: 1,
+    }));
+    expect(rc).toBe(0);
+  });
+
+  it("non-once loop keeps running while the pane is alive (a live probe does not stop it early)", async () => {
+    const h = home();
+    scaffold(h);
+    // Alive for the first checks, then dead — proves a live probe resets the dead-poll counter and
+    // only a sustained death stops the loop (no false early-exit on a transient blip).
+    let calls = 0;
+    const { rc } = await capture(() => monitorRun([TOPIC, INST], {
+      ...opts(h), paneAlive: async () => (++calls <= 3 ? calls % 2 === 1 : false), sleepMs: 0, paneCheckEveryTicks: 1,
+    }));
+    expect(rc).toBe(0);
+    expect(calls).toBeGreaterThan(3);   // ran past the alive probes before the sustained death exit
+  });
 });
 
 // ---- Phase C: status-brief — render a compact chat-shaped status update (C8) ----

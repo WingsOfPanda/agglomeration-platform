@@ -3,6 +3,7 @@ import { realpathSync, mkdirSync, writeFileSync, readFileSync, existsSync, readd
 import { homedir } from "node:os";
 import { join, basename, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
+import { atomicWrite } from "./atomic.js";
 
 export function globalRoot(home?: string): string {
   return home ?? process.env.AP_HOME ?? join(homedir(), ".ap");
@@ -85,7 +86,7 @@ export function runDir(command: string, opts?: { sweepSecs?: number }): string {
     } catch { /* ignore */ }
   }
   const dir = mkdtempSync(join(runRoot, `${command}.`));
-  writeFileSync(join(runRoot, ".last"), dir); // no trailing newline
+  atomicWrite(join(runRoot, ".last"), dir); // no trailing newline; atomic so a torn write can't strand runDirLast
   return dir;
 }
 
@@ -101,7 +102,7 @@ export function runArgsFile(command: string, prefix?: string): string {
   mkdirSync(argsDir, { recursive: true });
   const f = mkdtempSync(join(argsDir, `${prefix ?? command}.`)) + "/args";
   writeFileSync(f, ""); // placeholder file at a unique path
-  writeFileSync(join(dir, "args-path.txt"), f); // no trailing newline
+  atomicWrite(join(dir, "args-path.txt"), f); // no trailing newline; atomic so the pointer never tears
   return f;
 }
 

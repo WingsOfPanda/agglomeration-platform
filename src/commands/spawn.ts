@@ -6,6 +6,7 @@ import { inTmuxSession, tmuxVersionOk, haveCmd } from "../core/deps.js";
 import { topicDir, workerDir, repoRoot } from "../core/paths.js";
 import { stateInit, stateArchive, isoUtc } from "../core/archive.js";
 import { readIfExists } from "../core/fsread.js";
+import { atomicWrite } from "../core/atomic.js";
 import { identityWrite, identityPath, inboxWrite, inboxPath, paneMetaWrite, outboxWait, outboxDump } from "../core/ipc.js";
 import { paneListedFor } from "../core/design.js";
 import { pickRandomAgent, agentInUse, formatCollisionError } from "../core/agents.js";
@@ -88,7 +89,7 @@ export async function run(args: string[]): Promise<number> {
       else pane = await splitRight(launch, undefined, startDir);
       await paneLabelSet(pane, agent, model, topic);
       mkdirSync(topicDir(topic), { recursive: true });
-      writeFileSync(lastFile, pane + "\n");
+      atomicWrite(lastFile, pane + "\n");   // atomic: a torn .last_pane would break the next split-target
     }
     if (!(await ensureWindowBorderStatus(pane))) log.warn(`could not force pane-border-status on the spawn window; '${labelFor(agent, model, topic)}' label may not render`);
     paneMetaWrite(agent, model, topic, pane);
