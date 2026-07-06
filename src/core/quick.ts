@@ -39,7 +39,9 @@ export function parseQuickArgs(tokens: string[]): QuickArgs {
 }
 
 /** Repo test command by file presence (never executes). Precedence:
- *  tests/run.sh > package.json "test" > Makefile test: > pytest. "" if none. */
+ *  tests/run.sh > package.json "test" > Makefile test: > pytest > cargo test > go test.
+ *  "" if none — a "" makes the hub verify-tests step emit VERDICT=none (no independent re-run),
+ *  so a missing ecosystem here silently drops back to trusting the worker's own log. */
 export function detectTestCommand(root: string): string {
   if (existsSync(join(root, "tests", "run.sh"))) return "bash tests/run.sh";
   const pkg = join(root, "package.json");
@@ -51,6 +53,8 @@ export function detectTestCommand(root: string): string {
     try { if (/^test:/m.test(readFileSync(mk, "utf8"))) return "make test"; } catch { /* unreadable */ }
   }
   if ((existsSync(join(root, "pyproject.toml")) || existsSync(join(root, "setup.cfg"))) && existsSync(join(root, "tests"))) return "pytest";
+  if (existsSync(join(root, "Cargo.toml"))) return "cargo test";
+  if (existsSync(join(root, "go.mod"))) return "go test ./...";
   return "";
 }
 
