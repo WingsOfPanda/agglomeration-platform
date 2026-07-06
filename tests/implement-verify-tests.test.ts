@@ -4,9 +4,8 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { implementArtDir } from "../src/core/implement.js";
-import { classifyTestRun } from "../src/core/implementVerifyTests.js";
+import { classifyTestRun, parseWorkerDuration, shouldSkipVerify, type TestRunner } from "../src/core/implementVerifyTests.js";
 import { verifyTestsWith, type VerifyTestsDeps } from "../src/commands/implement.js";
-import type { TestRunner } from "../src/core/implementVerifyTests.js";
 
 async function capture(fn: () => Promise<number>): Promise<{ rc: number; out: string; err: string }> {
   const out: string[] = []; const err: string[] = [];
@@ -110,6 +109,87 @@ describe("implement verify-tests (in-place hub re-run)", () => {
     const h = freshHome();
     const runner: TestRunner = { run: () => ({ code: 0, output: "" }) };
     expect(await verifyTestsWith("vt-noart", 1, deps(runner, "npm test"))).toBe(1);
+    h.cleanup();
+  });
+});
+
+describe("parseWorkerDuration (pure)", () => {
+  it("parses TEST_DURATION_S=<int>", () => { expect(parseWorkerDuration("TEST_DURATION_S=1234\n")).toBe(1234); });
+  it("tolerates trailing spaces/tabs", () => { expect(parseWorkerDuration("TEST_DURATION_S=42 \t")).toBe(42); });
+  it("returns null when absent", () => { expect(parseWorkerDuration("nothing here\n")).toBeNull(); });
+  it("returns null when non-numeric", () => { expect(parseWorkerDuration("TEST_DURATION_S=abc")).toBeNull(); });
+});
+
+describe("shouldSkipVerify (pure)", () => {
+  it("null duration never skips (fail-safe)", () => { expect(shouldSkipVerify(null, 1800)).toBe(false); });
+  it("under threshold does not skip", () => { expect(shouldSkipVerify(1799, 1800)).toBe(false); });
+  it("equal to threshold does not skip (strict >)", () => { expect(shouldSkipVerify(1800, 1800)).toBe(false); });
+  it("over threshold skips", () => { expect(shouldSkipVerify(1801, 1800)).toBe(true); });
+});
+
+describe("implement verify-tests (duration gate)", () => {
+  it("worker duration over budget -> VERDICT=skipped, runner NOT called, no hub-test-output", async () => {
+    const h = freshHome();
+    const art = implementArtDir("vt-skip");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "target_cwd.txt"), "/repo/main\n");
+    writeFileSync(join(art, "worker-test-duration-1.txt"), "TEST_DURATION_S=999999\n"); // > 1800 default
+    let called = false;
+    const runner: TestRunner = { run: () => { called = true; return { code: 0, output: "" }; } };
+    const { rc, out } = await capture(() => verifyTestsWith("vt-skip", 1, deps(runner, "npm test")));
+    expect(rc).toBe(0);
+    expect(out).toContain("VERDICT=skipped\n");
+    expect(out).toContain("WORKER_DURATION_S=999999\n");
+    expect(out).toContain("TESTCMD=npm test\n");
+    expect(called).toBe(false);
+    expect(existsSync(join(art, "hub-test-output-1.log"))).toBe(false);
+    expect(readFileSync(join(art, "hub-verify-1.tsv"), "utf8")).toContain("verdict=skipped");
+    h.cleanup();
+  });
+
+  it("worker duration under budget -> runs normally (VERDICT=pass), carries WORKER_DURATION_S", async () => {
+    const h = freshHome();
+    const art = implementArtDir("vt-under");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "target_cwd.txt"), "/repo/main\n");
+    writeFileSync(join(art, "worker-test-duration-1.txt"), "TEST_DURATION_S=5\n");
+    const runner: TestRunner = { run: () => ({ code: 0, output: "ok\n" }) };
+    const { out } = await capture(() => verifyTestsWith("vt-under", 1, deps(runner, "npm test")));
+    expect(out).toContain("VERDICT=pass\n");
+    expect(out).toContain("WORKER_DURATION_S=5\n");
+    expect(readFileSync(join(art, "hub-test-output-1.log"), "utf8")).toBe("ok\n");
+    h.cleanup();
+  });
+
+  it("no duration file -> runs (fail-safe), WORKER_DURATION_S empty", async () => {
+    const h = freshHome();
+    const art = implementArtDir("vt-nodur");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "target_cwd.txt"), "/repo/main\n");
+    const runner: TestRunner = { run: () => ({ code: 0, output: "ok\n" }) };
+    const { out } = await capture(() => verifyTestsWith("vt-nodur", 1, deps(runner, "npm test")));
+    expect(out).toContain("VERDICT=pass\n");
+    expect(out).toContain("WORKER_DURATION_S=\n");
+    h.cleanup();
+  });
+
+  it("AP_IMPLEMENT_VERIFY_MAX_S knob lowers the skip threshold", async () => {
+    const h = freshHome();
+    const prev = process.env.AP_IMPLEMENT_VERIFY_MAX_S;
+    process.env.AP_IMPLEMENT_VERIFY_MAX_S = "60";
+    try {
+      const art = implementArtDir("vt-knob");
+      mkdirSync(art, { recursive: true });
+      writeFileSync(join(art, "target_cwd.txt"), "/repo/main\n");
+      writeFileSync(join(art, "worker-test-duration-1.txt"), "TEST_DURATION_S=100\n"); // > 60
+      let called = false;
+      const runner: TestRunner = { run: () => { called = true; return { code: 0, output: "" }; } };
+      const { out } = await capture(() => verifyTestsWith("vt-knob", 1, deps(runner, "npm test")));
+      expect(out).toContain("VERDICT=skipped\n");
+      expect(called).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.AP_IMPLEMENT_VERIFY_MAX_S; else process.env.AP_IMPLEMENT_VERIFY_MAX_S = prev;
+    }
     h.cleanup();
   });
 });
