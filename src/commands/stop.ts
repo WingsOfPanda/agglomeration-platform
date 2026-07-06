@@ -5,14 +5,14 @@ import { topicDir, repoStateDir, isArtifactDir, pluginRoot } from "../core/paths
 import { stateArchive } from "../core/archive.js";
 import { readIfExists } from "../core/fsread.js";
 import { paneMetaRead, paneMetaReadForDir } from "../core/ipc.js";
-import { paneAlive, killGraceful, killNow } from "../core/tmux.js";
+import { livePanes, killGraceful, killNow } from "../core/tmux.js";
 
 export const GRACEFUL_BATCH_WAIT_MS = 9000;
 export interface Pair { agent: string; model: string; }
 
 export interface StopDeps {
   paneMetaRead(i: string, m: string, t: string): string | null;
-  paneAlive(pane: string): Promise<boolean>;
+  livePanes(): Promise<Set<string>>;
   killGraceful(pane: string): Promise<void>;
   killNow(pane: string): Promise<void>;
   stateArchive(i: string, m: string, t: string): string | null;
@@ -23,9 +23,12 @@ export interface StopDeps {
 
 export async function teardownBatch(topic: string, pairs: Pair[], d: StopDeps): Promise<void> {
   const pending: string[] = [];
+  // ONE full-server pane snapshot for the whole batch (per-pane paneAlive would re-run the
+  // identical `tmux list-panes -a` scan for every worker).
+  const live = pairs.length > 0 ? await d.livePanes() : new Set<string>();
   for (const { agent, model } of pairs) {
     const pane = d.paneMetaRead(agent, model, topic) ?? "";
-    if (pane && (await d.paneAlive(pane))) {
+    if (pane && live.has(pane)) {
       log.info(`graceful shutdown for ${agent}-${model} on ${topic} (pane ${pane})`);
       await d.killGraceful(pane);
       pending.push(pane);
@@ -49,7 +52,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 function liveDeps(): StopDeps {
   return {
     paneMetaRead: (i, m, t) => paneMetaRead(i, m, t),
-    paneAlive: (p) => paneAlive(p),
+    livePanes: () => livePanes(),
     killGraceful: (p) => killGraceful(p, pluginRoot()),
     killNow: (p) => killNow(p),
     stateArchive: (i, m, t) => stateArchive(i, m, t),

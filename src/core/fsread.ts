@@ -10,6 +10,12 @@ export function readIfExistsOrNull(path: string): string | null {
   return existsSync(path) ? readFileSync(path, "utf8") : null;
 }
 
+/** File contents as utf8, or `fallback` ("" by default) when the read fails for ANY reason —
+ *  unlike readIfExists this also swallows read errors (EACCES/EISDIR), not just absence. */
+export function readOr(path: string, fallback = ""): string {
+  try { return readFileSync(path, "utf8"); } catch { return fallback; }
+}
+
 /** First line of a single-value state file, trimmed; "" if absent. */
 export function readField(path: string): string {
   return readIfExists(path).split("\n")[0].trim();

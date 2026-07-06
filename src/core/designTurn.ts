@@ -1,7 +1,9 @@
 // src/core/designTurn.ts — multi-worker research-phase turn helpers for design.
 // Built on the ipc primitives + the classifyTurn *semantics* from turn.ts
 // (reused, not bent). The verify-phase composer + state machine land in Phase D.
-import type { OutboxEvent } from "./ipc.js";
+import { appendFileSync } from "node:fs";
+import { outboxOffset, outboxPath, type OutboxEvent } from "./ipc.js";
+import { atomicWrite } from "./atomic.js";
 import { parseClaims } from "./designDiff.js";
 
 /** Research findings.md health, ported from consult_findings_status (lib/consult.sh).
@@ -43,6 +45,26 @@ export function lastKeyedNumber(text: string, key: string): number | null {
 /** The LAST `OFFSET=<n>` line — the re-armed wait resumes from the latest. */
 export function parseLatestOffset(stateText: string): number | null {
   return lastKeyedNumber(stateText, "OFFSET");
+}
+
+/** Shared wait-verb tail — the single WRITER of the `OFFSET=` / `<KEY>=` state-file micro-protocol
+ *  (parseLatestOffset / lastKeyedNumber / gateState are its readers). A captured question writes
+ *  the question payload file, then re-arms the state file with the outbox offset bumped PAST the
+ *  handled question event (plus any caller extra lines, e.g. implement's `OBJECTIONS=` counter) so
+ *  a same-round re-arm does not re-read it. Every other outcome appends the terminal
+ *  `<key>=<state>` line (latest-line-wins). Callers add their own `.done` marker / logging. */
+export function recordWaitOutcome(
+  agent: string, model: string, topic: string, stateFile: string,
+  state: string, key: string,
+  question?: { file: string; body: string; extraLines?: string },
+): void {
+  if (state === "question" && question) {
+    atomicWrite(question.file, question.body);
+    const bumped = outboxOffset(outboxPath(agent, model, topic));
+    appendFileSync(stateFile, `OFFSET=${bumped}\n${key}=question\n${question.extraLines ?? ""}`);
+  } else {
+    appendFileSync(stateFile, `${key}=${state}\n`);
+  }
 }
 
 /** Apply a provider's timeout_multiplier to a base timeout, ported from the consult_wait loop's

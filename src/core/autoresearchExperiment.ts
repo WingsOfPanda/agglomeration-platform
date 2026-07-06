@@ -7,7 +7,6 @@ import { mergeState } from "./autoresearchState.js";
  *  through the unchanged parent/knob lineage classification (see autoresearchLineage.ts) — the
  *  label is carried on the dispatch, not derived here. */
 export const OPERATORS = ["draft", "improve", "debug", "ablate", "replicate", "crossover", "literature-refresh"] as const;
-export type Operator = typeof OPERATORS[number];
 export function isOperator(s: string): boolean {
   return (OPERATORS as readonly string[]).includes(s);
 }

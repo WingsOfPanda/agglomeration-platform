@@ -4,6 +4,7 @@ import { workerDir, topicDir, pluginRoot } from "./paths.js";
 import { atomicWrite } from "./atomic.js";
 import { isoUtc } from "./archive.js";
 import { readIfExists } from "./fsread.js";
+import { log } from "./log.js";
 
 export function inboxPath(i: string, m: string, t: string) { return join(workerDir(i, m, t), "inbox.md"); }
 export function outboxPath(i: string, m: string, t: string) { return join(workerDir(i, m, t), "outbox.jsonl"); }
@@ -19,6 +20,17 @@ export function workerBusyState(i: string, m: string, t: string): string | null 
   if (!existsSync(sp)) return null;
   const match = readFileSync(sp, "utf8").match(/"state":"([^"]*)"/);
   return match && match[1] && match[1] !== "idle" ? match[1] : null;
+}
+
+/** Send-side dispatch gate shared by the single-worker turn/round verbs: refuse (log to stderr,
+ *  return false) unless the worker's outbox exists (it was spawned) and status.json says idle.
+ *  Guards against the mid-turn send that would clobber the worker's in-flight inbox task. */
+export function workerSendGate(i: string, m: string, t: string, label: string, unit: "turn" | "round"): boolean {
+  const outbox = outboxPath(i, m, t);
+  if (!existsSync(outbox)) { log.error(`${label}: outbox not found at ${outbox} — was ${i} spawned?`); return false; }
+  const busy = workerBusyState(i, m, t);
+  if (busy) { log.error(`${label}: worker not idle (state=${busy}); previous ${unit} still in flight`); return false; }
+  return true;
 }
 
 const SENDER_RE = /^[a-zA-Z0-9_-]+$/;
@@ -65,6 +77,10 @@ export function identityWrite(i: string, m: string, t: string): void {
 }
 
 export interface OutboxEvent { event: string; ts?: string; [k: string]: unknown; }
+
+/** The terminal outbox events every relay-capable turn/round wait listens for (frozen names).
+ *  Drilldown's `["done", "error"]` (no question relay) is deliberately not this list. */
+export const TERMINAL_EVENTS: string[] = ["done", "error", "question"];
 
 /** Parse one outbox JSONL line into a typed event, or null when the line is not JSON. The single
  *  home of the frozen JSON.parse event-matching mechanism (skip-non-JSON, never an anchored regex). */

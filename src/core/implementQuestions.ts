@@ -4,7 +4,6 @@
 // Side effects (git ref resolution, command lookup, diagnostic test runs) shell through an injected
 // Runner so unit tests stay pure. Filesystem (path) + environment (env) checks read ambient state.
 import { existsSync, accessSync, constants, statSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import type { OutboxEvent } from "./ipc.js";
 
 export interface RunResult { code: number; stdout: string; }
@@ -53,23 +52,6 @@ export function parseQuestionPayload(body: string): QuestionPayload {
 }
 
 export interface VerifyResult { rc: 0 | 1 | 2; evidence: string; }
-
-/** A cwd-bound synchronous runner for git/cmd/test claims. execFileSync — never a shell for git/cmd
- *  (argv array); kind=test routes through `bash -c` to match the prior plugin's `timeout 30 bash`. */
-export function questionRunnerAt(cwd: string): QuestionRunner {
-  return {
-    run(cmd, args) {
-      try {
-        const stdout = execFileSync(cmd, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-        return { code: 0, stdout };
-      } catch (e: unknown) {
-        const err = e as { status?: number; stdout?: Buffer | string; stderr?: Buffer | string };
-        const out = (err.stdout != null ? String(err.stdout) : "") + (err.stderr != null ? String(err.stderr) : "");
-        return { code: typeof err.status === "number" ? err.status : 1, stdout: out };
-      }
-    },
-  };
-}
 
 /** Strip trailing newline(s), matching bash `$(...)` capture (which strips all trailing newlines)
  *  + the reply's own printf '%s\n'. */

@@ -1,13 +1,14 @@
 // /ap:autoresearch CLI verbs (Phase B front half). Ports deep-research-init.sh
 // (slug/codex-gate/flags/scaffolding) + the deep-research.md Phase 0-3 surface.
 // Phase C: experiment-send (dispatch ONE experiment to a persistent codex worker).
-import { accessSync, appendFileSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, closeSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, relative, resolve } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile, kvParse } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
-import { readIfExists, readIfExistsOrNull } from "../core/fsread.js";
+import { readIfExists, readIfExistsOrNull, readOr } from "../core/fsread.js";
+import { envNum } from "../core/env.js";
 import { splitNonCommentLines } from "../core/text.js";
 import { archiveTopic, isoUtc } from "../core/archive.js";
 import { deriveSlug } from "../core/quick.js";
@@ -767,6 +768,21 @@ export const liveScoreDeps: AutoresearchScoreDeps = {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/** Positioned read of a file's bytes [start, end) — the tail the monitor cursor hasn't consumed.
+ *  "" when the range is empty (incl. a shrunk file, matching the prior subarray(offset) behavior)
+ *  or the file vanished mid-tick (the next tick recovers). */
+function readSlice(path: string, start: number, end: number): string {
+  if (end <= start) return "";
+  try {
+    const fd = openSync(path, "r");
+    try {
+      const buf = Buffer.alloc(end - start);
+      const n = readSync(fd, buf, 0, buf.length, start);
+      return buf.subarray(0, n).toString("utf8");
+    } finally { closeSync(fd); }
+  } catch { return ""; }
+}
+
 export async function monitorRun(args: string[], opts?: { home?: string; cwd?: string }): Promise<number> {
   // Strip --once anywhere so it's position-independent; the rest are the 2 positionals.
   const once = args.includes("--once");
@@ -808,17 +824,17 @@ export async function monitorRun(args: string[], opts?: { home?: string; cwd?: s
   persist(state);
 
   do {
-    const buf = existsSync(outbox) ? readFileSync(outbox) : Buffer.alloc(0);
-    const size = buf.length;
+    let size = 0, mtime = 0;
+    try { const st = statSync(outbox); size = st.size; mtime = Math.floor(st.mtimeMs / 1000); } catch { /* absent */ }
     const now = Math.floor(Date.now() / 1000);
     // Only the periodic whole-outbox rescan consumes outboxFullText; on the ticks where no rescan is
-    // due (the common case — rescanEveryS >> the poll interval) skip decoding the full buffer. When
+    // due (the common case — rescanEveryS >> the poll interval) skip reading the full file. When
     // not due, monitorScan's rescan guard short-circuits anyway (it needs both the interval AND a
-    // truthy outboxFullText), so passing "" is the exact no-op path.
+    // truthy outboxFullText), so passing "" is the exact no-op path. The common tick reads only the
+    // unconsumed tail [offset, size) instead of the whole (ever-growing) outbox.
     const rescanDue = now - state.lastRescan >= thresholds.rescanEveryS;
-    const full = rescanDue ? buf.toString("utf8") : "";
-    const text = buf.subarray(state.offset).toString("utf8");
-    const mtime = existsSync(outbox) ? Math.floor(statSync(outbox).mtimeMs / 1000) : 0;
+    const full = rescanDue ? readOr(outbox) : "";
+    const text = readSlice(outbox, state.offset, size);
     const phase = (existsSync(stateTxt) ? parseState(readFileSync(stateTxt, "utf8")).phase : "") ?? "";
 
     const r = monitorScan(outbox, agent, state, {
@@ -1010,11 +1026,6 @@ export interface AutoresearchFinalizeDeps {
 }
 
 const GIB = 1073741824;
-
-/** Read a file as utf8, or "" when absent/unreadable. */
-function readOr(path: string, fallback = ""): string {
-  try { return readFileSync(path, "utf8"); } catch { return fallback; }
-}
 
 /** List the exp-NNN dirs directly under a worker's experiments root (ENOENT-safe). */
 function listExpDirs(expsRoot: string): string[] {
@@ -1316,30 +1327,28 @@ export async function finalizeWith(args: string[], deps: AutoresearchFinalizeDep
   // any existing finalize step, output, or return value.
   writeFinalizeLessons(art, agents, deps);
 
-  // A3: fold non-audit sanity flags into warnings.txt (audit-knob-drift already covered by audit_warn).
-  const sanityExtra: string[] = [];
-  for (const c of readTsvRows(join(art, "sanity.tsv"), "exp_id\t") ?? []) {   // exp_id, agent, flag, detail, ts
-    if (c[2] === "audit-knob-drift") continue;   // dedupe vs finalize audit_warn
-    if (c[0] && c[1] && c[2]) sanityExtra.push(`sanity\t${c[1]}/${c[0]}\t${c[2]}\t${c[3] ?? ""}`);
-  }
-  if (sanityExtra.length) appendFileSync(warningsPath, sanityExtra.join("\n") + "\n");
-
-  // B2: fold improve-multi lineage rows into warnings.txt (advisory: delta not cleanly attributable).
-  const lineageExtra: string[] = [];
-  for (const c of readTsvRows(join(art, "lineage.tsv"), "exp_id\t") ?? []) {   // exp_id, agent, parent_id, knobs_changed, verdict, ts
-    if (c[4] !== "improve-multi") continue;
-    if (c[0] && c[1]) lineageExtra.push(`lineage\t${c[1]}/${c[0]}\timprove-multi\tparent=${c[2] ?? ""} knobs_changed=${c[3] ?? ""}`);
-  }
-  if (lineageExtra.length) appendFileSync(warningsPath, lineageExtra.join("\n") + "\n");
-
-  // C1: fold a not-reproduced inspection into warnings.txt (advisory in the summary; the row is
-  // already demoted to x<rank> by computeScore).
-  const reimplExtra: string[] = [];
-  for (const c of readTsvRows(join(art, "inspection.tsv"), "exp_id\t") ?? []) {   // exp_id, agent, verdict, reason, reimpl_metric, ts
-    if (c[2] !== "not-reproduced") continue;
-    if (c[0] && c[1]) reimplExtra.push(`reimpl\t${c[1]}/${c[0]}\tnot-reproduced\t${c[3] ?? ""}`);
-  }
-  if (reimplExtra.length) appendFileSync(warningsPath, reimplExtra.join("\n") + "\n");
+  // Fold advisory research-validity tsv rows into warnings.txt: one appended block per source,
+  // in this fixed order (part of the warnings.txt layout). rowToLine returns null to skip a row.
+  const foldWarnings = (tsv: string, rowToLine: (c: string[]) => string | null): void => {
+    const lines: string[] = [];
+    for (const c of readTsvRows(join(art, tsv), "exp_id\t") ?? []) {
+      const l = rowToLine(c);
+      if (l !== null) lines.push(l);
+    }
+    if (lines.length) appendFileSync(warningsPath, lines.join("\n") + "\n");
+  };
+  // A3: non-audit sanity flags (audit-knob-drift deduped — finalize's audit_warn already covers it).
+  foldWarnings("sanity.tsv", (c) =>            // exp_id, agent, flag, detail, ts
+    c[2] !== "audit-knob-drift" && c[0] && c[1] && c[2]
+      ? `sanity\t${c[1]}/${c[0]}\t${c[2]}\t${c[3] ?? ""}` : null);
+  // B2: improve-multi lineage rows (advisory: delta not cleanly attributable).
+  foldWarnings("lineage.tsv", (c) =>           // exp_id, agent, parent_id, knobs_changed, verdict, ts
+    c[4] === "improve-multi" && c[0] && c[1]
+      ? `lineage\t${c[1]}/${c[0]}\timprove-multi\tparent=${c[2] ?? ""} knobs_changed=${c[3] ?? ""}` : null);
+  // C1: not-reproduced inspections (advisory in the summary; computeScore already demotes to x<rank>).
+  foldWarnings("inspection.tsv", (c) =>        // exp_id, agent, verdict, reason, reimpl_metric, ts
+    c[2] === "not-reproduced" && c[0] && c[1]
+      ? `reimpl\t${c[1]}/${c[0]}\tnot-reproduced\t${c[3] ?? ""}` : null);
 
   // 9. render session-summary.md (FULL re-render; wholesale atomic replace).
   const statusRows: StatusRow[] = [];
@@ -1430,7 +1439,7 @@ export async function finalizeWith(args: string[], deps: AutoresearchFinalizeDep
 const liveFinalizeDeps: AutoresearchFinalizeDeps = {
   now: () => isoUtc(),
   keepIntermediate: process.env.AP_AUTORESEARCH_KEEP_INTERMEDIATE ? true : undefined,
-  sizeWarnGb: Number(process.env.AP_AUTORESEARCH_SIZE_WARN_GB) || 2,
+  sizeWarnGb: envNum("AP_AUTORESEARCH_SIZE_WARN_GB", 2),
 };
 
 // ---- Phase D: refine — STATELESS mid-experiment scope-narrowing. ----
@@ -1928,9 +1937,10 @@ const liveVerifyPlanDeps: VerifyPlanDeps = {
   writeRow: appendVerificationRow,
   now: () => isoUtc(),
 };
+const readMetricMd = (art: string): string | null => readIfExistsOrNull(join(art, "metric.md"));
 const liveVerifyCheckDeps: VerifyCheckDeps = {
   readResult: liveVerifyPlanDeps.readResult,
-  readMetricMd: (art) => readIfExistsOrNull(join(art, "metric.md")),
+  readMetricMd,
   readStdout: readIfExistsOrNull,
   readJson: readIfExistsOrNull,
   writeRow: appendVerificationRow,
@@ -1946,7 +1956,7 @@ function appendInspectionRow(art: string, agent: string, expId: string, row: Ins
 }
 const liveInspectPlanDeps: InspectPlanDeps = {
   readResult: liveVerifyPlanDeps.readResult,
-  readMetricMd: (art) => readIfExistsOrNull(join(art, "metric.md")),
+  readMetricMd,
   inspectionCount: (art) => { const p = join(art, "inspection.tsv"); if (!existsSync(p)) return 0; return readFileSync(p, "utf8").split("\n").filter((l) => l && !l.startsWith("exp_id\t")).length; },
   workerProvider: (_art, i, topic) => resolveModel(i, topic),
   writeRow: appendInspectionRow,
@@ -1954,7 +1964,7 @@ const liveInspectPlanDeps: InspectPlanDeps = {
 };
 const liveInspectCheckDeps: InspectCheckDeps = {
   readResult: liveVerifyPlanDeps.readResult,
-  readMetricMd: (art) => readIfExistsOrNull(join(art, "metric.md")),
+  readMetricMd,
   readStdout: readIfExistsOrNull,
   readJson: readIfExistsOrNull,
   writeRow: appendInspectionRow,
