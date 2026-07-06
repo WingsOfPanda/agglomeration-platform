@@ -1,5 +1,5 @@
 // src/commands/quick.ts
-import { mkdirSync, existsSync, readFileSync, appendFileSync } from "node:fs";
+import { mkdirSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile } from "../args.js";
@@ -13,9 +13,10 @@ import { haveCmd } from "../core/deps.js";
 import { pickRandomAgent } from "../core/agents.js";
 import { runnerAt, preSnapshot, createOrResumeBranch, finishBranch } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
-import { outboxOffset, outboxPath, outboxWaitSince, workerBusyState, type OutboxEvent } from "../core/ipc.js";
+import { outboxOffset, outboxPath, outboxWaitSince, workerSendGate, TERMINAL_EVENTS, type OutboxEvent } from "../core/ipc.js";
 import { composeRound1Prompt, composeFixPrompt, classifyTurn } from "../core/turn.js";
-import { parseLatestOffset } from "../core/designTurn.js";
+import { parseLatestOffset, recordWaitOutcome } from "../core/designTurn.js";
+import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
 import { run as sendRun } from "./send.js";
 import { readIfExists, readField, kvField } from "../core/fsread.js";
 
@@ -133,10 +134,7 @@ export async function turnSendWith(topic: string, round: number, d: TurnSendDeps
   const provider = readField(join(art, "selected-provider.txt"));
   if (!agent || !provider) { log.error("quick turn-send: missing agent.txt/selected-provider.txt (run quick init)"); return 1; }
 
-  const outbox = outboxPath(agent, provider, topic);
-  if (!existsSync(outbox)) { log.error(`quick turn-send: outbox not found at ${outbox} — was ${agent} spawned?`); return 1; }
-  const busy = workerBusyState(agent, provider, topic);
-  if (busy) { log.error(`quick turn-send: worker not idle (state=${busy}); previous turn still in flight`); return 1; }
+  if (!workerSendGate(agent, provider, topic, "quick turn-send", "turn")) return 1;
 
   const stateFile = join(exec, `turn-${round}.txt`);
   if (existsSync(stateFile)) { log.error(`quick turn-send: ${stateFile} already exists; rm to retry`); return 1; }
@@ -167,7 +165,7 @@ export interface TurnWaitDeps {
   wait(agent: string, model: string, topic: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null>;
 }
 
-const QUICK_TURN_TIMEOUT = Number(process.env.AP_QUICK_TURN_TIMEOUT) || 14400;
+const QUICK_TURN_TIMEOUT = envNum("AP_QUICK_TURN_TIMEOUT", DEFAULT_TURN_BUDGET_S);
 
 async function turnWaitRun(rest: string[]): Promise<number> {
   const [topic, roundStr] = rest;
@@ -190,17 +188,10 @@ export async function turnWaitWith(topic: string, round: number, d: TurnWaitDeps
   if (offset === null) { log.error(`quick turn-wait: OFFSET not set in ${stateFile}`); return 1; }
 
   log.info(`quick turn-wait: round=${round} offset=${offset} timeout=${QUICK_TURN_TIMEOUT}s`);
-  const ev = await d.wait(agent, provider, topic, offset, ["done", "error", "question"], QUICK_TURN_TIMEOUT);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, QUICK_TURN_TIMEOUT);
   const ts = classifyTurn(ev);
-  if (ts === "question" && ev) {
-    atomicWrite(join(exec, `question-${round}.txt`), JSON.stringify(ev) + "\n");
-    // Advance the offset past the handled question so a same-round re-arm does not re-read it
-    // (mirrors implement turnWaitWith; quick has no objection routing, so no OBJECTIONS= line).
-    const bumped = outboxOffset(outboxPath(agent, provider, topic));
-    appendFileSync(stateFile, `OFFSET=${bumped}\nTS=question\n`);
-  } else {
-    appendFileSync(stateFile, `TS=${ts}\n`);
-  }
+  recordWaitOutcome(agent, provider, topic, stateFile, ts, "TS",
+    ev ? { file: join(exec, `question-${round}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
   log.ok(`quick turn-wait: round=${round} TS=${ts}`);
   return 0;
 }
