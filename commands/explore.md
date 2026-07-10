@@ -242,7 +242,12 @@ recorded in `annotations.json` but **not** inlined (inlining there would perturb
 Set task `5.5` → `in_progress`.
 
 `$CS explore confidence <TOPIC>` → evaluates the 5 signals against `landscape-draft.md` + findings,
-logs `S1`–`S5` to stderr, and prints `ALL_HOLD=<bool>` to stdout.
+logs `S1`–`S5` to stderr, and prints one `S<n>=<bool>` line per signal followed by `ALL_HOLD=<bool>`
+(always the LAST stdout line — the `sed -n 's/^ALL_HOLD=//p'` parse is unchanged). The per-signal
+lines tell you WHICH signal failed — e.g. `S2=false` means at least one draft citation is
+corroborated by fewer than 2 workers; those exact citations reach the Phase 6 adversary prompts as
+Priority targets via `annotations.json`. The signals are report-only: never re-run, repair, or loop
+the gate on them.
 
 **Branch on `ALL_HOLD`:**
 
@@ -282,6 +287,11 @@ peers' raw `findings-<agent>.md` paths in the prompt. A worker whose research en
 soft-skipped (`AS=skipped`, no send): dispatching to a possibly-still-churning worker would
 clobber its single-slot inbox.
 
+When Phase 5b's `annotations.json` recorded solo citations (`unverified` / `approaches-flagged`
+items), each adversary prompt additionally lists those tokens under a `Priority targets` block —
+citations corroborated by only ONE worker, which the adversary is told to open and verify first.
+No annotations (or none of those kinds) → the block is simply absent; dispatch is unchanged.
+
 Set task `6` → `completed`.
 
 ## Phase 7 — adversary wait (skipped if Phase 6 skipped)
@@ -313,6 +323,26 @@ Run the input validator: `$CS explore synth-final <TOPIC>`. It prints the canoni
 `$ART/landscape-<date>-<topic>.md` on stdout. If adversary ran (the gate didn't record
 `user_decision: skip`), it requires every `adversary-<agent>.md` and **rc 1** with a
 missing-file list otherwise — surface and stop.
+
+**Then run the adversary consensus tally** (under this task row — no new TaskCreate row), UNLESS
+the gate recorded `user_decision: skip` (no critiques exist to tally — skip this call):
+
+```
+$CS explore verdict-tally <TOPIC>
+```
+
+It prints one `VERDICT=<agent>:<needs-attention|minor-revisions|accept|skipped|malformed>` line
+per list row plus a final `TALLY=<value>` majority line (ties break to the MOST severe;
+`skipped`/`malformed` rows are excluded from the majority; zero countable rows →
+`TALLY=unavailable`). The tally shapes your PROSE OBLIGATIONS below — NEVER an automatic loop or
+re-dispatch:
+
+- `TALLY=needs-attention` → you MUST address every Material finding from each
+  `adversary-<agent>.md` explicitly in `## Adversary critiques` and carry the surviving caveats
+  into `## Conclusion`.
+- `TALLY=accept` → a fast final synthesis is permitted — summarize the critiques normally.
+- `TALLY=minor-revisions` or `TALLY=unavailable` → today's behavior: summarize each critique and
+  incorporate what your judgment says matters.
 
 Then **use the Write tool** to author the final doc, reading `$ART/landscape-draft.md` + all
 `$ART/adversary-<agent>.md` (if adversary ran), with this EXACT section set:
