@@ -26236,12 +26236,21 @@ async function adversaryWaitWith(topic, agent, provider, d) {
 }
 async function exploreWaitGateRun(rest) {
   const [topic, phase] = rest;
+  const KEYS = {
+    research: "FS",
+    openq: "QS",
+    crossverify: "VS",
+    adversary: "AS",
+    rebuttal: "RS",
+    gap: "GS"
+  };
   if (!topic || !phase) {
-    log.error("usage: explore wait-gate <topic> <research|adversary|openq>");
+    log.error("usage: explore wait-gate <topic> <research|openq|crossverify|adversary|rebuttal|gap>");
     return 2;
   }
-  if (phase !== "research" && phase !== "adversary" && phase !== "openq") {
-    log.error(`explore wait-gate: phase must be research|adversary|openq (got ${phase})`);
+  const key = KEYS[phase];
+  if (!key) {
+    log.error(`explore wait-gate: phase must be research|openq|crossverify|adversary|rebuttal|gap (got ${phase})`);
     return 2;
   }
   const art = exploreArtDir(topic);
@@ -26255,7 +26264,6 @@ async function exploreWaitGateRun(rest) {
     log.error("explore wait-gate: list.txt has no workers");
     return 2;
   }
-  const key = phase === "research" ? "FS" : phase === "adversary" ? "AS" : "QS";
   const workers = rows.map((r) => {
     const stateFile = (0, import_node_path34.join)(art, `${phase}-${r.agent}.txt`);
     return {
