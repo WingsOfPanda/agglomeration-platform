@@ -8482,7 +8482,7 @@ function agentConsultValidated(name) {
   return inst(name)?.consult_validated === true;
 }
 function consultTimeout(kind) {
-  if (!(kind in CONSULT_DEFAULTS)) throw new Error(`consultTimeout: kind must be 'research', 'verify', 'adversary', 'experiment', 'openq', 'rebuttal', or 'gap'; got '${kind}'`);
+  if (!(kind in CONSULT_DEFAULTS)) throw new Error(`consultTimeout: kind must be 'research', 'verify', 'adversary', 'experiment', 'openq', 'rebuttal', 'gap', or 'signoff'; got '${kind}'`);
   const v = (load().consult ?? {})[`${kind}_timeout_s`];
   return /^[1-9][0-9]*$/.test(String(v)) ? Number(v) : CONSULT_DEFAULTS[kind];
 }
@@ -8497,7 +8497,7 @@ var init_contracts = __esm({
     import_node_path7 = require("node:path");
     import_yaml2 = __toESM(require_dist(), 1);
     init_paths();
-    CONSULT_DEFAULTS = { research: 600, verify: 300, adversary: 600, experiment: 1800, openq: 300, rebuttal: 300, gap: 600 };
+    CONSULT_DEFAULTS = { research: 600, verify: 300, adversary: 600, experiment: 1800, openq: 300, rebuttal: 300, gap: 600, signoff: 300 };
   }
 });
 
@@ -25351,7 +25351,7 @@ function litGuidance(track) {
 function researchLens(provider) {
   return RESEARCH_LENSES[provider] ?? NEUTRAL_LENS;
 }
-function composeExploreResearchPrompt(topic, writeTo, lit, lens) {
+function composeExploreResearchPrompt(topic, writeTo, lit, lens, selfassessTo) {
   const t = topic.trim();
   return [
     "Investigate the following topic from multiple angles. Your job is not to",
@@ -25393,6 +25393,20 @@ function composeExploreResearchPrompt(topic, writeTo, lit, lens) {
     "",
     "  ## Notes",
     "  <any free-form additions; not parsed by the Hub>",
+    "",
+    `SECOND output file \u2014 write your self-assessment to ${selfassessTo} with this structure:`,
+    "",
+    "  # Self-assessment",
+    "",
+    "  <one line per approach you listed: `<confidence>: <approach name>`,",
+    "  where <confidence> is high | medium | low>",
+    "",
+    "  ## Least sure",
+    "  - <the claim you are least confident in, with its [citation]>",
+    "  - ...",
+    "",
+    "The self-assessment is hub-side accountability material \u2014 do NOT embed it in the",
+    "findings file; keep the two files separate.",
     "",
     "Citation format options:",
     "  - <file path>:<line>          e.g. src/auth/store.py:42",
@@ -25448,6 +25462,12 @@ function composeAdversaryPrompt(landscapeDraft, agent, outPath, opts) {
       "Priority targets \u2014 these citations are corroborated by only ONE worker; open each",
       "and verify the claim it anchors FIRST:",
       ...opts.priorityTargets.map((t) => `- ${t}`),
+      ""
+    ] : [],
+    ...opts.lowConfidenceClaims?.length ? [
+      "Self-flagged low-confidence claims \u2014 the workers themselves are least sure of",
+      "these; verify them first:",
+      ...opts.lowConfidenceClaims.map((c3) => `- ${c3}`),
       ""
     ] : [],
     "Attack surface \u2014 prioritize these failure modes:",
@@ -25523,6 +25543,44 @@ function composeGapPrompt(bucketItems, outPath) {
     "Your answers feed ONLY the final landscape doc and the design handoff \u2014 the draft",
     "is not re-synthesized and the confidence gate does not re-run. If you cannot tell",
     "from available evidence, say so explicitly \u2014 do not pad."
+  ].join("\n");
+}
+function composeSignoffPrompt(conclusion, soloBucketLines, agreedText, outPath) {
+  return [
+    "The run's final landscape doc has been written. Below is its Conclusion, plus",
+    "the claims you personally contributed. Check ONLY that your findings are fairly",
+    "represented \u2014 this is a misquote/misattribution check, NOT a re-litigation of",
+    "the synthesis, and you may NOT introduce new claims.",
+    "",
+    "The final doc's Conclusion:",
+    "",
+    conclusion,
+    "",
+    ...soloBucketLines.length ? [
+      "Your solo claims (you were the only worker who raised these):",
+      ...soloBucketLines.map((l) => `- ${l}`),
+      ""
+    ] : [],
+    ...agreedText.trim() ? [
+      "Consensus claims you co-authored (from the run's findings diff):",
+      agreedText.trimEnd(),
+      ""
+    ] : [],
+    `Write your sign-off to ${outPath} with this EXACT structure:`,
+    "",
+    "  # Sign-off",
+    "",
+    "  VERDICT: fair | misrepresented",
+    "",
+    "  ### Flag: <one-line summary of a specific misquote or misattribution>",
+    "  - **Where:** <the passage in the Conclusion>",
+    "  - **Should say:** <the faithful version, citing your original finding>",
+    "",
+    "  (one ### Flag: block per issue; none when the VERDICT is fair)",
+    "",
+    "Rules: no new claims, no re-litigation of peer claims or adversary critiques, no",
+    "style nits \u2014 flag only concrete misrepresentation of YOUR findings. An honest",
+    "'fair' is the common case; do not invent flags."
   ].join("\n");
 }
 var LENS_GUARD, RESEARCH_LENSES, NEUTRAL_LENS, ADVERSARY_LENSES;
@@ -25793,6 +25851,117 @@ var init_exploreRebuttal = __esm({
   }
 });
 
+// src/core/exploreSelfAssess.ts
+function parseSelfAssessment(text) {
+  const grades = [];
+  const leastSure = [];
+  let inLeastSure = false;
+  for (const line of text.split("\n")) {
+    if (/^## Least sure/i.test(line)) {
+      inLeastSure = true;
+      continue;
+    }
+    if (/^## /.test(line)) {
+      inLeastSure = false;
+      continue;
+    }
+    if (inLeastSure) {
+      const b = line.match(/^- (.+)$/);
+      if (b) leastSure.push(b[1].trim());
+      continue;
+    }
+    const g = line.match(/^(high|medium|low):[ \t]+(.+)$/i);
+    if (g) grades.push({ confidence: g[1].toLowerCase(), approach: g[2].trim() });
+  }
+  return { grades, leastSure };
+}
+var init_exploreSelfAssess = __esm({
+  "src/core/exploreSelfAssess.ts"() {
+    "use strict";
+  }
+});
+
+// src/core/exploreContribution.ts
+function countResponses(text, tag) {
+  return text.split("\n").filter((l) => new RegExp(`^[0-9]+\\. ${tag}\\b`).test(l)).length;
+}
+function signoffVerdict(text, tag) {
+  if (tag === "skipped" || !text.trim()) return "skipped";
+  const m = text.match(/^VERDICT:[ \t]*(fair|misrepresented)[ \t]*$/im);
+  return m ? m[1].toLowerCase() : "malformed";
+}
+function buildContribution(input) {
+  return input.rows.map((r) => {
+    const a2 = input.artifacts[r.agent] ?? NO_ARTIFACTS;
+    const solo = parseBucketLines(a2.soloBucket);
+    const total = parseClaims(a2.findings, ["Approaches"]).length;
+    let agree = 0, dispute = 0, uncertain = 0;
+    for (const [verifier, text] of Object.entries(input.crossverify)) {
+      if (verifier === r.agent) continue;
+      for (const v of parseVerdicts(text)) {
+        if (solo.some((c3) => citationOverlaps(v.cite, c3.cite))) {
+          if (v.tag === "AGREE") agree++;
+          else if (v.tag === "DISPUTE") dispute++;
+          else uncertain++;
+        }
+      }
+    }
+    const adversary_verdict = a2.adversaryTag === "skipped" || !a2.adversary.trim() ? "skipped" : parseAdversaryVerdict(a2.adversary);
+    return {
+      agent: r.agent,
+      provider: r.provider,
+      claims_total: total,
+      claims_solo: solo.length,
+      claims_consensus: Math.max(0, total - solo.length),
+      peer_agree: agree,
+      peer_dispute: dispute,
+      peer_uncertain: uncertain,
+      adversary_verdict,
+      rebuttal_defended: countResponses(a2.rebuttal, "DEFEND"),
+      rebuttal_conceded: countResponses(a2.rebuttal, "CONCEDE"),
+      signoff: signoffVerdict(a2.signoff, a2.signoffTag)
+    };
+  });
+}
+function renderContributionTsv(rows) {
+  const scrub = (v) => String(v).replace(/[\t\n\r]+/g, " ");
+  return `# ${COLUMNS.join("	")}
+` + rows.map((r) => COLUMNS.map((c3) => scrub(r[c3])).join("	") + "\n").join("");
+}
+var NO_ARTIFACTS, COLUMNS;
+var init_exploreContribution = __esm({
+  "src/core/exploreContribution.ts"() {
+    "use strict";
+    init_designDiff();
+    init_designAdjudicate();
+    init_exploreRebuttal();
+    init_exploreVerdict();
+    NO_ARTIFACTS = {
+      findings: "",
+      soloBucket: "",
+      adversary: "",
+      adversaryTag: null,
+      rebuttal: "",
+      signoff: "",
+      signoffTag: null
+    };
+    COLUMNS = [
+      "agent",
+      "provider",
+      "claims_total",
+      "claims_solo",
+      "claims_consensus",
+      "peer_agree",
+      "peer_dispute",
+      "peer_uncertain",
+      "adversary_verdict",
+      "rebuttal_defended",
+      "rebuttal_conceded",
+      "signoff"
+    ];
+  }
+});
+
 // src/commands/explore.ts
 var explore_exports = {};
 __export(explore_exports, {
@@ -25801,6 +25970,7 @@ __export(explore_exports, {
   annotateRun: () => annotateRun,
   classifyRun: () => classifyRun,
   confidenceRun: () => confidenceRun,
+  contributionRun: () => contributionRun,
   crossverifySendWith: () => crossverifySendWith,
   crossverifyWaitWith: () => crossverifyWaitWith,
   diffExploreRun: () => diffExploreRun,
@@ -25818,14 +25988,17 @@ __export(explore_exports, {
   researchSendWith: () => researchSendWith2,
   researchWaitWith: () => researchWaitWith2,
   run: () => run14,
+  signoffSendWith: () => signoffSendWith,
+  signoffWaitWith: () => signoffWaitWith,
   spawnAllWith: () => spawnAllWith3,
+  survivorsRun: () => survivorsRun,
   synthFinalRun: () => synthFinalRun,
   synthPreliminaryRun: () => synthPreliminaryRun,
   teardownWith: () => teardownWith2,
   verdictTallyRun: () => verdictTallyRun
 });
 function usage5() {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|rebuttal-send|rebuttal-wait|gap-send|gap-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|survivors|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|rebuttal-send|rebuttal-wait|gap-send|gap-wait|signoff-send|signoff-wait|synth-final|verdict-tally|contribution|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 async function run14(args) {
@@ -25842,6 +26015,8 @@ async function run14(args) {
       return researchSendRun2(rest);
     case "research-wait":
       return researchWaitRun2(rest);
+    case "survivors":
+      return survivorsRun(rest);
     case "openq-collate":
       return openqCollateRun(rest);
     case "openq-send":
@@ -25862,6 +26037,12 @@ async function run14(args) {
       return gapSendRun(rest);
     case "gap-wait":
       return gapWaitRun(rest);
+    case "signoff-send":
+      return signoffSendRun(rest);
+    case "signoff-wait":
+      return signoffWaitRun(rest);
+    case "contribution":
+      return contributionRun(rest);
     case "wait-gate":
       return exploreWaitGateRun(rest);
     case "synth-preliminary":
@@ -25991,7 +26172,7 @@ async function researchSendWith2(topic, agent, provider, d) {
   const track = readIfExists((0, import_node_path34.join)(art, "lit-track.txt")).startsWith("ON") ? "ON" : "OFF";
   const findingsPath = (0, import_node_path34.join)(art, `findings-${agent}.md`);
   const promptFile = (0, import_node_path34.join)(art, `${agent}_research_prompt.md`);
-  atomicWrite(promptFile, composeExploreResearchPrompt(topicText, findingsPath, litGuidance(track), researchLens(provider)));
+  atomicWrite(promptFile, composeExploreResearchPrompt(topicText, findingsPath, litGuidance(track), researchLens(provider), (0, import_node_path34.join)(art, `selfassess-${agent}.md`)));
   const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}
 `);
@@ -26507,8 +26688,210 @@ async function gapWaitWith(topic, agent, provider, d) {
   log.ok(`explore gap-wait: ${agent} GS=${gs}`);
   return 0;
 }
+function finalLandscapePath(art) {
+  let names;
+  try {
+    names = (0, import_node_fs37.readdirSync)(art);
+  } catch {
+    return null;
+  }
+  const finals = names.filter((f) => /^landscape-\d{4}-\d{2}-\d{2}-.+\.md$/.test(f)).sort();
+  return finals.length ? (0, import_node_path34.join)(art, finals[finals.length - 1]) : null;
+}
+function sectionText(text, headings) {
+  const out = [];
+  let inSection = false;
+  for (const line of text.split("\n")) {
+    if (headings.some((h2) => line.startsWith(`## ${h2}`))) {
+      inSection = true;
+      continue;
+    }
+    if (/^## /.test(line)) {
+      if (inSection) break;
+      continue;
+    }
+    if (inSection) out.push(line);
+  }
+  return out.join("\n").trim();
+}
+async function signoffSendRun(rest) {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) {
+    log.error("usage: explore signoff-send <topic> <agent> <provider>");
+    return 2;
+  }
+  return signoffSendWith(topic, agent, provider, liveResearchSendDeps2);
+}
+async function signoffSendWith(topic, agent, provider, d) {
+  const art = exploreArtDir(topic);
+  const stateFile = (0, import_node_path34.join)(art, `signoff-${agent}.txt`);
+  if ((0, import_node_fs37.existsSync)(stateFile)) {
+    log.error(`explore signoff-send: ${stateFile} exists \u2014 one sign-off turn per worker (the one-turn cap)`);
+    return 1;
+  }
+  const tags = [
+    ["GS", lastTag(readIfExists((0, import_node_path34.join)(art, `gap-${agent}.txt`)), "GS")],
+    ["RS", lastTag(readIfExists((0, import_node_path34.join)(art, `rebuttal-${agent}.txt`)), "RS")],
+    ["AS", lastTag(readIfExists((0, import_node_path34.join)(art, `adversary-${agent}.txt`)), "AS")],
+    ["QS", lastTag(readIfExists((0, import_node_path34.join)(art, `openq-${agent}.txt`)), "QS")],
+    ["FS", lastTag(readIfExists((0, import_node_path34.join)(art, `research-${agent}.txt`)), "FS")]
+  ];
+  const latest = tags.find(([, v]) => v !== null && v !== "skipped");
+  if (latest && (latest[1] === "timeout" || latest[1] === "failed")) {
+    atomicWrite(stateFile, "SS=skipped\n");
+    log.warn(`explore signoff-send: ${agent} skipped \u2014 latest phase ended ${latest[0]}=${latest[1]} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
+  const rows = parseListFile(readIfExists((0, import_node_path34.join)(art, "list.txt")));
+  if (!rows.some((r) => r.agent === agent)) {
+    log.error(`explore signoff-send: ${agent} not in list.txt at ${art}`);
+    return 1;
+  }
+  const finalPath = finalLandscapePath(art);
+  const conclusion = finalPath ? sectionText(readIfExists(finalPath), ["Conclusion"]) : "";
+  if (!conclusion) {
+    log.error(`explore signoff-send: final landscape doc missing or has no ## Conclusion at ${art} \u2014 author it (Phase 8) first`);
+    return 1;
+  }
+  const soloBucketLines = readIfExists((0, import_node_path34.join)(art, `${agent}_only_items.txt`)).split("\n").filter((l) => l.length > 0);
+  const agreedText = sectionText(readIfExists((0, import_node_path34.join)(art, "diff.md")), ["Agreed", "Consensus"]);
+  const outPath = (0, import_node_path34.join)(art, `signoff-${agent}.md`);
+  const promptFile = (0, import_node_path34.join)(art, `${agent}_signoff_prompt.md`);
+  atomicWrite(promptFile, composeSignoffPrompt(conclusion, soloBucketLines, agreedText, outPath));
+  const offset = d.offsetFor(agent, provider, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}
+`);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
+  if (rc !== 0) {
+    log.error(`explore signoff-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`);
+    return 1;
+  }
+  log.ok(`explore signoff-send: ${agent} offset=${offset}`);
+  return 0;
+}
+async function signoffWaitRun(rest) {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) {
+    log.error("usage: explore signoff-wait <topic> <agent> <provider>");
+    return 2;
+  }
+  return signoffWaitWith(topic, agent, provider, liveResearchWaitDeps2);
+}
+async function signoffWaitWith(topic, agent, provider, d) {
+  const art = exploreArtDir(topic);
+  const stateFile = (0, import_node_path34.join)(art, `signoff-${agent}.txt`);
+  if (!(0, import_node_fs37.existsSync)(stateFile)) {
+    log.error(`explore signoff-wait: ${stateFile} missing (run explore signoff-send first)`);
+    return 1;
+  }
+  const text = (0, import_node_fs37.readFileSync)(stateFile, "utf8");
+  if (lastTag(text, "SS") === "skipped") {
+    (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `signoff-${agent}.done`), "");
+    log.ok(`explore signoff-wait: ${agent} SS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
+  if (offset === null) {
+    log.error(`explore signoff-wait: OFFSET not set in ${stateFile}`);
+    return 1;
+  }
+  const timeout = scaledTimeout(consultTimeout("signoff"), d.multiplier(provider));
+  log.info(`explore signoff-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
+  const ss = verifyState(ev, readIfExistsOrNull((0, import_node_path34.join)(art, `signoff-${agent}.md`)));
+  recordWaitOutcome(
+    agent,
+    provider,
+    topic,
+    stateFile,
+    ss,
+    "SS",
+    ev ? { file: (0, import_node_path34.join)(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : void 0
+  );
+  (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `signoff-${agent}.done`), "");
+  log.ok(`explore signoff-wait: ${agent} SS=${ss}`);
+  return 0;
+}
+async function contributionRun(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("usage: explore contribution <topic>");
+    return 2;
+  }
+  const art = exploreArtDir(topic);
+  if (!(0, import_node_fs37.existsSync)(art)) {
+    log.error(`explore contribution: ${art} not found \u2014 run explore init`);
+    return 1;
+  }
+  const listRaw = readIfExists((0, import_node_path34.join)(art, "list-original.txt")) || readIfExists((0, import_node_path34.join)(art, "list.txt"));
+  const rows = parseListFile(listRaw);
+  if (rows.length === 0) {
+    log.error(`explore contribution: list.txt missing or empty at ${art}`);
+    return 1;
+  }
+  const artifacts = {};
+  const crossverify = {};
+  for (const r of rows) {
+    artifacts[r.agent] = {
+      findings: readIfExists((0, import_node_path34.join)(art, `findings-${r.agent}.md`)),
+      soloBucket: readIfExists((0, import_node_path34.join)(art, `${r.agent}_only_items.txt`)),
+      adversary: readIfExists((0, import_node_path34.join)(art, `adversary-${r.agent}.md`)),
+      adversaryTag: lastTag(readIfExists((0, import_node_path34.join)(art, `adversary-${r.agent}.txt`)), "AS"),
+      rebuttal: readIfExists((0, import_node_path34.join)(art, `rebuttal-${r.agent}.md`)),
+      signoff: readIfExists((0, import_node_path34.join)(art, `signoff-${r.agent}.md`)),
+      signoffTag: lastTag(readIfExists((0, import_node_path34.join)(art, `signoff-${r.agent}.txt`)), "SS")
+    };
+    crossverify[r.agent] = readIfExists((0, import_node_path34.join)(art, `crossverify-${r.agent}.md`));
+  }
+  const tsv = renderContributionTsv(buildContribution({ rows, artifacts, crossverify }));
+  atomicWrite((0, import_node_path34.join)(art, "contribution.tsv"), tsv);
+  process.stdout.write(tsv);
+  log.ok(`explore contribution: wrote ${(0, import_node_path34.join)(art, "contribution.tsv")} (${rows.length} rows)`);
+  return 0;
+}
 function missingListArtifacts(art, rows, prefix) {
   return rows.filter((r) => !readIfExists((0, import_node_path34.join)(art, `${prefix}-${r.agent}.md`)).trim()).map((r) => `${prefix}-${r.agent}.md`);
+}
+async function survivorsRun(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("usage: explore survivors <topic>");
+    return 2;
+  }
+  const art = exploreArtDir(topic);
+  if (!(0, import_node_fs37.existsSync)(art)) {
+    log.error(`explore survivors: ${art} not found \u2014 run explore init`);
+    return 1;
+  }
+  const listPath = (0, import_node_path34.join)(art, "list.txt");
+  const rows = parseListFile(readIfExists(listPath));
+  if (rows.length === 0) {
+    log.error(`explore survivors: list.txt missing or empty at ${art}`);
+    return 1;
+  }
+  const missing = new Set(missingListArtifacts(art, rows, "findings"));
+  const survivors = rows.filter((r) => !missing.has(`findings-${r.agent}.md`));
+  const dropped = rows.filter((r) => missing.has(`findings-${r.agent}.md`));
+  if (survivors.length === 0) {
+    log.error("explore survivors: zero survivors \u2014 every findings file is missing or empty");
+    return 1;
+  }
+  if (dropped.length === 0) {
+    log.ok(`explore survivors: all ${rows.length} workers produced findings`);
+    process.stdout.write(`SURVIVORS=${rows.length}
+`);
+    return 0;
+  }
+  const originalPath = (0, import_node_path34.join)(art, "list-original.txt");
+  if (!(0, import_node_fs37.existsSync)(originalPath)) atomicWrite(originalPath, (0, import_node_fs37.readFileSync)(listPath, "utf8"));
+  atomicWrite(listPath, formatListFile(survivors, isoUtc()));
+  log.warn(`explore survivors: dropped ${dropped.map((r) => r.agent).join(", ")} \u2014 ${survivors.length} of ${rows.length} continue`);
+  process.stdout.write(`SURVIVORS=${survivors.length}
+`);
+  for (const r of dropped) process.stdout.write(`DROPPED=${r.agent}
+`);
+  if (survivors.length === 1) process.stdout.write("DEGRADED=1\n");
+  return 0;
 }
 async function synthPreliminaryRun(rest) {
   const topic = rest[0];
@@ -26680,9 +27063,15 @@ async function adversarySendWith(topic, agent, provider, d) {
   const peerFindingsPaths = rows.filter((r) => r.agent !== agent).map((r) => (0, import_node_path34.join)(art, `findings-${r.agent}.md`));
   const lens = ADVERSARY_LENSES[index % ADVERSARY_LENSES.length];
   const priorityTargets = soloTokensFromAnnotations(readIfExistsOrNull((0, import_node_path34.join)(art, "annotations.json")));
+  const lowConfidenceClaims = [];
+  for (const r of rows) {
+    for (const l of parseSelfAssessment(readIfExists((0, import_node_path34.join)(art, `selfassess-${r.agent}.md`))).leastSure) {
+      if (!lowConfidenceClaims.includes(l)) lowConfidenceClaims.push(l);
+    }
+  }
   const outPath = (0, import_node_path34.join)(art, `adversary-${agent}.md`);
   const promptFile = (0, import_node_path34.join)(art, `${agent}_adversary_prompt.md`);
-  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath, { peerFindingsPaths, lens, priorityTargets }));
+  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath, { peerFindingsPaths, lens, priorityTargets, lowConfidenceClaims }));
   const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}
 `);
@@ -26747,15 +27136,16 @@ async function exploreWaitGateRun(rest) {
     crossverify: "VS",
     adversary: "AS",
     rebuttal: "RS",
-    gap: "GS"
+    gap: "GS",
+    signoff: "SS"
   };
   if (!topic || !phase) {
-    log.error("usage: explore wait-gate <topic> <research|openq|crossverify|adversary|rebuttal|gap>");
+    log.error("usage: explore wait-gate <topic> <research|openq|crossverify|adversary|rebuttal|gap|signoff>");
     return 2;
   }
   const key = KEYS[phase];
   if (!key) {
-    log.error(`explore wait-gate: phase must be research|openq|crossverify|adversary|rebuttal|gap (got ${phase})`);
+    log.error(`explore wait-gate: phase must be research|openq|crossverify|adversary|rebuttal|gap|signoff (got ${phase})`);
     return 2;
   }
   const art = exploreArtDir(topic);
@@ -26944,6 +27334,8 @@ var init_explore2 = __esm({
     init_exploreVerdict();
     init_designDiff();
     init_exploreRebuttal();
+    init_exploreSelfAssess();
+    init_exploreContribution();
     liveExploreInitDeps = {
       activeProviders: () => readProviderList(activeProvidersPath()),
       isValidated: agentConsultValidated,

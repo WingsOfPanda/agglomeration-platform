@@ -139,14 +139,15 @@ export type GateStatus = "terminal" | "question" | "pending";
 
 /** Per-worker readiness for the research/verify wait gate. `key` is the status-line prefix
  *  (`FS` research, `VS` explore's cross-verify + design's verify, `AS` explore's adversary,
- *  `QS` explore's open-questions relay, `RS` explore's rebuttal, `GS` explore's gap round).
+ *  `QS` explore's open-questions relay, `RS` explore's rebuttal, `GS` explore's gap round,
+ *  `SS` explore's sign-off).
  *  A worker is `terminal` once its `.done` marker exists and
  *  its LAST `<key>=` line is a non-`question` value; `question` while its last `<key>=` line is
  *  `question` (transient — awaiting a relay+re-arm); otherwise `pending` (still running). Pure:
  *  callers pass the pre-read `.done` existence and `.txt` text so this stays IPC-free and testable. */
 export function gateState(
   workers: Array<{ agent: string; doneExists: boolean; stateText: string | null }>,
-  key: "FS" | "VS" | "AS" | "QS" | "RS" | "GS",
+  key: "FS" | "VS" | "AS" | "QS" | "RS" | "GS" | "SS",
 ): Array<{ agent: string; status: GateStatus }> {
   return workers.map((p) => {
     const matches = (p.stateText ?? "").split("\n").filter((l) => l.startsWith(`${key}=`));

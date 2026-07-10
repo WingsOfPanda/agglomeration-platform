@@ -91,6 +91,12 @@ describe("contracts", () => {
     expect(K.consultTimeout("rebuttal")).toBe(120);
     expect(K.consultTimeout("gap")).toBe(90);
   });
+  it("consultTimeout signoff: default 300, consult override respected", () => {
+    withContracts(SAMPLE);                       // no signoff_timeout_s → TS default
+    expect(K.consultTimeout("signoff")).toBe(300);
+    withContracts(SAMPLE + "  signoff_timeout_s: 120\n"); // SAMPLE ends inside consult:
+    expect(K.consultTimeout("signoff")).toBe(120);
+  });
   it("ignores a ~/.ap/contracts.yaml shadow; always reads shipped", () => {
     withContracts(SAMPLE);                                  // shipped: codex ready_timeout_s 90
     const shadow = mkdtempSync(join(tmpdir(), "shadow-"));

@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { freshHome } from "./helpers/tmpHome.js";
-import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, crossverifySendWith, crossverifyWaitWith, rebuttalSendWith, rebuttalWaitWith, gapSendWith, gapWaitWith, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, verdictTallyRun, diffExploreRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
+import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, crossverifySendWith, crossverifyWaitWith, rebuttalSendWith, rebuttalWaitWith, gapSendWith, gapWaitWith, signoffSendWith, signoffWaitWith, survivorsRun, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, verdictTallyRun, diffExploreRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, contributionRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
 import { exploreArtDir } from "../src/core/explore.js";
 
 function initDeps(over: Partial<ExploreInitDeps> = {}): ExploreInitDeps {
@@ -102,6 +102,7 @@ describe("explore research-send/wait", () => {
       expect(readFileSync(join(art, "research-alpha.txt"), "utf8")).toContain("OFFSET=7");
       const prompt = readFileSync(join(art, "alpha_research_prompt.md"), "utf8");
       expect(prompt).toContain(join(art, "findings-alpha.md"));
+      expect(prompt).toContain(join(art, "selfassess-alpha.md"));
       expect(sent).toEqual(["--from", "hub", "alpha", "x", `@${join(art, "alpha_research_prompt.md")}`]);
     } finally { cleanup(); }
   });
@@ -603,6 +604,62 @@ describe("explore adversary-send/wait", () => {
       expect(readFileSync(join(art, "adversary-alpha.txt"), "utf8")).toBe("AS=skipped\n"); // no extra lines
     } finally { cleanup(); }
   });
+  it("send passes the union of selfassess least-sure lines as the low-confidence block", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "## Approaches\n1. A");
+      writeFileSync(join(art, "selfassess-alpha.md"), "high: A\n## Least sure\n- claim-a [src/a.ts:1]\n- shared-claim [https://x.test/s]\n");
+      writeFileSync(join(art, "selfassess-charlie.md"), "## Least sure\n- shared-claim [https://x.test/s]\n- claim-c [paper:arxiv:9]\n");
+      const rc = await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => 0 });
+      expect(rc).toBe(0);
+      const prompt = readFileSync(join(art, "alpha_adversary_prompt.md"), "utf8");
+      expect(prompt).toContain("Self-flagged low-confidence claims");
+      expect(prompt).toContain("- claim-a [src/a.ts:1]");
+      expect(prompt).toContain("- claim-c [paper:arxiv:9]");
+      expect(prompt.split("- shared-claim [https://x.test/s]").length - 1).toBe(1); // unioned/deduped
+    } finally { cleanup(); }
+  });
+  it("send omits the low-confidence block when no selfassess files exist", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "## Approaches\n1. A");
+      expect(await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => 0 })).toBe(0);
+      expect(readFileSync(join(art, "alpha_adversary_prompt.md"), "utf8")).not.toContain("Self-flagged low-confidence claims");
+    } finally { cleanup(); }
+  });
+});
+
+describe("selfassess gate-blindness invariant (confidence/annotate never read selfassess-*)", () => {
+  it("a selfassess file saturated with UNCERTAIN vocabulary and restated citations changes no signal and no marker", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      // Findings: confident (no UNCERTAIN vocab anywhere) and citation-disjoint (every draft cite is solo).
+      writeFileSync(join(art, "findings-alpha.md"), "FlashAttention rocks. https://a.only/1 .");
+      writeFileSync(join(art, "findings-charlie.md"), "PagedAttention rocks. https://c.only/2 .");
+      writeFileSync(join(art, "landscape-draft.md"), [
+        "## Approaches", "1. FlashAttention — fused", "## Tradeoff matrix",
+        "| latency | FlashAttention | see https://a.only/1 |", "## Citations", "- https://a.only/1",
+      ].join("\n"));
+      // The poison pill: uncertainty vocab + BOTH citations restated. If confidence/annotate ever
+      // read this file, S5 flips true and https://a.only/1 stops being solo (S2 + [unverified]).
+      writeFileSync(join(art, "selfassess-alpha.md"),
+        "low: FlashAttention\n## Least sure\n- uncertain unclear not sure https://a.only/1 https://c.only/2\n");
+      const chunks: string[] = [];
+      const spy = vi.spyOn(process.stdout, "write").mockImplementation(((s: unknown) => { chunks.push(String(s)); return true; }) as never);
+      try { expect(await confidenceRun(["x"])).toBe(0); } finally { spy.mockRestore(); }
+      const lines = chunks.join("").trim().split("\n");
+      expect(lines).toContain("S5=false"); // findings alone carry no uncertainty vocab
+      expect(lines).toContain("S2=false"); // https://a.only/1 stays solo — selfassess restatement invisible
+      expect(await annotateRun(["x"])).toBe(0);
+      expect(readFileSync(join(art, "landscape-draft.md"), "utf8")).toContain("https://a.only/1 [unverified]");
+    } finally { cleanup(); }
+  });
 });
 
 describe("explore synth-final", () => {
@@ -1050,6 +1107,303 @@ describe("explore gap-send/wait", () => {
       writeFileSync(join(art, "gap-charlie.md"), "# Gap enrichment\n## Answers\n1. CONFIRM ...\n");
       expect(await gapWaitWith("x", "charlie", "claude", { wait: async () => ({ event: "done" } as any), multiplier: () => "1" })).toBe(0);
       expect(readFileSync(join(art, "gap-charlie.txt"), "utf8")).toContain("GS=ok");
+    } finally { cleanup(); }
+  });
+});
+
+describe("explore survivors", () => {
+  function cap(): { text: () => string; restore: () => void } {
+    const c: string[] = [];
+    const s = vi.spyOn(process.stdout, "write").mockImplementation(((x: unknown) => { c.push(String(x)); return true; }) as never);
+    return { text: () => c.join(""), restore: () => s.mockRestore() };
+  }
+  const deps3 = () => initDeps({ activeProviders: () => ["codex", "claude", "agy"] }); // alpha, charlie, golf
+
+  it("all rows non-empty → SURVIVORS=N, list.txt untouched, no list-original.txt", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "findings-alpha.md"), "a");
+      writeFileSync(join(art, "findings-charlie.md"), "c");
+      const before = readFileSync(join(art, "list.txt"), "utf8");
+      const out = cap();
+      try { expect(await survivorsRun(["x"])).toBe(0); } finally { out.restore(); }
+      expect(out.text().trim()).toBe("SURVIVORS=2");
+      expect(readFileSync(join(art, "list.txt"), "utf8")).toBe(before);
+      expect(existsSync(join(art, "list-original.txt"))).toBe(false);
+    } finally { cleanup(); }
+  });
+
+  it("one empty findings at N=3 → list-original written, list.txt rewritten to 2 rows, DROPPED line", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], deps3());
+      const art = exploreArtDir("x");
+      const original = readFileSync(join(art, "list.txt"), "utf8");
+      writeFileSync(join(art, "findings-alpha.md"), "a");
+      writeFileSync(join(art, "findings-charlie.md"), "c");
+      writeFileSync(join(art, "findings-golf.md"), "   \n\t\n"); // whitespace-only: same predicate as missingListArtifacts
+      const out = cap();
+      try { expect(await survivorsRun(["x"])).toBe(0); } finally { out.restore(); }
+      expect(out.text().trim().split("\n")).toEqual(["SURVIVORS=2", "DROPPED=golf"]);
+      expect(readFileSync(join(art, "list-original.txt"), "utf8")).toBe(original);
+      const rewritten = readFileSync(join(art, "list.txt"), "utf8");
+      expect(rewritten).toContain("codex\talpha");
+      expect(rewritten).toContain("claude\tcharlie");
+      expect(rewritten).not.toContain("golf");
+    } finally { cleanup(); }
+  });
+
+  it("crash re-run never overwrites list-original.txt", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], deps3());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "findings-alpha.md"), "a");
+      writeFileSync(join(art, "findings-charlie.md"), "c"); // golf missing
+      writeFileSync(join(art, "list-original.txt"), "# SENTINEL preserved roster\ncodex\talpha\nclaude\tcharlie\nagy\tgolf\n");
+      const out = cap();
+      try { expect(await survivorsRun(["x"])).toBe(0); } finally { out.restore(); }
+      expect(readFileSync(join(art, "list-original.txt"), "utf8")).toContain("SENTINEL");
+    } finally { cleanup(); }
+  });
+
+  it("N=2 with one empty → DEGRADED=1 as the last stdout line", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "findings-alpha.md"), "a"); // charlie missing
+      const out = cap();
+      try { expect(await survivorsRun(["x"])).toBe(0); } finally { out.restore(); }
+      expect(out.text().trim().split("\n")).toEqual(["SURVIVORS=1", "DROPPED=charlie", "DEGRADED=1"]);
+      expect(readFileSync(join(art, "list.txt"), "utf8")).not.toContain("charlie");
+    } finally { cleanup(); }
+  });
+
+  it("all findings empty → rc 1, nothing rewritten", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      const before = readFileSync(join(art, "list.txt"), "utf8");
+      expect(await survivorsRun(["x"])).toBe(1);
+      expect(readFileSync(join(art, "list.txt"), "utf8")).toBe(before);
+      expect(existsSync(join(art, "list-original.txt"))).toBe(false);
+    } finally { cleanup(); }
+  });
+
+  it("rc2 without a topic; rc1 when the art dir is missing", async () => {
+    const { cleanup } = freshHome();
+    try {
+      expect(await survivorsRun([])).toBe(2);
+      expect(await survivorsRun(["nope"])).toBe(1);
+    } finally { cleanup(); }
+  });
+
+  it("post-rewrite pipeline: synth-preliminary, annotate, confidence pass over the survivor set", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], deps3());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "findings-alpha.md"), "FlashAttention is fast. https://x.test/p . uncertain about batch.");
+      writeFileSync(join(art, "findings-charlie.md"), "FlashAttention wins. https://x.test/p .");
+      // golf produced nothing — without survivors this blocks synth-preliminary with rc 1
+      expect(await synthPreliminaryRun(["x"])).toBe(1);
+      const out = cap();
+      try { expect(await survivorsRun(["x"])).toBe(0); } finally { out.restore(); }
+      writeFileSync(join(art, "landscape-draft.md"), DRAFT);
+      expect(await synthPreliminaryRun(["x"])).toBe(0);
+      expect(await annotateRun(["x"])).toBe(0);
+      expect(await confidenceRun(["x"])).toBe(0);
+    } finally { cleanup(); }
+  });
+});
+
+describe("explore signoff-send/wait", () => {
+  function seedSignoff(art: string) {
+    writeFileSync(join(art, "landscape-2026-07-10-x.md"),
+      "## Topic\nx\n## Approaches\n1. A\n## Conclusion\nAdopt FlashAttention; caveats apply.\n## Citations\n- c\n");
+    writeFileSync(join(art, "alpha_only_items.txt"), "[src/only-a.ts:1] AlphaOnly — solo\n");
+    writeFileSync(join(art, "charlie_only_items.txt"), "");
+    writeFileSync(join(art, "diff.md"),
+      "## Agreed\n- [https://x.test/p] Shared — both\n\n## Alpha-only\n- [src/only-a.ts:1] AlphaOnly — solo\n\n## Charlie-only\n");
+    writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+    writeFileSync(join(art, "adversary-alpha.txt"), "OFFSET=0\nAS=ok\n");
+  }
+  it("send one-turn cap: existing signoff-<agent>.txt → rc 1, no send", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      seedSignoff(art);
+      writeFileSync(join(art, "signoff-alpha.txt"), "OFFSET=5\nSS=ok\n");
+      const send = vi.fn(async () => 0);
+      expect(await signoffSendWith("x", "alpha", "codex", { offsetFor: () => 0, send })).toBe(1);
+      expect(send).not.toHaveBeenCalled();
+    } finally { cleanup(); }
+  });
+  for (const [key, file] of [["GS", "gap-alpha.txt"], ["RS", "rebuttal-alpha.txt"], ["AS", "adversary-alpha.txt"], ["QS", "openq-alpha.txt"], ["FS", "research-alpha.txt"]] as const) {
+    it(`send guard: latest phase ${key}=timeout → SS=skipped, no send`, async () => {
+      const { cleanup } = freshHome();
+      try {
+        await initWith(["x"], initDeps());
+        const art = exploreArtDir("x");
+        seedSignoff(art);
+        // seedSignoff leaves AS=ok/FS=ok; neutralize them to skipped so the injected phase is the
+        // latest non-skipped one (the guard walks past skipped). Otherwise seed AS=ok — adversary is
+        // a LATER phase than openq/research in the GS->RS->AS->QS->FS order — masks a QS/FS timeout.
+        writeFileSync(join(art, "adversary-alpha.txt"), "AS=skipped\n");
+        writeFileSync(join(art, "research-alpha.txt"), "FS=skipped\n");
+        writeFileSync(join(art, file), `OFFSET=0\n${key}=timeout\n`);
+        const send = vi.fn(async () => 0);
+        expect(await signoffSendWith("x", "alpha", "codex", { offsetFor: () => 0, send })).toBe(0);
+        expect(send).not.toHaveBeenCalled();
+        expect(readFileSync(join(art, "signoff-alpha.txt"), "utf8")).toBe("SS=skipped\n");
+      } finally { cleanup(); }
+    });
+  }
+  it("send guard walks PAST skipped tags: GS=skipped + RS=skipped + AS=ok → proceeds", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      seedSignoff(art);
+      writeFileSync(join(art, "gap-alpha.txt"), "GS=skipped\n");
+      writeFileSync(join(art, "rebuttal-alpha.txt"), "RS=skipped\n");
+      const send = vi.fn(async () => 0);
+      expect(await signoffSendWith("x", "alpha", "codex", { offsetFor: () => 2, send })).toBe(0);
+      expect(send).toHaveBeenCalled();
+    } finally { cleanup(); }
+  });
+  it("send happy path: prompt carries Conclusion + solo bucket + Agreed text; OFFSET captured", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      seedSignoff(art);
+      let sent: string[] = [];
+      expect(await signoffSendWith("x", "alpha", "codex", { offsetFor: () => 5, send: async (a) => { sent = a; return 0; } })).toBe(0);
+      expect(readFileSync(join(art, "signoff-alpha.txt"), "utf8")).toBe("OFFSET=5\n");
+      const prompt = readFileSync(join(art, "alpha_signoff_prompt.md"), "utf8");
+      expect(prompt).toContain("Adopt FlashAttention; caveats apply.");
+      expect(prompt).toContain("- [src/only-a.ts:1] AlphaOnly — solo");
+      expect(prompt).toContain("- [https://x.test/p] Shared — both");
+      expect(prompt).toContain("VERDICT: fair | misrepresented");
+      expect(prompt).toContain(join(art, "signoff-alpha.md"));
+      expect(prompt).not.toContain("END_OF_INSTRUCTION");
+      expect(sent).toEqual(["--from", "hub", "alpha", "x", `@${join(art, "alpha_signoff_prompt.md")}`]);
+    } finally { cleanup(); }
+  });
+  it("send rc1 when the final landscape doc (or its Conclusion) is missing", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+      expect(await signoffSendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => 0 })).toBe(1);
+    } finally { cleanup(); }
+  });
+  it("send tolerates missing bucket/diff (degraded N=1): prompt still renders the Conclusion", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-2026-07-10-x.md"), "## Conclusion\nSingle-source survey.\n");
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+      const send = vi.fn(async () => 0);
+      expect(await signoffSendWith("x", "alpha", "codex", { offsetFor: () => 0, send })).toBe(0);
+      expect(send).toHaveBeenCalled();
+      const prompt = readFileSync(join(art, "alpha_signoff_prompt.md"), "utf8");
+      expect(prompt).toContain("Single-source survey.");
+      expect(prompt).not.toContain("Your solo claims");
+    } finally { cleanup(); }
+  });
+  it("wait: skipped fast-path; done+non-empty → SS=ok; no event → SS=timeout; question bumps OFFSET", async () => {
+    const { cleanup } = freshHome();
+    try {
+      process.env.CLAUDE_PLUGIN_ROOT = process.cwd();
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "signoff-alpha.txt"), "SS=skipped\n");
+      expect(await signoffWaitWith("x", "alpha", "codex", { wait: async () => { throw new Error("must not wait"); }, multiplier: () => "1" })).toBe(0);
+      expect(existsSync(join(art, "signoff-alpha.done"))).toBe(true);
+      writeFileSync(join(art, "signoff-charlie.txt"), "OFFSET=0\n");
+      writeFileSync(join(art, "signoff-charlie.md"), "# Sign-off\nVERDICT: fair\n");
+      expect(await signoffWaitWith("x", "charlie", "claude", { wait: async () => ({ event: "done" } as any), multiplier: () => "1" })).toBe(0);
+      expect(readFileSync(join(art, "signoff-charlie.txt"), "utf8")).toContain("SS=ok");
+      writeFileSync(join(art, "signoff-golf.txt"), "OFFSET=0\n");
+      expect(await signoffWaitWith("x", "golf", "codex", { wait: async () => null, multiplier: () => "1" })).toBe(0);
+      expect(readFileSync(join(art, "signoff-golf.txt"), "utf8")).toContain("SS=timeout");
+      writeFileSync(join(art, "signoff-hotel.txt"), "OFFSET=0\n");
+      expect(await signoffWaitWith("x", "hotel", "claude", { wait: async () => ({ event: "question", message: "which passage?" } as any), multiplier: () => "1" })).toBe(0);
+      expect(readFileSync(join(art, "question-hotel.txt"), "utf8")).toContain("which passage?");
+      const state = readFileSync(join(art, "signoff-hotel.txt"), "utf8");
+      expect(state).toContain("SS=question");
+      expect(state.match(/OFFSET=/g)!.length).toBe(2); // re-armed past the question event
+    } finally { cleanup(); delete process.env.CLAUDE_PLUGIN_ROOT; }
+  });
+});
+
+describe("explore contribution", () => {
+  function cap2(): { text: () => string; restore: () => void } {
+    const c: string[] = [];
+    const s = vi.spyOn(process.stdout, "write").mockImplementation(((x: unknown) => { c.push(String(x)); return true; }) as never);
+    return { text: () => c.join(""), restore: () => s.mockRestore() };
+  }
+  it("fully seeded N=2 art dir → exact TSV rows in file and stdout", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps()); // alpha(codex), charlie(claude)
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "findings-alpha.md"),
+        "## Approaches\n1. [src/a.ts:10] Shared — both\n2. [src/only-a.ts:1] AlphaOnly — solo\n");
+      writeFileSync(join(art, "findings-charlie.md"),
+        "## Approaches\n1. [src/a.ts:10] Shared — both\n");
+      writeFileSync(join(art, "alpha_only_items.txt"), "[src/only-a.ts:1] AlphaOnly — solo\n");
+      writeFileSync(join(art, "charlie_only_items.txt"), "");
+      writeFileSync(join(art, "crossverify-charlie.md"),
+        "# Verify\n## Verdicts\n1. AGREE [src/only-a.ts:1] AlphaOnly — solo\n   checked\n");
+      writeFileSync(join(art, "crossverify-alpha.md"), "");
+      writeFileSync(join(art, "adversary-alpha.txt"), "OFFSET=0\nAS=ok\n");
+      writeFileSync(join(art, "adversary-alpha.md"), "## Verdict\naccept\n");
+      writeFileSync(join(art, "adversary-charlie.txt"), "AS=skipped\n");
+      writeFileSync(join(art, "rebuttal-alpha.md"), "## Responses\n1. DEFEND holds\n");
+      writeFileSync(join(art, "signoff-alpha.txt"), "OFFSET=0\nSS=ok\n");
+      writeFileSync(join(art, "signoff-alpha.md"), "# Sign-off\nVERDICT: fair\n");
+      const out = cap2();
+      try { expect(await contributionRun(["x"])).toBe(0); } finally { out.restore(); }
+      const expected = [
+        "# agent\tprovider\tclaims_total\tclaims_solo\tclaims_consensus\tpeer_agree\tpeer_dispute\tpeer_uncertain\tadversary_verdict\trebuttal_defended\trebuttal_conceded\tsignoff",
+        "alpha\tcodex\t2\t1\t1\t1\t0\t0\taccept\t1\t0\tfair",
+        "charlie\tclaude\t1\t0\t1\t0\t0\t0\tskipped\t0\t0\tskipped",
+      ].join("\n") + "\n";
+      expect(readFileSync(join(art, "contribution.tsv"), "utf8")).toBe(expected);
+      expect(out.text()).toBe(expected);
+    } finally { cleanup(); }
+  });
+  it("with list-original.txt present the dropped worker appears as a zero row", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      // survivors dropped charlie: list.txt has alpha only, list-original preserves both
+      writeFileSync(join(art, "list-original.txt"), readFileSync(join(art, "list.txt"), "utf8"));
+      writeFileSync(join(art, "list.txt"), "# generated later by /ap:design\ncodex\talpha\n");
+      writeFileSync(join(art, "findings-alpha.md"), "## Approaches\n1. [src/a.ts:1] A — solo\n");
+      const out = cap2();
+      try { expect(await contributionRun(["x"])).toBe(0); } finally { out.restore(); }
+      const lines = readFileSync(join(art, "contribution.tsv"), "utf8").trimEnd().split("\n");
+      expect(lines.length).toBe(3); // header + BOTH roster rows
+      expect(lines[2]).toBe("charlie\tclaude\t0\t0\t0\t0\t0\t0\tskipped\t0\t0\tskipped");
+    } finally { cleanup(); }
+  });
+  it("rc2 without a topic; rc1 when the art dir is missing", async () => {
+    const { cleanup } = freshHome();
+    try {
+      expect(await contributionRun([])).toBe(2);
+      expect(await contributionRun(["nope"])).toBe(1);
     } finally { cleanup(); }
   });
 });

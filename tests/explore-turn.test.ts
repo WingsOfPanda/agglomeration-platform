@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { composeExploreResearchPrompt, composeAdversaryPrompt, litGuidance, ADVERSARY_LENSES, researchLens, composeGapPrompt } from "../src/core/exploreTurn.js";
+import { composeExploreResearchPrompt, composeAdversaryPrompt, litGuidance, ADVERSARY_LENSES, researchLens, composeGapPrompt, composeSignoffPrompt } from "../src/core/exploreTurn.js";
 import { inboxWrite, inboxPath } from "../src/core/ipc.js";
 import { workerDir } from "../src/core/paths.js";
 
@@ -39,7 +39,7 @@ describe("researchLens", () => {
 });
 
 describe("composeExploreResearchPrompt", () => {
-  const p = composeExploreResearchPrompt("attention kernels", "/art/findings-rex.md", litGuidance("ON"), researchLens("codex"));
+  const p = composeExploreResearchPrompt("attention kernels", "/art/findings-rex.md", litGuidance("ON"), researchLens("codex"), "/art/selfassess-rex.md");
   it("contains topic, write-to, and the lit-guidance", () => {
     expect(p).toContain("attention kernels");
     expect(p).toContain("/art/findings-rex.md");
@@ -67,6 +67,13 @@ describe("composeExploreResearchPrompt", () => {
   it("stays peer-material-free (no adversary-only blocks leak in)", () => {
     expect(p).not.toContain("Raw evidence behind the draft");
     expect(p).not.toContain("Priority targets");
+  });
+  it("names BOTH output files: findings and the separate self-assessment", () => {
+    expect(p).toContain("/art/findings-rex.md");
+    expect(p).toContain("/art/selfassess-rex.md");
+    expect(p).toContain("## Least sure");
+    expect(p).toContain("high | medium | low");
+    expect(p).toMatch(/do NOT embed it in the\nfindings file/i);
   });
 });
 
@@ -114,6 +121,23 @@ describe("composeAdversaryPrompt", () => {
     expect(empty).not.toContain("Priority targets");
     expect(without).toBe(empty); // byte-identical to pre-change behavior
   });
+  it("renders lowConfidenceClaims as a block DISTINCT from Priority targets (both present → two headers)", () => {
+    const both = composeAdversaryPrompt("d", "alpha", "/o.md", {
+      peerFindingsPaths: [], lens: ADVERSARY_LENSES[0],
+      priorityTargets: ["src/a.ts:1"],
+      lowConfidenceClaims: ["RingAttention scales linearly [https://x.test/ring]"],
+    });
+    expect(both).toContain("Priority targets");
+    expect(both).toContain("Self-flagged low-confidence claims");
+    expect(both).toContain("- RingAttention scales linearly [https://x.test/ring]");
+    expect(both.indexOf("Priority targets")).not.toBe(both.indexOf("Self-flagged low-confidence claims"));
+  });
+  it("omits the low-confidence block when absent or empty — byte-identical", () => {
+    const without = composeAdversaryPrompt("d", "alpha", "/o.md", { peerFindingsPaths: [], lens: ADVERSARY_LENSES[0] });
+    const empty = composeAdversaryPrompt("d", "alpha", "/o.md", { peerFindingsPaths: [], lens: ADVERSARY_LENSES[0], lowConfidenceClaims: [] });
+    expect(without).not.toContain("Self-flagged low-confidence claims");
+    expect(without).toBe(empty);
+  });
 });
 
 // Regression: the explore send path is `inboxWrite(i, m, t, composeX(...))`. Before the fix the
@@ -131,7 +155,7 @@ describe("explore inbox carries a single done contract (no duplicate END_OF_INST
 
   it("research prompt → exactly one END_OF_INSTRUCTION and one done line", () => {
     seedPart("rex", "codex", "demo");
-    inboxWrite("rex", "codex", "demo", composeExploreResearchPrompt("attn", "/art/findings-rex.md", litGuidance("ON"), researchLens("codex")));
+    inboxWrite("rex", "codex", "demo", composeExploreResearchPrompt("attn", "/art/findings-rex.md", litGuidance("ON"), researchLens("codex"), "/art/selfassess-rex.md"));
     const txt = readFileSync(inboxPath("rex", "codex", "demo"), "utf8");
     expect(count(txt, "END_OF_INSTRUCTION")).toBe(1);
     expect(count(txt, '"event":"done"')).toBe(1);
@@ -159,5 +183,38 @@ describe("composeGapPrompt", () => {
     expect(p).toContain("final landscape doc");
     expect(p).not.toContain("END_OF_INSTRUCTION");
     expect(p).not.toContain('"event"');
+  });
+});
+
+describe("composeSignoffPrompt", () => {
+  const p = composeSignoffPrompt(
+    "Adopt FlashAttention; caveats apply.",
+    ["[src/only-a.ts:1] AlphaOnly — solo"],
+    "- [https://x.test/p] Shared — both",
+    "/art/signoff-alpha.md",
+  );
+  it("carries the conclusion, solo bucket lines, agreed text, and the out-path", () => {
+    expect(p).toContain("Adopt FlashAttention; caveats apply.");
+    expect(p).toContain("- [src/only-a.ts:1] AlphaOnly — solo");
+    expect(p).toContain("- [https://x.test/p] Shared — both");
+    expect(p).toContain("/art/signoff-alpha.md");
+  });
+  it("demands the VERDICT enum line first and ### Flag: blocks", () => {
+    expect(p).toContain("VERDICT: fair | misrepresented");
+    expect(p).toContain("### Flag:");
+    expect(p.indexOf("VERDICT: fair | misrepresented")).toBeLessThan(p.indexOf("### Flag:"));
+  });
+  it("states the no-new-claims / no-re-litigation rule explicitly", () => {
+    expect(p).toMatch(/no new claims/i);
+    expect(p).toMatch(/re-litigation/i);
+  });
+  it("does NOT embed its own done-event line or END_OF_INSTRUCTION (inboxWrite owns them)", () => {
+    expect(p).not.toContain('{"event":"done"');
+    expect(p).not.toContain("END_OF_INSTRUCTION");
+  });
+  it("omits the solo/agreed blocks when empty (degraded N=1 tolerance)", () => {
+    const q = composeSignoffPrompt("C.", [], "", "/o.md");
+    expect(q).not.toContain("Your solo claims");
+    expect(q).not.toContain("Consensus claims");
   });
 });
