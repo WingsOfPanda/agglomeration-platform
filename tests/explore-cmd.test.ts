@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { existsSync, readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -350,6 +350,24 @@ describe("explore confidence", () => {
       const rc = await confidenceRun(["x"]);
       expect(rc).toBe(0);
       expect(existsSync(join(art, "adversary-skip.txt"))).toBe(false);
+    } finally { cleanup(); }
+  });
+  it("prints S1=..S5= per-signal lines to stdout with ALL_HOLD= as the LAST line", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      await seedFindings(art, DRAFT + "\nCONTESTED: foo"); // S3 fails
+      const chunks: string[] = [];
+      const spy = vi.spyOn(process.stdout, "write").mockImplementation(((s: unknown) => { chunks.push(String(s)); return true; }) as never);
+      try {
+        expect(await confidenceRun(["x"])).toBe(0);
+      } finally { spy.mockRestore(); }
+      const lines = chunks.join("").trim().split("\n");
+      expect(lines).toContain("S3=false");
+      for (const n of [1, 2, 4, 5]) expect(lines.some((l) => new RegExp(`^S${n}=(true|false)$`).test(l))).toBe(true);
+      expect(lines[lines.length - 1]).toBe("ALL_HOLD=false"); // directive-parse compatibility: last line
+      expect(lines.slice(0, 5)).toEqual(lines.filter((l) => /^S[1-5]=/.test(l))); // S-lines come first, in order
     } finally { cleanup(); }
   });
 });
