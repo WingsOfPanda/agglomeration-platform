@@ -25412,7 +25412,7 @@ function composeExploreResearchPrompt(topic, writeTo, lit) {
     "doc is written."
   ].join("\n");
 }
-function composeAdversaryPrompt(landscapeDraft, agent, outPath) {
+function composeAdversaryPrompt(landscapeDraft, agent, outPath, opts) {
   return [
     "You are now playing adversary against a synthesized landscape doc that",
     "was built from your earlier research findings (and the findings of your",
@@ -25426,6 +25426,17 @@ function composeAdversaryPrompt(landscapeDraft, agent, outPath) {
     "The synthesis to challenge:",
     "",
     landscapeDraft,
+    "",
+    ...opts.peerFindingsPaths.length ? [
+      "Raw evidence behind the draft \u2014 your fellow workers' unfiltered findings files:",
+      ...opts.peerFindingsPaths.map((p) => `- ${p}`),
+      "Open them with your own tools and check whether the draft faithfully",
+      "represents them: a weak peer claim the synthesis absorbed uncritically is a",
+      "finding; so is peer evidence the synthesis dropped or distorted.",
+      ""
+    ] : [],
+    `Your PRIMARY attack angle \u2014 ${opts.lens.name} \u2014 spend most of your effort here:`,
+    ...opts.lens.emphasis.map((l) => `- ${l}`),
     "",
     "Attack surface \u2014 prioritize these failure modes:",
     "- Approaches that were missed or wrongly excluded from the landscape",
@@ -25472,9 +25483,36 @@ function composeAdversaryPrompt(landscapeDraft, agent, outPath) {
     "  cited evidence, not speculative"
   ].join("\n");
 }
+var ADVERSARY_LENSES;
 var init_exploreTurn = __esm({
   "src/core/exploreTurn.ts"() {
     "use strict";
+    ADVERSARY_LENSES = [
+      {
+        name: "citation-fidelity",
+        emphasis: [
+          "Open every cited file/URL/paper in the draft AND in the raw peer findings files.",
+          "Verify each claim is actually supported by its citation; flag over-reached citations",
+          "where the source says less (or something other) than the claim attached to it."
+        ]
+      },
+      {
+        name: "frame-exclusion",
+        emphasis: [
+          "Hunt approaches that were missed or wrongly excluded from the landscape.",
+          "Attack frames the synthesis adopted that shut out valid alternatives, comparing the",
+          "draft against what the raw peer findings files actually contain."
+        ]
+      },
+      {
+        name: "staleness-and-correlation",
+        emphasis: [
+          'Attack stale SOTA claims (a paper from 3+ years ago marked "current SOTA") and',
+          "convergent findings that may share a correlated blind spot (all workers read the",
+          "same paper, all missed the same recent development)."
+        ]
+      }
+    ];
   }
 });
 
@@ -25831,9 +25869,17 @@ async function adversarySendWith(topic, agent, provider, d) {
     log.error(`explore adversary-send: ${stateFile} exists; rm to retry`);
     return 1;
   }
+  const rows = parseListFile(readIfExists((0, import_node_path34.join)(art, "list.txt")));
+  const index = rows.findIndex((r) => r.agent === agent);
+  if (index < 0) {
+    log.error(`explore adversary-send: ${agent} not in list.txt at ${art}`);
+    return 1;
+  }
+  const peerFindingsPaths = rows.filter((r) => r.agent !== agent).map((r) => (0, import_node_path34.join)(art, `findings-${r.agent}.md`));
+  const lens = ADVERSARY_LENSES[index % ADVERSARY_LENSES.length];
   const outPath = (0, import_node_path34.join)(art, `adversary-${agent}.md`);
   const promptFile = (0, import_node_path34.join)(art, `${agent}_adversary_prompt.md`);
-  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath));
+  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath, { peerFindingsPaths, lens }));
   const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}
 `);

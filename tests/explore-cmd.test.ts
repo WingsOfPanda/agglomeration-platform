@@ -260,6 +260,33 @@ describe("explore adversary-send/wait", () => {
       expect(await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => 0 })).toBe(1);
     } finally { cleanup(); }
   });
+  it("send lists peer findings paths and assigns a distinct lens per list index", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps()); // list: alpha(codex), charlie(claude)
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "## Approaches\n1. A");
+      const deps: ResearchSendDeps = { offsetFor: () => 0, send: async () => 0 };
+      expect(await adversarySendWith("x", "alpha", "codex", deps)).toBe(0);
+      expect(await adversarySendWith("x", "charlie", "claude", deps)).toBe(0);
+      const pAlpha = readFileSync(join(art, "alpha_adversary_prompt.md"), "utf8");
+      const pCharlie = readFileSync(join(art, "charlie_adversary_prompt.md"), "utf8");
+      expect(pAlpha).toContain(join(art, "findings-charlie.md"));   // peers only
+      expect(pAlpha).not.toContain(join(art, "findings-alpha.md"));
+      expect(pCharlie).toContain(join(art, "findings-alpha.md"));
+      expect(pAlpha).toContain("citation-fidelity");                 // index 0 lens
+      expect(pCharlie).toContain("frame-exclusion");                 // index 1 lens
+      expect(pAlpha).not.toBe(pCharlie);
+    } finally { cleanup(); }
+  });
+  it("send rc1 when the agent is not in list.txt", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      writeFileSync(join(exploreArtDir("x"), "landscape-draft.md"), "d");
+      expect(await adversarySendWith("x", "zulu", "codex", { offsetFor: () => 0, send: async () => 0 })).toBe(1);
+    } finally { cleanup(); }
+  });
   it("wait marks AS=ok on a done event with a non-empty critique", async () => {
     const { cleanup } = freshHome();
     try {
