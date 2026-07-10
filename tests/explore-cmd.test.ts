@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { freshHome } from "./helpers/tmpHome.js";
-import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, verdictTallyRun, diffExploreRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
+import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, crossverifySendWith, crossverifyWaitWith, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, verdictTallyRun, diffExploreRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
 import { exploreArtDir } from "../src/core/explore.js";
 
 function initDeps(over: Partial<ExploreInitDeps> = {}): ExploreInitDeps {
@@ -788,6 +788,98 @@ describe("explore diff", () => {
       writeFileSync(join(art, "findings-charlie.md"), approaches("[a.ts:1] A — a"));
       expect(await diffExploreRun(["x"])).toBe(0);
       expect(await diffExploreRun(["x"])).toBe(1); // diff.md exists; rm to retry
+    } finally { cleanup(); }
+  });
+});
+
+describe("explore crossverify-send/wait", () => {
+  function seedBuckets(art: string) {
+    writeFileSync(join(art, "alpha_only_items.txt"), "[src/only-a.ts:1] AlphaOnly — solo\n");
+    writeFileSync(join(art, "charlie_only_items.txt"), "[paper:arxiv:9] CharlieOnly — solo\n");
+  }
+  it("send FS guard: research FS=timeout → VS=skipped, no send", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      seedBuckets(art);
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=timeout\n");
+      const send = vi.fn(async () => 0);
+      expect(await crossverifySendWith("x", "alpha", "codex", { offsetFor: () => 0, send })).toBe(0);
+      expect(send).not.toHaveBeenCalled();
+      expect(readFileSync(join(art, "crossverify-alpha.txt"), "utf8")).toBe("VS=skipped\n");
+    } finally { cleanup(); }
+  });
+  it("send empty peer scope → VS=skipped, claims file written empty, no send", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "alpha_only_items.txt"), "");
+      writeFileSync(join(art, "charlie_only_items.txt"), "");
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+      const send = vi.fn(async () => 0);
+      expect(await crossverifySendWith("x", "alpha", "codex", { offsetFor: () => 0, send })).toBe(0);
+      expect(send).not.toHaveBeenCalled();
+      expect(readFileSync(join(art, "crossverify-alpha.txt"), "utf8")).toBe("VS=skipped\n");
+      expect(readFileSync(join(art, "crossverify-claims-alpha.txt"), "utf8")).toBe("");
+    } finally { cleanup(); }
+  });
+  it("send happy path: scoped to PEER buckets only, OFFSET captured, @prompt-file send", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      seedBuckets(art);
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+      let sent: string[] = [];
+      expect(await crossverifySendWith("x", "alpha", "codex", { offsetFor: () => 7, send: async (a) => { sent = a; return 0; } })).toBe(0);
+      expect(readFileSync(join(art, "crossverify-alpha.txt"), "utf8")).toBe("OFFSET=7\n");
+      const claims = readFileSync(join(art, "crossverify-claims-alpha.txt"), "utf8");
+      expect(claims).toBe("[paper:arxiv:9] CharlieOnly — solo\n"); // charlie's bucket, never alpha's own
+      const prompt = readFileSync(join(art, "alpha_crossverify_prompt.md"), "utf8");
+      expect(prompt).toContain("AGREE");
+      expect(prompt).toContain(join(art, "crossverify-alpha.md"));
+      expect(prompt).not.toContain("END_OF_INSTRUCTION");
+      expect(sent).toEqual(["--from", "hub", "alpha", "x", `@${join(art, "alpha_crossverify_prompt.md")}`]);
+    } finally { cleanup(); }
+  });
+  it("send rc1 when its state file already exists; rc1 when a bucket is missing", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+      expect(await crossverifySendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => 0 })).toBe(1); // charlie bucket missing (run explore diff first)
+      writeFileSync(join(art, "crossverify-alpha.txt"), "OFFSET=0\n");
+      expect(await crossverifySendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => 0 })).toBe(1); // state exists
+    } finally { cleanup(); }
+  });
+  it("wait fast-path: VS=skipped writes .done, rc 0; wait outcomes ok/timeout; question bumps OFFSET", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "crossverify-alpha.txt"), "VS=skipped\n");
+      expect(await crossverifyWaitWith("x", "alpha", "codex", { wait: async () => null, multiplier: () => "1" })).toBe(0);
+      expect(existsSync(join(art, "crossverify-alpha.done"))).toBe(true);
+      // done + non-empty verdicts → VS=ok
+      writeFileSync(join(art, "crossverify-charlie.txt"), "OFFSET=0\n");
+      writeFileSync(join(art, "crossverify-charlie.md"), "# Verify\n## Verdicts\n1. AGREE ...\n");
+      expect(await crossverifyWaitWith("x", "charlie", "claude", { wait: async () => ({ event: "done" } as any), multiplier: () => "1" })).toBe(0);
+      expect(readFileSync(join(art, "crossverify-charlie.txt"), "utf8")).toContain("VS=ok");
+      // no event → VS=timeout
+      writeFileSync(join(art, "crossverify-golf.txt"), "OFFSET=0\n");
+      expect(await crossverifyWaitWith("x", "golf", "claude", { wait: async () => null, multiplier: () => "1" })).toBe(0);
+      expect(readFileSync(join(art, "crossverify-golf.txt"), "utf8")).toContain("VS=timeout");
+      // question event → payload captured + OFFSET re-armed (recordWaitOutcome contract)
+      writeFileSync(join(art, "crossverify-hotel.txt"), "OFFSET=0\n");
+      const q = { event: "question", message: "which bucket?" };
+      expect(await crossverifyWaitWith("x", "hotel", "claude", { wait: async () => (q as any), multiplier: () => "1" })).toBe(0);
+      expect(readFileSync(join(art, "question-hotel.txt"), "utf8")).toContain("which bucket?");
+      const state = readFileSync(join(art, "crossverify-hotel.txt"), "utf8");
+      expect(state).toContain("VS=question");
+      expect(state.match(/OFFSET=/g)!.length).toBe(2); // re-armed past the question event
     } finally { cleanup(); }
   });
 });
