@@ -39,7 +39,7 @@ describe("researchLens", () => {
 });
 
 describe("composeExploreResearchPrompt", () => {
-  const p = composeExploreResearchPrompt("attention kernels", "/art/findings-rex.md", litGuidance("ON"), researchLens("codex"));
+  const p = composeExploreResearchPrompt("attention kernels", "/art/findings-rex.md", litGuidance("ON"), researchLens("codex"), "/art/selfassess-rex.md");
   it("contains topic, write-to, and the lit-guidance", () => {
     expect(p).toContain("attention kernels");
     expect(p).toContain("/art/findings-rex.md");
@@ -67,6 +67,13 @@ describe("composeExploreResearchPrompt", () => {
   it("stays peer-material-free (no adversary-only blocks leak in)", () => {
     expect(p).not.toContain("Raw evidence behind the draft");
     expect(p).not.toContain("Priority targets");
+  });
+  it("names BOTH output files: findings and the separate self-assessment", () => {
+    expect(p).toContain("/art/findings-rex.md");
+    expect(p).toContain("/art/selfassess-rex.md");
+    expect(p).toContain("## Least sure");
+    expect(p).toContain("high | medium | low");
+    expect(p).toMatch(/do NOT embed it in the\nfindings file/i);
   });
 });
 
@@ -131,7 +138,7 @@ describe("explore inbox carries a single done contract (no duplicate END_OF_INST
 
   it("research prompt → exactly one END_OF_INSTRUCTION and one done line", () => {
     seedPart("rex", "codex", "demo");
-    inboxWrite("rex", "codex", "demo", composeExploreResearchPrompt("attn", "/art/findings-rex.md", litGuidance("ON"), researchLens("codex")));
+    inboxWrite("rex", "codex", "demo", composeExploreResearchPrompt("attn", "/art/findings-rex.md", litGuidance("ON"), researchLens("codex"), "/art/selfassess-rex.md"));
     const txt = readFileSync(inboxPath("rex", "codex", "demo"), "utf8");
     expect(count(txt, "END_OF_INSTRUCTION")).toBe(1);
     expect(count(txt, '"event":"done"')).toBe(1);

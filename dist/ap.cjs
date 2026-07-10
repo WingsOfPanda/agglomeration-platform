@@ -25351,7 +25351,7 @@ function litGuidance(track) {
 function researchLens(provider) {
   return RESEARCH_LENSES[provider] ?? NEUTRAL_LENS;
 }
-function composeExploreResearchPrompt(topic, writeTo, lit, lens) {
+function composeExploreResearchPrompt(topic, writeTo, lit, lens, selfassessTo) {
   const t = topic.trim();
   return [
     "Investigate the following topic from multiple angles. Your job is not to",
@@ -25393,6 +25393,20 @@ function composeExploreResearchPrompt(topic, writeTo, lit, lens) {
     "",
     "  ## Notes",
     "  <any free-form additions; not parsed by the Hub>",
+    "",
+    `SECOND output file \u2014 write your self-assessment to ${selfassessTo} with this structure:`,
+    "",
+    "  # Self-assessment",
+    "",
+    "  <one line per approach you listed: `<confidence>: <approach name>`,",
+    "  where <confidence> is high | medium | low>",
+    "",
+    "  ## Least sure",
+    "  - <the claim you are least confident in, with its [citation]>",
+    "  - ...",
+    "",
+    "The self-assessment is hub-side accountability material \u2014 do NOT embed it in the",
+    "findings file; keep the two files separate.",
     "",
     "Citation format options:",
     "  - <file path>:<line>          e.g. src/auth/store.py:42",
@@ -25991,7 +26005,7 @@ async function researchSendWith2(topic, agent, provider, d) {
   const track = readIfExists((0, import_node_path34.join)(art, "lit-track.txt")).startsWith("ON") ? "ON" : "OFF";
   const findingsPath = (0, import_node_path34.join)(art, `findings-${agent}.md`);
   const promptFile = (0, import_node_path34.join)(art, `${agent}_research_prompt.md`);
-  atomicWrite(promptFile, composeExploreResearchPrompt(topicText, findingsPath, litGuidance(track), researchLens(provider)));
+  atomicWrite(promptFile, composeExploreResearchPrompt(topicText, findingsPath, litGuidance(track), researchLens(provider), (0, import_node_path34.join)(art, `selfassess-${agent}.md`)));
   const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}
 `);

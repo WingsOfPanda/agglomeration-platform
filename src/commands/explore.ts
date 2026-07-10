@@ -177,7 +177,7 @@ export async function researchSendWith(topic: string, agent: string, provider: s
   const track = readIf(join(art, "lit-track.txt")).startsWith("ON") ? "ON" : "OFF";
   const findingsPath = join(art, `findings-${agent}.md`); // art-dir-flat (faithful to meditate)
   const promptFile = join(art, `${agent}_research_prompt.md`);
-  atomicWrite(promptFile, composeExploreResearchPrompt(topicText, findingsPath, litGuidance(track), researchLens(provider)));
+  atomicWrite(promptFile, composeExploreResearchPrompt(topicText, findingsPath, litGuidance(track), researchLens(provider), join(art, `selfassess-${agent}.md`)));
 
   const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}\n`);
