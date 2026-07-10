@@ -15,8 +15,35 @@ export function litGuidance(track: "ON" | "OFF"): string {
       "sources or write 'Not applicable' with a one-line reason.";
 }
 
+/** The whole-landscape guard sentence EVERY research lens ends with. Load-bearing partition guard:
+ *  a hard code/lit split at N=2 gives disjoint citation vocabularies → every draft citation is
+ *  solo → S2 systematically false (src/core/exploreConfidence.ts soloCitations). A weighting keeps
+ *  vocabularies overlapping on central sources. */
+export const LENS_GUARD =
+  "This is an emphasis, not a boundary — you must still cover the WHOLE landscape; " +
+  "do not skip an approach because it sits outside your emphasis.";
+
+/** Per-provider research lens — a WEIGHTING, never a partition. Keyed on provider NAME in code,
+ *  deliberately NOT a contracts.yaml field (the frozen key list stays untouched; provider names
+ *  are as stable as the closed provider set). */
+export const RESEARCH_LENSES: Readonly<Record<string, string>> = {
+  codex:
+    "Weight your investigation toward repo-code evidence: read the implementation, run runtime " +
+    "probes/experiments where cheap, judge implementation feasibility first-hand. " + LENS_GUARD,
+  claude:
+    "Weight your investigation toward literature and web synthesis: papers, RFCs, vendor docs, " +
+    "cross-domain analogues, conceptual frames. " + LENS_GUARD,
+};
+
+const NEUTRAL_LENS = "No special emphasis — balance code and literature evidence as the topic demands. " + LENS_GUARD;
+
+/** The research lens for a provider; agy/opencode/unknown get the neutral default. */
+export function researchLens(provider: string): string {
+  return RESEARCH_LENSES[provider] ?? NEUTRAL_LENS;
+}
+
 /** Research-phase prompt (port of meditate/research.md). Expose the landscape; do NOT recommend. */
-export function composeExploreResearchPrompt(topic: string, writeTo: string, lit: string): string {
+export function composeExploreResearchPrompt(topic: string, writeTo: string, lit: string, lens: string): string {
   const t = topic.trim();
   return [
     "Investigate the following topic from multiple angles. Your job is not to",
@@ -24,6 +51,8 @@ export function composeExploreResearchPrompt(topic: string, writeTo: string, lit
     "SOTA evidence, and open questions.",
     "",
     `Topic: ${t}`,
+    "",
+    `Research lens: ${lens}`,
     "",
     `Output requirements — write to ${writeTo} with this EXACT structure:`,
     "",
@@ -120,7 +149,7 @@ export const ADVERSARY_LENSES: readonly AdversaryLens[] = [
  *  distinct primary attack lens per worker. */
 export function composeAdversaryPrompt(
   landscapeDraft: string, agent: string, outPath: string,
-  opts: { peerFindingsPaths: string[]; lens: AdversaryLens },
+  opts: { peerFindingsPaths: string[]; lens: AdversaryLens; priorityTargets?: string[] },
 ): string {
   return [
     "You are now playing adversary against a synthesized landscape doc that",
@@ -147,6 +176,12 @@ export function composeAdversaryPrompt(
     `Your PRIMARY attack angle — ${opts.lens.name} — spend most of your effort here:`,
     ...opts.lens.emphasis.map((l) => `- ${l}`),
     "",
+    ...(opts.priorityTargets?.length ? [
+      "Priority targets — these citations are corroborated by only ONE worker; open each",
+      "and verify the claim it anchors FIRST:",
+      ...opts.priorityTargets.map((t) => `- ${t}`),
+      "",
+    ] : []),
     "Attack surface — prioritize these failure modes:",
     "- Approaches that were missed or wrongly excluded from the landscape",
     "- Tradeoff matrix rows where the \"Best fit\" assignment is wrong or weakly justified",
