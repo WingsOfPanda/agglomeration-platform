@@ -12,7 +12,7 @@ import { extractHandoffData } from "../core/exploreHandoff.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { killNow } from "../core/tmux.js";
 import {
-  type ListRow, formatListFile, parseListFile, parsePanesFile, spawnAllBatch,
+  type ListRow, formatListFile, parseListFile, parsePanesFile, spawnAllBatch, lastTag,
 } from "../core/design.js";
 import { readProviderList } from "../core/providers.js";
 import { activeProvidersPath, repoRoot } from "../core/paths.js";
@@ -315,6 +315,13 @@ export async function adversarySendWith(topic: string, agent: string, provider: 
   const stateFile = join(art, `adversary-${agent}.txt`);
   if (existsSync(stateFile)) { log.error(`explore adversary-send: ${stateFile} exists; rm to retry`); return 1; }
 
+  const fsTag = lastTag(readIf(join(art, `research-${agent}.txt`)), "FS");
+  if (fsTag === "timeout" || fsTag === "failed") {
+    atomicWrite(stateFile, "AS=skipped\n");
+    log.warn(`explore adversary-send: ${agent} skipped — research ended FS=${fsTag} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
+
   const rows = parseListFile(readIf(join(art, "list.txt")));
   const index = rows.findIndex((r) => r.agent === agent);
   if (index < 0) { log.error(`explore adversary-send: ${agent} not in list.txt at ${art}`); return 1; }
@@ -342,7 +349,13 @@ export async function adversaryWaitWith(topic: string, agent: string, provider: 
   const art = exploreArtDir(topic);
   const stateFile = join(art, `adversary-${agent}.txt`);
   if (!existsSync(stateFile)) { log.error(`explore adversary-wait: ${stateFile} missing (run explore adversary-send first)`); return 1; }
-  const offset = parseLatestOffset(readFileSync(stateFile, "utf8"));
+  const text = readFileSync(stateFile, "utf8");
+  if (lastTag(text, "AS") === "skipped") { // guard short-circuit: nothing was sent
+    writeFileSync(join(art, `adversary-${agent}.done`), "");
+    log.ok(`explore adversary-wait: ${agent} AS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
   if (offset === null) { log.error(`explore adversary-wait: OFFSET not set in ${stateFile}`); return 1; }
 
   const timeout = scaledTimeout(consultTimeout("adversary"), d.multiplier(provider));
@@ -350,8 +363,8 @@ export async function adversaryWaitWith(topic: string, agent: string, provider: 
   const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
 
   const outPath = join(art, `adversary-${agent}.md`);
-  const text = readIfExistsOrNull(outPath);
-  const as = verifyState(ev, text); // done -> ok iff non-empty; mirrors the adversary wait's -s check
+  const outText = readIfExistsOrNull(outPath);
+  const as = verifyState(ev, outText); // done -> ok iff non-empty; mirrors the adversary wait's -s check
   recordWaitOutcome(agent, provider, topic, stateFile, as, "AS",
     ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
   writeFileSync(join(art, `adversary-${agent}.done`), "");
@@ -395,7 +408,8 @@ export async function synthFinalRun(rest: string[]): Promise<number> {
   const skipped = /^user_decision: skip$/m.test(readIf(join(art, "adversary-skip.txt")));
   if (!skipped) {
     const rows = parseListFile(readIf(join(art, "list.txt")));
-    const missing = missingListArtifacts(art, rows, "adversary");
+    const active = rows.filter((r) => lastTag(readIf(join(art, `adversary-${r.agent}.txt`)), "AS") !== "skipped");
+    const missing = missingListArtifacts(art, active, "adversary");
     if (missing.length) {
       log.error("explore synth-final: blocked — adversary ran but critiques missing:");
       for (const m of missing) log.error(`  - ${join(art, m)}`);

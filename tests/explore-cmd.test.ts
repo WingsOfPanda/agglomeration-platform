@@ -312,6 +312,52 @@ describe("explore adversary-send/wait", () => {
       expect(readFileSync(join(art, "adversary-alpha.txt"), "utf8")).toContain("AS=missing");
     } finally { cleanup(); }
   });
+  for (const bad of ["timeout", "failed"] as const) {
+    it(`send soft-skips (AS=skipped, no send) when research ended FS=${bad}`, async () => {
+      const { cleanup } = freshHome();
+      try {
+        await initWith(["x"], initDeps());
+        const art = exploreArtDir("x");
+        writeFileSync(join(art, "landscape-draft.md"), "## Approaches\n1. A");
+        writeFileSync(join(art, "research-alpha.txt"), `OFFSET=0\nFS=${bad}\n`);
+        let sendCalled = false;
+        const rc = await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => { sendCalled = true; return 0; } });
+        expect(rc).toBe(0);
+        expect(sendCalled).toBe(false);
+        expect(readFileSync(join(art, "adversary-alpha.txt"), "utf8")).toBe("AS=skipped\n");
+        expect(existsSync(join(art, "alpha_adversary_prompt.md"))).toBe(false);
+      } finally { cleanup(); }
+    });
+  }
+  it("send proceeds normally when research ended FS=ok", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "## Approaches\n1. A");
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+      let sendCalled = false;
+      const rc = await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 5, send: async () => { sendCalled = true; return 0; } });
+      expect(rc).toBe(0);
+      expect(sendCalled).toBe(true);
+      expect(readFileSync(join(art, "adversary-alpha.txt"), "utf8")).toContain("OFFSET=5");
+    } finally { cleanup(); }
+  });
+  it("wait fast-path: AS=skipped state (no OFFSET) writes .done and rc 0 without waiting", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "adversary-alpha.txt"), "AS=skipped\n");
+      const rc = await adversaryWaitWith("x", "alpha", "codex", {
+        wait: async () => { throw new Error("wait must not be called for a skipped worker"); },
+        multiplier: () => "1",
+      });
+      expect(rc).toBe(0);
+      expect(existsSync(join(art, "adversary-alpha.done"))).toBe(true);
+      expect(readFileSync(join(art, "adversary-alpha.txt"), "utf8")).toBe("AS=skipped\n"); // no extra lines
+    } finally { cleanup(); }
+  });
 });
 
 describe("explore synth-final", () => {
@@ -345,6 +391,18 @@ describe("explore synth-final", () => {
       writeFileSync(join(art, "adversary-skip.txt"), "user_decision: continue\n");
       writeFileSync(join(art, "adversary-alpha.md"), "c"); // charlie missing
       expect(await synthFinalRun(["x"])).toBe(1);
+    } finally { cleanup(); }
+  });
+  it("rc0 when a worker's critique is absent but its state says AS=skipped", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "d");
+      writeFileSync(join(art, "adversary-skip.txt"), "user_decision: continue\n");
+      writeFileSync(join(art, "adversary-alpha.md"), "c");           // alpha critiqued
+      writeFileSync(join(art, "adversary-charlie.txt"), "AS=skipped\n"); // charlie skipped, no .md
+      expect(await synthFinalRun(["x"])).toBe(0);
     } finally { cleanup(); }
   });
 });

@@ -25869,6 +25869,12 @@ async function adversarySendWith(topic, agent, provider, d) {
     log.error(`explore adversary-send: ${stateFile} exists; rm to retry`);
     return 1;
   }
+  const fsTag = lastTag(readIfExists((0, import_node_path34.join)(art, `research-${agent}.txt`)), "FS");
+  if (fsTag === "timeout" || fsTag === "failed") {
+    atomicWrite(stateFile, "AS=skipped\n");
+    log.warn(`explore adversary-send: ${agent} skipped \u2014 research ended FS=${fsTag} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
   const rows = parseListFile(readIfExists((0, import_node_path34.join)(art, "list.txt")));
   const index = rows.findIndex((r) => r.agent === agent);
   if (index < 0) {
@@ -25906,7 +25912,13 @@ async function adversaryWaitWith(topic, agent, provider, d) {
     log.error(`explore adversary-wait: ${stateFile} missing (run explore adversary-send first)`);
     return 1;
   }
-  const offset = parseLatestOffset((0, import_node_fs37.readFileSync)(stateFile, "utf8"));
+  const text = (0, import_node_fs37.readFileSync)(stateFile, "utf8");
+  if (lastTag(text, "AS") === "skipped") {
+    (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `adversary-${agent}.done`), "");
+    log.ok(`explore adversary-wait: ${agent} AS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
   if (offset === null) {
     log.error(`explore adversary-wait: OFFSET not set in ${stateFile}`);
     return 1;
@@ -25915,8 +25927,8 @@ async function adversaryWaitWith(topic, agent, provider, d) {
   log.info(`explore adversary-wait: ${agent} offset=${offset} timeout=${timeout}s`);
   const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
   const outPath = (0, import_node_path34.join)(art, `adversary-${agent}.md`);
-  const text = readIfExistsOrNull(outPath);
-  const as = verifyState(ev, text);
+  const outText = readIfExistsOrNull(outPath);
+  const as = verifyState(ev, outText);
   recordWaitOutcome(
     agent,
     provider,
@@ -25987,7 +25999,8 @@ async function synthFinalRun(rest) {
   const skipped = /^user_decision: skip$/m.test(readIfExists((0, import_node_path34.join)(art, "adversary-skip.txt")));
   if (!skipped) {
     const rows = parseListFile(readIfExists((0, import_node_path34.join)(art, "list.txt")));
-    const missing = missingListArtifacts(art, rows, "adversary");
+    const active = rows.filter((r) => lastTag(readIfExists((0, import_node_path34.join)(art, `adversary-${r.agent}.txt`)), "AS") !== "skipped");
+    const missing = missingListArtifacts(art, active, "adversary");
     if (missing.length) {
       log.error("explore synth-final: blocked \u2014 adversary ran but critiques missing:");
       for (const m of missing) log.error(`  - ${(0, import_node_path34.join)(art, m)}`);
