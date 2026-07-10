@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { freshHome } from "./helpers/tmpHome.js";
-import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
+import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
 import { exploreArtDir } from "../src/core/explore.js";
 
 function initDeps(over: Partial<ExploreInitDeps> = {}): ExploreInitDeps {
@@ -118,6 +118,148 @@ describe("explore research-send/wait", () => {
       expect(existsSync(join(art, "research-alpha.done"))).toBe(true);
       expect(readFileSync(join(art, "research-alpha.txt"), "utf8")).toContain("FS=ok");
     } finally { cleanup(); }
+  });
+});
+
+describe("explore openq-collate", () => {
+  it("collates open questions and writes per-target claims files (swap at N=2)", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps()); // alpha, charlie
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "findings-alpha.md"), "## Open questions\n- qa1\n- qa2\n## Notes\nn\n");
+      writeFileSync(join(art, "findings-charlie.md"), "## Open questions\n- qc1\n## Notes\nn\n");
+      const rc = await openqCollateRun(["x"]);
+      expect(rc).toBe(0);
+      expect(readFileSync(join(art, "open-questions.md"), "utf8")).toContain("qa1");
+      expect(readFileSync(join(art, "openq-claims-charlie.txt"), "utf8")).toBe("alpha\tqa1\nalpha\tqa2\n");
+      expect(readFileSync(join(art, "openq-claims-alpha.txt"), "utf8")).toBe("charlie\tqc1\n");
+    } finally { cleanup(); }
+  });
+  it("prints OPENQ=none and writes no claims files when no findings carry questions", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "findings-alpha.md"), "## Summary\ns\n");
+      writeFileSync(join(art, "findings-charlie.md"), "## Summary\ns\n");
+      expect(await openqCollateRun(["x"])).toBe(0);
+      expect(existsSync(join(art, "open-questions.md"))).toBe(false);
+      expect(existsSync(join(art, "openq-claims-alpha.txt"))).toBe(false);
+      expect(existsSync(join(art, "openq-claims-charlie.txt"))).toBe(false);
+    } finally { cleanup(); }
+  });
+  it("rc2 without a topic; rc1 when the art dir is missing", async () => {
+    const { cleanup } = freshHome();
+    try {
+      expect(await openqCollateRun([])).toBe(2);
+      expect(await openqCollateRun(["nope"])).toBe(1);
+    } finally { cleanup(); }
+  });
+});
+
+describe("explore openq-send/wait", () => {
+  it("send FS guard: research FS=timeout → QS=skipped, no send", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=timeout\n");
+      writeFileSync(join(art, "openq-claims-alpha.txt"), "charlie\tq?\n");
+      let sendCalled = false;
+      const rc = await openqSendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => { sendCalled = true; return 0; } });
+      expect(rc).toBe(0);
+      expect(sendCalled).toBe(false);
+      expect(readFileSync(join(art, "openq-alpha.txt"), "utf8")).toBe("QS=skipped\n");
+    } finally { cleanup(); }
+  });
+  it("send zero-questions skip: missing claims file → QS=skipped, no send", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+      let sendCalled = false;
+      const rc = await openqSendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => { sendCalled = true; return 0; } });
+      expect(rc).toBe(0);
+      expect(sendCalled).toBe(false);
+      expect(readFileSync(join(art, "openq-alpha.txt"), "utf8")).toBe("QS=skipped\n");
+    } finally { cleanup(); }
+  });
+  it("send happy path: prompt rendered from claims, OFFSET captured, send invoked with @prompt-file", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+      writeFileSync(join(art, "openq-claims-alpha.txt"), "charlie\tIs batch viable?\n");
+      let sent: string[] = [];
+      const rc = await openqSendWith("x", "alpha", "codex", { offsetFor: () => 9, send: async (a) => { sent = a; return 0; } });
+      expect(rc).toBe(0);
+      expect(readFileSync(join(art, "openq-alpha.txt"), "utf8")).toContain("OFFSET=9");
+      const prompt = readFileSync(join(art, "alpha_openq_prompt.md"), "utf8");
+      expect(prompt).toContain("1. (from charlie) Is batch viable?");
+      expect(prompt).toContain(join(art, "openq-alpha.md"));
+      expect(sent).toEqual(["--from", "hub", "alpha", "x", `@${join(art, "alpha_openq_prompt.md")}`]);
+    } finally { cleanup(); }
+  });
+  it("send rc1 when its state file already exists", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "openq-alpha.txt"), "QS=skipped\n");
+      expect(await openqSendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => 0 })).toBe(1);
+    } finally { cleanup(); }
+  });
+  it("wait fast-path: QS=skipped writes .done, rc 0, no OFFSET error", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "openq-alpha.txt"), "QS=skipped\n");
+      const rc = await openqWaitWith("x", "alpha", "codex", {
+        wait: async () => { throw new Error("wait must not be called for a skipped worker"); },
+        multiplier: () => "1",
+      });
+      expect(rc).toBe(0);
+      expect(existsSync(join(art, "openq-alpha.done"))).toBe(true);
+    } finally { cleanup(); }
+  });
+  it("wait: done + non-empty answers → QS=ok; done + empty → QS=missing; no event → QS=timeout", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "openq-alpha.txt"), "OFFSET=0\n");
+      writeFileSync(join(art, "openq-alpha.md"), "## Q1 x\nanswer");
+      expect(await openqWaitWith("x", "alpha", "codex", { wait: async () => ({ event: "done" } as any), multiplier: () => "1" })).toBe(0);
+      expect(readFileSync(join(art, "openq-alpha.txt"), "utf8")).toContain("QS=ok");
+      expect(existsSync(join(art, "openq-alpha.done"))).toBe(true);
+
+      writeFileSync(join(art, "openq-charlie.txt"), "OFFSET=0\n");
+      writeFileSync(join(art, "openq-charlie.md"), "");
+      expect(await openqWaitWith("x", "charlie", "claude", { wait: async () => ({ event: "done" } as any), multiplier: () => "1" })).toBe(0);
+      expect(readFileSync(join(art, "openq-charlie.txt"), "utf8")).toContain("QS=missing");
+
+      writeFileSync(join(art, "openq-golf.txt"), "OFFSET=0\n");
+      expect(await openqWaitWith("x", "golf", "codex", { wait: async () => null, multiplier: () => "1" })).toBe(0);
+      expect(readFileSync(join(art, "openq-golf.txt"), "utf8")).toContain("QS=timeout");
+    } finally { cleanup(); }
+  });
+  it("wait question event: captures the payload and bumps OFFSET via recordWaitOutcome", async () => {
+    const { cleanup } = freshHome();
+    try {
+      process.env.CLAUDE_PLUGIN_ROOT = process.cwd();
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "openq-alpha.txt"), "OFFSET=0\n");
+      const rc = await openqWaitWith("x", "alpha", "codex", { wait: async () => ({ event: "question", message: "m" } as any), multiplier: () => "1" });
+      expect(rc).toBe(0);
+      const st = readFileSync(join(art, "openq-alpha.txt"), "utf8");
+      expect(st).toContain("QS=question");
+      expect(readFileSync(join(art, "question-alpha.txt"), "utf8")).toContain('"question"');
+    } finally { cleanup(); delete process.env.CLAUDE_PLUGIN_ROOT; }
   });
 });
 
@@ -260,6 +402,33 @@ describe("explore adversary-send/wait", () => {
       expect(await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => 0 })).toBe(1);
     } finally { cleanup(); }
   });
+  it("send lists peer findings paths and assigns a distinct lens per list index", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps()); // list: alpha(codex), charlie(claude)
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "## Approaches\n1. A");
+      const deps: ResearchSendDeps = { offsetFor: () => 0, send: async () => 0 };
+      expect(await adversarySendWith("x", "alpha", "codex", deps)).toBe(0);
+      expect(await adversarySendWith("x", "charlie", "claude", deps)).toBe(0);
+      const pAlpha = readFileSync(join(art, "alpha_adversary_prompt.md"), "utf8");
+      const pCharlie = readFileSync(join(art, "charlie_adversary_prompt.md"), "utf8");
+      expect(pAlpha).toContain(join(art, "findings-charlie.md"));   // peers only
+      expect(pAlpha).not.toContain(join(art, "findings-alpha.md"));
+      expect(pCharlie).toContain(join(art, "findings-alpha.md"));
+      expect(pAlpha).toContain("citation-fidelity");                 // index 0 lens
+      expect(pCharlie).toContain("frame-exclusion");                 // index 1 lens
+      expect(pAlpha).not.toBe(pCharlie);
+    } finally { cleanup(); }
+  });
+  it("send rc1 when the agent is not in list.txt", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      writeFileSync(join(exploreArtDir("x"), "landscape-draft.md"), "d");
+      expect(await adversarySendWith("x", "zulu", "codex", { offsetFor: () => 0, send: async () => 0 })).toBe(1);
+    } finally { cleanup(); }
+  });
   it("wait marks AS=ok on a done event with a non-empty critique", async () => {
     const { cleanup } = freshHome();
     try {
@@ -283,6 +452,81 @@ describe("explore adversary-send/wait", () => {
       const rc = await adversaryWaitWith("x", "alpha", "codex", { wait: async () => ({ event: "done" } as any), multiplier: () => "1" });
       expect(rc).toBe(0);
       expect(readFileSync(join(art, "adversary-alpha.txt"), "utf8")).toContain("AS=missing");
+    } finally { cleanup(); }
+  });
+  for (const bad of ["timeout", "failed"] as const) {
+    it(`send soft-skips (AS=skipped, no send) when research ended FS=${bad}`, async () => {
+      const { cleanup } = freshHome();
+      try {
+        await initWith(["x"], initDeps());
+        const art = exploreArtDir("x");
+        writeFileSync(join(art, "landscape-draft.md"), "## Approaches\n1. A");
+        writeFileSync(join(art, "research-alpha.txt"), `OFFSET=0\nFS=${bad}\n`);
+        let sendCalled = false;
+        const rc = await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => { sendCalled = true; return 0; } });
+        expect(rc).toBe(0);
+        expect(sendCalled).toBe(false);
+        expect(readFileSync(join(art, "adversary-alpha.txt"), "utf8")).toBe("AS=skipped\n");
+        expect(existsSync(join(art, "alpha_adversary_prompt.md"))).toBe(false);
+      } finally { cleanup(); }
+    });
+  }
+  it("send soft-skips (AS=skipped, no send) when research is ok but the openq turn ended QS=timeout", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "## Approaches\n1. A");
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+      writeFileSync(join(art, "openq-alpha.txt"), "OFFSET=3\nQS=timeout\n");
+      let sendCalled = false;
+      const rc = await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => { sendCalled = true; return 0; } });
+      expect(rc).toBe(0);
+      expect(sendCalled).toBe(false);
+      expect(readFileSync(join(art, "adversary-alpha.txt"), "utf8")).toBe("AS=skipped\n");
+    } finally { cleanup(); }
+  });
+  it("send proceeds when research is ok and the openq turn was QS=skipped (nothing was sent to it)", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "## Approaches\n1. A");
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+      writeFileSync(join(art, "openq-alpha.txt"), "QS=skipped\n");
+      let sendCalled = false;
+      const rc = await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 4, send: async () => { sendCalled = true; return 0; } });
+      expect(rc).toBe(0);
+      expect(sendCalled).toBe(true);
+    } finally { cleanup(); }
+  });
+  it("send proceeds normally when research ended FS=ok", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "## Approaches\n1. A");
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+      let sendCalled = false;
+      const rc = await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 5, send: async () => { sendCalled = true; return 0; } });
+      expect(rc).toBe(0);
+      expect(sendCalled).toBe(true);
+      expect(readFileSync(join(art, "adversary-alpha.txt"), "utf8")).toContain("OFFSET=5");
+    } finally { cleanup(); }
+  });
+  it("wait fast-path: AS=skipped state (no OFFSET) writes .done and rc 0 without waiting", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "adversary-alpha.txt"), "AS=skipped\n");
+      const rc = await adversaryWaitWith("x", "alpha", "codex", {
+        wait: async () => { throw new Error("wait must not be called for a skipped worker"); },
+        multiplier: () => "1",
+      });
+      expect(rc).toBe(0);
+      expect(existsSync(join(art, "adversary-alpha.done"))).toBe(true);
+      expect(readFileSync(join(art, "adversary-alpha.txt"), "utf8")).toBe("AS=skipped\n"); // no extra lines
     } finally { cleanup(); }
   });
 });
@@ -318,6 +562,18 @@ describe("explore synth-final", () => {
       writeFileSync(join(art, "adversary-skip.txt"), "user_decision: continue\n");
       writeFileSync(join(art, "adversary-alpha.md"), "c"); // charlie missing
       expect(await synthFinalRun(["x"])).toBe(1);
+    } finally { cleanup(); }
+  });
+  it("rc0 when a worker's critique is absent but its state says AS=skipped", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "d");
+      writeFileSync(join(art, "adversary-skip.txt"), "user_decision: continue\n");
+      writeFileSync(join(art, "adversary-alpha.md"), "c");           // alpha critiqued
+      writeFileSync(join(art, "adversary-charlie.txt"), "AS=skipped\n"); // charlie skipped, no .md
+      expect(await synthFinalRun(["x"])).toBe(0);
     } finally { cleanup(); }
   });
 });

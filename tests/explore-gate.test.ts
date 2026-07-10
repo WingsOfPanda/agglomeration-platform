@@ -50,6 +50,26 @@ describe("explore wait-gate (verb)", () => {
     expect(await exploreWaitGateRun(["t", "adversary"])).toBe(0);
   });
 
+  it("openq phase (QS): rc 0 when all terminal — ok and skipped rows both count", async () => {
+    const art = seedList("t");
+    writeFileSync(join(art, "openq-alpha.txt"), "OFFSET=1\nQS=ok\n");
+    writeFileSync(join(art, "openq-alpha.done"), "");
+    writeFileSync(join(art, "openq-charlie.txt"), "QS=skipped\n");
+    writeFileSync(join(art, "openq-charlie.done"), "");
+    expect(await exploreWaitGateRun(["t", "openq"])).toBe(0);
+  });
+
+  it("openq phase: rc 1 while one worker is pending (no .done) or in question", async () => {
+    const art = seedList("t");
+    writeFileSync(join(art, "openq-alpha.txt"), "OFFSET=1\nQS=ok\n");
+    writeFileSync(join(art, "openq-alpha.done"), "");
+    writeFileSync(join(art, "openq-charlie.txt"), "OFFSET=2\n"); // pending: no QS line, no .done
+    expect(await exploreWaitGateRun(["t", "openq"])).toBe(1);
+    writeFileSync(join(art, "openq-charlie.txt"), "OFFSET=2\nQS=question\n");
+    writeFileSync(join(art, "openq-charlie.done"), "");
+    expect(await exploreWaitGateRun(["t", "openq"])).toBe(1); // question is not terminal
+  });
+
   it("bad/absent phase and missing list → rc 2", async () => {
     expect(await exploreWaitGateRun(["t"])).toBe(2);
     expect(await exploreWaitGateRun(["t", "verify"])).toBe(2);

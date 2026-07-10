@@ -82,8 +82,46 @@ export function composeExploreResearchPrompt(topic: string, writeTo: string, lit
   ].join("\n");
 }
 
-/** Adversary-phase prompt (port of meditate/adversary.md). Inlines the draft to challenge. */
-export function composeAdversaryPrompt(landscapeDraft: string, agent: string, outPath: string): string {
+/** A distinct adversary attack angle. `emphasis` lines render as the PRIMARY-angle bullet block. */
+export interface AdversaryLens { name: string; emphasis: string[] }
+
+/** Distinct attack lenses, assigned by list.txt row index (`index % ADVERSARY_LENSES.length`) so
+ *  concurrent adversaries do not duplicate the same critique. Emphasis-only: the full attack-surface
+ *  list stays in every prompt, so N=2 keeps whole-surface coverage. Index 2 is reached only at N=3. */
+export const ADVERSARY_LENSES: readonly AdversaryLens[] = [
+  {
+    name: "citation-fidelity",
+    emphasis: [
+      "Open every cited file/URL/paper in the draft AND in the raw peer findings files.",
+      "Verify each claim is actually supported by its citation; flag over-reached citations",
+      "where the source says less (or something other) than the claim attached to it.",
+    ],
+  },
+  {
+    name: "frame-exclusion",
+    emphasis: [
+      "Hunt approaches that were missed or wrongly excluded from the landscape.",
+      "Attack frames the synthesis adopted that shut out valid alternatives, comparing the",
+      "draft against what the raw peer findings files actually contain.",
+    ],
+  },
+  {
+    name: "staleness-and-correlation",
+    emphasis: [
+      "Attack stale SOTA claims (a paper from 3+ years ago marked \"current SOTA\") and",
+      "convergent findings that may share a correlated blind spot (all workers read the",
+      "same paper, all missed the same recent development).",
+    ],
+  },
+];
+
+/** Adversary-phase prompt (port of meditate/adversary.md). Inlines the draft to challenge; lists
+ *  raw peer findings PATHS (not contents — workers open them with their own tools) and assigns a
+ *  distinct primary attack lens per worker. */
+export function composeAdversaryPrompt(
+  landscapeDraft: string, agent: string, outPath: string,
+  opts: { peerFindingsPaths: string[]; lens: AdversaryLens },
+): string {
   return [
     "You are now playing adversary against a synthesized landscape doc that",
     "was built from your earlier research findings (and the findings of your",
@@ -97,6 +135,17 @@ export function composeAdversaryPrompt(landscapeDraft: string, agent: string, ou
     "The synthesis to challenge:",
     "",
     landscapeDraft,
+    "",
+    ...(opts.peerFindingsPaths.length ? [
+      "Raw evidence behind the draft — your fellow workers' unfiltered findings files:",
+      ...opts.peerFindingsPaths.map((p) => `- ${p}`),
+      "Open them with your own tools and check whether the draft faithfully",
+      "represents them: a weak peer claim the synthesis absorbed uncritically is a",
+      "finding; so is peer evidence the synthesis dropped or distorted.",
+      "",
+    ] : []),
+    `Your PRIMARY attack angle — ${opts.lens.name} — spend most of your effort here:`,
+    ...opts.lens.emphasis.map((l) => `- ${l}`),
     "",
     "Attack surface — prioritize these failure modes:",
     "- Approaches that were missed or wrongly excluded from the landscape",

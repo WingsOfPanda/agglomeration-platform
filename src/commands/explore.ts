@@ -12,7 +12,7 @@ import { extractHandoffData } from "../core/exploreHandoff.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { killNow } from "../core/tmux.js";
 import {
-  type ListRow, formatListFile, parseListFile, parsePanesFile, spawnAllBatch,
+  type ListRow, formatListFile, parseListFile, parsePanesFile, spawnAllBatch, lastTag,
 } from "../core/design.js";
 import { readProviderList } from "../core/providers.js";
 import { activeProvidersPath, repoRoot } from "../core/paths.js";
@@ -24,14 +24,15 @@ import { buildAnnotations } from "../core/exploreAnnotate.js";
 import { outboxOffset, outboxPath, TERMINAL_EVENTS, type OutboxEvent } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
 import { parseLatestOffset, scaledTimeout, researchState, verifyState, gateState, recordWaitOutcome } from "../core/designTurn.js";
-import { composeExploreResearchPrompt, composeAdversaryPrompt, litGuidance } from "../core/exploreTurn.js";
+import { composeExploreResearchPrompt, composeAdversaryPrompt, litGuidance, ADVERSARY_LENSES } from "../core/exploreTurn.js";
 import { run as sendRun } from "./send.js";
 import { run as spawnRun } from "./spawn.js";
 import { run as preflightRun } from "./preflight.js";
 import { readIfExists as readIf, readIfExistsOrNull } from "../core/fsread.js";
+import { parseOpenQuestions, assignOpenQuestions, formatOpenqClaims, parseOpenqClaims, composeOpenqPrompt } from "../core/exploreOpenq.js";
 
 function usage(): number {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|wait-gate|synth-preliminary|" +
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|wait-gate|synth-preliminary|" +
     "confidence|annotate|adversary-send|adversary-wait|synth-final|forensics|teardown|handoff-extract> ...");
   return 2;
 }
@@ -45,6 +46,9 @@ export async function run(args: string[]): Promise<number> {
     case "spawn-all": return spawnAllRun(rest);
     case "research-send": return researchSendRun(rest);
     case "research-wait": return researchWaitRun(rest);
+    case "openq-collate": return openqCollateRun(rest);
+    case "openq-send": return openqSendRun(rest);
+    case "openq-wait": return openqWaitRun(rest);
     case "wait-gate": return exploreWaitGateRun(rest);
     case "synth-preliminary": return synthPreliminaryRun(rest);
     case "confidence": return confidenceRun(rest);
@@ -206,6 +210,102 @@ export async function researchWaitWith(topic: string, agent: string, provider: s
   return 0;
 }
 
+// ---- openq-collate / openq-send / openq-wait (Phase 4b open-questions peer relay) ----
+export async function openqCollateRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: explore openq-collate <topic>"); return 2; }
+  const art = exploreArtDir(topic);
+  if (!existsSync(art)) { log.error(`explore openq-collate: ${art} not found — run explore init`); return 1; }
+  const rows = parseListFile(readIf(join(art, "list.txt")));
+  if (rows.length === 0) { log.error(`explore openq-collate: list.txt missing or empty at ${art}`); return 1; }
+
+  const questionsByAgent = new Map<string, string[]>();
+  for (const r of rows) questionsByAgent.set(r.agent, parseOpenQuestions(readIf(join(art, `findings-${r.agent}.md`))));
+
+  const assignments = assignOpenQuestions(rows, questionsByAgent);
+  if (assignments.size === 0) {
+    log.ok("explore openq-collate: no open questions in any findings — phase skips");
+    process.stdout.write("OPENQ=none\n");
+    return 0;
+  }
+  const collated = rows.map((r) => {
+    const qs = questionsByAgent.get(r.agent) ?? [];
+    return `## ${r.agent}\n` + (qs.length ? qs.map((q) => `- ${q}`).join("\n") : "(none)");
+  }).join("\n\n") + "\n";
+  atomicWrite(join(art, "open-questions.md"), collated);
+  for (const [target, list] of assignments) {
+    atomicWrite(join(art, `openq-claims-${target}.txt`), formatOpenqClaims(list));
+  }
+  log.ok(`explore openq-collate: routed questions to ${assignments.size} worker(s)`);
+  process.stdout.write(`OPENQ=${assignments.size}\n`);
+  return 0;
+}
+
+async function openqSendRun(rest: string[]): Promise<number> {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: explore openq-send <topic> <agent> <provider>"); return 2; }
+  return openqSendWith(topic, agent, provider, liveResearchSendDeps);
+}
+export async function openqSendWith(topic: string, agent: string, provider: string, d: ResearchSendDeps): Promise<number> {
+  const art = exploreArtDir(topic);
+  const stateFile = join(art, `openq-${agent}.txt`);
+  if (existsSync(stateFile)) { log.error(`explore openq-send: ${stateFile} exists; rm to retry`); return 1; }
+
+  const fsTag = lastTag(readIf(join(art, `research-${agent}.txt`)), "FS"); // timeout-dispatch guard first
+  if (fsTag === "timeout" || fsTag === "failed") {
+    atomicWrite(stateFile, "QS=skipped\n");
+    log.warn(`explore openq-send: ${agent} skipped — research ended FS=${fsTag} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
+  const claims = parseOpenqClaims(readIf(join(art, `openq-claims-${agent}.txt`)));
+  if (claims.length === 0) {
+    atomicWrite(stateFile, "QS=skipped\n");
+    log.ok(`explore openq-send: ${agent} QS=skipped (no questions routed to it)`);
+    return 0;
+  }
+  const answersPath = join(art, `openq-${agent}.md`);
+  const promptFile = join(art, `${agent}_openq_prompt.md`);
+  atomicWrite(promptFile, composeOpenqPrompt(claims, answersPath));
+
+  const offset = d.offsetFor(agent, provider, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}\n`);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
+  if (rc !== 0) { log.error(`explore openq-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`); return 1; }
+  log.ok(`explore openq-send: ${agent} offset=${offset}`);
+  return 0;
+}
+
+async function openqWaitRun(rest: string[]): Promise<number> {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: explore openq-wait <topic> <agent> <provider>"); return 2; }
+  return openqWaitWith(topic, agent, provider, liveResearchWaitDeps);
+}
+export async function openqWaitWith(topic: string, agent: string, provider: string, d: ResearchWaitDeps): Promise<number> {
+  const art = exploreArtDir(topic);
+  const stateFile = join(art, `openq-${agent}.txt`);
+  if (!existsSync(stateFile)) { log.error(`explore openq-wait: ${stateFile} missing (run explore openq-send first)`); return 1; }
+  const text = readFileSync(stateFile, "utf8");
+  if (lastTag(text, "QS") === "skipped") { // guard/zero-questions short-circuit: nothing was sent
+    writeFileSync(join(art, `openq-${agent}.done`), "");
+    log.ok(`explore openq-wait: ${agent} QS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
+  if (offset === null) { log.error(`explore openq-wait: OFFSET not set in ${stateFile}`); return 1; }
+
+  const timeout = scaledTimeout(consultTimeout("openq"), d.multiplier(provider));
+  log.info(`explore openq-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
+
+  const answersPath = join(art, `openq-${agent}.md`);
+  const qs = verifyState(ev, readIfExistsOrNull(answersPath)); // done → ok iff answers file non-empty
+  recordWaitOutcome(agent, provider, topic, stateFile, qs, "QS",
+    ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
+  writeFileSync(join(art, `openq-${agent}.done`), "");
+  log.ok(`explore openq-wait: ${agent} QS=${qs}`);
+  return 0;
+}
+
 /** List rows whose `<prefix>-<agent>.md` art file is missing/empty → list of the missing filenames. */
 function missingListArtifacts(art: string, rows: ListRow[], prefix: string): string[] {
   return rows.filter((r) => !readIf(join(art, `${prefix}-${r.agent}.md`)).trim()).map((r) => `${prefix}-${r.agent}.md`);
@@ -315,9 +415,25 @@ export async function adversarySendWith(topic: string, agent: string, provider: 
   const stateFile = join(art, `adversary-${agent}.txt`);
   if (existsSync(stateFile)) { log.error(`explore adversary-send: ${stateFile} exists; rm to retry`); return 1; }
 
+  const fsTag = lastTag(readIf(join(art, `research-${agent}.txt`)), "FS");
+  const qsTag = lastTag(readIf(join(art, `openq-${agent}.txt`)), "QS");
+  const unsafe = fsTag === "timeout" || fsTag === "failed" ? `FS=${fsTag}`
+    : qsTag === "timeout" || qsTag === "failed" ? `QS=${qsTag}` : null;
+  if (unsafe) {
+    atomicWrite(stateFile, "AS=skipped\n");
+    log.warn(`explore adversary-send: ${agent} skipped — previous phase ended ${unsafe} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
+
+  const rows = parseListFile(readIf(join(art, "list.txt")));
+  const index = rows.findIndex((r) => r.agent === agent);
+  if (index < 0) { log.error(`explore adversary-send: ${agent} not in list.txt at ${art}`); return 1; }
+  const peerFindingsPaths = rows.filter((r) => r.agent !== agent).map((r) => join(art, `findings-${r.agent}.md`));
+  const lens = ADVERSARY_LENSES[index % ADVERSARY_LENSES.length];
+
   const outPath = join(art, `adversary-${agent}.md`);
   const promptFile = join(art, `${agent}_adversary_prompt.md`);
-  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath));
+  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath, { peerFindingsPaths, lens }));
 
   const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}\n`);
@@ -336,7 +452,13 @@ export async function adversaryWaitWith(topic: string, agent: string, provider: 
   const art = exploreArtDir(topic);
   const stateFile = join(art, `adversary-${agent}.txt`);
   if (!existsSync(stateFile)) { log.error(`explore adversary-wait: ${stateFile} missing (run explore adversary-send first)`); return 1; }
-  const offset = parseLatestOffset(readFileSync(stateFile, "utf8"));
+  const text = readFileSync(stateFile, "utf8");
+  if (lastTag(text, "AS") === "skipped") { // guard short-circuit: nothing was sent
+    writeFileSync(join(art, `adversary-${agent}.done`), "");
+    log.ok(`explore adversary-wait: ${agent} AS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
   if (offset === null) { log.error(`explore adversary-wait: OFFSET not set in ${stateFile}`); return 1; }
 
   const timeout = scaledTimeout(consultTimeout("adversary"), d.multiplier(provider));
@@ -344,8 +466,8 @@ export async function adversaryWaitWith(topic: string, agent: string, provider: 
   const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
 
   const outPath = join(art, `adversary-${agent}.md`);
-  const text = readIfExistsOrNull(outPath);
-  const as = verifyState(ev, text); // done -> ok iff non-empty; mirrors the adversary wait's -s check
+  const outText = readIfExistsOrNull(outPath);
+  const as = verifyState(ev, outText); // done -> ok iff non-empty; mirrors the adversary wait's -s check
   recordWaitOutcome(agent, provider, topic, stateFile, as, "AS",
     ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
   writeFileSync(join(art, `adversary-${agent}.done`), "");
@@ -356,14 +478,14 @@ export async function adversaryWaitWith(topic: string, agent: string, provider: 
 // ---- wait-gate (composes the pure gateState over research/adversary state files) ----
 export async function exploreWaitGateRun(rest: string[]): Promise<number> {
   const [topic, phase] = rest;
-  if (!topic || !phase) { log.error("usage: explore wait-gate <topic> <research|adversary>"); return 2; }
-  if (phase !== "research" && phase !== "adversary") { log.error(`explore wait-gate: phase must be research|adversary (got ${phase})`); return 2; }
+  if (!topic || !phase) { log.error("usage: explore wait-gate <topic> <research|adversary|openq>"); return 2; }
+  if (phase !== "research" && phase !== "adversary" && phase !== "openq") { log.error(`explore wait-gate: phase must be research|adversary|openq (got ${phase})`); return 2; }
   const art = exploreArtDir(topic);
   const listPath = join(art, "list.txt");
   if (!existsSync(listPath)) { log.error(`explore wait-gate: list.txt missing at ${art}`); return 2; }
   const rows = parseListFile(readFileSync(listPath, "utf8"));
   if (rows.length === 0) { log.error("explore wait-gate: list.txt has no workers"); return 2; }
-  const key = phase === "research" ? "FS" : "AS";
+  const key = phase === "research" ? "FS" : phase === "adversary" ? "AS" : "QS";
   const workers = rows.map((r) => {
     const stateFile = join(art, `${phase}-${r.agent}.txt`);
     return {
@@ -389,7 +511,8 @@ export async function synthFinalRun(rest: string[]): Promise<number> {
   const skipped = /^user_decision: skip$/m.test(readIf(join(art, "adversary-skip.txt")));
   if (!skipped) {
     const rows = parseListFile(readIf(join(art, "list.txt")));
-    const missing = missingListArtifacts(art, rows, "adversary");
+    const active = rows.filter((r) => lastTag(readIf(join(art, `adversary-${r.agent}.txt`)), "AS") !== "skipped");
+    const missing = missingListArtifacts(art, active, "adversary");
     if (missing.length) {
       log.error("explore synth-final: blocked — adversary ran but critiques missing:");
       for (const m of missing) log.error(`  - ${join(art, m)}`);

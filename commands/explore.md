@@ -31,7 +31,7 @@ alarm — record it: `$CS explore flag <TOPIC> "<what looked off>"`. It writes s
 feed (survives teardown and aborts) and costs nothing, so prefer over-recording. Review later with
 `/ap:review`.
 
-## Task list (TaskCreate × 11 before Phase 0)
+## Task list (TaskCreate × 12 before Phase 0)
 
 Create the task list with `TaskCreate`. Update statuses at the phase boundaries below. Per-worker
 rows are intentionally absent (N varies 2 or 3); each `[workers]` row covers the whole list in
@@ -44,6 +44,7 @@ parallel.
 | 2   | `2 Parallel spawn [hub]`               | `Spawning workers` |
 | 3   | `3 Research dispatch [workers]`              | `Dispatching research` |
 | 4   | `4 Research wait [workers]`                  | `Workers researching` |
+| 4b  | `4b Open-questions relay [workers]`    | `Relaying open questions` |
 | 5   | `5 Preliminary synthesis [hub]`        | `Synthesizing draft` |
 | 5.5 | `5.5 Confidence gate [hub + user]`     | `Evaluating confidence` |
 | 6   | `6 Adversary dispatch [workers]`             | `Dispatching adversary` |
@@ -151,6 +152,31 @@ handle it via **Intervention Pattern 1** before proceeding.
 
 Set task `4` → `completed`.
 
+## Phase 4b — open-questions peer relay (auto-skips when OPENQ=none)
+
+Set task `4b` → `in_progress`.
+
+1. **Collate:** `$CS explore openq-collate <TOPIC>` — parses every `findings-<agent>.md`'s
+   `## Open questions` bullets and round-robin routes each worker's questions to a DIFFERENT
+   worker (N=2 swaps, N=3 rotates by list order), writing `$ART/open-questions.md` plus one
+   `$ART/openq-claims-<agent>.txt` per receiving worker. If stdout says `OPENQ=none`, set task
+   `4b` → `completed` and continue to Phase 5 — no worker turn happens.
+2. **Dispatch:** issue N parallel Bash calls in one message (mirror Phase 3):
+   `$CS explore openq-send <TOPIC> <agent> <provider>`. The verb soft-skips (`QS=skipped`,
+   no send) any worker whose research ended `FS=timeout`/`FS=failed` — a timed-out worker may
+   still be churning, and a new inbox write would clobber its in-flight task — and any worker
+   with no questions routed to it.
+3. **Wait:** issue N background-await Bash calls in parallel (mirror Phase 4):
+   `$CS explore openq-wait <TOPIC> <agent> <provider>`. Answers land at `$ART/openq-<agent>.md`;
+   each wait appends `QS=` to `$ART/openq-<agent>.txt` and writes `$ART/openq-<agent>.done`.
+4. **Gate:** do not proceed until `$CS explore wait-gate <TOPIC> openq` exits 0. The `QS=` value is
+   informational (do NOT gate on `QS=ok`) — a `QS=timeout`/`QS=missing`/`QS=skipped` relay never
+   blocks the run; Phase 5 simply proceeds without that worker's answers. If a worker's state file
+   ends `QS=question`, handle via **Intervention Pattern 1** (state key `QS`, marker
+   `openq-<agent>.done`).
+
+Set task `4b` → `completed`.
+
 ## Phase 5 — preliminary synthesis (Hub Writes)
 
 Set task `5` → `in_progress`.
@@ -188,6 +214,11 @@ with this EXACT section set:
 
 Label **CONTESTED** claims explicitly (this is confidence signal S3). Every Tradeoff-matrix Reason
 cell MUST contain at least one citation — a file path, URL, or paper-id (this is signal S4).
+
+Additionally read every `$ART/openq-<agent>.md` that Phase 4b produced (when the phase ran):
+answered questions strengthen or resolve `## Open questions` entries — cite the answering
+worker's evidence. Missing/empty answer files are fine; answers are optional enrichment and
+never block the draft.
 
 Set task `5` → `completed`.
 
@@ -245,6 +276,12 @@ $CS explore adversary-send <TOPIC> <agent> <provider>
 Each `adversary-send` renders that worker's adversary prompt against `landscape-draft.md`, captures
 the pre-send `OFFSET=` into `$ART/adversary-<agent>.txt`, and nudges the pane.
 
+The verb also assigns each worker a DISTINCT primary attack lens (by list order) and lists its
+peers' raw `findings-<agent>.md` paths in the prompt. A worker whose research ended
+`FS=timeout`/`FS=failed` — or whose Phase 4b relay turn ended `QS=timeout`/`QS=failed` — is
+soft-skipped (`AS=skipped`, no send): dispatching to a possibly-still-churning worker would
+clobber its single-slot inbox.
+
 Set task `6` → `completed`.
 
 ## Phase 7 — adversary wait (skipped if Phase 6 skipped)
@@ -262,6 +299,9 @@ Bash(command='$CS explore adversary-wait <TOPIC> <agent> <provider>', run_in_bac
 informational (do NOT gate on `AS=ok`). Same question handling as Phase 4 — if a worker's state file's
 last line shows `AS=question`, handle via **Intervention Pattern 1** before proceeding. A malformed
 or empty adversary critique is handled by **Intervention Pattern 2**.
+
+A worker skipped by the Phase 6 guard is immediately terminal (`adversary-wait` sees
+`AS=skipped`, writes the `.done` marker, and returns 0) — background-wait every worker uniformly.
 
 Set task `7` → `completed`.
 
@@ -300,6 +340,12 @@ Then **use the Write tool** to author the final doc, reading `$ART/landscape-dra
 ## Citations
 <collected from all findings + adversary critiques>
 ```
+
+For a worker whose `$ART/adversary-<agent>.txt` ends `AS=skipped` (the Phase 6 dispatch guard),
+render its critique bullet as:
+`- **<agent> (<provider>):** (skipped: unsafe after research timeout)` — mirroring Intervention
+Pattern 2's `(unavailable)` convention. `synth-final` already tolerates the missing
+`adversary-<agent>.md` for such rows.
 
 **If adversary was SKIPPED**, replace the `## Adversary critiques` body with this blockquote note:
 
@@ -426,13 +472,14 @@ produces unexpected output, intervene before the next subcommand runs.
 
 ### Pattern 1: worker question event
 
-A worker emits `{"event": "question", ...}`. The wait verb sets `FS=question` (research) or
-`AS=question` (adversary) as the state file's last line and captures the question JSON to
+A worker emits `{"event": "question", ...}`. The wait verb sets `FS=question` (research),
+`AS=question` (adversary), or `QS=question` (open-questions relay) as the state file's last line
+and captures the question JSON to
 `$ART/question-<agent>.txt`. Read that file (its `message`, optional `options`), compose an
 answer from the topic + findings, then relay it:
 `$CS send --from hub <agent> <TOPIC> "<answer>"`. The wait verb already advanced the
-`OFFSET=`; `rm -f "$ART/research-<agent>.done"` (or `adversary-<agent>.done`) and re-arm
-that worker's background wait. The wait resumes past the question — it never re-sends the prompt.
+`OFFSET=`; `rm -f "$ART/research-<agent>.done"` (or `adversary-<agent>.done` /
+`openq-<agent>.done`) and re-arm that worker's background wait. The wait resumes past the question — it never re-sends the prompt.
 
 ### Pattern 2: malformed adversary output
 

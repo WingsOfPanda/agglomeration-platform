@@ -8482,7 +8482,7 @@ function agentConsultValidated(name) {
   return inst(name)?.consult_validated === true;
 }
 function consultTimeout(kind) {
-  if (!(kind in CONSULT_DEFAULTS)) throw new Error(`consultTimeout: kind must be 'research', 'verify', 'adversary', or 'experiment'; got '${kind}'`);
+  if (!(kind in CONSULT_DEFAULTS)) throw new Error(`consultTimeout: kind must be 'research', 'verify', 'adversary', 'experiment', or 'openq'; got '${kind}'`);
   const v = (load().consult ?? {})[`${kind}_timeout_s`];
   return /^[1-9][0-9]*$/.test(String(v)) ? Number(v) : CONSULT_DEFAULTS[kind];
 }
@@ -8497,7 +8497,7 @@ var init_contracts = __esm({
     import_node_path7 = require("node:path");
     import_yaml2 = __toESM(require_dist(), 1);
     init_paths();
-    CONSULT_DEFAULTS = { research: 600, verify: 300, adversary: 600, experiment: 1800 };
+    CONSULT_DEFAULTS = { research: 600, verify: 300, adversary: 600, experiment: 1800, openq: 300 };
   }
 });
 
@@ -25412,7 +25412,7 @@ function composeExploreResearchPrompt(topic, writeTo, lit) {
     "doc is written."
   ].join("\n");
 }
-function composeAdversaryPrompt(landscapeDraft, agent, outPath) {
+function composeAdversaryPrompt(landscapeDraft, agent, outPath, opts) {
   return [
     "You are now playing adversary against a synthesized landscape doc that",
     "was built from your earlier research findings (and the findings of your",
@@ -25426,6 +25426,17 @@ function composeAdversaryPrompt(landscapeDraft, agent, outPath) {
     "The synthesis to challenge:",
     "",
     landscapeDraft,
+    "",
+    ...opts.peerFindingsPaths.length ? [
+      "Raw evidence behind the draft \u2014 your fellow workers' unfiltered findings files:",
+      ...opts.peerFindingsPaths.map((p) => `- ${p}`),
+      "Open them with your own tools and check whether the draft faithfully",
+      "represents them: a weak peer claim the synthesis absorbed uncritically is a",
+      "finding; so is peer evidence the synthesis dropped or distorted.",
+      ""
+    ] : [],
+    `Your PRIMARY attack angle \u2014 ${opts.lens.name} \u2014 spend most of your effort here:`,
+    ...opts.lens.emphasis.map((l) => `- ${l}`),
     "",
     "Attack surface \u2014 prioritize these failure modes:",
     "- Approaches that were missed or wrongly excluded from the landscape",
@@ -25472,8 +25483,107 @@ function composeAdversaryPrompt(landscapeDraft, agent, outPath) {
     "  cited evidence, not speculative"
   ].join("\n");
 }
+var ADVERSARY_LENSES;
 var init_exploreTurn = __esm({
   "src/core/exploreTurn.ts"() {
+    "use strict";
+    ADVERSARY_LENSES = [
+      {
+        name: "citation-fidelity",
+        emphasis: [
+          "Open every cited file/URL/paper in the draft AND in the raw peer findings files.",
+          "Verify each claim is actually supported by its citation; flag over-reached citations",
+          "where the source says less (or something other) than the claim attached to it."
+        ]
+      },
+      {
+        name: "frame-exclusion",
+        emphasis: [
+          "Hunt approaches that were missed or wrongly excluded from the landscape.",
+          "Attack frames the synthesis adopted that shut out valid alternatives, comparing the",
+          "draft against what the raw peer findings files actually contain."
+        ]
+      },
+      {
+        name: "staleness-and-correlation",
+        emphasis: [
+          'Attack stale SOTA claims (a paper from 3+ years ago marked "current SOTA") and',
+          "convergent findings that may share a correlated blind spot (all workers read the",
+          "same paper, all missed the same recent development)."
+        ]
+      }
+    ];
+  }
+});
+
+// src/core/exploreOpenq.ts
+function parseOpenQuestions(findingsText) {
+  const out = [];
+  let inSection = false;
+  for (const line of findingsText.split("\n")) {
+    if (/^## Open questions\s*$/i.test(line)) {
+      inSection = true;
+      continue;
+    }
+    if (/^## /.test(line)) {
+      inSection = false;
+      continue;
+    }
+    if (!inSection) continue;
+    const m = line.match(/^- +(.*\S)/);
+    if (m) out.push(m[1]);
+  }
+  return out;
+}
+function assignOpenQuestions(rows, questionsByAgent) {
+  const out = /* @__PURE__ */ new Map();
+  if (rows.length < 2) return out;
+  rows.forEach((row, i2) => {
+    const qs = questionsByAgent.get(row.agent) ?? [];
+    if (qs.length === 0) return;
+    const target = rows[(i2 + 1) % rows.length].agent;
+    const list = out.get(target) ?? [];
+    for (const q of qs) list.push({ from: row.agent, question: q });
+    out.set(target, list);
+  });
+  return out;
+}
+function formatOpenqClaims(list) {
+  return list.map((a2) => `${a2.from}	${a2.question}`).join("\n") + "\n";
+}
+function parseOpenqClaims(text) {
+  const out = [];
+  for (const line of text.split("\n")) {
+    const i2 = line.indexOf("	");
+    if (i2 <= 0) continue;
+    out.push({ from: line.slice(0, i2), question: line.slice(i2 + 1) });
+  }
+  return out;
+}
+function composeOpenqPrompt(assignments, answersPath) {
+  const items = assignments.map((a2, i2) => `${i2 + 1}. (from ${a2.from}) ${a2.question}`).join("\n");
+  return [
+    "Your fellow workers could not resolve the questions below during their research",
+    "turn. Answer each one from your own investigation: use any tool available in",
+    "your environment (files, web search / fetch where present) and cite sources.",
+    "",
+    "Questions:",
+    items,
+    "",
+    `Output requirements \u2014 write to ${answersPath} with this EXACT structure:`,
+    "",
+    "  ## Q1 <question restated>",
+    "  <answer, with [citation] anchors>",
+    "",
+    "  ## Q2 <question restated>",
+    "  ...",
+    "",
+    "If you cannot answer one, say so explicitly under its heading \u2014 do not pad.",
+    'An honest "cannot resolve, because <reason>" is more useful than a weak guess.'
+  ].join("\n");
+}
+var init_exploreOpenq = __esm({
+  "src/core/exploreOpenq.ts"() {
     "use strict";
   }
 });
@@ -25490,6 +25600,9 @@ __export(explore_exports, {
   forensicsRun: () => forensicsRun5,
   handoffExtractRun: () => handoffExtractRun,
   initWith: () => initWith5,
+  openqCollateRun: () => openqCollateRun,
+  openqSendWith: () => openqSendWith,
+  openqWaitWith: () => openqWaitWith,
   researchSendWith: () => researchSendWith2,
   researchWaitWith: () => researchWaitWith2,
   run: () => run14,
@@ -25499,7 +25612,7 @@ __export(explore_exports, {
   teardownWith: () => teardownWith2
 });
 function usage5() {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|synth-final|forensics|teardown|handoff-extract> ...");
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|synth-final|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 async function run14(args) {
@@ -25516,6 +25629,12 @@ async function run14(args) {
       return researchSendRun2(rest);
     case "research-wait":
       return researchWaitRun2(rest);
+    case "openq-collate":
+      return openqCollateRun(rest);
+    case "openq-send":
+      return openqSendRun(rest);
+    case "openq-wait":
+      return openqWaitRun(rest);
     case "wait-gate":
       return exploreWaitGateRun(rest);
     case "synth-preliminary":
@@ -25694,6 +25813,129 @@ async function researchWaitWith2(topic, agent, provider, d) {
   log.ok(`explore research-wait: ${agent} FS=${fs}`);
   return 0;
 }
+async function openqCollateRun(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("usage: explore openq-collate <topic>");
+    return 2;
+  }
+  const art = exploreArtDir(topic);
+  if (!(0, import_node_fs37.existsSync)(art)) {
+    log.error(`explore openq-collate: ${art} not found \u2014 run explore init`);
+    return 1;
+  }
+  const rows = parseListFile(readIfExists((0, import_node_path34.join)(art, "list.txt")));
+  if (rows.length === 0) {
+    log.error(`explore openq-collate: list.txt missing or empty at ${art}`);
+    return 1;
+  }
+  const questionsByAgent = /* @__PURE__ */ new Map();
+  for (const r of rows) questionsByAgent.set(r.agent, parseOpenQuestions(readIfExists((0, import_node_path34.join)(art, `findings-${r.agent}.md`))));
+  const assignments = assignOpenQuestions(rows, questionsByAgent);
+  if (assignments.size === 0) {
+    log.ok("explore openq-collate: no open questions in any findings \u2014 phase skips");
+    process.stdout.write("OPENQ=none\n");
+    return 0;
+  }
+  const collated = rows.map((r) => {
+    const qs = questionsByAgent.get(r.agent) ?? [];
+    return `## ${r.agent}
+` + (qs.length ? qs.map((q) => `- ${q}`).join("\n") : "(none)");
+  }).join("\n\n") + "\n";
+  atomicWrite((0, import_node_path34.join)(art, "open-questions.md"), collated);
+  for (const [target, list] of assignments) {
+    atomicWrite((0, import_node_path34.join)(art, `openq-claims-${target}.txt`), formatOpenqClaims(list));
+  }
+  log.ok(`explore openq-collate: routed questions to ${assignments.size} worker(s)`);
+  process.stdout.write(`OPENQ=${assignments.size}
+`);
+  return 0;
+}
+async function openqSendRun(rest) {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) {
+    log.error("usage: explore openq-send <topic> <agent> <provider>");
+    return 2;
+  }
+  return openqSendWith(topic, agent, provider, liveResearchSendDeps2);
+}
+async function openqSendWith(topic, agent, provider, d) {
+  const art = exploreArtDir(topic);
+  const stateFile = (0, import_node_path34.join)(art, `openq-${agent}.txt`);
+  if ((0, import_node_fs37.existsSync)(stateFile)) {
+    log.error(`explore openq-send: ${stateFile} exists; rm to retry`);
+    return 1;
+  }
+  const fsTag = lastTag(readIfExists((0, import_node_path34.join)(art, `research-${agent}.txt`)), "FS");
+  if (fsTag === "timeout" || fsTag === "failed") {
+    atomicWrite(stateFile, "QS=skipped\n");
+    log.warn(`explore openq-send: ${agent} skipped \u2014 research ended FS=${fsTag} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
+  const claims = parseOpenqClaims(readIfExists((0, import_node_path34.join)(art, `openq-claims-${agent}.txt`)));
+  if (claims.length === 0) {
+    atomicWrite(stateFile, "QS=skipped\n");
+    log.ok(`explore openq-send: ${agent} QS=skipped (no questions routed to it)`);
+    return 0;
+  }
+  const answersPath = (0, import_node_path34.join)(art, `openq-${agent}.md`);
+  const promptFile = (0, import_node_path34.join)(art, `${agent}_openq_prompt.md`);
+  atomicWrite(promptFile, composeOpenqPrompt(claims, answersPath));
+  const offset = d.offsetFor(agent, provider, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}
+`);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
+  if (rc !== 0) {
+    log.error(`explore openq-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`);
+    return 1;
+  }
+  log.ok(`explore openq-send: ${agent} offset=${offset}`);
+  return 0;
+}
+async function openqWaitRun(rest) {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) {
+    log.error("usage: explore openq-wait <topic> <agent> <provider>");
+    return 2;
+  }
+  return openqWaitWith(topic, agent, provider, liveResearchWaitDeps2);
+}
+async function openqWaitWith(topic, agent, provider, d) {
+  const art = exploreArtDir(topic);
+  const stateFile = (0, import_node_path34.join)(art, `openq-${agent}.txt`);
+  if (!(0, import_node_fs37.existsSync)(stateFile)) {
+    log.error(`explore openq-wait: ${stateFile} missing (run explore openq-send first)`);
+    return 1;
+  }
+  const text = (0, import_node_fs37.readFileSync)(stateFile, "utf8");
+  if (lastTag(text, "QS") === "skipped") {
+    (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `openq-${agent}.done`), "");
+    log.ok(`explore openq-wait: ${agent} QS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
+  if (offset === null) {
+    log.error(`explore openq-wait: OFFSET not set in ${stateFile}`);
+    return 1;
+  }
+  const timeout = scaledTimeout(consultTimeout("openq"), d.multiplier(provider));
+  log.info(`explore openq-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
+  const answersPath = (0, import_node_path34.join)(art, `openq-${agent}.md`);
+  const qs = verifyState(ev, readIfExistsOrNull(answersPath));
+  recordWaitOutcome(
+    agent,
+    provider,
+    topic,
+    stateFile,
+    qs,
+    "QS",
+    ev ? { file: (0, import_node_path34.join)(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : void 0
+  );
+  (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `openq-${agent}.done`), "");
+  log.ok(`explore openq-wait: ${agent} QS=${qs}`);
+  return 0;
+}
 function missingListArtifacts(art, rows, prefix) {
   return rows.filter((r) => !readIfExists((0, import_node_path34.join)(art, `${prefix}-${r.agent}.md`)).trim()).map((r) => `${prefix}-${r.agent}.md`);
 }
@@ -25831,9 +26073,25 @@ async function adversarySendWith(topic, agent, provider, d) {
     log.error(`explore adversary-send: ${stateFile} exists; rm to retry`);
     return 1;
   }
+  const fsTag = lastTag(readIfExists((0, import_node_path34.join)(art, `research-${agent}.txt`)), "FS");
+  const qsTag = lastTag(readIfExists((0, import_node_path34.join)(art, `openq-${agent}.txt`)), "QS");
+  const unsafe = fsTag === "timeout" || fsTag === "failed" ? `FS=${fsTag}` : qsTag === "timeout" || qsTag === "failed" ? `QS=${qsTag}` : null;
+  if (unsafe) {
+    atomicWrite(stateFile, "AS=skipped\n");
+    log.warn(`explore adversary-send: ${agent} skipped \u2014 previous phase ended ${unsafe} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
+  const rows = parseListFile(readIfExists((0, import_node_path34.join)(art, "list.txt")));
+  const index = rows.findIndex((r) => r.agent === agent);
+  if (index < 0) {
+    log.error(`explore adversary-send: ${agent} not in list.txt at ${art}`);
+    return 1;
+  }
+  const peerFindingsPaths = rows.filter((r) => r.agent !== agent).map((r) => (0, import_node_path34.join)(art, `findings-${r.agent}.md`));
+  const lens = ADVERSARY_LENSES[index % ADVERSARY_LENSES.length];
   const outPath = (0, import_node_path34.join)(art, `adversary-${agent}.md`);
   const promptFile = (0, import_node_path34.join)(art, `${agent}_adversary_prompt.md`);
-  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath));
+  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath, { peerFindingsPaths, lens }));
   const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}
 `);
@@ -25860,7 +26118,13 @@ async function adversaryWaitWith(topic, agent, provider, d) {
     log.error(`explore adversary-wait: ${stateFile} missing (run explore adversary-send first)`);
     return 1;
   }
-  const offset = parseLatestOffset((0, import_node_fs37.readFileSync)(stateFile, "utf8"));
+  const text = (0, import_node_fs37.readFileSync)(stateFile, "utf8");
+  if (lastTag(text, "AS") === "skipped") {
+    (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `adversary-${agent}.done`), "");
+    log.ok(`explore adversary-wait: ${agent} AS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
   if (offset === null) {
     log.error(`explore adversary-wait: OFFSET not set in ${stateFile}`);
     return 1;
@@ -25869,8 +26133,8 @@ async function adversaryWaitWith(topic, agent, provider, d) {
   log.info(`explore adversary-wait: ${agent} offset=${offset} timeout=${timeout}s`);
   const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
   const outPath = (0, import_node_path34.join)(art, `adversary-${agent}.md`);
-  const text = readIfExistsOrNull(outPath);
-  const as = verifyState(ev, text);
+  const outText = readIfExistsOrNull(outPath);
+  const as = verifyState(ev, outText);
   recordWaitOutcome(
     agent,
     provider,
@@ -25887,11 +26151,11 @@ async function adversaryWaitWith(topic, agent, provider, d) {
 async function exploreWaitGateRun(rest) {
   const [topic, phase] = rest;
   if (!topic || !phase) {
-    log.error("usage: explore wait-gate <topic> <research|adversary>");
+    log.error("usage: explore wait-gate <topic> <research|adversary|openq>");
     return 2;
   }
-  if (phase !== "research" && phase !== "adversary") {
-    log.error(`explore wait-gate: phase must be research|adversary (got ${phase})`);
+  if (phase !== "research" && phase !== "adversary" && phase !== "openq") {
+    log.error(`explore wait-gate: phase must be research|adversary|openq (got ${phase})`);
     return 2;
   }
   const art = exploreArtDir(topic);
@@ -25905,7 +26169,7 @@ async function exploreWaitGateRun(rest) {
     log.error("explore wait-gate: list.txt has no workers");
     return 2;
   }
-  const key = phase === "research" ? "FS" : "AS";
+  const key = phase === "research" ? "FS" : phase === "adversary" ? "AS" : "QS";
   const workers = rows.map((r) => {
     const stateFile = (0, import_node_path34.join)(art, `${phase}-${r.agent}.txt`);
     return {
@@ -25941,7 +26205,8 @@ async function synthFinalRun(rest) {
   const skipped = /^user_decision: skip$/m.test(readIfExists((0, import_node_path34.join)(art, "adversary-skip.txt")));
   if (!skipped) {
     const rows = parseListFile(readIfExists((0, import_node_path34.join)(art, "list.txt")));
-    const missing = missingListArtifacts(art, rows, "adversary");
+    const active = rows.filter((r) => lastTag(readIfExists((0, import_node_path34.join)(art, `adversary-${r.agent}.txt`)), "AS") !== "skipped");
+    const missing = missingListArtifacts(art, active, "adversary");
     if (missing.length) {
       log.error("explore synth-final: blocked \u2014 adversary ran but critiques missing:");
       for (const m of missing) log.error(`  - ${(0, import_node_path34.join)(art, m)}`);
@@ -26046,6 +26311,7 @@ var init_explore2 = __esm({
     init_spawn();
     init_preflight();
     init_fsread();
+    init_exploreOpenq();
     liveExploreInitDeps = {
       activeProviders: () => readProviderList(activeProvidersPath()),
       isValidated: agentConsultValidated,
