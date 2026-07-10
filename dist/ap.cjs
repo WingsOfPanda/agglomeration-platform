@@ -25443,6 +25443,12 @@ function composeAdversaryPrompt(landscapeDraft, agent, outPath, opts) {
     `Your PRIMARY attack angle \u2014 ${opts.lens.name} \u2014 spend most of your effort here:`,
     ...opts.lens.emphasis.map((l) => `- ${l}`),
     "",
+    ...opts.priorityTargets?.length ? [
+      "Priority targets \u2014 these citations are corroborated by only ONE worker; open each",
+      "and verify the claim it anchors FIRST:",
+      ...opts.priorityTargets.map((t) => `- ${t}`),
+      ""
+    ] : [],
     "Attack surface \u2014 prioritize these failure modes:",
     "- Approaches that were missed or wrongly excluded from the landscape",
     '- Tradeoff matrix rows where the "Best fit" assignment is wrong or weakly justified',
@@ -26064,6 +26070,19 @@ unverified=${counts.n_unverified} no_citation=${counts.n_no_citation} approaches
   log.ok(`explore annotate: ${counts.n_unverified} unverified, ${counts.n_no_citation} no-citation, ${counts.n_approaches_flagged} approaches-flagged`);
   return 0;
 }
+function soloTokensFromAnnotations(raw) {
+  if (!raw || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    const seen = /* @__PURE__ */ new Set();
+    for (const it of parsed.items ?? []) {
+      if ((it.kind === "unverified" || it.kind === "approaches-flagged") && it.token) seen.add(it.token);
+    }
+    return [...seen];
+  } catch {
+    return [];
+  }
+}
 async function adversarySendRun(rest) {
   const [topic, agent, provider] = rest;
   if (!topic || !agent || !provider) {
@@ -26100,9 +26119,10 @@ async function adversarySendWith(topic, agent, provider, d) {
   }
   const peerFindingsPaths = rows.filter((r) => r.agent !== agent).map((r) => (0, import_node_path34.join)(art, `findings-${r.agent}.md`));
   const lens = ADVERSARY_LENSES[index % ADVERSARY_LENSES.length];
+  const priorityTargets = soloTokensFromAnnotations(readIfExistsOrNull((0, import_node_path34.join)(art, "annotations.json")));
   const outPath = (0, import_node_path34.join)(art, `adversary-${agent}.md`);
   const promptFile = (0, import_node_path34.join)(art, `${agent}_adversary_prompt.md`);
-  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath, { peerFindingsPaths, lens }));
+  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath, { peerFindingsPaths, lens, priorityTargets }));
   const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}
 `);

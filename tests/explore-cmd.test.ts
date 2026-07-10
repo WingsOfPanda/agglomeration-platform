@@ -532,6 +532,44 @@ describe("explore adversary-send/wait", () => {
       expect(readFileSync(join(art, "adversary-alpha.txt"), "utf8")).toContain("OFFSET=5");
     } finally { cleanup(); }
   });
+  it("send passes annotations.json solo tokens as Priority targets (unverified + approaches-flagged, deduped)", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "## Approaches\n1. A");
+      writeFileSync(join(art, "annotations.json"), JSON.stringify({
+        topic: "x",
+        counts: { n_unverified: 2, n_no_citation: 1, n_approaches_flagged: 1 },
+        items: [
+          { kind: "unverified", token: "https://x.test/solo", lineIndex: 1 },
+          { kind: "unverified", token: "https://x.test/solo", lineIndex: 4 },
+          { kind: "approaches-flagged", token: "src/a.ts:1", lineIndex: 2 },
+          { kind: "no-citation", lineIndex: 3 },
+        ],
+      }));
+      const rc = await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => 0 });
+      expect(rc).toBe(0);
+      const prompt = readFileSync(join(art, "alpha_adversary_prompt.md"), "utf8");
+      expect(prompt).toContain("Priority targets");
+      expect(prompt.split("- https://x.test/solo").length - 1).toBe(1); // deduped
+      expect(prompt).toContain("- src/a.ts:1");
+    } finally { cleanup(); }
+  });
+  it("send omits the Priority targets block when annotations.json is missing or malformed", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "## Approaches\n1. A");
+      expect(await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => 0 })).toBe(0);
+      expect(readFileSync(join(art, "alpha_adversary_prompt.md"), "utf8")).not.toContain("Priority targets");
+
+      writeFileSync(join(art, "annotations.json"), "{not json");
+      expect(await adversarySendWith("x", "charlie", "claude", { offsetFor: () => 0, send: async () => 0 })).toBe(0);
+      expect(readFileSync(join(art, "charlie_adversary_prompt.md"), "utf8")).not.toContain("Priority targets");
+    } finally { cleanup(); }
+  });
   it("wait fast-path: AS=skipped state (no OFFSET) writes .done and rc 0 without waiting", async () => {
     const { cleanup } = freshHome();
     try {

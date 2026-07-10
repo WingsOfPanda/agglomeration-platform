@@ -403,6 +403,21 @@ export async function annotateRun(rest: string[]): Promise<number> {
 }
 
 // ---- adversary-send / adversary-wait ----
+/** Solo-citation tokens from annotations.json (kind unverified | approaches-flagged), unique, in
+ *  file order. Missing/empty/malformed → [] — the Priority targets block is optional sharpening,
+ *  never an error (annotate always runs before Phase 6, but a skip must not break dispatch). */
+function soloTokensFromAnnotations(raw: string | null): string[] {
+  if (!raw || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw) as { items?: { kind?: string; token?: string }[] };
+    const seen = new Set<string>();
+    for (const it of parsed.items ?? []) {
+      if ((it.kind === "unverified" || it.kind === "approaches-flagged") && it.token) seen.add(it.token);
+    }
+    return [...seen];
+  } catch { return []; }
+}
+
 async function adversarySendRun(rest: string[]): Promise<number> {
   const [topic, agent, provider] = rest;
   if (!topic || !agent || !provider) { log.error("usage: explore adversary-send <topic> <agent> <provider>"); return 2; }
@@ -430,10 +445,11 @@ export async function adversarySendWith(topic: string, agent: string, provider: 
   if (index < 0) { log.error(`explore adversary-send: ${agent} not in list.txt at ${art}`); return 1; }
   const peerFindingsPaths = rows.filter((r) => r.agent !== agent).map((r) => join(art, `findings-${r.agent}.md`));
   const lens = ADVERSARY_LENSES[index % ADVERSARY_LENSES.length];
+  const priorityTargets = soloTokensFromAnnotations(readIfExistsOrNull(join(art, "annotations.json")));
 
   const outPath = join(art, `adversary-${agent}.md`);
   const promptFile = join(art, `${agent}_adversary_prompt.md`);
-  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath, { peerFindingsPaths, lens }));
+  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath, { peerFindingsPaths, lens, priorityTargets }));
 
   const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}\n`);
