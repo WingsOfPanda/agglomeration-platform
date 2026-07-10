@@ -227,3 +227,38 @@ export function composeAdversaryPrompt(
     "  cited evidence, not speculative",
   ].join("\n");
 }
+
+/** Post-gate gap-enrichment prompt (Phase 7c). Peer-only bucket items in → one confirm/extend/
+ *  refute turn out. Answers feed ONLY the final landscape doc + design-handoff Evidence — never
+ *  the draft, the gate, or the recorded signals (gate-as-loop-predicate stays a rejected
+ *  non-goal). Same no-fence contract as the other builders in this file. */
+export function composeGapPrompt(bucketItems: string[], outPath: string): string {
+  const items = bucketItems.map((l, i) => `${i + 1}. ${l}`).join("\n");
+  return [
+    "Your fellow workers surfaced the approaches below during research; you did not",
+    "cover them. The run's confidence gate recorded low cross-worker overlap, so each",
+    "item currently rests on a single worker's evidence.",
+    "",
+    "For EACH item, do ONE of:",
+    "",
+    "  CONFIRM — corroborate it with your OWN evidence (cite a file/line/URL/paper)",
+    "  EXTEND  — confirm it and add material the original worker missed",
+    "  REFUTE  — explain why it is wrong, with counter-evidence",
+    "",
+    "Items:",
+    items,
+    "",
+    `Write your answers to ${outPath} with this EXACT structure:`,
+    "",
+    "  # Gap enrichment",
+    "",
+    "  ## Answers",
+    "  1. <CONFIRM|EXTEND|REFUTE> <original [citation] and text>",
+    "     <your evidence, with [citation] anchors>",
+    "  2. ...",
+    "",
+    "Your answers feed ONLY the final landscape doc and the design handoff — the draft",
+    "is not re-synthesized and the confidence gate does not re-run. If you cannot tell",
+    "from available evidence, say so explicitly — do not pad.",
+  ].join("\n");
+}

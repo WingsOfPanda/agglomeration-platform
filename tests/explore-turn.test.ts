@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { composeExploreResearchPrompt, composeAdversaryPrompt, litGuidance, ADVERSARY_LENSES, researchLens } from "../src/core/exploreTurn.js";
+import { composeExploreResearchPrompt, composeAdversaryPrompt, litGuidance, ADVERSARY_LENSES, researchLens, composeGapPrompt } from "../src/core/exploreTurn.js";
 import { inboxWrite, inboxPath } from "../src/core/ipc.js";
 import { workerDir } from "../src/core/paths.js";
 
@@ -144,5 +144,20 @@ describe("explore inbox carries a single done contract (no duplicate END_OF_INST
     const txt = readFileSync(inboxPath("alpha", "codex", "demo"), "utf8");
     expect(count(txt, "END_OF_INSTRUCTION")).toBe(1);
     expect(count(txt, '"event":"done"')).toBe(1);
+  });
+});
+
+describe("composeGapPrompt", () => {
+  it("numbers the peer-only items, demands CONFIRM/EXTEND/REFUTE, names the output path, no fence", () => {
+    const p = composeGapPrompt(["[src/x.ts:4] PeerOnly — solo", "[paper:arxiv:9] Другой — solo"], "/art/gap-alpha.md");
+    expect(p).toContain("1. [src/x.ts:4] PeerOnly — solo");
+    expect(p).toContain("2. [paper:arxiv:9]");
+    expect(p).toContain("CONFIRM");
+    expect(p).toContain("EXTEND");
+    expect(p).toContain("REFUTE");
+    expect(p).toContain("/art/gap-alpha.md");
+    expect(p).toContain("final landscape doc");
+    expect(p).not.toContain("END_OF_INSTRUCTION");
+    expect(p).not.toContain('"event"');
   });
 });

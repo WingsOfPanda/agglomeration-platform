@@ -8482,7 +8482,7 @@ function agentConsultValidated(name) {
   return inst(name)?.consult_validated === true;
 }
 function consultTimeout(kind) {
-  if (!(kind in CONSULT_DEFAULTS)) throw new Error(`consultTimeout: kind must be 'research', 'verify', 'adversary', 'experiment', or 'openq'; got '${kind}'`);
+  if (!(kind in CONSULT_DEFAULTS)) throw new Error(`consultTimeout: kind must be 'research', 'verify', 'adversary', 'experiment', 'openq', 'rebuttal', or 'gap'; got '${kind}'`);
   const v = (load().consult ?? {})[`${kind}_timeout_s`];
   return /^[1-9][0-9]*$/.test(String(v)) ? Number(v) : CONSULT_DEFAULTS[kind];
 }
@@ -8497,7 +8497,7 @@ var init_contracts = __esm({
     import_node_path7 = require("node:path");
     import_yaml2 = __toESM(require_dist(), 1);
     init_paths();
-    CONSULT_DEFAULTS = { research: 600, verify: 300, adversary: 600, experiment: 1800, openq: 300 };
+    CONSULT_DEFAULTS = { research: 600, verify: 300, adversary: 600, experiment: 1800, openq: 300, rebuttal: 300, gap: 600 };
   }
 });
 
@@ -18326,11 +18326,11 @@ var init_turn = __esm({
 });
 
 // src/core/designDiff.ts
-function parseClaims(findings) {
+function parseClaims(findings, headings = ["Claims"]) {
   const out = [];
   let inClaims = false;
   for (const line of findings.split("\n")) {
-    if (/^## Claims/.test(line)) {
+    if (headings.some((h2) => line.startsWith(`## ${h2}`))) {
       inClaims = true;
       continue;
     }
@@ -18353,6 +18353,7 @@ function citationOverlaps(aRaw, bRaw) {
   const b = bRaw.replace(/^\.\//, "");
   if (a2.startsWith("http") || b.startsWith("http")) return a2 === b;
   if (a2.startsWith("runtime:") || b.startsWith("runtime:")) return a2 === b;
+  if (a2.startsWith("paper:") || b.startsWith("paper:")) return a2 === b;
   const aPath = a2.split(":")[0];
   const bPath = b.split(":")[0];
   if (aPath !== bPath) return false;
@@ -18369,7 +18370,7 @@ function citationOverlaps(aRaw, bRaw) {
 function mdSection(header, lines) {
   return header + "\n" + (lines && lines.length ? lines.map((l) => `- ${l}`).join("\n") + "\n" : "");
 }
-function diffFindings(workers) {
+function diffFindings(workers, headings) {
   const n2 = workers.length;
   if (n2 < 2) throw new Error(`diffFindings: need >=2 workers, got ${n2}`);
   const names = workers.map((p) => p.name);
@@ -18377,7 +18378,7 @@ function diffFindings(workers) {
   const start = [], end = [];
   for (let idx = 0; idx < n2; idx++) {
     start[idx] = owner.length;
-    for (const c3 of parseClaims(workers[idx].findings)) {
+    for (const c3 of parseClaims(workers[idx].findings, headings)) {
       owner.push(idx);
       cite.push(c3.cite);
       text.push(c3.text);
@@ -25494,6 +25495,36 @@ function composeAdversaryPrompt(landscapeDraft, agent, outPath, opts) {
     "  cited evidence, not speculative"
   ].join("\n");
 }
+function composeGapPrompt(bucketItems, outPath) {
+  const items = bucketItems.map((l, i2) => `${i2 + 1}. ${l}`).join("\n");
+  return [
+    "Your fellow workers surfaced the approaches below during research; you did not",
+    "cover them. The run's confidence gate recorded low cross-worker overlap, so each",
+    "item currently rests on a single worker's evidence.",
+    "",
+    "For EACH item, do ONE of:",
+    "",
+    "  CONFIRM \u2014 corroborate it with your OWN evidence (cite a file/line/URL/paper)",
+    "  EXTEND  \u2014 confirm it and add material the original worker missed",
+    "  REFUTE  \u2014 explain why it is wrong, with counter-evidence",
+    "",
+    "Items:",
+    items,
+    "",
+    `Write your answers to ${outPath} with this EXACT structure:`,
+    "",
+    "  # Gap enrichment",
+    "",
+    "  ## Answers",
+    "  1. <CONFIRM|EXTEND|REFUTE> <original [citation] and text>",
+    "     <your evidence, with [citation] anchors>",
+    "  2. ...",
+    "",
+    "Your answers feed ONLY the final landscape doc and the design handoff \u2014 the draft",
+    "is not re-synthesized and the confidence gate does not re-run. If you cannot tell",
+    "from available evidence, say so explicitly \u2014 do not pad."
+  ].join("\n");
+}
 var LENS_GUARD, RESEARCH_LENSES, NEUTRAL_LENS, ADVERSARY_LENSES;
 var init_exploreTurn = __esm({
   "src/core/exploreTurn.ts"() {
@@ -25650,6 +25681,118 @@ var init_exploreVerdict = __esm({
   }
 });
 
+// src/core/exploreRebuttal.ts
+function parseBucketLines(text) {
+  const out = [];
+  for (const line of text.split("\n")) {
+    const m = line.match(/^\[([^\]]+)\] (.*)$/);
+    if (m) out.push({ cite: m[1], text: m[2] });
+  }
+  return out;
+}
+function parseFindings(critique) {
+  const out = [];
+  let inSection = false;
+  let cur = null;
+  const flush = () => {
+    if (cur) out.push(cur.join("\n").trimEnd());
+    cur = null;
+  };
+  for (const line of critique.split("\n")) {
+    if (/^## Material findings/.test(line)) {
+      inSection = true;
+      continue;
+    }
+    if (/^## /.test(line)) {
+      flush();
+      inSection = false;
+      continue;
+    }
+    if (!inSection) continue;
+    if (/^### /.test(line)) {
+      flush();
+      cur = [line];
+      continue;
+    }
+    if (cur) cur.push(line);
+  }
+  flush();
+  return out;
+}
+function attributeFinding(findingText, buckets) {
+  const owners = /* @__PURE__ */ new Set();
+  for (const token of draftCitations(findingText)) {
+    for (const [agent, claims] of buckets) {
+      if (claims.some((c3) => citationOverlaps(token, c3.cite))) owners.add(agent);
+    }
+  }
+  return owners.size === 1 ? [...owners][0] : null;
+}
+function selectRebuttalTargets(critiques, buckets) {
+  const out = /* @__PURE__ */ new Map();
+  for (const c3 of critiques) {
+    if (parseAdversaryVerdict(c3.text) !== "needs-attention") continue;
+    for (const finding of parseFindings(c3.text)) {
+      const owner = attributeFinding(finding, buckets);
+      if (owner === null) continue;
+      const t = out.get(owner) ?? { findings: [], claims: [] };
+      t.findings.push(finding);
+      const own = buckets.get(owner) ?? [];
+      for (const token of draftCitations(finding)) {
+        for (const cl of own) {
+          if (citationOverlaps(token, cl.cite) && !t.claims.some((x) => x.cite === cl.cite && x.text === cl.text)) {
+            t.claims.push(cl);
+          }
+        }
+      }
+      out.set(owner, t);
+    }
+  }
+  return out;
+}
+function composeRebuttalPrompt(claims, critiques, outPath) {
+  const claimLines = claims.map((c3, i2) => `${i2 + 1}. [${c3.cite}] ${c3.text}`).join("\n");
+  return [
+    "An adversary round challenged the synthesized landscape doc. The critiques below",
+    "attack claims that YOU raised during research (your peers did not raise them, so",
+    "you are the only worker who can defend them).",
+    "",
+    "Your attacked claims:",
+    claimLines,
+    "",
+    "The critiques against them:",
+    "",
+    critiques.join("\n\n"),
+    "",
+    "For EACH critique, do ONE of:",
+    "",
+    "  DEFEND  \u2014 rebut it with concrete evidence (cite a file/line/URL/paper)",
+    "  CONCEDE \u2014 accept it explicitly; say what the landscape doc should say instead",
+    "",
+    "This is ONE turn: no counter-attacks on the adversary, no new claims beyond the",
+    "evidence needed to defend, and no follow-up round.",
+    "",
+    `Write your responses to ${outPath} with this EXACT structure:`,
+    "",
+    "  # Rebuttal",
+    "",
+    "  ## Responses",
+    "  1. <DEFEND|CONCEDE> <one-line restatement of the critique>",
+    "     <evidence or concession, with [citation] anchors>",
+    "  2. ...",
+    "",
+    "An honest concession is more useful than a weak defense \u2014 do not pad."
+  ].join("\n");
+}
+var init_exploreRebuttal = __esm({
+  "src/core/exploreRebuttal.ts"() {
+    "use strict";
+    init_designDiff();
+    init_exploreConfidence();
+    init_exploreVerdict();
+  }
+});
+
 // src/commands/explore.ts
 var explore_exports = {};
 __export(explore_exports, {
@@ -25658,13 +25801,20 @@ __export(explore_exports, {
   annotateRun: () => annotateRun,
   classifyRun: () => classifyRun,
   confidenceRun: () => confidenceRun,
+  crossverifySendWith: () => crossverifySendWith,
+  crossverifyWaitWith: () => crossverifyWaitWith,
+  diffExploreRun: () => diffExploreRun,
   exploreWaitGateRun: () => exploreWaitGateRun,
   forensicsRun: () => forensicsRun5,
+  gapSendWith: () => gapSendWith,
+  gapWaitWith: () => gapWaitWith,
   handoffExtractRun: () => handoffExtractRun,
   initWith: () => initWith5,
   openqCollateRun: () => openqCollateRun,
   openqSendWith: () => openqSendWith,
   openqWaitWith: () => openqWaitWith,
+  rebuttalSendWith: () => rebuttalSendWith,
+  rebuttalWaitWith: () => rebuttalWaitWith,
   researchSendWith: () => researchSendWith2,
   researchWaitWith: () => researchWaitWith2,
   run: () => run14,
@@ -25675,7 +25825,7 @@ __export(explore_exports, {
   verdictTallyRun: () => verdictTallyRun
 });
 function usage5() {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|rebuttal-send|rebuttal-wait|gap-send|gap-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 async function run14(args) {
@@ -25698,6 +25848,20 @@ async function run14(args) {
       return openqSendRun(rest);
     case "openq-wait":
       return openqWaitRun(rest);
+    case "diff":
+      return diffExploreRun(rest);
+    case "crossverify-send":
+      return crossverifySendRun(rest);
+    case "crossverify-wait":
+      return crossverifyWaitRun(rest);
+    case "rebuttal-send":
+      return rebuttalSendRun(rest);
+    case "rebuttal-wait":
+      return rebuttalWaitRun(rest);
+    case "gap-send":
+      return gapSendRun(rest);
+    case "gap-wait":
+      return gapWaitRun(rest);
     case "wait-gate":
       return exploreWaitGateRun(rest);
     case "synth-preliminary":
@@ -26001,6 +26165,348 @@ async function openqWaitWith(topic, agent, provider, d) {
   log.ok(`explore openq-wait: ${agent} QS=${qs}`);
   return 0;
 }
+async function diffExploreRun(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("usage: explore diff <topic>");
+    return 2;
+  }
+  const art = exploreArtDir(topic);
+  if (!(0, import_node_fs37.existsSync)(art)) {
+    log.error(`explore diff: ${art} not found \u2014 run explore init`);
+    return 1;
+  }
+  if ((0, import_node_fs37.existsSync)((0, import_node_path34.join)(art, "diff.md"))) {
+    log.error("explore diff: diff.md exists; rm to retry");
+    return 1;
+  }
+  const listPath = (0, import_node_path34.join)(art, "list.txt");
+  if (!(0, import_node_fs37.existsSync)(listPath)) {
+    log.error("explore diff: list.txt missing \u2014 run explore init first");
+    return 1;
+  }
+  const rows = parseListFile((0, import_node_fs37.readFileSync)(listPath, "utf8"));
+  if (rows.length < 2) {
+    log.error(`explore diff: need >=2 workers in list.txt, got ${rows.length}`);
+    return 1;
+  }
+  const workers = [];
+  for (const r of rows) {
+    const f = (0, import_node_path34.join)(art, `findings-${r.agent}.md`);
+    if (!(0, import_node_fs37.existsSync)(f)) {
+      log.error(`explore diff: ${r.agent} findings missing: ${f}`);
+      return 1;
+    }
+    workers.push({ name: r.agent, findings: (0, import_node_fs37.readFileSync)(f, "utf8") });
+  }
+  const result = diffFindings(workers, ["Approaches"]);
+  for (const file of result.files) atomicWrite((0, import_node_path34.join)(art, file.filename), file.content);
+  atomicWrite((0, import_node_path34.join)(art, "diff.md"), result.diffMd);
+  const summary = result.files.filter((f) => f.filename.endsWith("_only_items.txt") || f.filename === "consensus.txt").map((f) => `${f.filename.replace(/\.txt$/, "")}=${f.content.split("\n").filter(Boolean).length}`).join(" ");
+  log.ok(`explore diff: wrote ${(0, import_node_path34.join)(art, "diff.md")} (${rows.length} workers) ${summary}`);
+  return 0;
+}
+async function crossverifySendRun(rest) {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) {
+    log.error("usage: explore crossverify-send <topic> <agent> <provider>");
+    return 2;
+  }
+  return crossverifySendWith(topic, agent, provider, liveResearchSendDeps2);
+}
+async function crossverifySendWith(topic, agent, provider, d) {
+  const art = exploreArtDir(topic);
+  const stateFile = (0, import_node_path34.join)(art, `crossverify-${agent}.txt`);
+  if ((0, import_node_fs37.existsSync)(stateFile)) {
+    log.error(`explore crossverify-send: ${stateFile} exists; rm to retry`);
+    return 1;
+  }
+  const fsTag = lastTag(readIfExists((0, import_node_path34.join)(art, `research-${agent}.txt`)), "FS");
+  const qsTag = lastTag(readIfExists((0, import_node_path34.join)(art, `openq-${agent}.txt`)), "QS");
+  const unsafe = fsTag === "timeout" || fsTag === "failed" ? `FS=${fsTag}` : qsTag === "timeout" || qsTag === "failed" ? `QS=${qsTag}` : null;
+  if (unsafe) {
+    atomicWrite(stateFile, "VS=skipped\n");
+    log.warn(`explore crossverify-send: ${agent} skipped \u2014 previous phase ended ${unsafe} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
+  const agents = parseListFile(readIfExists((0, import_node_path34.join)(art, "list.txt"))).map((r) => r.agent);
+  if (agents.length < 2) {
+    log.error(`explore crossverify-send: need >=2 workers in list.txt, got ${agents.length}`);
+    return 1;
+  }
+  if (!agents.includes(agent)) {
+    log.error(`explore crossverify-send: ${agent} not in list.txt`);
+    return 1;
+  }
+  const parts = [];
+  for (const f of verifyScopeFiles(agent, agents)) {
+    const p = (0, import_node_path34.join)(art, f);
+    if (!(0, import_node_fs37.existsSync)(p)) {
+      log.error(`explore crossverify-send: expected bucket missing: ${p} (run explore diff first)`);
+      return 1;
+    }
+    const c3 = (0, import_node_fs37.readFileSync)(p, "utf8");
+    if (c3.split("\n").some((l) => l.length > 0)) parts.push(c3.replace(/\n+$/, ""));
+  }
+  const items = parts.join("\n");
+  atomicWrite((0, import_node_path34.join)(art, `crossverify-claims-${agent}.txt`), items ? items + "\n" : "");
+  if (!items) {
+    atomicWrite(stateFile, "VS=skipped\n");
+    log.ok(`explore crossverify-send: ${agent} VS=skipped (no peer claims to verify)`);
+    return 0;
+  }
+  const outPath = (0, import_node_path34.join)(art, `crossverify-${agent}.md`);
+  const promptFile = (0, import_node_path34.join)(art, `${agent}_crossverify_prompt.md`);
+  atomicWrite(promptFile, composeVerifyPrompt(items, outPath));
+  const offset = d.offsetFor(agent, provider, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}
+`);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
+  if (rc !== 0) {
+    log.error(`explore crossverify-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`);
+    return 1;
+  }
+  log.ok(`explore crossverify-send: ${agent} offset=${offset}`);
+  return 0;
+}
+async function crossverifyWaitRun(rest) {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) {
+    log.error("usage: explore crossverify-wait <topic> <agent> <provider>");
+    return 2;
+  }
+  return crossverifyWaitWith(topic, agent, provider, liveResearchWaitDeps2);
+}
+async function crossverifyWaitWith(topic, agent, provider, d) {
+  const art = exploreArtDir(topic);
+  const stateFile = (0, import_node_path34.join)(art, `crossverify-${agent}.txt`);
+  if (!(0, import_node_fs37.existsSync)(stateFile)) {
+    log.error(`explore crossverify-wait: ${stateFile} missing (run explore crossverify-send first)`);
+    return 1;
+  }
+  const text = (0, import_node_fs37.readFileSync)(stateFile, "utf8");
+  if (lastTag(text, "VS") === "skipped") {
+    (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `crossverify-${agent}.done`), "");
+    log.ok(`explore crossverify-wait: ${agent} VS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
+  if (offset === null) {
+    log.error(`explore crossverify-wait: OFFSET not set in ${stateFile}`);
+    return 1;
+  }
+  const timeout = scaledTimeout(consultTimeout("verify"), d.multiplier(provider));
+  log.info(`explore crossverify-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
+  const vs = verifyState(ev, readIfExistsOrNull((0, import_node_path34.join)(art, `crossverify-${agent}.md`)));
+  recordWaitOutcome(
+    agent,
+    provider,
+    topic,
+    stateFile,
+    vs,
+    "VS",
+    ev ? { file: (0, import_node_path34.join)(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : void 0
+  );
+  (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `crossverify-${agent}.done`), "");
+  log.ok(`explore crossverify-wait: ${agent} VS=${vs}`);
+  return 0;
+}
+async function rebuttalSendRun(rest) {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) {
+    log.error("usage: explore rebuttal-send <topic> <agent> <provider>");
+    return 2;
+  }
+  return rebuttalSendWith(topic, agent, provider, liveResearchSendDeps2);
+}
+async function rebuttalSendWith(topic, agent, provider, d) {
+  const art = exploreArtDir(topic);
+  const stateFile = (0, import_node_path34.join)(art, `rebuttal-${agent}.txt`);
+  if ((0, import_node_fs37.existsSync)(stateFile)) {
+    log.error(`explore rebuttal-send: ${stateFile} exists \u2014 one rebuttal round per worker (the one-turn cap)`);
+    return 1;
+  }
+  const asTag = lastTag(readIfExists((0, import_node_path34.join)(art, `adversary-${agent}.txt`)), "AS");
+  if (asTag === "timeout" || asTag === "failed") {
+    atomicWrite(stateFile, "RS=skipped\n");
+    log.warn(`explore rebuttal-send: ${agent} skipped \u2014 adversary ended AS=${asTag} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
+  const rows = parseListFile(readIfExists((0, import_node_path34.join)(art, "list.txt")));
+  if (!rows.some((r) => r.agent === agent)) {
+    log.error(`explore rebuttal-send: ${agent} not in list.txt at ${art}`);
+    return 1;
+  }
+  const buckets = /* @__PURE__ */ new Map();
+  for (const r of rows) buckets.set(r.agent, parseBucketLines(readIfExists((0, import_node_path34.join)(art, `${r.agent}_only_items.txt`))));
+  const critiques = rows.filter((r) => lastTag(readIfExists((0, import_node_path34.join)(art, `adversary-${r.agent}.txt`)), "AS") !== "skipped").map((r) => ({ agent: r.agent, text: readIfExists((0, import_node_path34.join)(art, `adversary-${r.agent}.md`)) })).filter((c3) => c3.text.trim().length > 0);
+  const mine = selectRebuttalTargets(critiques, buckets).get(agent);
+  if (!mine || mine.findings.length === 0) {
+    atomicWrite(stateFile, "RS=skipped\n");
+    log.ok(`explore rebuttal-send: ${agent} RS=skipped (no needs-attention findings attributed to it)`);
+    return 0;
+  }
+  const outPath = (0, import_node_path34.join)(art, `rebuttal-${agent}.md`);
+  const promptFile = (0, import_node_path34.join)(art, `${agent}_rebuttal_prompt.md`);
+  atomicWrite(promptFile, composeRebuttalPrompt(mine.claims, mine.findings, outPath));
+  const offset = d.offsetFor(agent, provider, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}
+`);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
+  if (rc !== 0) {
+    log.error(`explore rebuttal-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`);
+    return 1;
+  }
+  log.ok(`explore rebuttal-send: ${agent} offset=${offset}`);
+  return 0;
+}
+async function rebuttalWaitRun(rest) {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) {
+    log.error("usage: explore rebuttal-wait <topic> <agent> <provider>");
+    return 2;
+  }
+  return rebuttalWaitWith(topic, agent, provider, liveResearchWaitDeps2);
+}
+async function rebuttalWaitWith(topic, agent, provider, d) {
+  const art = exploreArtDir(topic);
+  const stateFile = (0, import_node_path34.join)(art, `rebuttal-${agent}.txt`);
+  if (!(0, import_node_fs37.existsSync)(stateFile)) {
+    log.error(`explore rebuttal-wait: ${stateFile} missing (run explore rebuttal-send first)`);
+    return 1;
+  }
+  const text = (0, import_node_fs37.readFileSync)(stateFile, "utf8");
+  if (lastTag(text, "RS") === "skipped") {
+    (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `rebuttal-${agent}.done`), "");
+    log.ok(`explore rebuttal-wait: ${agent} RS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
+  if (offset === null) {
+    log.error(`explore rebuttal-wait: OFFSET not set in ${stateFile}`);
+    return 1;
+  }
+  const timeout = scaledTimeout(consultTimeout("rebuttal"), d.multiplier(provider));
+  log.info(`explore rebuttal-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
+  const rs = verifyState(ev, readIfExistsOrNull((0, import_node_path34.join)(art, `rebuttal-${agent}.md`)));
+  recordWaitOutcome(
+    agent,
+    provider,
+    topic,
+    stateFile,
+    rs,
+    "RS",
+    ev ? { file: (0, import_node_path34.join)(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : void 0
+  );
+  (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `rebuttal-${agent}.done`), "");
+  log.ok(`explore rebuttal-wait: ${agent} RS=${rs}`);
+  return 0;
+}
+async function gapSendRun(rest) {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) {
+    log.error("usage: explore gap-send <topic> <agent> <provider>");
+    return 2;
+  }
+  return gapSendWith(topic, agent, provider, liveResearchSendDeps2);
+}
+async function gapSendWith(topic, agent, provider, d) {
+  const art = exploreArtDir(topic);
+  const stateFile = (0, import_node_path34.join)(art, `gap-${agent}.txt`);
+  if ((0, import_node_fs37.existsSync)(stateFile)) {
+    log.error(`explore gap-send: ${stateFile} exists; rm to retry`);
+    return 1;
+  }
+  const signalsLine = readIfExists((0, import_node_path34.join)(art, "adversary-skip.txt")).split("\n").find((l) => l.startsWith("signals_passed:")) ?? "";
+  if (!/\bS1=false\b/.test(signalsLine) && !/\bS2=false\b/.test(signalsLine)) {
+    atomicWrite(stateFile, "GS=skipped\n");
+    log.ok(`explore gap-send: ${agent} GS=skipped (no recorded S1/S2 failure \u2014 trigger not fired)`);
+    return 0;
+  }
+  const tags = [
+    ["RS", lastTag(readIfExists((0, import_node_path34.join)(art, `rebuttal-${agent}.txt`)), "RS")],
+    ["AS", lastTag(readIfExists((0, import_node_path34.join)(art, `adversary-${agent}.txt`)), "AS")],
+    ["FS", lastTag(readIfExists((0, import_node_path34.join)(art, `research-${agent}.txt`)), "FS")]
+  ];
+  const latest = tags.find(([, v]) => v !== null && v !== "skipped");
+  if (latest && (latest[1] === "timeout" || latest[1] === "failed")) {
+    atomicWrite(stateFile, "GS=skipped\n");
+    log.warn(`explore gap-send: ${agent} skipped \u2014 latest phase ended ${latest[0]}=${latest[1]} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
+  const agents = parseListFile(readIfExists((0, import_node_path34.join)(art, "list.txt"))).map((r) => r.agent);
+  if (!agents.includes(agent)) {
+    log.error(`explore gap-send: ${agent} not in list.txt at ${art}`);
+    return 1;
+  }
+  const items = [];
+  for (const f of verifyScopeFiles(agent, agents)) {
+    for (const l of readIfExists((0, import_node_path34.join)(art, f)).split("\n")) if (l.length > 0) items.push(l);
+  }
+  if (items.length === 0) {
+    atomicWrite(stateFile, "GS=skipped\n");
+    log.ok(`explore gap-send: ${agent} GS=skipped (no peer-only items to enrich)`);
+    return 0;
+  }
+  const outPath = (0, import_node_path34.join)(art, `gap-${agent}.md`);
+  const promptFile = (0, import_node_path34.join)(art, `${agent}_gap_prompt.md`);
+  atomicWrite(promptFile, composeGapPrompt(items, outPath));
+  const offset = d.offsetFor(agent, provider, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}
+`);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
+  if (rc !== 0) {
+    log.error(`explore gap-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`);
+    return 1;
+  }
+  log.ok(`explore gap-send: ${agent} offset=${offset}`);
+  return 0;
+}
+async function gapWaitRun(rest) {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) {
+    log.error("usage: explore gap-wait <topic> <agent> <provider>");
+    return 2;
+  }
+  return gapWaitWith(topic, agent, provider, liveResearchWaitDeps2);
+}
+async function gapWaitWith(topic, agent, provider, d) {
+  const art = exploreArtDir(topic);
+  const stateFile = (0, import_node_path34.join)(art, `gap-${agent}.txt`);
+  if (!(0, import_node_fs37.existsSync)(stateFile)) {
+    log.error(`explore gap-wait: ${stateFile} missing (run explore gap-send first)`);
+    return 1;
+  }
+  const text = (0, import_node_fs37.readFileSync)(stateFile, "utf8");
+  if (lastTag(text, "GS") === "skipped") {
+    (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `gap-${agent}.done`), "");
+    log.ok(`explore gap-wait: ${agent} GS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
+  if (offset === null) {
+    log.error(`explore gap-wait: OFFSET not set in ${stateFile}`);
+    return 1;
+  }
+  const timeout = scaledTimeout(consultTimeout("gap"), d.multiplier(provider));
+  log.info(`explore gap-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
+  const gs = verifyState(ev, readIfExistsOrNull((0, import_node_path34.join)(art, `gap-${agent}.md`)));
+  recordWaitOutcome(
+    agent,
+    provider,
+    topic,
+    stateFile,
+    gs,
+    "GS",
+    ev ? { file: (0, import_node_path34.join)(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : void 0
+  );
+  (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `gap-${agent}.done`), "");
+  log.ok(`explore gap-wait: ${agent} GS=${gs}`);
+  return 0;
+}
 function missingListArtifacts(art, rows, prefix) {
   return rows.filter((r) => !readIfExists((0, import_node_path34.join)(art, `${prefix}-${r.agent}.md`)).trim()).map((r) => `${prefix}-${r.agent}.md`);
 }
@@ -26235,12 +26741,21 @@ async function adversaryWaitWith(topic, agent, provider, d) {
 }
 async function exploreWaitGateRun(rest) {
   const [topic, phase] = rest;
+  const KEYS = {
+    research: "FS",
+    openq: "QS",
+    crossverify: "VS",
+    adversary: "AS",
+    rebuttal: "RS",
+    gap: "GS"
+  };
   if (!topic || !phase) {
-    log.error("usage: explore wait-gate <topic> <research|adversary|openq>");
+    log.error("usage: explore wait-gate <topic> <research|openq|crossverify|adversary|rebuttal|gap>");
     return 2;
   }
-  if (phase !== "research" && phase !== "adversary" && phase !== "openq") {
-    log.error(`explore wait-gate: phase must be research|adversary|openq (got ${phase})`);
+  const key = KEYS[phase];
+  if (!key) {
+    log.error(`explore wait-gate: phase must be research|openq|crossverify|adversary|rebuttal|gap (got ${phase})`);
     return 2;
   }
   const art = exploreArtDir(topic);
@@ -26254,7 +26769,6 @@ async function exploreWaitGateRun(rest) {
     log.error("explore wait-gate: list.txt has no workers");
     return 2;
   }
-  const key = phase === "research" ? "FS" : phase === "adversary" ? "AS" : "QS";
   const workers = rows.map((r) => {
     const stateFile = (0, import_node_path34.join)(art, `${phase}-${r.agent}.txt`);
     return {
@@ -26428,6 +26942,8 @@ var init_explore2 = __esm({
     init_fsread();
     init_exploreOpenq();
     init_exploreVerdict();
+    init_designDiff();
+    init_exploreRebuttal();
     liveExploreInitDeps = {
       activeProviders: () => readProviderList(activeProvidersPath()),
       isValidated: agentConsultValidated,

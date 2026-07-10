@@ -31,7 +31,7 @@ alarm — record it: `$CS explore flag <TOPIC> "<what looked off>"`. It writes s
 feed (survives teardown and aborts) and costs nothing, so prefer over-recording. Review later with
 `/ap:review`.
 
-## Task list (TaskCreate × 12 before Phase 0)
+## Task list (TaskCreate × 15 before Phase 0)
 
 Create the task list with `TaskCreate`. Update statuses at the phase boundaries below. Per-worker
 rows are intentionally absent (N varies 2 or 3); each `[workers]` row covers the whole list in
@@ -45,10 +45,13 @@ parallel.
 | 3   | `3 Research dispatch [workers]`              | `Dispatching research` |
 | 4   | `4 Research wait [workers]`                  | `Workers researching` |
 | 4b  | `4b Open-questions relay [workers]`    | `Relaying open questions` |
+| 4c  | `4c Peer cross-verify [workers]`       | `Cross-verifying peer claims` |
 | 5   | `5 Preliminary synthesis [hub]`        | `Synthesizing draft` |
 | 5.5 | `5.5 Confidence gate [hub + user]`     | `Evaluating confidence` |
 | 6   | `6 Adversary dispatch [workers]`             | `Dispatching adversary` |
 | 7   | `7 Adversary wait [workers]`                 | `Workers attacking synthesis` |
+| 7b  | `7b Bounded rebuttal [workers]`        | `Workers defending claims` |
+| 7c  | `7c Gap enrichment [workers]`          | `Workers filling gaps` |
 | 8   | `8 Final synthesis [hub]`              | `Writing final landscape` |
 | 9   | `9 Teardown + archive + handoff [hub]` | `Tearing down` |
 
@@ -177,6 +180,34 @@ Set task `4b` → `in_progress`.
 
 Set task `4b` → `completed`.
 
+## Phase 4c — peer cross-verify (auto-skips when peer buckets are empty)
+
+Set task `4c` → `in_progress`.
+
+1. **Diff:** `$CS explore diff <TOPIC>` — buckets every `findings-<agent>.md`'s `## Approaches`
+   claims by citation overlap, writing `$ART/diff.md` plus the bucket files
+   (`<agent>_only_items.txt`; N=3 adds `consensus.txt` + `<a>+<b>_only.txt`). rc 1 = `diff.md`
+   already exists (`rm` to retry) or a findings file is missing.
+2. **Dispatch:** issue N parallel Bash calls in one message (mirror Phase 3):
+   `$CS explore crossverify-send <TOPIC> <agent> <provider>`. Each worker is scoped to ONLY the
+   buckets it is NOT a member of — its peers' solo claims (claude checks codex and vice versa;
+   a worker never re-verifies its own claims). The verb soft-skips (`VS=skipped`, no send) a
+   worker whose research/openq turn ended `timeout`/`failed`, and a worker whose peer buckets
+   are all empty.
+3. **Wait:** issue N background-await Bash calls in parallel (mirror Phase 4):
+   `$CS explore crossverify-wait <TOPIC> <agent> <provider>`. Verdicts land at
+   `$ART/crossverify-<agent>.md` (AGREE / DISPUTE / UNCERTAIN per item).
+4. **Gate:** do not proceed until `$CS explore wait-gate <TOPIC> crossverify` exits 0. The `VS=`
+   value is informational (do NOT gate on `VS=ok`); `VS=question` → **Intervention Pattern 1**
+   (state key `VS`, marker `crossverify-<agent>.done`).
+
+Cross-verify is gate-neutral by construction: signal S2 counts citations against findings files
+only, and `crossverify-<agent>.md` is not a findings file. Its verdicts reach the gate only
+organically — a peer-DISPUTED claim MUST be rendered CONTESTED in the Phase 5 draft (signal S3's
+input) — transparency, never erasure.
+
+Set task `4c` → `completed`.
+
 ## Phase 5 — preliminary synthesis (Hub Writes)
 
 Set task `5` → `in_progress`.
@@ -219,6 +250,12 @@ Additionally read every `$ART/openq-<agent>.md` that Phase 4b produced (when the
 answered questions strengthen or resolve `## Open questions` entries — cite the answering
 worker's evidence. Missing/empty answer files are fine; answers are optional enrichment and
 never block the draft.
+
+Additionally read every `$ART/crossverify-<agent>.md` that Phase 4c produced: a claim DISPUTED
+by its verifying peer MUST be marked **CONTESTED** in the draft (organic input to signal S3 —
+surface the disagreement, never erase the claim). AGREE verdicts strengthen a claim's standing;
+UNCERTAIN verdicts are neutral. Missing/empty crossverify files are fine — verdicts are optional
+enrichment and never block the draft.
 
 Set task `5` → `completed`.
 
@@ -315,6 +352,60 @@ A worker skipped by the Phase 6 guard is immediately terminal (`adversary-wait` 
 
 Set task `7` → `completed`.
 
+## Phase 7b — bounded rebuttal (auto-skips without attributed needs-attention critiques)
+
+Set task `7b` → `in_progress`. If the gate recorded `user_decision: skip` (no critiques exist),
+set `7b` → `completed` and continue to Phase 7c.
+
+The author of an attacked claim gets exactly ONE defend-or-concede turn — machine-selected,
+never open-ended:
+
+1. **Dispatch:** issue N parallel Bash calls in one message:
+   `$CS explore rebuttal-send <TOPIC> <agent> <provider>`. The verb selects only
+   `needs-attention` critiques (parsed from each `adversary-<agent>.md` verdict), attributes
+   each Material finding to its originating worker via diff-bucket citation overlap (a finding
+   whose tokens match zero buckets or tie across two stays unattributed — you weigh it alone in
+   Phase 8, as today), and soft-skips (`RS=skipped`, no send) a worker with nothing attributed
+   to it or whose adversary turn ended `AS=timeout`/`failed`. A second `rebuttal-send` for the
+   same worker returns rc 1 — the one-turn cap is state-file existence; NEVER `rm` a rebuttal
+   state file to force a second round.
+2. **Wait:** issue N background-await Bash calls in parallel:
+   `$CS explore rebuttal-wait <TOPIC> <agent> <provider>`. Responses land at
+   `$ART/rebuttal-<agent>.md` (DEFEND / CONCEDE per critique).
+3. **Gate:** do not proceed until `$CS explore wait-gate <TOPIC> rebuttal` exits 0. `RS=` is
+   informational; `RS=question` → **Intervention Pattern 1** (state key `RS`, marker
+   `rebuttal-<agent>.done`).
+
+Set task `7b` → `completed`.
+
+## Phase 7c — post-gate gap enrichment (fires only on recorded S1/S2 failure)
+
+Set task `7c` → `in_progress`.
+
+When Phase 5.5 recorded `S1=false` or `S2=false` (the `signals_passed:` line in
+`$ART/adversary-skip.txt`), each safe worker receives its peers' solo approaches to CONFIRM with
+its own evidence, EXTEND, or REFUTE — the run learns from the overlap gap instead of discarding
+it. The verbs read the recorded signals themselves; you never re-run `confidence`.
+
+1. **Dispatch:** issue N parallel Bash calls in one message:
+   `$CS explore gap-send <TOPIC> <agent> <provider>`. The verb soft-skips (`GS=skipped`, no
+   send) every worker when the trigger did not fire, plus any worker whose latest phase ended
+   `timeout`/`failed` or whose peer-only buckets are empty.
+2. **Wait:** issue N background-await Bash calls in parallel:
+   `$CS explore gap-wait <TOPIC> <agent> <provider>`. Answers land at `$ART/gap-<agent>.md`
+   (CONFIRM / EXTEND / REFUTE per item).
+3. **Gate:** do not proceed until `$CS explore wait-gate <TOPIC> gap` exits 0. `GS=` is
+   informational; `GS=question` → **Intervention Pattern 1** (state key `GS`, marker
+   `gap-<agent>.done`).
+
+**HARD anti-goals** (rejected non-goals of the 2026-06-22 annotations spec — they stay
+rejected): gap answers feed ONLY the Phase 8 final landscape doc and the Phase 9c design-handoff
+`## Evidence`. The draft is NEVER re-synthesized, `$CS explore confidence` is NEVER re-run after
+Phase 5.5, no signal is retroactively flipped, and `adversary-skip.txt` is never rewritten. This
+round enriches the OUTPUT, not the gate.
+
+Set task `7c` → `completed`.
+
 ## Phase 8 — final synthesis (Hub Writes)
 
 Set task `8` → `in_progress`.
@@ -343,6 +434,17 @@ re-dispatch:
 - `TALLY=accept` → a fast final synthesis is permitted — summarize the critiques normally.
 - `TALLY=minor-revisions` or `TALLY=unavailable` → today's behavior: summarize each critique and
   incorporate what your judgment says matters.
+
+When Phase 7b produced `$ART/rebuttal-<agent>.md` files, weigh each critique WITH its author's
+response in `## Adversary critiques`: a CONCEDED critique stands as-is (note the concession); a
+DEFENDED critique is summarized alongside the defense's evidence, and only the caveats that
+survive the defense carry into `## Conclusion`.
+
+When Phase 7c produced `$ART/gap-<agent>.md` files, fold CONFIRMED/EXTENDED items into the final
+doc's `## Approaches` and `## Tradeoff matrix` revisions (the corroboration now exists — cite the
+confirming worker's evidence) and record REFUTED items under `## Adversary critiques` or
+`## Open questions` as fits. Gap answers revise the FINAL doc only — the draft and the gate
+record stay untouched.
 
 Then **use the Write tool** to author the final doc, reading `$ART/landscape-draft.md` + all
 `$ART/adversary-<agent>.md` (if adversary ran), with this EXACT section set:
@@ -456,6 +558,8 @@ couldn't separate). If research closed everything, OMIT the WHOLE section — no
 | Source | Claim | Strength |
 |--------|-------|----------|
 | <paper / repo file:line> | <claim> | strong \| medium \| weak |
+When Phase 7c ran, fold gap answers into this table: a CONFIRM/EXTEND upgrades that source's
+Strength (cite $ART/gap-<agent>.md); a REFUTE demotes or drops the row with a one-line note.
 Then report the confidence-gate result: parse confidence_signals → "<N>/5 passed".>
 
 ## Appendix: artifacts
@@ -503,13 +607,15 @@ produces unexpected output, intervene before the next subcommand runs.
 ### Pattern 1: worker question event
 
 A worker emits `{"event": "question", ...}`. The wait verb sets `FS=question` (research),
-`AS=question` (adversary), or `QS=question` (open-questions relay) as the state file's last line
-and captures the question JSON to
-`$ART/question-<agent>.txt`. Read that file (its `message`, optional `options`), compose an
-answer from the topic + findings, then relay it:
+`QS=question` (open-questions relay), `VS=question` (cross-verify), `AS=question` (adversary),
+`RS=question` (rebuttal), or `GS=question` (gap) as the state file's last line and captures the
+question JSON to `$ART/question-<agent>.txt`. Read that file (its `message`, optional `options`),
+compose an answer from the topic + findings, then relay it:
 `$CS send --from hub <agent> <TOPIC> "<answer>"`. The wait verb already advanced the
-`OFFSET=`; `rm -f "$ART/research-<agent>.done"` (or `adversary-<agent>.done` /
-`openq-<agent>.done`) and re-arm that worker's background wait. The wait resumes past the question — it never re-sends the prompt.
+`OFFSET=`; `rm -f` that phase's `.done` marker (`research-<agent>.done`, `openq-<agent>.done`,
+`crossverify-<agent>.done`, `adversary-<agent>.done`, `rebuttal-<agent>.done`, or
+`gap-<agent>.done`) and re-arm that worker's background wait. The wait resumes past the
+question — it never re-sends the prompt.
 
 ### Pattern 2: malformed adversary output
 

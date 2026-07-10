@@ -12,7 +12,7 @@ import { extractHandoffData } from "../core/exploreHandoff.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { killNow } from "../core/tmux.js";
 import {
-  type ListRow, formatListFile, parseListFile, parsePanesFile, spawnAllBatch, lastTag,
+  type ListRow, formatListFile, parseListFile, parsePanesFile, spawnAllBatch, lastTag, verifyScopeFiles,
 } from "../core/design.js";
 import { readProviderList } from "../core/providers.js";
 import { activeProvidersPath, repoRoot } from "../core/paths.js";
@@ -23,18 +23,20 @@ import { computeSignals, renderSkipRecord, type Decision } from "../core/explore
 import { buildAnnotations } from "../core/exploreAnnotate.js";
 import { outboxOffset, outboxPath, TERMINAL_EVENTS, type OutboxEvent } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
-import { parseLatestOffset, scaledTimeout, researchState, verifyState, gateState, recordWaitOutcome } from "../core/designTurn.js";
-import { composeExploreResearchPrompt, composeAdversaryPrompt, litGuidance, ADVERSARY_LENSES, researchLens } from "../core/exploreTurn.js";
+import { parseLatestOffset, scaledTimeout, researchState, verifyState, gateState, recordWaitOutcome, composeVerifyPrompt } from "../core/designTurn.js";
+import { composeExploreResearchPrompt, composeAdversaryPrompt, composeGapPrompt, litGuidance, ADVERSARY_LENSES, researchLens } from "../core/exploreTurn.js";
 import { run as sendRun } from "./send.js";
 import { run as spawnRun } from "./spawn.js";
 import { run as preflightRun } from "./preflight.js";
 import { readIfExists as readIf, readIfExistsOrNull } from "../core/fsread.js";
 import { parseOpenQuestions, assignOpenQuestions, formatOpenqClaims, parseOpenqClaims, composeOpenqPrompt } from "../core/exploreOpenq.js";
 import { parseAdversaryVerdict, tallyVerdicts } from "../core/exploreVerdict.js";
+import { diffFindings, type DiffPart, type Claim } from "../core/designDiff.js";
+import { parseBucketLines, selectRebuttalTargets, composeRebuttalPrompt, type CritiqueInput } from "../core/exploreRebuttal.js";
 
 function usage(): number {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|wait-gate|synth-preliminary|" +
-    "confidence|annotate|adversary-send|adversary-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|" +
+    "confidence|annotate|adversary-send|adversary-wait|rebuttal-send|rebuttal-wait|gap-send|gap-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 
@@ -50,6 +52,13 @@ export async function run(args: string[]): Promise<number> {
     case "openq-collate": return openqCollateRun(rest);
     case "openq-send": return openqSendRun(rest);
     case "openq-wait": return openqWaitRun(rest);
+    case "diff": return diffExploreRun(rest);
+    case "crossverify-send": return crossverifySendRun(rest);
+    case "crossverify-wait": return crossverifyWaitRun(rest);
+    case "rebuttal-send": return rebuttalSendRun(rest);
+    case "rebuttal-wait": return rebuttalWaitRun(rest);
+    case "gap-send": return gapSendRun(rest);
+    case "gap-wait": return gapWaitRun(rest);
     case "wait-gate": return exploreWaitGateRun(rest);
     case "synth-preliminary": return synthPreliminaryRun(rest);
     case "confidence": return confidenceRun(rest);
@@ -308,6 +317,279 @@ export async function openqWaitWith(topic: string, agent: string, provider: stri
   return 0;
 }
 
+// ---- diff (Approaches-schema buckets; foundation for crossverify/rebuttal/gap rounds) ----
+export async function diffExploreRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: explore diff <topic>"); return 2; }
+  const art = exploreArtDir(topic);
+  if (!existsSync(art)) { log.error(`explore diff: ${art} not found — run explore init`); return 1; }
+  if (existsSync(join(art, "diff.md"))) { log.error("explore diff: diff.md exists; rm to retry"); return 1; }
+  const listPath = join(art, "list.txt");
+  if (!existsSync(listPath)) { log.error("explore diff: list.txt missing — run explore init first"); return 1; }
+  const rows = parseListFile(readFileSync(listPath, "utf8"));
+  if (rows.length < 2) { log.error(`explore diff: need >=2 workers in list.txt, got ${rows.length}`); return 1; }
+
+  const workers: DiffPart[] = [];
+  for (const r of rows) {
+    const f = join(art, `findings-${r.agent}.md`);
+    if (!existsSync(f)) { log.error(`explore diff: ${r.agent} findings missing: ${f}`); return 1; }
+    workers.push({ name: r.agent, findings: readFileSync(f, "utf8") });
+  }
+  const result = diffFindings(workers, ["Approaches"]);
+  for (const file of result.files) atomicWrite(join(art, file.filename), file.content);
+  atomicWrite(join(art, "diff.md"), result.diffMd);
+  const summary = result.files
+    .filter((f) => f.filename.endsWith("_only_items.txt") || f.filename === "consensus.txt")
+    .map((f) => `${f.filename.replace(/\.txt$/, "")}=${f.content.split("\n").filter(Boolean).length}`)
+    .join(" ");
+  log.ok(`explore diff: wrote ${join(art, "diff.md")} (${rows.length} workers) ${summary}`);
+  return 0;
+}
+
+// ---- crossverify-send / crossverify-wait (Phase 4c peer cross-verification) ----
+async function crossverifySendRun(rest: string[]): Promise<number> {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: explore crossverify-send <topic> <agent> <provider>"); return 2; }
+  return crossverifySendWith(topic, agent, provider, liveResearchSendDeps);
+}
+export async function crossverifySendWith(topic: string, agent: string, provider: string, d: ResearchSendDeps): Promise<number> {
+  const art = exploreArtDir(topic);
+  const stateFile = join(art, `crossverify-${agent}.txt`);
+  if (existsSync(stateFile)) { log.error(`explore crossverify-send: ${stateFile} exists; rm to retry`); return 1; }
+
+  const fsTag = lastTag(readIf(join(art, `research-${agent}.txt`)), "FS"); // timeout-dispatch guard first
+  const qsTag = lastTag(readIf(join(art, `openq-${agent}.txt`)), "QS");
+  const unsafe = fsTag === "timeout" || fsTag === "failed" ? `FS=${fsTag}`
+    : qsTag === "timeout" || qsTag === "failed" ? `QS=${qsTag}` : null;
+  if (unsafe) {
+    atomicWrite(stateFile, "VS=skipped\n");
+    log.warn(`explore crossverify-send: ${agent} skipped — previous phase ended ${unsafe} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
+
+  const agents = parseListFile(readIf(join(art, "list.txt"))).map((r) => r.agent);
+  if (agents.length < 2) { log.error(`explore crossverify-send: need >=2 workers in list.txt, got ${agents.length}`); return 1; }
+  if (!agents.includes(agent)) { log.error(`explore crossverify-send: ${agent} not in list.txt`); return 1; }
+
+  const parts: string[] = [];
+  for (const f of verifyScopeFiles(agent, agents)) {
+    const p = join(art, f);
+    if (!existsSync(p)) { log.error(`explore crossverify-send: expected bucket missing: ${p} (run explore diff first)`); return 1; }
+    const c = readFileSync(p, "utf8");
+    if (c.split("\n").some((l) => l.length > 0)) parts.push(c.replace(/\n+$/, ""));
+  }
+  const items = parts.join("\n");
+  atomicWrite(join(art, `crossverify-claims-${agent}.txt`), items ? items + "\n" : "");
+  if (!items) { atomicWrite(stateFile, "VS=skipped\n"); log.ok(`explore crossverify-send: ${agent} VS=skipped (no peer claims to verify)`); return 0; }
+
+  const outPath = join(art, `crossverify-${agent}.md`);
+  const promptFile = join(art, `${agent}_crossverify_prompt.md`);
+  atomicWrite(promptFile, composeVerifyPrompt(items, outPath));
+
+  const offset = d.offsetFor(agent, provider, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}\n`);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
+  if (rc !== 0) { log.error(`explore crossverify-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`); return 1; }
+  log.ok(`explore crossverify-send: ${agent} offset=${offset}`);
+  return 0;
+}
+
+async function crossverifyWaitRun(rest: string[]): Promise<number> {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: explore crossverify-wait <topic> <agent> <provider>"); return 2; }
+  return crossverifyWaitWith(topic, agent, provider, liveResearchWaitDeps);
+}
+export async function crossverifyWaitWith(topic: string, agent: string, provider: string, d: ResearchWaitDeps): Promise<number> {
+  const art = exploreArtDir(topic);
+  const stateFile = join(art, `crossverify-${agent}.txt`);
+  if (!existsSync(stateFile)) { log.error(`explore crossverify-wait: ${stateFile} missing (run explore crossverify-send first)`); return 1; }
+  const text = readFileSync(stateFile, "utf8");
+  if (lastTag(text, "VS") === "skipped") { // guard/empty-scope short-circuit: nothing was sent
+    writeFileSync(join(art, `crossverify-${agent}.done`), "");
+    log.ok(`explore crossverify-wait: ${agent} VS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
+  if (offset === null) { log.error(`explore crossverify-wait: OFFSET not set in ${stateFile}`); return 1; }
+
+  const timeout = scaledTimeout(consultTimeout("verify"), d.multiplier(provider));
+  log.info(`explore crossverify-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
+
+  const vs = verifyState(ev, readIfExistsOrNull(join(art, `crossverify-${agent}.md`))); // done → ok iff verdicts non-empty
+  recordWaitOutcome(agent, provider, topic, stateFile, vs, "VS",
+    ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
+  writeFileSync(join(art, `crossverify-${agent}.done`), "");
+  log.ok(`explore crossverify-wait: ${agent} VS=${vs}`);
+  return 0;
+}
+
+// ---- rebuttal-send / rebuttal-wait (Phase 7b bounded defend-or-concede) ----
+async function rebuttalSendRun(rest: string[]): Promise<number> {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: explore rebuttal-send <topic> <agent> <provider>"); return 2; }
+  return rebuttalSendWith(topic, agent, provider, liveResearchSendDeps);
+}
+export async function rebuttalSendWith(topic: string, agent: string, provider: string, d: ResearchSendDeps): Promise<number> {
+  const art = exploreArtDir(topic);
+  const stateFile = join(art, `rebuttal-${agent}.txt`);
+  if (existsSync(stateFile)) { log.error(`explore rebuttal-send: ${stateFile} exists — one rebuttal round per worker (the one-turn cap)`); return 1; }
+
+  const asTag = lastTag(readIf(join(art, `adversary-${agent}.txt`)), "AS"); // timeout-dispatch guard first
+  if (asTag === "timeout" || asTag === "failed") {
+    atomicWrite(stateFile, "RS=skipped\n");
+    log.warn(`explore rebuttal-send: ${agent} skipped — adversary ended AS=${asTag} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
+
+  const rows = parseListFile(readIf(join(art, "list.txt")));
+  if (!rows.some((r) => r.agent === agent)) { log.error(`explore rebuttal-send: ${agent} not in list.txt at ${art}`); return 1; }
+
+  const buckets = new Map<string, Claim[]>();
+  for (const r of rows) buckets.set(r.agent, parseBucketLines(readIf(join(art, `${r.agent}_only_items.txt`))));
+
+  const critiques: CritiqueInput[] = rows
+    .filter((r) => lastTag(readIf(join(art, `adversary-${r.agent}.txt`)), "AS") !== "skipped")
+    .map((r) => ({ agent: r.agent, text: readIf(join(art, `adversary-${r.agent}.md`)) }))
+    .filter((c) => c.text.trim().length > 0);
+
+  const mine = selectRebuttalTargets(critiques, buckets).get(agent);
+  if (!mine || mine.findings.length === 0) {
+    atomicWrite(stateFile, "RS=skipped\n");
+    log.ok(`explore rebuttal-send: ${agent} RS=skipped (no needs-attention findings attributed to it)`);
+    return 0;
+  }
+
+  const outPath = join(art, `rebuttal-${agent}.md`);
+  const promptFile = join(art, `${agent}_rebuttal_prompt.md`);
+  atomicWrite(promptFile, composeRebuttalPrompt(mine.claims, mine.findings, outPath));
+
+  const offset = d.offsetFor(agent, provider, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}\n`);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
+  if (rc !== 0) { log.error(`explore rebuttal-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`); return 1; }
+  log.ok(`explore rebuttal-send: ${agent} offset=${offset}`);
+  return 0;
+}
+
+async function rebuttalWaitRun(rest: string[]): Promise<number> {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: explore rebuttal-wait <topic> <agent> <provider>"); return 2; }
+  return rebuttalWaitWith(topic, agent, provider, liveResearchWaitDeps);
+}
+export async function rebuttalWaitWith(topic: string, agent: string, provider: string, d: ResearchWaitDeps): Promise<number> {
+  const art = exploreArtDir(topic);
+  const stateFile = join(art, `rebuttal-${agent}.txt`);
+  if (!existsSync(stateFile)) { log.error(`explore rebuttal-wait: ${stateFile} missing (run explore rebuttal-send first)`); return 1; }
+  const text = readFileSync(stateFile, "utf8");
+  if (lastTag(text, "RS") === "skipped") { // guard/no-targets short-circuit: nothing was sent
+    writeFileSync(join(art, `rebuttal-${agent}.done`), "");
+    log.ok(`explore rebuttal-wait: ${agent} RS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
+  if (offset === null) { log.error(`explore rebuttal-wait: OFFSET not set in ${stateFile}`); return 1; }
+
+  const timeout = scaledTimeout(consultTimeout("rebuttal"), d.multiplier(provider));
+  log.info(`explore rebuttal-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
+
+  const rs = verifyState(ev, readIfExistsOrNull(join(art, `rebuttal-${agent}.md`))); // done → ok iff responses non-empty
+  recordWaitOutcome(agent, provider, topic, stateFile, rs, "RS",
+    ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
+  writeFileSync(join(art, `rebuttal-${agent}.done`), "");
+  log.ok(`explore rebuttal-wait: ${agent} RS=${rs}`);
+  return 0;
+}
+
+// ---- gap-send / gap-wait (Phase 7c post-gate gap enrichment; trigger = recorded S1/S2 false) ----
+async function gapSendRun(rest: string[]): Promise<number> {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: explore gap-send <topic> <agent> <provider>"); return 2; }
+  return gapSendWith(topic, agent, provider, liveResearchSendDeps);
+}
+export async function gapSendWith(topic: string, agent: string, provider: string, d: ResearchSendDeps): Promise<number> {
+  const art = exploreArtDir(topic);
+  const stateFile = join(art, `gap-${agent}.txt`);
+  if (existsSync(stateFile)) { log.error(`explore gap-send: ${stateFile} exists; rm to retry`); return 1; }
+
+  // Trigger: the Phase 5.5 record's signals_passed line — S1=false or S2=false fires the round.
+  // The record is READ ONLY here; the gate ran once and adversary-skip.txt is never rewritten.
+  const signalsLine = readIf(join(art, "adversary-skip.txt")).split("\n").find((l) => l.startsWith("signals_passed:")) ?? "";
+  if (!/\bS1=false\b/.test(signalsLine) && !/\bS2=false\b/.test(signalsLine)) {
+    atomicWrite(stateFile, "GS=skipped\n");
+    log.ok(`explore gap-send: ${agent} GS=skipped (no recorded S1/S2 failure — trigger not fired)`);
+    return 0;
+  }
+
+  // Latest-phase guard: first non-skipped tag among RS -> AS -> FS decides safety.
+  const tags: Array<[string, string | null]> = [
+    ["RS", lastTag(readIf(join(art, `rebuttal-${agent}.txt`)), "RS")],
+    ["AS", lastTag(readIf(join(art, `adversary-${agent}.txt`)), "AS")],
+    ["FS", lastTag(readIf(join(art, `research-${agent}.txt`)), "FS")],
+  ];
+  const latest = tags.find(([, v]) => v !== null && v !== "skipped");
+  if (latest && (latest[1] === "timeout" || latest[1] === "failed")) {
+    atomicWrite(stateFile, "GS=skipped\n");
+    log.warn(`explore gap-send: ${agent} skipped — latest phase ended ${latest[0]}=${latest[1]} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
+
+  const agents = parseListFile(readIf(join(art, "list.txt"))).map((r) => r.agent);
+  if (!agents.includes(agent)) { log.error(`explore gap-send: ${agent} not in list.txt at ${art}`); return 1; }
+
+  const items: string[] = [];
+  for (const f of verifyScopeFiles(agent, agents)) {
+    for (const l of readIf(join(art, f)).split("\n")) if (l.length > 0) items.push(l);
+  }
+  if (items.length === 0) {
+    atomicWrite(stateFile, "GS=skipped\n");
+    log.ok(`explore gap-send: ${agent} GS=skipped (no peer-only items to enrich)`);
+    return 0;
+  }
+
+  const outPath = join(art, `gap-${agent}.md`);
+  const promptFile = join(art, `${agent}_gap_prompt.md`);
+  atomicWrite(promptFile, composeGapPrompt(items, outPath));
+
+  const offset = d.offsetFor(agent, provider, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}\n`);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
+  if (rc !== 0) { log.error(`explore gap-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`); return 1; }
+  log.ok(`explore gap-send: ${agent} offset=${offset}`);
+  return 0;
+}
+
+async function gapWaitRun(rest: string[]): Promise<number> {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: explore gap-wait <topic> <agent> <provider>"); return 2; }
+  return gapWaitWith(topic, agent, provider, liveResearchWaitDeps);
+}
+export async function gapWaitWith(topic: string, agent: string, provider: string, d: ResearchWaitDeps): Promise<number> {
+  const art = exploreArtDir(topic);
+  const stateFile = join(art, `gap-${agent}.txt`);
+  if (!existsSync(stateFile)) { log.error(`explore gap-wait: ${stateFile} missing (run explore gap-send first)`); return 1; }
+  const text = readFileSync(stateFile, "utf8");
+  if (lastTag(text, "GS") === "skipped") { // trigger/guard/empty-scope short-circuit: nothing was sent
+    writeFileSync(join(art, `gap-${agent}.done`), "");
+    log.ok(`explore gap-wait: ${agent} GS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
+  if (offset === null) { log.error(`explore gap-wait: OFFSET not set in ${stateFile}`); return 1; }
+
+  const timeout = scaledTimeout(consultTimeout("gap"), d.multiplier(provider));
+  log.info(`explore gap-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
+
+  const gs = verifyState(ev, readIfExistsOrNull(join(art, `gap-${agent}.md`))); // done → ok iff answers non-empty
+  recordWaitOutcome(agent, provider, topic, stateFile, gs, "GS",
+    ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
+  writeFileSync(join(art, `gap-${agent}.done`), "");
+  log.ok(`explore gap-wait: ${agent} GS=${gs}`);
+  return 0;
+}
+
 /** List rows whose `<prefix>-<agent>.md` art file is missing/empty → list of the missing filenames. */
 function missingListArtifacts(art: string, rows: ListRow[], prefix: string): string[] {
   return rows.filter((r) => !readIf(join(art, `${prefix}-${r.agent}.md`)).trim()).map((r) => `${prefix}-${r.agent}.md`);
@@ -497,14 +779,17 @@ export async function adversaryWaitWith(topic: string, agent: string, provider: 
 // ---- wait-gate (composes the pure gateState over research/adversary state files) ----
 export async function exploreWaitGateRun(rest: string[]): Promise<number> {
   const [topic, phase] = rest;
-  if (!topic || !phase) { log.error("usage: explore wait-gate <topic> <research|adversary|openq>"); return 2; }
-  if (phase !== "research" && phase !== "adversary" && phase !== "openq") { log.error(`explore wait-gate: phase must be research|adversary|openq (got ${phase})`); return 2; }
+  const KEYS: Record<string, "FS" | "VS" | "AS" | "QS" | "RS" | "GS"> = {
+    research: "FS", openq: "QS", crossverify: "VS", adversary: "AS", rebuttal: "RS", gap: "GS",
+  };
+  if (!topic || !phase) { log.error("usage: explore wait-gate <topic> <research|openq|crossverify|adversary|rebuttal|gap>"); return 2; }
+  const key = KEYS[phase];
+  if (!key) { log.error(`explore wait-gate: phase must be research|openq|crossverify|adversary|rebuttal|gap (got ${phase})`); return 2; }
   const art = exploreArtDir(topic);
   const listPath = join(art, "list.txt");
   if (!existsSync(listPath)) { log.error(`explore wait-gate: list.txt missing at ${art}`); return 2; }
   const rows = parseListFile(readFileSync(listPath, "utf8"));
   if (rows.length === 0) { log.error("explore wait-gate: list.txt has no workers"); return 2; }
-  const key = phase === "research" ? "FS" : phase === "adversary" ? "AS" : "QS";
   const workers = rows.map((r) => {
     const stateFile = join(art, `${phase}-${r.agent}.txt`);
     return {
