@@ -25651,6 +25651,118 @@ var init_exploreVerdict = __esm({
   }
 });
 
+// src/core/exploreRebuttal.ts
+function parseBucketLines(text) {
+  const out = [];
+  for (const line of text.split("\n")) {
+    const m = line.match(/^\[([^\]]+)\] (.*)$/);
+    if (m) out.push({ cite: m[1], text: m[2] });
+  }
+  return out;
+}
+function parseFindings(critique) {
+  const out = [];
+  let inSection = false;
+  let cur = null;
+  const flush = () => {
+    if (cur) out.push(cur.join("\n").trimEnd());
+    cur = null;
+  };
+  for (const line of critique.split("\n")) {
+    if (/^## Material findings/.test(line)) {
+      inSection = true;
+      continue;
+    }
+    if (/^## /.test(line)) {
+      flush();
+      inSection = false;
+      continue;
+    }
+    if (!inSection) continue;
+    if (/^### /.test(line)) {
+      flush();
+      cur = [line];
+      continue;
+    }
+    if (cur) cur.push(line);
+  }
+  flush();
+  return out;
+}
+function attributeFinding(findingText, buckets) {
+  const owners = /* @__PURE__ */ new Set();
+  for (const token of draftCitations(findingText)) {
+    for (const [agent, claims] of buckets) {
+      if (claims.some((c3) => citationOverlaps(token, c3.cite))) owners.add(agent);
+    }
+  }
+  return owners.size === 1 ? [...owners][0] : null;
+}
+function selectRebuttalTargets(critiques, buckets) {
+  const out = /* @__PURE__ */ new Map();
+  for (const c3 of critiques) {
+    if (parseAdversaryVerdict(c3.text) !== "needs-attention") continue;
+    for (const finding of parseFindings(c3.text)) {
+      const owner = attributeFinding(finding, buckets);
+      if (owner === null) continue;
+      const t = out.get(owner) ?? { findings: [], claims: [] };
+      t.findings.push(finding);
+      const own = buckets.get(owner) ?? [];
+      for (const token of draftCitations(finding)) {
+        for (const cl of own) {
+          if (citationOverlaps(token, cl.cite) && !t.claims.some((x) => x.cite === cl.cite && x.text === cl.text)) {
+            t.claims.push(cl);
+          }
+        }
+      }
+      out.set(owner, t);
+    }
+  }
+  return out;
+}
+function composeRebuttalPrompt(claims, critiques, outPath) {
+  const claimLines = claims.map((c3, i2) => `${i2 + 1}. [${c3.cite}] ${c3.text}`).join("\n");
+  return [
+    "An adversary round challenged the synthesized landscape doc. The critiques below",
+    "attack claims that YOU raised during research (your peers did not raise them, so",
+    "you are the only worker who can defend them).",
+    "",
+    "Your attacked claims:",
+    claimLines,
+    "",
+    "The critiques against them:",
+    "",
+    critiques.join("\n\n"),
+    "",
+    "For EACH critique, do ONE of:",
+    "",
+    "  DEFEND  \u2014 rebut it with concrete evidence (cite a file/line/URL/paper)",
+    "  CONCEDE \u2014 accept it explicitly; say what the landscape doc should say instead",
+    "",
+    "This is ONE turn: no counter-attacks on the adversary, no new claims beyond the",
+    "evidence needed to defend, and no follow-up round.",
+    "",
+    `Write your responses to ${outPath} with this EXACT structure:`,
+    "",
+    "  # Rebuttal",
+    "",
+    "  ## Responses",
+    "  1. <DEFEND|CONCEDE> <one-line restatement of the critique>",
+    "     <evidence or concession, with [citation] anchors>",
+    "  2. ...",
+    "",
+    "An honest concession is more useful than a weak defense \u2014 do not pad."
+  ].join("\n");
+}
+var init_exploreRebuttal = __esm({
+  "src/core/exploreRebuttal.ts"() {
+    "use strict";
+    init_designDiff();
+    init_exploreConfidence();
+    init_exploreVerdict();
+  }
+});
+
 // src/commands/explore.ts
 var explore_exports = {};
 __export(explore_exports, {
@@ -25669,6 +25781,8 @@ __export(explore_exports, {
   openqCollateRun: () => openqCollateRun,
   openqSendWith: () => openqSendWith,
   openqWaitWith: () => openqWaitWith,
+  rebuttalSendWith: () => rebuttalSendWith,
+  rebuttalWaitWith: () => rebuttalWaitWith,
   researchSendWith: () => researchSendWith2,
   researchWaitWith: () => researchWaitWith2,
   run: () => run14,
@@ -25679,7 +25793,7 @@ __export(explore_exports, {
   verdictTallyRun: () => verdictTallyRun
 });
 function usage5() {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|rebuttal-send|rebuttal-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 async function run14(args) {
@@ -25708,6 +25822,10 @@ async function run14(args) {
       return crossverifySendRun(rest);
     case "crossverify-wait":
       return crossverifyWaitRun(rest);
+    case "rebuttal-send":
+      return rebuttalSendRun(rest);
+    case "rebuttal-wait":
+      return rebuttalWaitRun(rest);
     case "wait-gate":
       return exploreWaitGateRun(rest);
     case "synth-preliminary":
@@ -26158,6 +26276,98 @@ async function crossverifyWaitWith(topic, agent, provider, d) {
   log.ok(`explore crossverify-wait: ${agent} VS=${vs}`);
   return 0;
 }
+async function rebuttalSendRun(rest) {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) {
+    log.error("usage: explore rebuttal-send <topic> <agent> <provider>");
+    return 2;
+  }
+  return rebuttalSendWith(topic, agent, provider, liveResearchSendDeps2);
+}
+async function rebuttalSendWith(topic, agent, provider, d) {
+  const art = exploreArtDir(topic);
+  const stateFile = (0, import_node_path34.join)(art, `rebuttal-${agent}.txt`);
+  if ((0, import_node_fs37.existsSync)(stateFile)) {
+    log.error(`explore rebuttal-send: ${stateFile} exists \u2014 one rebuttal round per worker (the one-turn cap)`);
+    return 1;
+  }
+  const asTag = lastTag(readIfExists((0, import_node_path34.join)(art, `adversary-${agent}.txt`)), "AS");
+  if (asTag === "timeout" || asTag === "failed") {
+    atomicWrite(stateFile, "RS=skipped\n");
+    log.warn(`explore rebuttal-send: ${agent} skipped \u2014 adversary ended AS=${asTag} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
+  const rows = parseListFile(readIfExists((0, import_node_path34.join)(art, "list.txt")));
+  if (!rows.some((r) => r.agent === agent)) {
+    log.error(`explore rebuttal-send: ${agent} not in list.txt at ${art}`);
+    return 1;
+  }
+  const buckets = /* @__PURE__ */ new Map();
+  for (const r of rows) buckets.set(r.agent, parseBucketLines(readIfExists((0, import_node_path34.join)(art, `${r.agent}_only_items.txt`))));
+  const critiques = rows.filter((r) => lastTag(readIfExists((0, import_node_path34.join)(art, `adversary-${r.agent}.txt`)), "AS") !== "skipped").map((r) => ({ agent: r.agent, text: readIfExists((0, import_node_path34.join)(art, `adversary-${r.agent}.md`)) })).filter((c3) => c3.text.trim().length > 0);
+  const mine = selectRebuttalTargets(critiques, buckets).get(agent);
+  if (!mine || mine.findings.length === 0) {
+    atomicWrite(stateFile, "RS=skipped\n");
+    log.ok(`explore rebuttal-send: ${agent} RS=skipped (no needs-attention findings attributed to it)`);
+    return 0;
+  }
+  const outPath = (0, import_node_path34.join)(art, `rebuttal-${agent}.md`);
+  const promptFile = (0, import_node_path34.join)(art, `${agent}_rebuttal_prompt.md`);
+  atomicWrite(promptFile, composeRebuttalPrompt(mine.claims, mine.findings, outPath));
+  const offset = d.offsetFor(agent, provider, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}
+`);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
+  if (rc !== 0) {
+    log.error(`explore rebuttal-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`);
+    return 1;
+  }
+  log.ok(`explore rebuttal-send: ${agent} offset=${offset}`);
+  return 0;
+}
+async function rebuttalWaitRun(rest) {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) {
+    log.error("usage: explore rebuttal-wait <topic> <agent> <provider>");
+    return 2;
+  }
+  return rebuttalWaitWith(topic, agent, provider, liveResearchWaitDeps2);
+}
+async function rebuttalWaitWith(topic, agent, provider, d) {
+  const art = exploreArtDir(topic);
+  const stateFile = (0, import_node_path34.join)(art, `rebuttal-${agent}.txt`);
+  if (!(0, import_node_fs37.existsSync)(stateFile)) {
+    log.error(`explore rebuttal-wait: ${stateFile} missing (run explore rebuttal-send first)`);
+    return 1;
+  }
+  const text = (0, import_node_fs37.readFileSync)(stateFile, "utf8");
+  if (lastTag(text, "RS") === "skipped") {
+    (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `rebuttal-${agent}.done`), "");
+    log.ok(`explore rebuttal-wait: ${agent} RS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
+  if (offset === null) {
+    log.error(`explore rebuttal-wait: OFFSET not set in ${stateFile}`);
+    return 1;
+  }
+  const timeout = scaledTimeout(consultTimeout("rebuttal"), d.multiplier(provider));
+  log.info(`explore rebuttal-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
+  const rs = verifyState(ev, readIfExistsOrNull((0, import_node_path34.join)(art, `rebuttal-${agent}.md`)));
+  recordWaitOutcome(
+    agent,
+    provider,
+    topic,
+    stateFile,
+    rs,
+    "RS",
+    ev ? { file: (0, import_node_path34.join)(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : void 0
+  );
+  (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `rebuttal-${agent}.done`), "");
+  log.ok(`explore rebuttal-wait: ${agent} RS=${rs}`);
+  return 0;
+}
 function missingListArtifacts(art, rows, prefix) {
   return rows.filter((r) => !readIfExists((0, import_node_path34.join)(art, `${prefix}-${r.agent}.md`)).trim()).map((r) => `${prefix}-${r.agent}.md`);
 }
@@ -26594,6 +26804,7 @@ var init_explore2 = __esm({
     init_exploreOpenq();
     init_exploreVerdict();
     init_designDiff();
+    init_exploreRebuttal();
     liveExploreInitDeps = {
       activeProviders: () => readProviderList(activeProvidersPath()),
       isValidated: agentConsultValidated,

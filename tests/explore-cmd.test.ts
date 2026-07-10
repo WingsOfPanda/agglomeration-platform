@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { freshHome } from "./helpers/tmpHome.js";
-import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, crossverifySendWith, crossverifyWaitWith, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, verdictTallyRun, diffExploreRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
+import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, crossverifySendWith, crossverifyWaitWith, rebuttalSendWith, rebuttalWaitWith, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, verdictTallyRun, diffExploreRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
 import { exploreArtDir } from "../src/core/explore.js";
 
 function initDeps(over: Partial<ExploreInitDeps> = {}): ExploreInitDeps {
@@ -880,6 +880,95 @@ describe("explore crossverify-send/wait", () => {
       const state = readFileSync(join(art, "crossverify-hotel.txt"), "utf8");
       expect(state).toContain("VS=question");
       expect(state.match(/OFFSET=/g)!.length).toBe(2); // re-armed past the question event
+    } finally { cleanup(); }
+  });
+});
+
+describe("explore rebuttal-send/wait", () => {
+  const NEEDS_ATTENTION = [
+    "# Adversary critique: charlie's pass",
+    "## Verdict",
+    "needs-attention",
+    "## Material findings",
+    "### Finding 1: alpha's solo claim over-reaches",
+    "- **Targets:** src/only-a.ts:1 in the draft",
+    "- **Why vulnerable:** the cited file does not say that",
+  ].join("\n");
+  function seedAdversary(art: string) {
+    writeFileSync(join(art, "alpha_only_items.txt"), "[src/only-a.ts:1] AlphaOnly — solo\n");
+    writeFileSync(join(art, "charlie_only_items.txt"), "");
+    writeFileSync(join(art, "adversary-alpha.txt"), "OFFSET=0\nAS=ok\n");
+    writeFileSync(join(art, "adversary-charlie.txt"), "OFFSET=0\nAS=ok\n");
+    writeFileSync(join(art, "adversary-alpha.md"), "## Verdict\naccept\n");
+    writeFileSync(join(art, "adversary-charlie.md"), NEEDS_ATTENTION);
+  }
+  it("send AS guard: AS=timeout → RS=skipped, no send", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      seedAdversary(art);
+      writeFileSync(join(art, "adversary-alpha.txt"), "OFFSET=0\nAS=timeout\n");
+      const send = vi.fn(async () => 0);
+      expect(await rebuttalSendWith("x", "alpha", "codex", { offsetFor: () => 0, send })).toBe(0);
+      expect(send).not.toHaveBeenCalled();
+      expect(readFileSync(join(art, "rebuttal-alpha.txt"), "utf8")).toBe("RS=skipped\n");
+    } finally { cleanup(); }
+  });
+  it("send zero attributed findings → RS=skipped, no send (charlie has none against it)", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      seedAdversary(art);
+      const send = vi.fn(async () => 0);
+      expect(await rebuttalSendWith("x", "charlie", "claude", { offsetFor: () => 0, send })).toBe(0);
+      expect(send).not.toHaveBeenCalled();
+      expect(readFileSync(join(art, "rebuttal-charlie.txt"), "utf8")).toBe("RS=skipped\n");
+    } finally { cleanup(); }
+  });
+  it("send happy path: attributed needs-attention finding → prompt with claim + critique, OFFSET captured", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      seedAdversary(art);
+      let sent: string[] = [];
+      expect(await rebuttalSendWith("x", "alpha", "codex", { offsetFor: () => 5, send: async (a) => { sent = a; return 0; } })).toBe(0);
+      expect(readFileSync(join(art, "rebuttal-alpha.txt"), "utf8")).toBe("OFFSET=5\n");
+      const prompt = readFileSync(join(art, "alpha_rebuttal_prompt.md"), "utf8");
+      expect(prompt).toContain("[src/only-a.ts:1] AlphaOnly — solo");
+      expect(prompt).toContain("### Finding 1: alpha's solo claim over-reaches");
+      expect(prompt).toContain("CONCEDE");
+      expect(prompt).toContain(join(art, "rebuttal-alpha.md"));
+      expect(prompt).not.toContain("END_OF_INSTRUCTION");
+      expect(sent).toEqual(["--from", "hub", "alpha", "x", `@${join(art, "alpha_rebuttal_prompt.md")}`]);
+    } finally { cleanup(); }
+  });
+  it("send second round refused: existing rebuttal-<agent>.txt → rc 1 (one-turn cap)", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      seedAdversary(art);
+      writeFileSync(join(art, "rebuttal-alpha.txt"), "OFFSET=5\nRS=ok\n");
+      const send = vi.fn(async () => 0);
+      expect(await rebuttalSendWith("x", "alpha", "codex", { offsetFor: () => 0, send })).toBe(1);
+      expect(send).not.toHaveBeenCalled();
+    } finally { cleanup(); }
+  });
+  it("wait: skipped fast-path rc 0 + .done; done+non-empty → RS=ok; no event → RS=timeout", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "rebuttal-alpha.txt"), "RS=skipped\n");
+      expect(await rebuttalWaitWith("x", "alpha", "codex", { wait: async () => null, multiplier: () => "1" })).toBe(0);
+      expect(existsSync(join(art, "rebuttal-alpha.done"))).toBe(true);
+      writeFileSync(join(art, "rebuttal-charlie.txt"), "OFFSET=0\n");
+      writeFileSync(join(art, "rebuttal-charlie.md"), "# Rebuttal\n## Responses\n1. DEFEND ...\n");
+      expect(await rebuttalWaitWith("x", "charlie", "claude", { wait: async () => ({ event: "done" } as any), multiplier: () => "1" })).toBe(0);
+      expect(readFileSync(join(art, "rebuttal-charlie.txt"), "utf8")).toContain("RS=ok");
     } finally { cleanup(); }
   });
 });
