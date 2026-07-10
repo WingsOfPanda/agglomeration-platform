@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { freshHome } from "./helpers/tmpHome.js";
-import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
+import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
 import { exploreArtDir } from "../src/core/explore.js";
 
 function initDeps(over: Partial<ExploreInitDeps> = {}): ExploreInitDeps {
@@ -117,6 +117,43 @@ describe("explore research-send/wait", () => {
       expect(rc).toBe(0);
       expect(existsSync(join(art, "research-alpha.done"))).toBe(true);
       expect(readFileSync(join(art, "research-alpha.txt"), "utf8")).toContain("FS=ok");
+    } finally { cleanup(); }
+  });
+});
+
+describe("explore openq-collate", () => {
+  it("collates open questions and writes per-target claims files (swap at N=2)", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps()); // alpha, charlie
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "findings-alpha.md"), "## Open questions\n- qa1\n- qa2\n## Notes\nn\n");
+      writeFileSync(join(art, "findings-charlie.md"), "## Open questions\n- qc1\n## Notes\nn\n");
+      const rc = await openqCollateRun(["x"]);
+      expect(rc).toBe(0);
+      expect(readFileSync(join(art, "open-questions.md"), "utf8")).toContain("qa1");
+      expect(readFileSync(join(art, "openq-claims-charlie.txt"), "utf8")).toBe("alpha\tqa1\nalpha\tqa2\n");
+      expect(readFileSync(join(art, "openq-claims-alpha.txt"), "utf8")).toBe("charlie\tqc1\n");
+    } finally { cleanup(); }
+  });
+  it("prints OPENQ=none and writes no claims files when no findings carry questions", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "findings-alpha.md"), "## Summary\ns\n");
+      writeFileSync(join(art, "findings-charlie.md"), "## Summary\ns\n");
+      expect(await openqCollateRun(["x"])).toBe(0);
+      expect(existsSync(join(art, "open-questions.md"))).toBe(false);
+      expect(existsSync(join(art, "openq-claims-alpha.txt"))).toBe(false);
+      expect(existsSync(join(art, "openq-claims-charlie.txt"))).toBe(false);
+    } finally { cleanup(); }
+  });
+  it("rc2 without a topic; rc1 when the art dir is missing", async () => {
+    const { cleanup } = freshHome();
+    try {
+      expect(await openqCollateRun([])).toBe(2);
+      expect(await openqCollateRun(["nope"])).toBe(1);
     } finally { cleanup(); }
   });
 });
