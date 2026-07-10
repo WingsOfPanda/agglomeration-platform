@@ -471,6 +471,35 @@ describe("explore adversary-send/wait", () => {
       } finally { cleanup(); }
     });
   }
+  it("send soft-skips (AS=skipped, no send) when research is ok but the openq turn ended QS=timeout", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "## Approaches\n1. A");
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+      writeFileSync(join(art, "openq-alpha.txt"), "OFFSET=3\nQS=timeout\n");
+      let sendCalled = false;
+      const rc = await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => { sendCalled = true; return 0; } });
+      expect(rc).toBe(0);
+      expect(sendCalled).toBe(false);
+      expect(readFileSync(join(art, "adversary-alpha.txt"), "utf8")).toBe("AS=skipped\n");
+    } finally { cleanup(); }
+  });
+  it("send proceeds when research is ok and the openq turn was QS=skipped (nothing was sent to it)", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "## Approaches\n1. A");
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+      writeFileSync(join(art, "openq-alpha.txt"), "QS=skipped\n");
+      let sendCalled = false;
+      const rc = await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 4, send: async () => { sendCalled = true; return 0; } });
+      expect(rc).toBe(0);
+      expect(sendCalled).toBe(true);
+    } finally { cleanup(); }
+  });
   it("send proceeds normally when research ended FS=ok", async () => {
     const { cleanup } = freshHome();
     try {

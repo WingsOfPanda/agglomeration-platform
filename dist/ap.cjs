@@ -26074,9 +26074,11 @@ async function adversarySendWith(topic, agent, provider, d) {
     return 1;
   }
   const fsTag = lastTag(readIfExists((0, import_node_path34.join)(art, `research-${agent}.txt`)), "FS");
-  if (fsTag === "timeout" || fsTag === "failed") {
+  const qsTag = lastTag(readIfExists((0, import_node_path34.join)(art, `openq-${agent}.txt`)), "QS");
+  const unsafe = fsTag === "timeout" || fsTag === "failed" ? `FS=${fsTag}` : qsTag === "timeout" || qsTag === "failed" ? `QS=${qsTag}` : null;
+  if (unsafe) {
     atomicWrite(stateFile, "AS=skipped\n");
-    log.warn(`explore adversary-send: ${agent} skipped \u2014 research ended FS=${fsTag} (worker may still be busy; sending would clobber its inbox)`);
+    log.warn(`explore adversary-send: ${agent} skipped \u2014 previous phase ended ${unsafe} (worker may still be busy; sending would clobber its inbox)`);
     return 0;
   }
   const rows = parseListFile(readIfExists((0, import_node_path34.join)(art, "list.txt")));
