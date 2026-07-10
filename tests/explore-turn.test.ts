@@ -121,6 +121,23 @@ describe("composeAdversaryPrompt", () => {
     expect(empty).not.toContain("Priority targets");
     expect(without).toBe(empty); // byte-identical to pre-change behavior
   });
+  it("renders lowConfidenceClaims as a block DISTINCT from Priority targets (both present → two headers)", () => {
+    const both = composeAdversaryPrompt("d", "alpha", "/o.md", {
+      peerFindingsPaths: [], lens: ADVERSARY_LENSES[0],
+      priorityTargets: ["src/a.ts:1"],
+      lowConfidenceClaims: ["RingAttention scales linearly [https://x.test/ring]"],
+    });
+    expect(both).toContain("Priority targets");
+    expect(both).toContain("Self-flagged low-confidence claims");
+    expect(both).toContain("- RingAttention scales linearly [https://x.test/ring]");
+    expect(both.indexOf("Priority targets")).not.toBe(both.indexOf("Self-flagged low-confidence claims"));
+  });
+  it("omits the low-confidence block when absent or empty — byte-identical", () => {
+    const without = composeAdversaryPrompt("d", "alpha", "/o.md", { peerFindingsPaths: [], lens: ADVERSARY_LENSES[0] });
+    const empty = composeAdversaryPrompt("d", "alpha", "/o.md", { peerFindingsPaths: [], lens: ADVERSARY_LENSES[0], lowConfidenceClaims: [] });
+    expect(without).not.toContain("Self-flagged low-confidence claims");
+    expect(without).toBe(empty);
+  });
 });
 
 // Regression: the explore send path is `inboxWrite(i, m, t, composeX(...))`. Before the fix the

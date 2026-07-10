@@ -163,7 +163,7 @@ export const ADVERSARY_LENSES: readonly AdversaryLens[] = [
  *  distinct primary attack lens per worker. */
 export function composeAdversaryPrompt(
   landscapeDraft: string, agent: string, outPath: string,
-  opts: { peerFindingsPaths: string[]; lens: AdversaryLens; priorityTargets?: string[] },
+  opts: { peerFindingsPaths: string[]; lens: AdversaryLens; priorityTargets?: string[]; lowConfidenceClaims?: string[] },
 ): string {
   return [
     "You are now playing adversary against a synthesized landscape doc that",
@@ -194,6 +194,12 @@ export function composeAdversaryPrompt(
       "Priority targets — these citations are corroborated by only ONE worker; open each",
       "and verify the claim it anchors FIRST:",
       ...opts.priorityTargets.map((t) => `- ${t}`),
+      "",
+    ] : []),
+    ...(opts.lowConfidenceClaims?.length ? [
+      "Self-flagged low-confidence claims — the workers themselves are least sure of",
+      "these; verify them first:",
+      ...opts.lowConfidenceClaims.map((c) => `- ${c}`),
       "",
     ] : []),
     "Attack surface — prioritize these failure modes:",
