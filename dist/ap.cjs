@@ -25659,6 +25659,7 @@ __export(explore_exports, {
   annotateRun: () => annotateRun,
   classifyRun: () => classifyRun,
   confidenceRun: () => confidenceRun,
+  diffExploreRun: () => diffExploreRun,
   exploreWaitGateRun: () => exploreWaitGateRun,
   forensicsRun: () => forensicsRun5,
   handoffExtractRun: () => handoffExtractRun,
@@ -25676,7 +25677,7 @@ __export(explore_exports, {
   verdictTallyRun: () => verdictTallyRun
 });
 function usage5() {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|diff|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 async function run14(args) {
@@ -25699,6 +25700,8 @@ async function run14(args) {
       return openqSendRun(rest);
     case "openq-wait":
       return openqWaitRun(rest);
+    case "diff":
+      return diffExploreRun(rest);
     case "wait-gate":
       return exploreWaitGateRun(rest);
     case "synth-preliminary":
@@ -26000,6 +26003,47 @@ async function openqWaitWith(topic, agent, provider, d) {
   );
   (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `openq-${agent}.done`), "");
   log.ok(`explore openq-wait: ${agent} QS=${qs}`);
+  return 0;
+}
+async function diffExploreRun(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("usage: explore diff <topic>");
+    return 2;
+  }
+  const art = exploreArtDir(topic);
+  if (!(0, import_node_fs37.existsSync)(art)) {
+    log.error(`explore diff: ${art} not found \u2014 run explore init`);
+    return 1;
+  }
+  if ((0, import_node_fs37.existsSync)((0, import_node_path34.join)(art, "diff.md"))) {
+    log.error("explore diff: diff.md exists; rm to retry");
+    return 1;
+  }
+  const listPath = (0, import_node_path34.join)(art, "list.txt");
+  if (!(0, import_node_fs37.existsSync)(listPath)) {
+    log.error("explore diff: list.txt missing \u2014 run explore init first");
+    return 1;
+  }
+  const rows = parseListFile((0, import_node_fs37.readFileSync)(listPath, "utf8"));
+  if (rows.length < 2) {
+    log.error(`explore diff: need >=2 workers in list.txt, got ${rows.length}`);
+    return 1;
+  }
+  const workers = [];
+  for (const r of rows) {
+    const f = (0, import_node_path34.join)(art, `findings-${r.agent}.md`);
+    if (!(0, import_node_fs37.existsSync)(f)) {
+      log.error(`explore diff: ${r.agent} findings missing: ${f}`);
+      return 1;
+    }
+    workers.push({ name: r.agent, findings: (0, import_node_fs37.readFileSync)(f, "utf8") });
+  }
+  const result = diffFindings(workers, ["Approaches"]);
+  for (const file of result.files) atomicWrite((0, import_node_path34.join)(art, file.filename), file.content);
+  atomicWrite((0, import_node_path34.join)(art, "diff.md"), result.diffMd);
+  const summary = result.files.filter((f) => f.filename.endsWith("_only_items.txt") || f.filename === "consensus.txt").map((f) => `${f.filename.replace(/\.txt$/, "")}=${f.content.split("\n").filter(Boolean).length}`).join(" ");
+  log.ok(`explore diff: wrote ${(0, import_node_path34.join)(art, "diff.md")} (${rows.length} workers) ${summary}`);
   return 0;
 }
 function missingListArtifacts(art, rows, prefix) {
@@ -26437,6 +26481,7 @@ var init_explore2 = __esm({
     init_fsread();
     init_exploreOpenq();
     init_exploreVerdict();
+    init_designDiff();
     liveExploreInitDeps = {
       activeProviders: () => readProviderList(activeProvidersPath()),
       isValidated: agentConsultValidated,
