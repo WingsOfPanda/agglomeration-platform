@@ -26011,6 +26011,12 @@ async function confidenceRun(rest) {
   const findings = rows.map((r) => readIfExists((0, import_node_path34.join)(art, `findings-${r.agent}.md`)));
   const s = computeSignals(draft, findings);
   log.info(`explore confidence: S1=${s.s1} S2=${s.s2} S3=${s.s3} S4=${s.s4} S5=${s.s5} \u2014 ALL_HOLD=${s.allHold}`);
+  process.stdout.write(`S1=${s.s1}
+S2=${s.s2}
+S3=${s.s3}
+S4=${s.s4}
+S5=${s.s5}
+`);
   process.stdout.write(`ALL_HOLD=${s.allHold}
 `);
   if (decision) {

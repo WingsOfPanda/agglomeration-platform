@@ -352,6 +352,7 @@ export async function confidenceRun(rest: string[]): Promise<number> {
 
   const s = computeSignals(draft, findings);
   log.info(`explore confidence: S1=${s.s1} S2=${s.s2} S3=${s.s3} S4=${s.s4} S5=${s.s5} — ALL_HOLD=${s.allHold}`);
+  process.stdout.write(`S1=${s.s1}\nS2=${s.s2}\nS3=${s.s3}\nS4=${s.s4}\nS5=${s.s5}\n`);
   process.stdout.write(`ALL_HOLD=${s.allHold}\n`);
 
   if (decision) { // --decision path: record the user's choice
