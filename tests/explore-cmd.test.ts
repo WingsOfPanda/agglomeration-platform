@@ -105,6 +105,24 @@ describe("explore research-send/wait", () => {
       expect(sent).toEqual(["--from", "hub", "alpha", "x", `@${join(art, "alpha_research_prompt.md")}`]);
     } finally { cleanup(); }
   });
+  it("send weights the prompt by provider: codex gets the code lens, claude the literature lens", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps()); // list: alpha(codex), charlie(claude)
+      await classifyRun(["x"]);
+      const art = exploreArtDir("x");
+      const deps: ResearchSendDeps = { offsetFor: () => 0, send: async () => 0 };
+      expect(await researchSendWith("x", "alpha", "codex", deps)).toBe(0);
+      expect(await researchSendWith("x", "charlie", "claude", deps)).toBe(0);
+      const pAlpha = readFileSync(join(art, "alpha_research_prompt.md"), "utf8");
+      const pCharlie = readFileSync(join(art, "charlie_research_prompt.md"), "utf8");
+      expect(pAlpha).toContain("repo-code evidence");
+      expect(pCharlie).toContain("literature and web synthesis");
+      const guard = "This is an emphasis, not a boundary";
+      expect(pAlpha).toContain(guard);
+      expect(pCharlie).toContain(guard);
+    } finally { cleanup(); }
+  });
   it("wait classifies a done event with findings as FS=ok and writes the .done sentinel", async () => {
     const { cleanup } = freshHome();
     try {
