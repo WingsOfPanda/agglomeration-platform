@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { composeExploreResearchPrompt, composeAdversaryPrompt, litGuidance, ADVERSARY_LENSES } from "../src/core/exploreTurn.js";
+import { composeExploreResearchPrompt, composeAdversaryPrompt, litGuidance, ADVERSARY_LENSES, researchLens } from "../src/core/exploreTurn.js";
 import { inboxWrite, inboxPath } from "../src/core/ipc.js";
 import { workerDir } from "../src/core/paths.js";
 
@@ -15,8 +15,31 @@ describe("litGuidance", () => {
   });
 });
 
+describe("researchLens", () => {
+  const GUARD = "This is an emphasis, not a boundary — you must still cover the WHOLE landscape; do not skip an approach because it sits outside your emphasis.";
+  it("codex / claude / neutral lenses are pairwise distinct", () => {
+    expect(researchLens("codex")).not.toBe(researchLens("claude"));
+    expect(researchLens("codex")).not.toBe(researchLens("agy"));
+    expect(researchLens("claude")).not.toBe(researchLens("agy"));
+  });
+  it("codex weights repo-code evidence; claude weights literature/web synthesis", () => {
+    expect(researchLens("codex")).toMatch(/repo-code evidence/);
+    expect(researchLens("claude")).toMatch(/literature and web synthesis/);
+  });
+  it("agy / opencode / unknown share the neutral default", () => {
+    expect(researchLens("agy")).toBe(researchLens("opencode"));
+    expect(researchLens("agy")).toBe(researchLens("no-such-provider"));
+    expect(researchLens("agy")).toMatch(/No special emphasis/);
+  });
+  it("EVERY lens (including neutral) ends with the whole-landscape guard sentence", () => {
+    for (const p of ["codex", "claude", "agy"]) {
+      expect(researchLens(p).endsWith(GUARD)).toBe(true);
+    }
+  });
+});
+
 describe("composeExploreResearchPrompt", () => {
-  const p = composeExploreResearchPrompt("attention kernels", "/art/findings-rex.md", litGuidance("ON"));
+  const p = composeExploreResearchPrompt("attention kernels", "/art/findings-rex.md", litGuidance("ON"), researchLens("codex"));
   it("contains topic, write-to, and the lit-guidance", () => {
     expect(p).toContain("attention kernels");
     expect(p).toContain("/art/findings-rex.md");
@@ -30,6 +53,20 @@ describe("composeExploreResearchPrompt", () => {
   });
   it("frames it as landscape exposure, not recommendation", () => {
     expect(p).toMatch(/not a recommendation/i);
+  });
+  it("renders the lens block after Topic: and before Output requirements", () => {
+    const lens = researchLens("codex");
+    expect(p).toContain(lens);
+    const iTopic = p.indexOf("Topic: attention kernels");
+    const iLens = p.indexOf(lens);
+    const iOut = p.indexOf("Output requirements");
+    expect(iTopic).toBeGreaterThanOrEqual(0);
+    expect(iLens).toBeGreaterThan(iTopic);
+    expect(iOut).toBeGreaterThan(iLens);
+  });
+  it("stays peer-material-free (no adversary-only blocks leak in)", () => {
+    expect(p).not.toContain("Raw evidence behind the draft");
+    expect(p).not.toContain("Priority targets");
   });
 });
 
@@ -61,6 +98,22 @@ describe("composeAdversaryPrompt", () => {
     expect(p).not.toContain('{"event":"done"');
     expect(p).not.toContain("END_OF_INSTRUCTION");
   });
+  it("renders every priorityTargets token under a Priority targets block", () => {
+    const pt = composeAdversaryPrompt("d", "alpha", "/o.md", {
+      peerFindingsPaths: [], lens: ADVERSARY_LENSES[0], priorityTargets: ["src/a.ts:1", "https://x.test/solo"],
+    });
+    expect(pt).toContain("Priority targets");
+    expect(pt).toContain("- src/a.ts:1");
+    expect(pt).toContain("- https://x.test/solo");
+    expect(pt).toMatch(/corroborated by only ONE worker/);
+  });
+  it("omits the Priority targets block when priorityTargets is absent or empty", () => {
+    const without = composeAdversaryPrompt("d", "alpha", "/o.md", { peerFindingsPaths: [], lens: ADVERSARY_LENSES[0] });
+    const empty = composeAdversaryPrompt("d", "alpha", "/o.md", { peerFindingsPaths: [], lens: ADVERSARY_LENSES[0], priorityTargets: [] });
+    expect(without).not.toContain("Priority targets");
+    expect(empty).not.toContain("Priority targets");
+    expect(without).toBe(empty); // byte-identical to pre-change behavior
+  });
 });
 
 // Regression: the explore send path is `inboxWrite(i, m, t, composeX(...))`. Before the fix the
@@ -78,7 +131,7 @@ describe("explore inbox carries a single done contract (no duplicate END_OF_INST
 
   it("research prompt → exactly one END_OF_INSTRUCTION and one done line", () => {
     seedPart("rex", "codex", "demo");
-    inboxWrite("rex", "codex", "demo", composeExploreResearchPrompt("attn", "/art/findings-rex.md", litGuidance("ON")));
+    inboxWrite("rex", "codex", "demo", composeExploreResearchPrompt("attn", "/art/findings-rex.md", litGuidance("ON"), researchLens("codex")));
     const txt = readFileSync(inboxPath("rex", "codex", "demo"), "utf8");
     expect(count(txt, "END_OF_INSTRUCTION")).toBe(1);
     expect(count(txt, '"event":"done"')).toBe(1);

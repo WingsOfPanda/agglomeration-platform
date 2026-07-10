@@ -25347,7 +25347,10 @@ var init_exploreAnnotate = __esm({
 function litGuidance(track) {
   return track === "ON" ? "The topic is academic / SOTA-shaped. Prioritize peer-reviewed papers (arXiv, conference proceedings) over blog posts or vendor docs. List 3+ recent papers, projects, or benchmarks with citations including authors, year, venue, URL/DOI where available." : "The topic is not academic-shaped. Brief SOTA-evidence section is fine \u2014 list 1-2 anchor sources or write 'Not applicable' with a one-line reason.";
 }
-function composeExploreResearchPrompt(topic, writeTo, lit) {
+function researchLens(provider) {
+  return RESEARCH_LENSES[provider] ?? NEUTRAL_LENS;
+}
+function composeExploreResearchPrompt(topic, writeTo, lit, lens) {
   const t = topic.trim();
   return [
     "Investigate the following topic from multiple angles. Your job is not to",
@@ -25355,6 +25358,8 @@ function composeExploreResearchPrompt(topic, writeTo, lit) {
     "SOTA evidence, and open questions.",
     "",
     `Topic: ${t}`,
+    "",
+    `Research lens: ${lens}`,
     "",
     `Output requirements \u2014 write to ${writeTo} with this EXACT structure:`,
     "",
@@ -25438,6 +25443,12 @@ function composeAdversaryPrompt(landscapeDraft, agent, outPath, opts) {
     `Your PRIMARY attack angle \u2014 ${opts.lens.name} \u2014 spend most of your effort here:`,
     ...opts.lens.emphasis.map((l) => `- ${l}`),
     "",
+    ...opts.priorityTargets?.length ? [
+      "Priority targets \u2014 these citations are corroborated by only ONE worker; open each",
+      "and verify the claim it anchors FIRST:",
+      ...opts.priorityTargets.map((t) => `- ${t}`),
+      ""
+    ] : [],
     "Attack surface \u2014 prioritize these failure modes:",
     "- Approaches that were missed or wrongly excluded from the landscape",
     '- Tradeoff matrix rows where the "Best fit" assignment is wrong or weakly justified',
@@ -25483,10 +25494,16 @@ function composeAdversaryPrompt(landscapeDraft, agent, outPath, opts) {
     "  cited evidence, not speculative"
   ].join("\n");
 }
-var ADVERSARY_LENSES;
+var LENS_GUARD, RESEARCH_LENSES, NEUTRAL_LENS, ADVERSARY_LENSES;
 var init_exploreTurn = __esm({
   "src/core/exploreTurn.ts"() {
     "use strict";
+    LENS_GUARD = "This is an emphasis, not a boundary \u2014 you must still cover the WHOLE landscape; do not skip an approach because it sits outside your emphasis.";
+    RESEARCH_LENSES = {
+      codex: "Weight your investigation toward repo-code evidence: read the implementation, run runtime probes/experiments where cheap, judge implementation feasibility first-hand. " + LENS_GUARD,
+      claude: "Weight your investigation toward literature and web synthesis: papers, RFCs, vendor docs, cross-domain analogues, conceptual frames. " + LENS_GUARD
+    };
+    NEUTRAL_LENS = "No special emphasis \u2014 balance code and literature evidence as the topic demands. " + LENS_GUARD;
     ADVERSARY_LENSES = [
       {
         name: "citation-fidelity",
@@ -25588,6 +25605,51 @@ var init_exploreOpenq = __esm({
   }
 });
 
+// src/core/exploreVerdict.ts
+function isVerdict(v) {
+  return SEVERITY.includes(v);
+}
+function parseAdversaryVerdict(text) {
+  let inVerdict = false;
+  for (const line of text.split("\n")) {
+    if (/^## Verdict\b/.test(line)) {
+      inVerdict = true;
+      continue;
+    }
+    if (/^## /.test(line)) {
+      inVerdict = false;
+      continue;
+    }
+    if (!inVerdict || !line.trim()) continue;
+    const v = line.trim().toLowerCase();
+    return isVerdict(v) ? v : "malformed";
+  }
+  return "malformed";
+}
+function tallyVerdicts(rows) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const r of rows) {
+    if (isVerdict(r.verdict)) counts.set(r.verdict, (counts.get(r.verdict) ?? 0) + 1);
+  }
+  let tally = "unavailable";
+  let best = 0;
+  for (const v of SEVERITY) {
+    const n2 = counts.get(v) ?? 0;
+    if (n2 > best) {
+      tally = v;
+      best = n2;
+    }
+  }
+  return { tally };
+}
+var SEVERITY;
+var init_exploreVerdict = __esm({
+  "src/core/exploreVerdict.ts"() {
+    "use strict";
+    SEVERITY = ["needs-attention", "minor-revisions", "accept"];
+  }
+});
+
 // src/commands/explore.ts
 var explore_exports = {};
 __export(explore_exports, {
@@ -25609,10 +25671,11 @@ __export(explore_exports, {
   spawnAllWith: () => spawnAllWith3,
   synthFinalRun: () => synthFinalRun,
   synthPreliminaryRun: () => synthPreliminaryRun,
-  teardownWith: () => teardownWith2
+  teardownWith: () => teardownWith2,
+  verdictTallyRun: () => verdictTallyRun
 });
 function usage5() {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|synth-final|forensics|teardown|handoff-extract> ...");
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 async function run14(args) {
@@ -25649,6 +25712,8 @@ async function run14(args) {
       return adversaryWaitRun(rest);
     case "synth-final":
       return synthFinalRun(rest);
+    case "verdict-tally":
+      return verdictTallyRun(rest);
     case "forensics":
       return forensicsRun5(rest);
     case "flag":
@@ -25762,7 +25827,7 @@ async function researchSendWith2(topic, agent, provider, d) {
   const track = readIfExists((0, import_node_path34.join)(art, "lit-track.txt")).startsWith("ON") ? "ON" : "OFF";
   const findingsPath = (0, import_node_path34.join)(art, `findings-${agent}.md`);
   const promptFile = (0, import_node_path34.join)(art, `${agent}_research_prompt.md`);
-  atomicWrite(promptFile, composeExploreResearchPrompt(topicText, findingsPath, litGuidance(track)));
+  atomicWrite(promptFile, composeExploreResearchPrompt(topicText, findingsPath, litGuidance(track), researchLens(provider)));
   const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}
 `);
@@ -25994,6 +26059,12 @@ async function confidenceRun(rest) {
   const findings = rows.map((r) => readIfExists((0, import_node_path34.join)(art, `findings-${r.agent}.md`)));
   const s = computeSignals(draft, findings);
   log.info(`explore confidence: S1=${s.s1} S2=${s.s2} S3=${s.s3} S4=${s.s4} S5=${s.s5} \u2014 ALL_HOLD=${s.allHold}`);
+  process.stdout.write(`S1=${s.s1}
+S2=${s.s2}
+S3=${s.s3}
+S4=${s.s4}
+S5=${s.s5}
+`);
   process.stdout.write(`ALL_HOLD=${s.allHold}
 `);
   if (decision) {
@@ -26053,6 +26124,19 @@ unverified=${counts.n_unverified} no_citation=${counts.n_no_citation} approaches
   log.ok(`explore annotate: ${counts.n_unverified} unverified, ${counts.n_no_citation} no-citation, ${counts.n_approaches_flagged} approaches-flagged`);
   return 0;
 }
+function soloTokensFromAnnotations(raw) {
+  if (!raw || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    const seen = /* @__PURE__ */ new Set();
+    for (const it of parsed.items ?? []) {
+      if ((it.kind === "unverified" || it.kind === "approaches-flagged") && it.token) seen.add(it.token);
+    }
+    return [...seen];
+  } catch {
+    return [];
+  }
+}
 async function adversarySendRun(rest) {
   const [topic, agent, provider] = rest;
   if (!topic || !agent || !provider) {
@@ -26089,9 +26173,10 @@ async function adversarySendWith(topic, agent, provider, d) {
   }
   const peerFindingsPaths = rows.filter((r) => r.agent !== agent).map((r) => (0, import_node_path34.join)(art, `findings-${r.agent}.md`));
   const lens = ADVERSARY_LENSES[index % ADVERSARY_LENSES.length];
+  const priorityTargets = soloTokensFromAnnotations(readIfExistsOrNull((0, import_node_path34.join)(art, "annotations.json")));
   const outPath = (0, import_node_path34.join)(art, `adversary-${agent}.md`);
   const promptFile = (0, import_node_path34.join)(art, `${agent}_adversary_prompt.md`);
-  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath, { peerFindingsPaths, lens }));
+  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath, { peerFindingsPaths, lens, priorityTargets }));
   const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}
 `);
@@ -26219,6 +26304,36 @@ async function synthFinalRun(rest) {
   process.stdout.write(out + "\n");
   return 0;
 }
+async function verdictTallyRun(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("usage: explore verdict-tally <topic>");
+    return 2;
+  }
+  const art = exploreArtDir(topic);
+  if (!(0, import_node_fs37.existsSync)(art)) {
+    log.error(`explore verdict-tally: ${art} not found \u2014 run explore init`);
+    return 1;
+  }
+  const listRaw = readIfExists((0, import_node_path34.join)(art, "list.txt"));
+  if (!listRaw.trim()) {
+    log.error(`explore verdict-tally: list.txt missing or empty at ${art}`);
+    return 1;
+  }
+  const rows = parseListFile(listRaw);
+  const verdictRows = rows.map((r) => {
+    const as = lastTag(readIfExists((0, import_node_path34.join)(art, `adversary-${r.agent}.txt`)), "AS");
+    const verdict = as === "skipped" ? "skipped" : parseAdversaryVerdict(readIfExists((0, import_node_path34.join)(art, `adversary-${r.agent}.md`)));
+    return { agent: r.agent, verdict };
+  });
+  for (const v of verdictRows) process.stdout.write(`VERDICT=${v.agent}:${v.verdict}
+`);
+  const { tally } = tallyVerdicts(verdictRows);
+  process.stdout.write(`TALLY=${tally}
+`);
+  log.ok(`explore verdict-tally: ${tally}`);
+  return 0;
+}
 async function forensicsRun5(rest) {
   return runForensics("explore", exploreArtDir, rest[0]);
 }
@@ -26312,6 +26427,7 @@ var init_explore2 = __esm({
     init_preflight();
     init_fsread();
     init_exploreOpenq();
+    init_exploreVerdict();
     liveExploreInitDeps = {
       activeProviders: () => readProviderList(activeProvidersPath()),
       isValidated: agentConsultValidated,

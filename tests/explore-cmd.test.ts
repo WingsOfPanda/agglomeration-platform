@@ -1,9 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { existsSync, readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { freshHome } from "./helpers/tmpHome.js";
-import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
+import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, verdictTallyRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
 import { exploreArtDir } from "../src/core/explore.js";
 
 function initDeps(over: Partial<ExploreInitDeps> = {}): ExploreInitDeps {
@@ -103,6 +103,24 @@ describe("explore research-send/wait", () => {
       const prompt = readFileSync(join(art, "alpha_research_prompt.md"), "utf8");
       expect(prompt).toContain(join(art, "findings-alpha.md"));
       expect(sent).toEqual(["--from", "hub", "alpha", "x", `@${join(art, "alpha_research_prompt.md")}`]);
+    } finally { cleanup(); }
+  });
+  it("send weights the prompt by provider: codex gets the code lens, claude the literature lens", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps()); // list: alpha(codex), charlie(claude)
+      await classifyRun(["x"]);
+      const art = exploreArtDir("x");
+      const deps: ResearchSendDeps = { offsetFor: () => 0, send: async () => 0 };
+      expect(await researchSendWith("x", "alpha", "codex", deps)).toBe(0);
+      expect(await researchSendWith("x", "charlie", "claude", deps)).toBe(0);
+      const pAlpha = readFileSync(join(art, "alpha_research_prompt.md"), "utf8");
+      const pCharlie = readFileSync(join(art, "charlie_research_prompt.md"), "utf8");
+      expect(pAlpha).toContain("repo-code evidence");
+      expect(pCharlie).toContain("literature and web synthesis");
+      const guard = "This is an emphasis, not a boundary";
+      expect(pAlpha).toContain(guard);
+      expect(pCharlie).toContain(guard);
     } finally { cleanup(); }
   });
   it("wait classifies a done event with findings as FS=ok and writes the .done sentinel", async () => {
@@ -334,6 +352,24 @@ describe("explore confidence", () => {
       expect(existsSync(join(art, "adversary-skip.txt"))).toBe(false);
     } finally { cleanup(); }
   });
+  it("prints S1=..S5= per-signal lines to stdout with ALL_HOLD= as the LAST line", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      await seedFindings(art, DRAFT + "\nCONTESTED: foo"); // S3 fails
+      const chunks: string[] = [];
+      const spy = vi.spyOn(process.stdout, "write").mockImplementation(((s: unknown) => { chunks.push(String(s)); return true; }) as never);
+      try {
+        expect(await confidenceRun(["x"])).toBe(0);
+      } finally { spy.mockRestore(); }
+      const lines = chunks.join("").trim().split("\n");
+      expect(lines).toContain("S3=false");
+      for (const n of [1, 2, 4, 5]) expect(lines.some((l) => new RegExp(`^S${n}=(true|false)$`).test(l))).toBe(true);
+      expect(lines[lines.length - 1]).toBe("ALL_HOLD=false"); // directive-parse compatibility: last line
+      expect(lines.slice(0, 5)).toEqual(lines.filter((l) => /^S[1-5]=/.test(l))); // S-lines come first, in order
+    } finally { cleanup(); }
+  });
 });
 
 describe("explore annotate", () => {
@@ -514,6 +550,44 @@ describe("explore adversary-send/wait", () => {
       expect(readFileSync(join(art, "adversary-alpha.txt"), "utf8")).toContain("OFFSET=5");
     } finally { cleanup(); }
   });
+  it("send passes annotations.json solo tokens as Priority targets (unverified + approaches-flagged, deduped)", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "## Approaches\n1. A");
+      writeFileSync(join(art, "annotations.json"), JSON.stringify({
+        topic: "x",
+        counts: { n_unverified: 2, n_no_citation: 1, n_approaches_flagged: 1 },
+        items: [
+          { kind: "unverified", token: "https://x.test/solo", lineIndex: 1 },
+          { kind: "unverified", token: "https://x.test/solo", lineIndex: 4 },
+          { kind: "approaches-flagged", token: "src/a.ts:1", lineIndex: 2 },
+          { kind: "no-citation", lineIndex: 3 },
+        ],
+      }));
+      const rc = await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => 0 });
+      expect(rc).toBe(0);
+      const prompt = readFileSync(join(art, "alpha_adversary_prompt.md"), "utf8");
+      expect(prompt).toContain("Priority targets");
+      expect(prompt.split("- https://x.test/solo").length - 1).toBe(1); // deduped
+      expect(prompt).toContain("- src/a.ts:1");
+    } finally { cleanup(); }
+  });
+  it("send omits the Priority targets block when annotations.json is missing or malformed", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "## Approaches\n1. A");
+      expect(await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => 0 })).toBe(0);
+      expect(readFileSync(join(art, "alpha_adversary_prompt.md"), "utf8")).not.toContain("Priority targets");
+
+      writeFileSync(join(art, "annotations.json"), "{not json");
+      expect(await adversarySendWith("x", "charlie", "claude", { offsetFor: () => 0, send: async () => 0 })).toBe(0);
+      expect(readFileSync(join(art, "charlie_adversary_prompt.md"), "utf8")).not.toContain("Priority targets");
+    } finally { cleanup(); }
+  });
   it("wait fast-path: AS=skipped state (no OFFSET) writes .done and rc 0 without waiting", async () => {
     const { cleanup } = freshHome();
     try {
@@ -574,6 +648,60 @@ describe("explore synth-final", () => {
       writeFileSync(join(art, "adversary-alpha.md"), "c");           // alpha critiqued
       writeFileSync(join(art, "adversary-charlie.txt"), "AS=skipped\n"); // charlie skipped, no .md
       expect(await synthFinalRun(["x"])).toBe(0);
+    } finally { cleanup(); }
+  });
+});
+
+describe("explore verdict-tally", () => {
+  function cap(): { text: () => string; restore: () => void } {
+    const c: string[] = [];
+    const s = vi.spyOn(process.stdout, "write").mockImplementation(((x: unknown) => { c.push(String(x)); return true; }) as never);
+    return { text: () => c.join(""), restore: () => s.mockRestore() };
+  }
+  it("prints one VERDICT= line per list row and a TALLY= majority (tie → most severe)", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps()); // list: alpha(codex), charlie(claude)
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "adversary-alpha.md"), "# c\n## Verdict\nneeds-attention\n## Material findings\n");
+      writeFileSync(join(art, "adversary-charlie.md"), "# c\n## Verdict\naccept\n");
+      const out = cap();
+      try { expect(await verdictTallyRun(["x"])).toBe(0); } finally { out.restore(); }
+      const lines = out.text().trim().split("\n");
+      expect(lines).toEqual(["VERDICT=alpha:needs-attention", "VERDICT=charlie:accept", "TALLY=needs-attention"]);
+    } finally { cleanup(); }
+  });
+  it("AS=skipped rows report skipped and never enter the majority", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "adversary-alpha.md"), "## Verdict\naccept\n");
+      writeFileSync(join(art, "adversary-charlie.txt"), "AS=skipped\n"); // no .md
+      const out = cap();
+      try { expect(await verdictTallyRun(["x"])).toBe(0); } finally { out.restore(); }
+      const lines = out.text().trim().split("\n");
+      expect(lines).toEqual(["VERDICT=alpha:accept", "VERDICT=charlie:skipped", "TALLY=accept"]);
+    } finally { cleanup(); }
+  });
+  it("missing or heading-less critique reports malformed; all-uncountable → TALLY=unavailable", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "adversary-alpha.md"), "no heading here\n");
+      // charlie has neither .txt nor .md → malformed too
+      const out = cap();
+      try { expect(await verdictTallyRun(["x"])).toBe(0); } finally { out.restore(); }
+      const lines = out.text().trim().split("\n");
+      expect(lines).toEqual(["VERDICT=alpha:malformed", "VERDICT=charlie:malformed", "TALLY=unavailable"]);
+    } finally { cleanup(); }
+  });
+  it("rc2 without a topic; rc1 when the art dir is missing", async () => {
+    const { cleanup } = freshHome();
+    try {
+      expect(await verdictTallyRun([])).toBe(2);
+      expect(await verdictTallyRun(["nope"])).toBe(1);
     } finally { cleanup(); }
   });
 });
