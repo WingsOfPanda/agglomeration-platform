@@ -497,14 +497,17 @@ export async function adversaryWaitWith(topic: string, agent: string, provider: 
 // ---- wait-gate (composes the pure gateState over research/adversary state files) ----
 export async function exploreWaitGateRun(rest: string[]): Promise<number> {
   const [topic, phase] = rest;
-  if (!topic || !phase) { log.error("usage: explore wait-gate <topic> <research|adversary|openq>"); return 2; }
-  if (phase !== "research" && phase !== "adversary" && phase !== "openq") { log.error(`explore wait-gate: phase must be research|adversary|openq (got ${phase})`); return 2; }
+  const KEYS: Record<string, "FS" | "VS" | "AS" | "QS" | "RS" | "GS"> = {
+    research: "FS", openq: "QS", crossverify: "VS", adversary: "AS", rebuttal: "RS", gap: "GS",
+  };
+  if (!topic || !phase) { log.error("usage: explore wait-gate <topic> <research|openq|crossverify|adversary|rebuttal|gap>"); return 2; }
+  const key = KEYS[phase];
+  if (!key) { log.error(`explore wait-gate: phase must be research|openq|crossverify|adversary|rebuttal|gap (got ${phase})`); return 2; }
   const art = exploreArtDir(topic);
   const listPath = join(art, "list.txt");
   if (!existsSync(listPath)) { log.error(`explore wait-gate: list.txt missing at ${art}`); return 2; }
   const rows = parseListFile(readFileSync(listPath, "utf8"));
   if (rows.length === 0) { log.error("explore wait-gate: list.txt has no workers"); return 2; }
-  const key = phase === "research" ? "FS" : phase === "adversary" ? "AS" : "QS";
   const workers = rows.map((r) => {
     const stateFile = join(art, `${phase}-${r.agent}.txt`);
     return {
