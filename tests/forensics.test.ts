@@ -137,4 +137,17 @@ describe("captureArtDir", () => {
     expect(existsSync(p)).toBe(true);
     expect(rfs(p, "utf8")).toContain("ISSUE=no_goal_section");
   });
+  it("two captures in the same UTC second do not overwrite (suffix -2)", () => {
+    const home = mkdtempSync(join(tmpdir(), "fh-")); process.env.AP_HOME = home;
+    const art = join(mkdtempSync(join(tmpdir(), "ft-")), "mytopic", "_design");
+    mkdirSync(join(art, "design-doc"), { recursive: true });
+    writeFileSync(join(art, "design-doc", "audit.log"), "ISSUE=no_goal_section\n");
+    const now = new Date("2026-05-29T12:34:56Z");
+    const p1 = captureArtDir({ artDir: art, command: "design", now });
+    const p2 = captureArtDir({ artDir: art, command: "design", now });
+    expect(p1).not.toBe(p2);
+    expect(existsSync(p1)).toBe(true);
+    expect(existsSync(p2)).toBe(true);
+    expect(p2).toMatch(/12-34-56-design-mytopic-2\.md$/);
+  });
 });

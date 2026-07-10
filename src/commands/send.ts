@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { log } from "../core/log.js";
 import { resolveModel, paneMetaRead, inboxWrite, inboxPath } from "../core/ipc.js";
 import { paneAlive, paneSend } from "../core/tmux.js";
+import { validateSlug } from "../core/slug.js";
 
 export async function run(args: string[]): Promise<number> {
   let from: string | undefined;
@@ -9,6 +10,7 @@ export async function run(args: string[]): Promise<number> {
   if (a[0] === "--from") { if (!a[1]) { log.error("--from requires a sender name"); return 2; } from = a[1]; a = a.slice(2); }
   if (a.length < 3) { log.error("usage: send [--from s] <agent> <topic> <message|@file>"); return 2; }
   const [agent, topic] = a;
+  if (!validateSlug(agent) || !validateSlug(topic)) { log.error(`agent/topic must match [a-z0-9-]+ and be <= 32 chars; got agent='${agent}' topic='${topic}'`); return 2; }
   let msg = a.slice(2).join(" ");
 
   const model = resolveModel(agent, topic);
