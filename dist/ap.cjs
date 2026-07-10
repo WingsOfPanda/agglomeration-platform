@@ -25495,6 +25495,36 @@ function composeAdversaryPrompt(landscapeDraft, agent, outPath, opts) {
     "  cited evidence, not speculative"
   ].join("\n");
 }
+function composeGapPrompt(bucketItems, outPath) {
+  const items = bucketItems.map((l, i2) => `${i2 + 1}. ${l}`).join("\n");
+  return [
+    "Your fellow workers surfaced the approaches below during research; you did not",
+    "cover them. The run's confidence gate recorded low cross-worker overlap, so each",
+    "item currently rests on a single worker's evidence.",
+    "",
+    "For EACH item, do ONE of:",
+    "",
+    "  CONFIRM \u2014 corroborate it with your OWN evidence (cite a file/line/URL/paper)",
+    "  EXTEND  \u2014 confirm it and add material the original worker missed",
+    "  REFUTE  \u2014 explain why it is wrong, with counter-evidence",
+    "",
+    "Items:",
+    items,
+    "",
+    `Write your answers to ${outPath} with this EXACT structure:`,
+    "",
+    "  # Gap enrichment",
+    "",
+    "  ## Answers",
+    "  1. <CONFIRM|EXTEND|REFUTE> <original [citation] and text>",
+    "     <your evidence, with [citation] anchors>",
+    "  2. ...",
+    "",
+    "Your answers feed ONLY the final landscape doc and the design handoff \u2014 the draft",
+    "is not re-synthesized and the confidence gate does not re-run. If you cannot tell",
+    "from available evidence, say so explicitly \u2014 do not pad."
+  ].join("\n");
+}
 var LENS_GUARD, RESEARCH_LENSES, NEUTRAL_LENS, ADVERSARY_LENSES;
 var init_exploreTurn = __esm({
   "src/core/exploreTurn.ts"() {
@@ -25776,6 +25806,8 @@ __export(explore_exports, {
   diffExploreRun: () => diffExploreRun,
   exploreWaitGateRun: () => exploreWaitGateRun,
   forensicsRun: () => forensicsRun5,
+  gapSendWith: () => gapSendWith,
+  gapWaitWith: () => gapWaitWith,
   handoffExtractRun: () => handoffExtractRun,
   initWith: () => initWith5,
   openqCollateRun: () => openqCollateRun,
@@ -25793,7 +25825,7 @@ __export(explore_exports, {
   verdictTallyRun: () => verdictTallyRun
 });
 function usage5() {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|rebuttal-send|rebuttal-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|rebuttal-send|rebuttal-wait|gap-send|gap-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 async function run14(args) {
@@ -25826,6 +25858,10 @@ async function run14(args) {
       return rebuttalSendRun(rest);
     case "rebuttal-wait":
       return rebuttalWaitRun(rest);
+    case "gap-send":
+      return gapSendRun(rest);
+    case "gap-wait":
+      return gapWaitRun(rest);
     case "wait-gate":
       return exploreWaitGateRun(rest);
     case "synth-preliminary":
@@ -26366,6 +26402,109 @@ async function rebuttalWaitWith(topic, agent, provider, d) {
   );
   (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `rebuttal-${agent}.done`), "");
   log.ok(`explore rebuttal-wait: ${agent} RS=${rs}`);
+  return 0;
+}
+async function gapSendRun(rest) {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) {
+    log.error("usage: explore gap-send <topic> <agent> <provider>");
+    return 2;
+  }
+  return gapSendWith(topic, agent, provider, liveResearchSendDeps2);
+}
+async function gapSendWith(topic, agent, provider, d) {
+  const art = exploreArtDir(topic);
+  const stateFile = (0, import_node_path34.join)(art, `gap-${agent}.txt`);
+  if ((0, import_node_fs37.existsSync)(stateFile)) {
+    log.error(`explore gap-send: ${stateFile} exists; rm to retry`);
+    return 1;
+  }
+  const signalsLine = readIfExists((0, import_node_path34.join)(art, "adversary-skip.txt")).split("\n").find((l) => l.startsWith("signals_passed:")) ?? "";
+  if (!/\bS1=false\b/.test(signalsLine) && !/\bS2=false\b/.test(signalsLine)) {
+    atomicWrite(stateFile, "GS=skipped\n");
+    log.ok(`explore gap-send: ${agent} GS=skipped (no recorded S1/S2 failure \u2014 trigger not fired)`);
+    return 0;
+  }
+  const tags = [
+    ["RS", lastTag(readIfExists((0, import_node_path34.join)(art, `rebuttal-${agent}.txt`)), "RS")],
+    ["AS", lastTag(readIfExists((0, import_node_path34.join)(art, `adversary-${agent}.txt`)), "AS")],
+    ["FS", lastTag(readIfExists((0, import_node_path34.join)(art, `research-${agent}.txt`)), "FS")]
+  ];
+  const latest = tags.find(([, v]) => v !== null && v !== "skipped");
+  if (latest && (latest[1] === "timeout" || latest[1] === "failed")) {
+    atomicWrite(stateFile, "GS=skipped\n");
+    log.warn(`explore gap-send: ${agent} skipped \u2014 latest phase ended ${latest[0]}=${latest[1]} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
+  const agents = parseListFile(readIfExists((0, import_node_path34.join)(art, "list.txt"))).map((r) => r.agent);
+  if (!agents.includes(agent)) {
+    log.error(`explore gap-send: ${agent} not in list.txt at ${art}`);
+    return 1;
+  }
+  const items = [];
+  for (const f of verifyScopeFiles(agent, agents)) {
+    for (const l of readIfExists((0, import_node_path34.join)(art, f)).split("\n")) if (l.length > 0) items.push(l);
+  }
+  if (items.length === 0) {
+    atomicWrite(stateFile, "GS=skipped\n");
+    log.ok(`explore gap-send: ${agent} GS=skipped (no peer-only items to enrich)`);
+    return 0;
+  }
+  const outPath = (0, import_node_path34.join)(art, `gap-${agent}.md`);
+  const promptFile = (0, import_node_path34.join)(art, `${agent}_gap_prompt.md`);
+  atomicWrite(promptFile, composeGapPrompt(items, outPath));
+  const offset = d.offsetFor(agent, provider, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}
+`);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
+  if (rc !== 0) {
+    log.error(`explore gap-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`);
+    return 1;
+  }
+  log.ok(`explore gap-send: ${agent} offset=${offset}`);
+  return 0;
+}
+async function gapWaitRun(rest) {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) {
+    log.error("usage: explore gap-wait <topic> <agent> <provider>");
+    return 2;
+  }
+  return gapWaitWith(topic, agent, provider, liveResearchWaitDeps2);
+}
+async function gapWaitWith(topic, agent, provider, d) {
+  const art = exploreArtDir(topic);
+  const stateFile = (0, import_node_path34.join)(art, `gap-${agent}.txt`);
+  if (!(0, import_node_fs37.existsSync)(stateFile)) {
+    log.error(`explore gap-wait: ${stateFile} missing (run explore gap-send first)`);
+    return 1;
+  }
+  const text = (0, import_node_fs37.readFileSync)(stateFile, "utf8");
+  if (lastTag(text, "GS") === "skipped") {
+    (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `gap-${agent}.done`), "");
+    log.ok(`explore gap-wait: ${agent} GS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
+  if (offset === null) {
+    log.error(`explore gap-wait: OFFSET not set in ${stateFile}`);
+    return 1;
+  }
+  const timeout = scaledTimeout(consultTimeout("gap"), d.multiplier(provider));
+  log.info(`explore gap-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
+  const gs = verifyState(ev, readIfExistsOrNull((0, import_node_path34.join)(art, `gap-${agent}.md`)));
+  recordWaitOutcome(
+    agent,
+    provider,
+    topic,
+    stateFile,
+    gs,
+    "GS",
+    ev ? { file: (0, import_node_path34.join)(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : void 0
+  );
+  (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `gap-${agent}.done`), "");
+  log.ok(`explore gap-wait: ${agent} GS=${gs}`);
   return 0;
 }
 function missingListArtifacts(art, rows, prefix) {
