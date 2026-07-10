@@ -25659,6 +25659,8 @@ __export(explore_exports, {
   annotateRun: () => annotateRun,
   classifyRun: () => classifyRun,
   confidenceRun: () => confidenceRun,
+  crossverifySendWith: () => crossverifySendWith,
+  crossverifyWaitWith: () => crossverifyWaitWith,
   diffExploreRun: () => diffExploreRun,
   exploreWaitGateRun: () => exploreWaitGateRun,
   forensicsRun: () => forensicsRun5,
@@ -25677,7 +25679,7 @@ __export(explore_exports, {
   verdictTallyRun: () => verdictTallyRun
 });
 function usage5() {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|diff|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 async function run14(args) {
@@ -25702,6 +25704,10 @@ async function run14(args) {
       return openqWaitRun(rest);
     case "diff":
       return diffExploreRun(rest);
+    case "crossverify-send":
+      return crossverifySendRun(rest);
+    case "crossverify-wait":
+      return crossverifyWaitRun(rest);
     case "wait-gate":
       return exploreWaitGateRun(rest);
     case "synth-preliminary":
@@ -26044,6 +26050,112 @@ async function diffExploreRun(rest) {
   atomicWrite((0, import_node_path34.join)(art, "diff.md"), result.diffMd);
   const summary = result.files.filter((f) => f.filename.endsWith("_only_items.txt") || f.filename === "consensus.txt").map((f) => `${f.filename.replace(/\.txt$/, "")}=${f.content.split("\n").filter(Boolean).length}`).join(" ");
   log.ok(`explore diff: wrote ${(0, import_node_path34.join)(art, "diff.md")} (${rows.length} workers) ${summary}`);
+  return 0;
+}
+async function crossverifySendRun(rest) {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) {
+    log.error("usage: explore crossverify-send <topic> <agent> <provider>");
+    return 2;
+  }
+  return crossverifySendWith(topic, agent, provider, liveResearchSendDeps2);
+}
+async function crossverifySendWith(topic, agent, provider, d) {
+  const art = exploreArtDir(topic);
+  const stateFile = (0, import_node_path34.join)(art, `crossverify-${agent}.txt`);
+  if ((0, import_node_fs37.existsSync)(stateFile)) {
+    log.error(`explore crossverify-send: ${stateFile} exists; rm to retry`);
+    return 1;
+  }
+  const fsTag = lastTag(readIfExists((0, import_node_path34.join)(art, `research-${agent}.txt`)), "FS");
+  const qsTag = lastTag(readIfExists((0, import_node_path34.join)(art, `openq-${agent}.txt`)), "QS");
+  const unsafe = fsTag === "timeout" || fsTag === "failed" ? `FS=${fsTag}` : qsTag === "timeout" || qsTag === "failed" ? `QS=${qsTag}` : null;
+  if (unsafe) {
+    atomicWrite(stateFile, "VS=skipped\n");
+    log.warn(`explore crossverify-send: ${agent} skipped \u2014 previous phase ended ${unsafe} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
+  const agents = parseListFile(readIfExists((0, import_node_path34.join)(art, "list.txt"))).map((r) => r.agent);
+  if (agents.length < 2) {
+    log.error(`explore crossverify-send: need >=2 workers in list.txt, got ${agents.length}`);
+    return 1;
+  }
+  if (!agents.includes(agent)) {
+    log.error(`explore crossverify-send: ${agent} not in list.txt`);
+    return 1;
+  }
+  const parts = [];
+  for (const f of verifyScopeFiles(agent, agents)) {
+    const p = (0, import_node_path34.join)(art, f);
+    if (!(0, import_node_fs37.existsSync)(p)) {
+      log.error(`explore crossverify-send: expected bucket missing: ${p} (run explore diff first)`);
+      return 1;
+    }
+    const c3 = (0, import_node_fs37.readFileSync)(p, "utf8");
+    if (c3.split("\n").some((l) => l.length > 0)) parts.push(c3.replace(/\n+$/, ""));
+  }
+  const items = parts.join("\n");
+  atomicWrite((0, import_node_path34.join)(art, `crossverify-claims-${agent}.txt`), items ? items + "\n" : "");
+  if (!items) {
+    atomicWrite(stateFile, "VS=skipped\n");
+    log.ok(`explore crossverify-send: ${agent} VS=skipped (no peer claims to verify)`);
+    return 0;
+  }
+  const outPath = (0, import_node_path34.join)(art, `crossverify-${agent}.md`);
+  const promptFile = (0, import_node_path34.join)(art, `${agent}_crossverify_prompt.md`);
+  atomicWrite(promptFile, composeVerifyPrompt(items, outPath));
+  const offset = d.offsetFor(agent, provider, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}
+`);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
+  if (rc !== 0) {
+    log.error(`explore crossverify-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`);
+    return 1;
+  }
+  log.ok(`explore crossverify-send: ${agent} offset=${offset}`);
+  return 0;
+}
+async function crossverifyWaitRun(rest) {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) {
+    log.error("usage: explore crossverify-wait <topic> <agent> <provider>");
+    return 2;
+  }
+  return crossverifyWaitWith(topic, agent, provider, liveResearchWaitDeps2);
+}
+async function crossverifyWaitWith(topic, agent, provider, d) {
+  const art = exploreArtDir(topic);
+  const stateFile = (0, import_node_path34.join)(art, `crossverify-${agent}.txt`);
+  if (!(0, import_node_fs37.existsSync)(stateFile)) {
+    log.error(`explore crossverify-wait: ${stateFile} missing (run explore crossverify-send first)`);
+    return 1;
+  }
+  const text = (0, import_node_fs37.readFileSync)(stateFile, "utf8");
+  if (lastTag(text, "VS") === "skipped") {
+    (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `crossverify-${agent}.done`), "");
+    log.ok(`explore crossverify-wait: ${agent} VS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
+  if (offset === null) {
+    log.error(`explore crossverify-wait: OFFSET not set in ${stateFile}`);
+    return 1;
+  }
+  const timeout = scaledTimeout(consultTimeout("verify"), d.multiplier(provider));
+  log.info(`explore crossverify-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
+  const vs = verifyState(ev, readIfExistsOrNull((0, import_node_path34.join)(art, `crossverify-${agent}.md`)));
+  recordWaitOutcome(
+    agent,
+    provider,
+    topic,
+    stateFile,
+    vs,
+    "VS",
+    ev ? { file: (0, import_node_path34.join)(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : void 0
+  );
+  (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `crossverify-${agent}.done`), "");
+  log.ok(`explore crossverify-wait: ${agent} VS=${vs}`);
   return 0;
 }
 function missingListArtifacts(art, rows, prefix) {
