@@ -29,10 +29,10 @@ import { run as sendRun } from "./send.js";
 import { run as spawnRun } from "./spawn.js";
 import { run as preflightRun } from "./preflight.js";
 import { readIfExists as readIf, readIfExistsOrNull } from "../core/fsread.js";
-import { parseOpenQuestions, assignOpenQuestions, formatOpenqClaims } from "../core/exploreOpenq.js";
+import { parseOpenQuestions, assignOpenQuestions, formatOpenqClaims, parseOpenqClaims, composeOpenqPrompt } from "../core/exploreOpenq.js";
 
 function usage(): number {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|wait-gate|synth-preliminary|" +
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|wait-gate|synth-preliminary|" +
     "confidence|annotate|adversary-send|adversary-wait|synth-final|forensics|teardown|handoff-extract> ...");
   return 2;
 }
@@ -47,6 +47,8 @@ export async function run(args: string[]): Promise<number> {
     case "research-send": return researchSendRun(rest);
     case "research-wait": return researchWaitRun(rest);
     case "openq-collate": return openqCollateRun(rest);
+    case "openq-send": return openqSendRun(rest);
+    case "openq-wait": return openqWaitRun(rest);
     case "wait-gate": return exploreWaitGateRun(rest);
     case "synth-preliminary": return synthPreliminaryRun(rest);
     case "confidence": return confidenceRun(rest);
@@ -236,6 +238,71 @@ export async function openqCollateRun(rest: string[]): Promise<number> {
   }
   log.ok(`explore openq-collate: routed questions to ${assignments.size} worker(s)`);
   process.stdout.write(`OPENQ=${assignments.size}\n`);
+  return 0;
+}
+
+async function openqSendRun(rest: string[]): Promise<number> {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: explore openq-send <topic> <agent> <provider>"); return 2; }
+  return openqSendWith(topic, agent, provider, liveResearchSendDeps);
+}
+export async function openqSendWith(topic: string, agent: string, provider: string, d: ResearchSendDeps): Promise<number> {
+  const art = exploreArtDir(topic);
+  const stateFile = join(art, `openq-${agent}.txt`);
+  if (existsSync(stateFile)) { log.error(`explore openq-send: ${stateFile} exists; rm to retry`); return 1; }
+
+  const fsTag = lastTag(readIf(join(art, `research-${agent}.txt`)), "FS"); // timeout-dispatch guard first
+  if (fsTag === "timeout" || fsTag === "failed") {
+    atomicWrite(stateFile, "QS=skipped\n");
+    log.warn(`explore openq-send: ${agent} skipped — research ended FS=${fsTag} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
+  const claims = parseOpenqClaims(readIf(join(art, `openq-claims-${agent}.txt`)));
+  if (claims.length === 0) {
+    atomicWrite(stateFile, "QS=skipped\n");
+    log.ok(`explore openq-send: ${agent} QS=skipped (no questions routed to it)`);
+    return 0;
+  }
+  const answersPath = join(art, `openq-${agent}.md`);
+  const promptFile = join(art, `${agent}_openq_prompt.md`);
+  atomicWrite(promptFile, composeOpenqPrompt(claims, answersPath));
+
+  const offset = d.offsetFor(agent, provider, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}\n`);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
+  if (rc !== 0) { log.error(`explore openq-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`); return 1; }
+  log.ok(`explore openq-send: ${agent} offset=${offset}`);
+  return 0;
+}
+
+async function openqWaitRun(rest: string[]): Promise<number> {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: explore openq-wait <topic> <agent> <provider>"); return 2; }
+  return openqWaitWith(topic, agent, provider, liveResearchWaitDeps);
+}
+export async function openqWaitWith(topic: string, agent: string, provider: string, d: ResearchWaitDeps): Promise<number> {
+  const art = exploreArtDir(topic);
+  const stateFile = join(art, `openq-${agent}.txt`);
+  if (!existsSync(stateFile)) { log.error(`explore openq-wait: ${stateFile} missing (run explore openq-send first)`); return 1; }
+  const text = readFileSync(stateFile, "utf8");
+  if (lastTag(text, "QS") === "skipped") { // guard/zero-questions short-circuit: nothing was sent
+    writeFileSync(join(art, `openq-${agent}.done`), "");
+    log.ok(`explore openq-wait: ${agent} QS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
+  if (offset === null) { log.error(`explore openq-wait: OFFSET not set in ${stateFile}`); return 1; }
+
+  const timeout = scaledTimeout(consultTimeout("openq"), d.multiplier(provider));
+  log.info(`explore openq-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
+
+  const answersPath = join(art, `openq-${agent}.md`);
+  const qs = verifyState(ev, readIfExistsOrNull(answersPath)); // done → ok iff answers file non-empty
+  recordWaitOutcome(agent, provider, topic, stateFile, qs, "QS",
+    ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
+  writeFileSync(join(art, `openq-${agent}.done`), "");
+  log.ok(`explore openq-wait: ${agent} QS=${qs}`);
   return 0;
 }
 
