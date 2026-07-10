@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { composeExploreResearchPrompt, composeAdversaryPrompt, litGuidance, ADVERSARY_LENSES, researchLens, composeGapPrompt } from "../src/core/exploreTurn.js";
+import { composeExploreResearchPrompt, composeAdversaryPrompt, litGuidance, ADVERSARY_LENSES, researchLens, composeGapPrompt, composeSignoffPrompt } from "../src/core/exploreTurn.js";
 import { inboxWrite, inboxPath } from "../src/core/ipc.js";
 import { workerDir } from "../src/core/paths.js";
 
@@ -183,5 +183,38 @@ describe("composeGapPrompt", () => {
     expect(p).toContain("final landscape doc");
     expect(p).not.toContain("END_OF_INSTRUCTION");
     expect(p).not.toContain('"event"');
+  });
+});
+
+describe("composeSignoffPrompt", () => {
+  const p = composeSignoffPrompt(
+    "Adopt FlashAttention; caveats apply.",
+    ["[src/only-a.ts:1] AlphaOnly — solo"],
+    "- [https://x.test/p] Shared — both",
+    "/art/signoff-alpha.md",
+  );
+  it("carries the conclusion, solo bucket lines, agreed text, and the out-path", () => {
+    expect(p).toContain("Adopt FlashAttention; caveats apply.");
+    expect(p).toContain("- [src/only-a.ts:1] AlphaOnly — solo");
+    expect(p).toContain("- [https://x.test/p] Shared — both");
+    expect(p).toContain("/art/signoff-alpha.md");
+  });
+  it("demands the VERDICT enum line first and ### Flag: blocks", () => {
+    expect(p).toContain("VERDICT: fair | misrepresented");
+    expect(p).toContain("### Flag:");
+    expect(p.indexOf("VERDICT: fair | misrepresented")).toBeLessThan(p.indexOf("### Flag:"));
+  });
+  it("states the no-new-claims / no-re-litigation rule explicitly", () => {
+    expect(p).toMatch(/no new claims/i);
+    expect(p).toMatch(/re-litigation/i);
+  });
+  it("does NOT embed its own done-event line or END_OF_INSTRUCTION (inboxWrite owns them)", () => {
+    expect(p).not.toContain('{"event":"done"');
+    expect(p).not.toContain("END_OF_INSTRUCTION");
+  });
+  it("omits the solo/agreed blocks when empty (degraded N=1 tolerance)", () => {
+    const q = composeSignoffPrompt("C.", [], "", "/o.md");
+    expect(q).not.toContain("Your solo claims");
+    expect(q).not.toContain("Consensus claims");
   });
 });
