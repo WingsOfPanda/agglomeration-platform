@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { freshHome } from "./helpers/tmpHome.js";
-import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, crossverifySendWith, crossverifyWaitWith, rebuttalSendWith, rebuttalWaitWith, gapSendWith, gapWaitWith, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, verdictTallyRun, diffExploreRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
+import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, crossverifySendWith, crossverifyWaitWith, rebuttalSendWith, rebuttalWaitWith, gapSendWith, gapWaitWith, survivorsRun, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, verdictTallyRun, diffExploreRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
 import { exploreArtDir } from "../src/core/explore.js";
 
 function initDeps(over: Partial<ExploreInitDeps> = {}): ExploreInitDeps {
@@ -1107,6 +1107,116 @@ describe("explore gap-send/wait", () => {
       writeFileSync(join(art, "gap-charlie.md"), "# Gap enrichment\n## Answers\n1. CONFIRM ...\n");
       expect(await gapWaitWith("x", "charlie", "claude", { wait: async () => ({ event: "done" } as any), multiplier: () => "1" })).toBe(0);
       expect(readFileSync(join(art, "gap-charlie.txt"), "utf8")).toContain("GS=ok");
+    } finally { cleanup(); }
+  });
+});
+
+describe("explore survivors", () => {
+  function cap(): { text: () => string; restore: () => void } {
+    const c: string[] = [];
+    const s = vi.spyOn(process.stdout, "write").mockImplementation(((x: unknown) => { c.push(String(x)); return true; }) as never);
+    return { text: () => c.join(""), restore: () => s.mockRestore() };
+  }
+  const deps3 = () => initDeps({ activeProviders: () => ["codex", "claude", "agy"] }); // alpha, charlie, golf
+
+  it("all rows non-empty → SURVIVORS=N, list.txt untouched, no list-original.txt", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "findings-alpha.md"), "a");
+      writeFileSync(join(art, "findings-charlie.md"), "c");
+      const before = readFileSync(join(art, "list.txt"), "utf8");
+      const out = cap();
+      try { expect(await survivorsRun(["x"])).toBe(0); } finally { out.restore(); }
+      expect(out.text().trim()).toBe("SURVIVORS=2");
+      expect(readFileSync(join(art, "list.txt"), "utf8")).toBe(before);
+      expect(existsSync(join(art, "list-original.txt"))).toBe(false);
+    } finally { cleanup(); }
+  });
+
+  it("one empty findings at N=3 → list-original written, list.txt rewritten to 2 rows, DROPPED line", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], deps3());
+      const art = exploreArtDir("x");
+      const original = readFileSync(join(art, "list.txt"), "utf8");
+      writeFileSync(join(art, "findings-alpha.md"), "a");
+      writeFileSync(join(art, "findings-charlie.md"), "c");
+      writeFileSync(join(art, "findings-golf.md"), "   \n\t\n"); // whitespace-only: same predicate as missingListArtifacts
+      const out = cap();
+      try { expect(await survivorsRun(["x"])).toBe(0); } finally { out.restore(); }
+      expect(out.text().trim().split("\n")).toEqual(["SURVIVORS=2", "DROPPED=golf"]);
+      expect(readFileSync(join(art, "list-original.txt"), "utf8")).toBe(original);
+      const rewritten = readFileSync(join(art, "list.txt"), "utf8");
+      expect(rewritten).toContain("codex\talpha");
+      expect(rewritten).toContain("claude\tcharlie");
+      expect(rewritten).not.toContain("golf");
+    } finally { cleanup(); }
+  });
+
+  it("crash re-run never overwrites list-original.txt", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], deps3());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "findings-alpha.md"), "a");
+      writeFileSync(join(art, "findings-charlie.md"), "c"); // golf missing
+      writeFileSync(join(art, "list-original.txt"), "# SENTINEL preserved roster\ncodex\talpha\nclaude\tcharlie\nagy\tgolf\n");
+      const out = cap();
+      try { expect(await survivorsRun(["x"])).toBe(0); } finally { out.restore(); }
+      expect(readFileSync(join(art, "list-original.txt"), "utf8")).toContain("SENTINEL");
+    } finally { cleanup(); }
+  });
+
+  it("N=2 with one empty → DEGRADED=1 as the last stdout line", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "findings-alpha.md"), "a"); // charlie missing
+      const out = cap();
+      try { expect(await survivorsRun(["x"])).toBe(0); } finally { out.restore(); }
+      expect(out.text().trim().split("\n")).toEqual(["SURVIVORS=1", "DROPPED=charlie", "DEGRADED=1"]);
+      expect(readFileSync(join(art, "list.txt"), "utf8")).not.toContain("charlie");
+    } finally { cleanup(); }
+  });
+
+  it("all findings empty → rc 1, nothing rewritten", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      const before = readFileSync(join(art, "list.txt"), "utf8");
+      expect(await survivorsRun(["x"])).toBe(1);
+      expect(readFileSync(join(art, "list.txt"), "utf8")).toBe(before);
+      expect(existsSync(join(art, "list-original.txt"))).toBe(false);
+    } finally { cleanup(); }
+  });
+
+  it("rc2 without a topic; rc1 when the art dir is missing", async () => {
+    const { cleanup } = freshHome();
+    try {
+      expect(await survivorsRun([])).toBe(2);
+      expect(await survivorsRun(["nope"])).toBe(1);
+    } finally { cleanup(); }
+  });
+
+  it("post-rewrite pipeline: synth-preliminary, annotate, confidence pass over the survivor set", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], deps3());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "findings-alpha.md"), "FlashAttention is fast. https://x.test/p . uncertain about batch.");
+      writeFileSync(join(art, "findings-charlie.md"), "FlashAttention wins. https://x.test/p .");
+      // golf produced nothing — without survivors this blocks synth-preliminary with rc 1
+      expect(await synthPreliminaryRun(["x"])).toBe(1);
+      const out = cap();
+      try { expect(await survivorsRun(["x"])).toBe(0); } finally { out.restore(); }
+      writeFileSync(join(art, "landscape-draft.md"), DRAFT);
+      expect(await synthPreliminaryRun(["x"])).toBe(0);
+      expect(await annotateRun(["x"])).toBe(0);
+      expect(await confidenceRun(["x"])).toBe(0);
     } finally { cleanup(); }
   });
 });

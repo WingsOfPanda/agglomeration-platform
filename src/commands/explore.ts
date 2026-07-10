@@ -36,7 +36,7 @@ import { parseBucketLines, selectRebuttalTargets, composeRebuttalPrompt, type Cr
 import { parseSelfAssessment } from "../core/exploreSelfAssess.js";
 
 function usage(): number {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|" +
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|survivors|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|" +
     "confidence|annotate|adversary-send|adversary-wait|rebuttal-send|rebuttal-wait|gap-send|gap-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
   return 2;
 }
@@ -50,6 +50,7 @@ export async function run(args: string[]): Promise<number> {
     case "spawn-all": return spawnAllRun(rest);
     case "research-send": return researchSendRun(rest);
     case "research-wait": return researchWaitRun(rest);
+    case "survivors": return survivorsRun(rest);
     case "openq-collate": return openqCollateRun(rest);
     case "openq-send": return openqSendRun(rest);
     case "openq-wait": return openqWaitRun(rest);
@@ -594,6 +595,41 @@ export async function gapWaitWith(topic: string, agent: string, provider: string
 /** List rows whose `<prefix>-<agent>.md` art file is missing/empty → list of the missing filenames. */
 function missingListArtifacts(art: string, rows: ListRow[], prefix: string): string[] {
   return rows.filter((r) => !readIf(join(art, `${prefix}-${r.agent}.md`)).trim()).map((r) => `${prefix}-${r.agent}.md`);
+}
+
+// ---- survivors (Phase 4a N-1 continuation: drop findings-less rows, preserve the roster) ----
+export async function survivorsRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: explore survivors <topic>"); return 2; }
+  const art = exploreArtDir(topic);
+  if (!existsSync(art)) { log.error(`explore survivors: ${art} not found — run explore init`); return 1; }
+  const listPath = join(art, "list.txt");
+  const rows = parseListFile(readIf(listPath));
+  if (rows.length === 0) { log.error(`explore survivors: list.txt missing or empty at ${art}`); return 1; }
+
+  // Survivor predicate IS missingListArtifacts' readIf().trim() — reused, never re-implemented (a
+  // whitespace-only findings file must not survive here only to block synth-preliminary anyway).
+  const missing = new Set(missingListArtifacts(art, rows, "findings"));
+  const survivors = rows.filter((r) => !missing.has(`findings-${r.agent}.md`));
+  const dropped = rows.filter((r) => missing.has(`findings-${r.agent}.md`));
+
+  if (survivors.length === 0) {
+    log.error("explore survivors: zero survivors — every findings file is missing or empty");
+    return 1;
+  }
+  if (dropped.length === 0) {
+    log.ok(`explore survivors: all ${rows.length} workers produced findings`);
+    process.stdout.write(`SURVIVORS=${rows.length}\n`);
+    return 0;
+  }
+  const originalPath = join(art, "list-original.txt");
+  if (!existsSync(originalPath)) atomicWrite(originalPath, readFileSync(listPath, "utf8")); // once — crash/retry-safe
+  atomicWrite(listPath, formatListFile(survivors, isoUtc()));
+  log.warn(`explore survivors: dropped ${dropped.map((r) => r.agent).join(", ")} — ${survivors.length} of ${rows.length} continue`);
+  process.stdout.write(`SURVIVORS=${survivors.length}\n`);
+  for (const r of dropped) process.stdout.write(`DROPPED=${r.agent}\n`);
+  if (survivors.length === 1) process.stdout.write("DEGRADED=1\n");
+  return 0;
 }
 
 // ---- synth-preliminary (input validator) ----
