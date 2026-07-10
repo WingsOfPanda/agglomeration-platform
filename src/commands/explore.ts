@@ -33,6 +33,7 @@ import { parseOpenQuestions, assignOpenQuestions, formatOpenqClaims, parseOpenqC
 import { parseAdversaryVerdict, tallyVerdicts } from "../core/exploreVerdict.js";
 import { diffFindings, type DiffPart, type Claim } from "../core/designDiff.js";
 import { parseBucketLines, selectRebuttalTargets, composeRebuttalPrompt, type CritiqueInput } from "../core/exploreRebuttal.js";
+import { parseSelfAssessment } from "../core/exploreSelfAssess.js";
 
 function usage(): number {
   log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|" +
@@ -731,10 +732,16 @@ export async function adversarySendWith(topic: string, agent: string, provider: 
   const peerFindingsPaths = rows.filter((r) => r.agent !== agent).map((r) => join(art, `findings-${r.agent}.md`));
   const lens = ADVERSARY_LENSES[index % ADVERSARY_LENSES.length];
   const priorityTargets = soloTokensFromAnnotations(readIfExistsOrNull(join(art, "annotations.json")));
+  const lowConfidenceClaims: string[] = []; // union across ALL workers' selfassess files (missing → skip)
+  for (const r of rows) {
+    for (const l of parseSelfAssessment(readIf(join(art, `selfassess-${r.agent}.md`))).leastSure) {
+      if (!lowConfidenceClaims.includes(l)) lowConfidenceClaims.push(l);
+    }
+  }
 
   const outPath = join(art, `adversary-${agent}.md`);
   const promptFile = join(art, `${agent}_adversary_prompt.md`);
-  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath, { peerFindingsPaths, lens, priorityTargets }));
+  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath, { peerFindingsPaths, lens, priorityTargets, lowConfidenceClaims }));
 
   const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}\n`);

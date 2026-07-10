@@ -25464,6 +25464,12 @@ function composeAdversaryPrompt(landscapeDraft, agent, outPath, opts) {
       ...opts.priorityTargets.map((t) => `- ${t}`),
       ""
     ] : [],
+    ...opts.lowConfidenceClaims?.length ? [
+      "Self-flagged low-confidence claims \u2014 the workers themselves are least sure of",
+      "these; verify them first:",
+      ...opts.lowConfidenceClaims.map((c3) => `- ${c3}`),
+      ""
+    ] : [],
     "Attack surface \u2014 prioritize these failure modes:",
     "- Approaches that were missed or wrongly excluded from the landscape",
     '- Tradeoff matrix rows where the "Best fit" assignment is wrong or weakly justified',
@@ -25804,6 +25810,36 @@ var init_exploreRebuttal = __esm({
     init_designDiff();
     init_exploreConfidence();
     init_exploreVerdict();
+  }
+});
+
+// src/core/exploreSelfAssess.ts
+function parseSelfAssessment(text) {
+  const grades = [];
+  const leastSure = [];
+  let inLeastSure = false;
+  for (const line of text.split("\n")) {
+    if (/^## Least sure/i.test(line)) {
+      inLeastSure = true;
+      continue;
+    }
+    if (/^## /.test(line)) {
+      inLeastSure = false;
+      continue;
+    }
+    if (inLeastSure) {
+      const b = line.match(/^- (.+)$/);
+      if (b) leastSure.push(b[1].trim());
+      continue;
+    }
+    const g = line.match(/^(high|medium|low):[ \t]+(.+)$/i);
+    if (g) grades.push({ confidence: g[1].toLowerCase(), approach: g[2].trim() });
+  }
+  return { grades, leastSure };
+}
+var init_exploreSelfAssess = __esm({
+  "src/core/exploreSelfAssess.ts"() {
+    "use strict";
   }
 });
 
@@ -26694,9 +26730,15 @@ async function adversarySendWith(topic, agent, provider, d) {
   const peerFindingsPaths = rows.filter((r) => r.agent !== agent).map((r) => (0, import_node_path34.join)(art, `findings-${r.agent}.md`));
   const lens = ADVERSARY_LENSES[index % ADVERSARY_LENSES.length];
   const priorityTargets = soloTokensFromAnnotations(readIfExistsOrNull((0, import_node_path34.join)(art, "annotations.json")));
+  const lowConfidenceClaims = [];
+  for (const r of rows) {
+    for (const l of parseSelfAssessment(readIfExists((0, import_node_path34.join)(art, `selfassess-${r.agent}.md`))).leastSure) {
+      if (!lowConfidenceClaims.includes(l)) lowConfidenceClaims.push(l);
+    }
+  }
   const outPath = (0, import_node_path34.join)(art, `adversary-${agent}.md`);
   const promptFile = (0, import_node_path34.join)(art, `${agent}_adversary_prompt.md`);
-  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath, { peerFindingsPaths, lens, priorityTargets }));
+  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath, { peerFindingsPaths, lens, priorityTargets, lowConfidenceClaims }));
   const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}
 `);
@@ -26959,6 +27001,7 @@ var init_explore2 = __esm({
     init_exploreVerdict();
     init_designDiff();
     init_exploreRebuttal();
+    init_exploreSelfAssess();
     liveExploreInitDeps = {
       activeProviders: () => readProviderList(activeProvidersPath()),
       isValidated: agentConsultValidated,

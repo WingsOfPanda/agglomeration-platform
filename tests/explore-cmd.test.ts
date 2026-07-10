@@ -604,6 +604,62 @@ describe("explore adversary-send/wait", () => {
       expect(readFileSync(join(art, "adversary-alpha.txt"), "utf8")).toBe("AS=skipped\n"); // no extra lines
     } finally { cleanup(); }
   });
+  it("send passes the union of selfassess least-sure lines as the low-confidence block", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "## Approaches\n1. A");
+      writeFileSync(join(art, "selfassess-alpha.md"), "high: A\n## Least sure\n- claim-a [src/a.ts:1]\n- shared-claim [https://x.test/s]\n");
+      writeFileSync(join(art, "selfassess-charlie.md"), "## Least sure\n- shared-claim [https://x.test/s]\n- claim-c [paper:arxiv:9]\n");
+      const rc = await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => 0 });
+      expect(rc).toBe(0);
+      const prompt = readFileSync(join(art, "alpha_adversary_prompt.md"), "utf8");
+      expect(prompt).toContain("Self-flagged low-confidence claims");
+      expect(prompt).toContain("- claim-a [src/a.ts:1]");
+      expect(prompt).toContain("- claim-c [paper:arxiv:9]");
+      expect(prompt.split("- shared-claim [https://x.test/s]").length - 1).toBe(1); // unioned/deduped
+    } finally { cleanup(); }
+  });
+  it("send omits the low-confidence block when no selfassess files exist", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "## Approaches\n1. A");
+      expect(await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => 0 })).toBe(0);
+      expect(readFileSync(join(art, "alpha_adversary_prompt.md"), "utf8")).not.toContain("Self-flagged low-confidence claims");
+    } finally { cleanup(); }
+  });
+});
+
+describe("selfassess gate-blindness invariant (confidence/annotate never read selfassess-*)", () => {
+  it("a selfassess file saturated with UNCERTAIN vocabulary and restated citations changes no signal and no marker", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      // Findings: confident (no UNCERTAIN vocab anywhere) and citation-disjoint (every draft cite is solo).
+      writeFileSync(join(art, "findings-alpha.md"), "FlashAttention rocks. https://a.only/1 .");
+      writeFileSync(join(art, "findings-charlie.md"), "PagedAttention rocks. https://c.only/2 .");
+      writeFileSync(join(art, "landscape-draft.md"), [
+        "## Approaches", "1. FlashAttention — fused", "## Tradeoff matrix",
+        "| latency | FlashAttention | see https://a.only/1 |", "## Citations", "- https://a.only/1",
+      ].join("\n"));
+      // The poison pill: uncertainty vocab + BOTH citations restated. If confidence/annotate ever
+      // read this file, S5 flips true and https://a.only/1 stops being solo (S2 + [unverified]).
+      writeFileSync(join(art, "selfassess-alpha.md"),
+        "low: FlashAttention\n## Least sure\n- uncertain unclear not sure https://a.only/1 https://c.only/2\n");
+      const chunks: string[] = [];
+      const spy = vi.spyOn(process.stdout, "write").mockImplementation(((s: unknown) => { chunks.push(String(s)); return true; }) as never);
+      try { expect(await confidenceRun(["x"])).toBe(0); } finally { spy.mockRestore(); }
+      const lines = chunks.join("").trim().split("\n");
+      expect(lines).toContain("S5=false"); // findings alone carry no uncertainty vocab
+      expect(lines).toContain("S2=false"); // https://a.only/1 stays solo — selfassess restatement invisible
+      expect(await annotateRun(["x"])).toBe(0);
+      expect(readFileSync(join(art, "landscape-draft.md"), "utf8")).toContain("https://a.only/1 [unverified]");
+    } finally { cleanup(); }
+  });
 });
 
 describe("explore synth-final", () => {
