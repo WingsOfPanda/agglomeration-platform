@@ -25545,6 +25545,44 @@ function composeGapPrompt(bucketItems, outPath) {
     "from available evidence, say so explicitly \u2014 do not pad."
   ].join("\n");
 }
+function composeSignoffPrompt(conclusion, soloBucketLines, agreedText, outPath) {
+  return [
+    "The run's final landscape doc has been written. Below is its Conclusion, plus",
+    "the claims you personally contributed. Check ONLY that your findings are fairly",
+    "represented \u2014 this is a misquote/misattribution check, NOT a re-litigation of",
+    "the synthesis, and you may NOT introduce new claims.",
+    "",
+    "The final doc's Conclusion:",
+    "",
+    conclusion,
+    "",
+    ...soloBucketLines.length ? [
+      "Your solo claims (you were the only worker who raised these):",
+      ...soloBucketLines.map((l) => `- ${l}`),
+      ""
+    ] : [],
+    ...agreedText.trim() ? [
+      "Consensus claims you co-authored (from the run's findings diff):",
+      agreedText.trimEnd(),
+      ""
+    ] : [],
+    `Write your sign-off to ${outPath} with this EXACT structure:`,
+    "",
+    "  # Sign-off",
+    "",
+    "  VERDICT: fair | misrepresented",
+    "",
+    "  ### Flag: <one-line summary of a specific misquote or misattribution>",
+    "  - **Where:** <the passage in the Conclusion>",
+    "  - **Should say:** <the faithful version, citing your original finding>",
+    "",
+    "  (one ### Flag: block per issue; none when the VERDICT is fair)",
+    "",
+    "Rules: no new claims, no re-litigation of peer claims or adversary critiques, no",
+    "style nits \u2014 flag only concrete misrepresentation of YOUR findings. An honest",
+    "'fair' is the common case; do not invent flags."
+  ].join("\n");
+}
 var LENS_GUARD, RESEARCH_LENSES, NEUTRAL_LENS, ADVERSARY_LENSES;
 var init_exploreTurn = __esm({
   "src/core/exploreTurn.ts"() {
@@ -25868,6 +25906,8 @@ __export(explore_exports, {
   researchSendWith: () => researchSendWith2,
   researchWaitWith: () => researchWaitWith2,
   run: () => run14,
+  signoffSendWith: () => signoffSendWith,
+  signoffWaitWith: () => signoffWaitWith,
   spawnAllWith: () => spawnAllWith3,
   survivorsRun: () => survivorsRun,
   synthFinalRun: () => synthFinalRun,
@@ -25876,7 +25916,7 @@ __export(explore_exports, {
   verdictTallyRun: () => verdictTallyRun
 });
 function usage5() {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|survivors|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|rebuttal-send|rebuttal-wait|gap-send|gap-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|survivors|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|rebuttal-send|rebuttal-wait|gap-send|gap-wait|signoff-send|signoff-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 async function run14(args) {
@@ -25915,6 +25955,10 @@ async function run14(args) {
       return gapSendRun(rest);
     case "gap-wait":
       return gapWaitRun(rest);
+    case "signoff-send":
+      return signoffSendRun(rest);
+    case "signoff-wait":
+      return signoffWaitRun(rest);
     case "wait-gate":
       return exploreWaitGateRun(rest);
     case "synth-preliminary":
@@ -26558,6 +26602,130 @@ async function gapWaitWith(topic, agent, provider, d) {
   );
   (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `gap-${agent}.done`), "");
   log.ok(`explore gap-wait: ${agent} GS=${gs}`);
+  return 0;
+}
+function finalLandscapePath(art) {
+  let names;
+  try {
+    names = (0, import_node_fs37.readdirSync)(art);
+  } catch {
+    return null;
+  }
+  const finals = names.filter((f) => /^landscape-\d{4}-\d{2}-\d{2}-.+\.md$/.test(f)).sort();
+  return finals.length ? (0, import_node_path34.join)(art, finals[finals.length - 1]) : null;
+}
+function sectionText(text, headings) {
+  const out = [];
+  let inSection = false;
+  for (const line of text.split("\n")) {
+    if (headings.some((h2) => line.startsWith(`## ${h2}`))) {
+      inSection = true;
+      continue;
+    }
+    if (/^## /.test(line)) {
+      if (inSection) break;
+      continue;
+    }
+    if (inSection) out.push(line);
+  }
+  return out.join("\n").trim();
+}
+async function signoffSendRun(rest) {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) {
+    log.error("usage: explore signoff-send <topic> <agent> <provider>");
+    return 2;
+  }
+  return signoffSendWith(topic, agent, provider, liveResearchSendDeps2);
+}
+async function signoffSendWith(topic, agent, provider, d) {
+  const art = exploreArtDir(topic);
+  const stateFile = (0, import_node_path34.join)(art, `signoff-${agent}.txt`);
+  if ((0, import_node_fs37.existsSync)(stateFile)) {
+    log.error(`explore signoff-send: ${stateFile} exists \u2014 one sign-off turn per worker (the one-turn cap)`);
+    return 1;
+  }
+  const tags = [
+    ["GS", lastTag(readIfExists((0, import_node_path34.join)(art, `gap-${agent}.txt`)), "GS")],
+    ["RS", lastTag(readIfExists((0, import_node_path34.join)(art, `rebuttal-${agent}.txt`)), "RS")],
+    ["AS", lastTag(readIfExists((0, import_node_path34.join)(art, `adversary-${agent}.txt`)), "AS")],
+    ["QS", lastTag(readIfExists((0, import_node_path34.join)(art, `openq-${agent}.txt`)), "QS")],
+    ["FS", lastTag(readIfExists((0, import_node_path34.join)(art, `research-${agent}.txt`)), "FS")]
+  ];
+  const latest = tags.find(([, v]) => v !== null && v !== "skipped");
+  if (latest && (latest[1] === "timeout" || latest[1] === "failed")) {
+    atomicWrite(stateFile, "SS=skipped\n");
+    log.warn(`explore signoff-send: ${agent} skipped \u2014 latest phase ended ${latest[0]}=${latest[1]} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
+  const rows = parseListFile(readIfExists((0, import_node_path34.join)(art, "list.txt")));
+  if (!rows.some((r) => r.agent === agent)) {
+    log.error(`explore signoff-send: ${agent} not in list.txt at ${art}`);
+    return 1;
+  }
+  const finalPath = finalLandscapePath(art);
+  const conclusion = finalPath ? sectionText(readIfExists(finalPath), ["Conclusion"]) : "";
+  if (!conclusion) {
+    log.error(`explore signoff-send: final landscape doc missing or has no ## Conclusion at ${art} \u2014 author it (Phase 8) first`);
+    return 1;
+  }
+  const soloBucketLines = readIfExists((0, import_node_path34.join)(art, `${agent}_only_items.txt`)).split("\n").filter((l) => l.length > 0);
+  const agreedText = sectionText(readIfExists((0, import_node_path34.join)(art, "diff.md")), ["Agreed", "Consensus"]);
+  const outPath = (0, import_node_path34.join)(art, `signoff-${agent}.md`);
+  const promptFile = (0, import_node_path34.join)(art, `${agent}_signoff_prompt.md`);
+  atomicWrite(promptFile, composeSignoffPrompt(conclusion, soloBucketLines, agreedText, outPath));
+  const offset = d.offsetFor(agent, provider, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}
+`);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
+  if (rc !== 0) {
+    log.error(`explore signoff-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`);
+    return 1;
+  }
+  log.ok(`explore signoff-send: ${agent} offset=${offset}`);
+  return 0;
+}
+async function signoffWaitRun(rest) {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) {
+    log.error("usage: explore signoff-wait <topic> <agent> <provider>");
+    return 2;
+  }
+  return signoffWaitWith(topic, agent, provider, liveResearchWaitDeps2);
+}
+async function signoffWaitWith(topic, agent, provider, d) {
+  const art = exploreArtDir(topic);
+  const stateFile = (0, import_node_path34.join)(art, `signoff-${agent}.txt`);
+  if (!(0, import_node_fs37.existsSync)(stateFile)) {
+    log.error(`explore signoff-wait: ${stateFile} missing (run explore signoff-send first)`);
+    return 1;
+  }
+  const text = (0, import_node_fs37.readFileSync)(stateFile, "utf8");
+  if (lastTag(text, "SS") === "skipped") {
+    (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `signoff-${agent}.done`), "");
+    log.ok(`explore signoff-wait: ${agent} SS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
+  if (offset === null) {
+    log.error(`explore signoff-wait: OFFSET not set in ${stateFile}`);
+    return 1;
+  }
+  const timeout = scaledTimeout(consultTimeout("signoff"), d.multiplier(provider));
+  log.info(`explore signoff-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
+  const ss = verifyState(ev, readIfExistsOrNull((0, import_node_path34.join)(art, `signoff-${agent}.md`)));
+  recordWaitOutcome(
+    agent,
+    provider,
+    topic,
+    stateFile,
+    ss,
+    "SS",
+    ev ? { file: (0, import_node_path34.join)(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : void 0
+  );
+  (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `signoff-${agent}.done`), "");
+  log.ok(`explore signoff-wait: ${agent} SS=${ss}`);
   return 0;
 }
 function missingListArtifacts(art, rows, prefix) {
