@@ -31,7 +31,7 @@ alarm — record it: `$CS explore flag <TOPIC> "<what looked off>"`. It writes s
 feed (survives teardown and aborts) and costs nothing, so prefer over-recording. Review later with
 `/ap:review`.
 
-## Task list (TaskCreate × 15 before Phase 0)
+## Task list (TaskCreate × 17 before Phase 0)
 
 Create the task list with `TaskCreate`. Update statuses at the phase boundaries below. Per-worker
 rows are intentionally absent (N varies 2 or 3); each `[workers]` row covers the whole list in
@@ -44,6 +44,7 @@ parallel.
 | 2   | `2 Parallel spawn [hub]`               | `Spawning workers` |
 | 3   | `3 Research dispatch [workers]`              | `Dispatching research` |
 | 4   | `4 Research wait [workers]`                  | `Workers researching` |
+| 4a  | `4a Survivor filter [hub]`             | `Filtering survivors` |
 | 4b  | `4b Open-questions relay [workers]`    | `Relaying open questions` |
 | 4c  | `4c Peer cross-verify [workers]`       | `Cross-verifying peer claims` |
 | 5   | `5 Preliminary synthesis [hub]`        | `Synthesizing draft` |
@@ -53,6 +54,7 @@ parallel.
 | 7b  | `7b Bounded rebuttal [workers]`        | `Workers defending claims` |
 | 7c  | `7c Gap enrichment [workers]`          | `Workers filling gaps` |
 | 8   | `8 Final synthesis [hub]`              | `Writing final landscape` |
+| 8b  | `8b Worker sign-off [workers]`         | `Workers signing off` |
 | 9   | `9 Teardown + archive + handoff [hub]` | `Tearing down` |
 
 ## Phase 0 — args + init + list
@@ -155,6 +157,47 @@ handle it via **Intervention Pattern 1** before proceeding.
 
 Set task `4` → `completed`.
 
+## Phase 4a — survivors (N-1 continuation)
+
+Set task `4a` → `in_progress`.
+
+`$CS explore survivors <TOPIC>` — keeps only the `list.txt` rows whose `findings-<agent>.md` is
+non-empty (the exact predicate Phase 5's validator uses), preserving the full original roster at
+`$ART/list-original.txt` the first time it rewrites (a re-run never overwrites it). Branch on rc /
+stdout:
+
+- **rc 1** → zero survivors: every findings file is missing or empty. Surface the error, run the
+  Phase 9 teardown steps (stop --pairs + teardown), and abort.
+- **`SURVIVORS=<N>` with no `DROPPED=` lines** → everyone survived. Continue to Phase 4b.
+- **`DROPPED=<agent>` lines** → those workers are OUT of the run from here on. Every later phase
+  derives its worker set fresh from the rewritten `$ART/list.txt` (the per-phase read below);
+  Phase 9 stops/archives the dropped panes from `list-original.txt`. Record it:
+  `$CS explore flag <TOPIC> "survivors: dropped <agent> — empty findings"`. Continue.
+- **`DEGRADED=1`** (exactly one survivor) → DEGRADED RUN. Set tasks `4b`/`4c`/`7b`/`7c` →
+  `completed` immediately (skipped: `diff` and `crossverify-send` refuse below 2 workers; rebuttal
+  and gap depend on the diff buckets). Still run Phase 5 → 5b → 5.5 (S2 goes false naturally — all
+  citations are solo — so the adversary fires) → Phase 6/7 as a single-worker adversary (the
+  prompt composer already tolerates zero peers) → Phase 8 → Phase 8b (sign-off is exactly the
+  misattribution check a single-source survey needs) → Phase 9. Phase 9c MUST stamp the degraded
+  caveat into the handoff `## Constraints` (see Phase 9c). On a crash-recovery re-run, `SURVIVORS=1`
+  with no `DROPPED=` lines ALSO means a degraded run when `$ART/list-original.txt` exists (the verb
+  only prints `DEGRADED=1` on the run that performs the drop).
+
+**Worker-set rule for every phase after this one:** phases 4b, 4c, 6, 7, 7b, 7c, and 8b derive
+their worker rows fresh from the CURRENT `$ART/list.txt` at dispatch time — never from the `PART=`
+pairs Phase 0 printed (survivors may have rewritten the list):
+
+```bash
+grep -v '^#' "$ART/list.txt" | while IFS=$'\t' read -r PROV INST; do
+  [ -n "$PROV" ] && [ -n "$INST" ] && <the per-worker command>
+done
+```
+
+For background-await steps, read the same rows first, then issue one background-await Bash call
+per row.
+
+Set task `4a` → `completed`.
+
 ## Phase 4b — open-questions peer relay (auto-skips when OPENQ=none)
 
 Set task `4b` → `in_progress`.
@@ -164,12 +207,19 @@ Set task `4b` → `in_progress`.
    worker (N=2 swaps, N=3 rotates by list order), writing `$ART/open-questions.md` plus one
    `$ART/openq-claims-<agent>.txt` per receiving worker. If stdout says `OPENQ=none`, set task
    `4b` → `completed` and continue to Phase 5 — no worker turn happens.
-2. **Dispatch:** issue N parallel Bash calls in one message (mirror Phase 3):
-   `$CS explore openq-send <TOPIC> <agent> <provider>`. The verb soft-skips (`QS=skipped`,
+2. **Dispatch:** dispatch each CURRENT list row (the Phase 4a worker-set rule — never init's PART= pairs):
+
+   ```bash
+   grep -v '^#' "$ART/list.txt" | while IFS=$'\t' read -r PROV INST; do
+     [ -n "$PROV" ] && [ -n "$INST" ] && $CS explore openq-send <TOPIC> "$INST" "$PROV"
+   done
+   ```
+
+   The verb soft-skips (`QS=skipped`,
    no send) any worker whose research ended `FS=timeout`/`FS=failed` — a timed-out worker may
    still be churning, and a new inbox write would clobber its in-flight task — and any worker
    with no questions routed to it.
-3. **Wait:** issue N background-await Bash calls in parallel (mirror Phase 4):
+3. **Wait:** read the CURRENT list rows (same grep), then issue one background-await Bash call per row:
    `$CS explore openq-wait <TOPIC> <agent> <provider>`. Answers land at `$ART/openq-<agent>.md`;
    each wait appends `QS=` to `$ART/openq-<agent>.txt` and writes `$ART/openq-<agent>.done`.
 4. **Gate:** do not proceed until `$CS explore wait-gate <TOPIC> openq` exits 0. The `QS=` value is
@@ -188,13 +238,20 @@ Set task `4c` → `in_progress`.
    claims by citation overlap, writing `$ART/diff.md` plus the bucket files
    (`<agent>_only_items.txt`; N=3 adds `consensus.txt` + `<a>+<b>_only.txt`). rc 1 = `diff.md`
    already exists (`rm` to retry) or a findings file is missing.
-2. **Dispatch:** issue N parallel Bash calls in one message (mirror Phase 3):
-   `$CS explore crossverify-send <TOPIC> <agent> <provider>`. Each worker is scoped to ONLY the
+2. **Dispatch:** dispatch each CURRENT list row (the Phase 4a worker-set rule — never init's PART= pairs):
+
+   ```bash
+   grep -v '^#' "$ART/list.txt" | while IFS=$'\t' read -r PROV INST; do
+     [ -n "$PROV" ] && [ -n "$INST" ] && $CS explore crossverify-send <TOPIC> "$INST" "$PROV"
+   done
+   ```
+
+   Each worker is scoped to ONLY the
    buckets it is NOT a member of — its peers' solo claims (claude checks codex and vice versa;
    a worker never re-verifies its own claims). The verb soft-skips (`VS=skipped`, no send) a
    worker whose research/openq turn ended `timeout`/`failed`, and a worker whose peer buckets
    are all empty.
-3. **Wait:** issue N background-await Bash calls in parallel (mirror Phase 4):
+3. **Wait:** read the CURRENT list rows (same grep), then issue one background-await Bash call per row:
    `$CS explore crossverify-wait <TOPIC> <agent> <provider>`. Verdicts land at
    `$ART/crossverify-<agent>.md` (AGREE / DISPUTE / UNCERTAIN per item).
 4. **Gate:** do not proceed until `$CS explore wait-gate <TOPIC> crossverify` exits 0. The `VS=`
@@ -309,10 +366,12 @@ Set task `5.5` → `completed`.
 
 Set task `6` → `in_progress` (or `completed` immediately if skipped).
 
-Issue **N parallel Bash calls in one message** (one per worker):
+Dispatch each CURRENT list row (the Phase 4a worker-set rule — never init's PART= pairs):
 
-```
-$CS explore adversary-send <TOPIC> <agent> <provider>
+```bash
+grep -v '^#' "$ART/list.txt" | while IFS=$'\t' read -r PROV INST; do
+  [ -n "$PROV" ] && [ -n "$INST" ] && $CS explore adversary-send <TOPIC> "$INST" "$PROV"
+done
 ```
 
 Each `adversary-send` renders that worker's adversary prompt against `landscape-draft.md`, captures
@@ -335,7 +394,7 @@ Set task `6` → `completed`.
 
 Set task `7` → `in_progress`.
 
-For each worker, issue an N-way background-await Bash call in parallel in one message (mirror Phase 4):
+Read the CURRENT list rows (`grep -v '^#' "$ART/list.txt"`), then issue one background-await Bash call per row:
 
 ```
 Bash(command='$CS explore adversary-wait <TOPIC> <agent> <provider>', run_in_background: true,
@@ -360,8 +419,15 @@ set `7b` → `completed` and continue to Phase 7c.
 The author of an attacked claim gets exactly ONE defend-or-concede turn — machine-selected,
 never open-ended:
 
-1. **Dispatch:** issue N parallel Bash calls in one message:
-   `$CS explore rebuttal-send <TOPIC> <agent> <provider>`. The verb selects only
+1. **Dispatch:** dispatch each CURRENT list row (the Phase 4a worker-set rule — never init's PART= pairs):
+
+   ```bash
+   grep -v '^#' "$ART/list.txt" | while IFS=$'\t' read -r PROV INST; do
+     [ -n "$PROV" ] && [ -n "$INST" ] && $CS explore rebuttal-send <TOPIC> "$INST" "$PROV"
+   done
+   ```
+
+   The verb selects only
    `needs-attention` critiques (parsed from each `adversary-<agent>.md` verdict), attributes
    each Material finding to its originating worker via diff-bucket citation overlap (a finding
    whose tokens match zero buckets or tie across two stays unattributed — you weigh it alone in
@@ -369,7 +435,7 @@ never open-ended:
    to it or whose adversary turn ended `AS=timeout`/`failed`. A second `rebuttal-send` for the
    same worker returns rc 1 — the one-turn cap is state-file existence; NEVER `rm` a rebuttal
    state file to force a second round.
-2. **Wait:** issue N background-await Bash calls in parallel:
+2. **Wait:** read the CURRENT list rows (same grep), then issue one background-await Bash call per row:
    `$CS explore rebuttal-wait <TOPIC> <agent> <provider>`. Responses land at
    `$ART/rebuttal-<agent>.md` (DEFEND / CONCEDE per critique).
 3. **Gate:** do not proceed until `$CS explore wait-gate <TOPIC> rebuttal` exits 0. `RS=` is
@@ -387,11 +453,18 @@ When Phase 5.5 recorded `S1=false` or `S2=false` (the `signals_passed:` line in
 its own evidence, EXTEND, or REFUTE — the run learns from the overlap gap instead of discarding
 it. The verbs read the recorded signals themselves; you never re-run `confidence`.
 
-1. **Dispatch:** issue N parallel Bash calls in one message:
-   `$CS explore gap-send <TOPIC> <agent> <provider>`. The verb soft-skips (`GS=skipped`, no
+1. **Dispatch:** dispatch each CURRENT list row (the Phase 4a worker-set rule — never init's PART= pairs):
+
+   ```bash
+   grep -v '^#' "$ART/list.txt" | while IFS=$'\t' read -r PROV INST; do
+     [ -n "$PROV" ] && [ -n "$INST" ] && $CS explore gap-send <TOPIC> "$INST" "$PROV"
+   done
+   ```
+
+   The verb soft-skips (`GS=skipped`, no
    send) every worker when the trigger did not fire, plus any worker whose latest phase ended
    `timeout`/`failed` or whose peer-only buckets are empty.
-2. **Wait:** issue N background-await Bash calls in parallel:
+2. **Wait:** read the CURRENT list rows (same grep), then issue one background-await Bash call per row:
    `$CS explore gap-wait <TOPIC> <agent> <provider>`. Answers land at `$ART/gap-<agent>.md`
    (CONFIRM / EXTEND / REFUTE per item).
 3. **Gate:** do not proceed until `$CS explore wait-gate <TOPIC> gap` exits 0. `GS=` is
@@ -494,6 +567,43 @@ Pattern 2's `(unavailable)` convention. `synth-final` already tolerates the miss
 
 Set task `8` → `completed`.
 
+## Phase 8b — worker sign-off (final-doc fairness check; workers still live)
+
+Set task `8b` → `in_progress`. In a DEGRADED run, sign-off still runs for the single survivor.
+
+Each worker gets ONE bounded turn to confirm the final landscape doc fairly represents its
+findings — a misquote/misattribution check, never a re-litigation, never new claims.
+
+1. **Dispatch:** send each CURRENT list row's sign-off turn:
+
+   ```bash
+   grep -v '^#' "$ART/list.txt" | while IFS=$'\t' read -r PROV INST; do
+     [ -n "$PROV" ] && [ -n "$INST" ] && $CS explore signoff-send <TOPIC> "$INST" "$PROV"
+   done
+   ```
+
+   The verb carries the final doc's `## Conclusion`, the worker's own solo-bucket lines, and
+   diff.md's Agreed section; it soft-skips (`SS=skipped`, no send) a worker whose latest phase
+   (GS→RS→AS→QS→FS walk) ended `timeout`/`failed`. A second signoff-send for the same worker
+   returns rc 1 — the one-turn cap is state-file existence; NEVER `rm` a signoff state file to
+   force a second round.
+2. **Wait:** read the CURRENT list rows, then issue one background-await Bash call per row:
+   `$CS explore signoff-wait <TOPIC> <agent> <provider>`. Sign-offs land at
+   `$ART/signoff-<agent>.md` (`VERDICT: fair | misrepresented` + `### Flag:` blocks).
+3. **Gate:** do not proceed until `$CS explore wait-gate <TOPIC> signoff` exits 0. `SS=` is
+   informational; `SS=question` → **Intervention Pattern 1** (state key `SS`, marker
+   `signoff-<agent>.done`).
+4. **Correction pass (at most ONE, BEFORE Phase 9):** read every `$ART/signoff-<agent>.md`. If any
+   says `VERDICT: misrepresented`, apply AT MOST ONE Edit pass to the final landscape doc — fix
+   the flagged passages and note each correction under `## Adversary critiques`
+   (`sign-off correction (<agent>): <one-line summary>`). Never a second sign-off round, never a
+   loop (same trust model as Phase 8 itself). **Ordering is load-bearing:** the correction must
+   land BEFORE Phase 9 step 2 — teardown archives the art dir, and both `handoff-extract` and the
+   Phase 9c author read the ARCHIVED copy. A `skipped`/`timeout`/`missing` sign-off never blocks —
+   proceed without that worker's check.
+
+Set task `8b` → `completed`.
+
 ## Phase 8a — forensics
 
 `$CS explore forensics <TOPIC>` (best-effort; never blocks — prints a path only if mechanical
@@ -503,11 +613,20 @@ signals were found, else empty). If it printed a path, use the **Write/Edit tool
 contains the exact header `## Hub reflection`. The forensics file lives outside the topic state
 tree, so it survives teardown + archive.
 
+Then run the contribution scoreboard: `$CS explore contribution <TOPIC>` — plain per-provider
+counts (claims total/solo/consensus, peer verdicts, adversary verdict, rebuttal defend/concede,
+sign-off) written to `$ART/contribution.tsv` and printed to stdout. Rows come from
+`list-original.txt` when Phase 4a rewrote the list, so dropped workers appear with their real
+(usually zero) counts. STRICTLY informational: it is archived with the art dir and surfaced in
+Phase 10 — it never feeds a gate, a dispatch decision, or synthesis weighting.
+
 ## Phase 9 — teardown + archive + handoff-extract
 
 Set task `9` → `in_progress`.
 
-1. **Pane teardown first.** Read the list agents and run
+1. **Pane teardown first.** Read the list agents from `$ART/list-original.txt` when it exists (the Phase 4a rewrite
+   preserved the full roster there — a dropped worker still gets its graceful DONE banner +
+   per-worker archive instead of a bannerless orphan-kill), else `$ART/list.txt`, and run
    `$CS stop --pairs <TOPIC> <agent…>` — one 9s graceful **DONE**-banner batch across all panes
    (not N × 9s), then hard-kill + per-worker archive. Per-worker failures are tolerated.
 2. **Archive the state.** `$CS explore teardown <TOPIC>` — orphan-kills any leftover preflight panes,
@@ -572,6 +691,10 @@ verbatim WITHOUT prepending $ART.
 - Full topic: $ART/<topic_txt_path>
 ```
 
+**Degraded-run stamp:** when Phase 4a printed `DEGRADED=1`, `## Constraints (carry-forward)` MUST
+additionally open with: "DEGRADED RUN: single-worker survey — no independent corroboration, no
+peer verification; treat every claim as single-source."
+
 **No-convergence branch** (`mode=explore-no-convergence` in `handoff-data.kv`):
 - `## Recommendation` reads: "Survey did not converge on a single best approach. See Evidence for
   contested findings and the tradeoff matrix."
@@ -593,6 +716,10 @@ Landscape doc:
 Handoff doc (pipe directly into design):
   $ART/design-handoff.md
 
+Contribution scoreboard (archived):
+  $ART/contribution.tsv
+<the TSV rows verbatim>
+
 Suggested next step:
   /ap:design $ART/design-handoff.md
 
@@ -608,13 +735,13 @@ produces unexpected output, intervene before the next subcommand runs.
 
 A worker emits `{"event": "question", ...}`. The wait verb sets `FS=question` (research),
 `QS=question` (open-questions relay), `VS=question` (cross-verify), `AS=question` (adversary),
-`RS=question` (rebuttal), or `GS=question` (gap) as the state file's last line and captures the
+`RS=question` (rebuttal), `GS=question` (gap), or `SS=question` (sign-off) as the state file's last line and captures the
 question JSON to `$ART/question-<agent>.txt`. Read that file (its `message`, optional `options`),
 compose an answer from the topic + findings, then relay it:
 `$CS send --from hub <agent> <TOPIC> "<answer>"`. The wait verb already advanced the
 `OFFSET=`; `rm -f` that phase's `.done` marker (`research-<agent>.done`, `openq-<agent>.done`,
-`crossverify-<agent>.done`, `adversary-<agent>.done`, `rebuttal-<agent>.done`, or
-`gap-<agent>.done`) and re-arm that worker's background wait. The wait resumes past the
+`crossverify-<agent>.done`, `adversary-<agent>.done`, `rebuttal-<agent>.done`,
+`gap-<agent>.done`, or `signoff-<agent>.done`) and re-arm that worker's background wait. The wait resumes past the
 question — it never re-sends the prompt.
 
 ### Pattern 2: malformed adversary output
@@ -628,3 +755,11 @@ mark that worker's critique as `(unavailable)` in the final landscape doc.
 
 Already absorbed by Phase 2's auto-retry-once mechanism. If the retry also fails, Phase 2 tears down,
 removes the topic state dir, and aborts with the provider-failure list. No further intervention.
+
+## Non-goal: fast/slow overlap scheduling (adversarially REFUTED 2026-07-10)
+
+Do not overlap a fast worker's next phase with a slow worker's research tail. Every post-research
+phase is a global fan-in over ALL findings (diff membership is first-match-wins across workers, so
+partial-input buckets misclassify solo-vs-consensus), the all-block `wait-gate` is the correct
+design, and a mid-research dispatch would clobber the single-slot inbox. Wall-clock upside at
+N=2-3 is near-zero. Recorded here so it is not re-proposed.

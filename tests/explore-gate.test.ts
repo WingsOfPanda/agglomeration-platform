@@ -99,6 +99,26 @@ describe("explore wait-gate (verb)", () => {
     expect(await exploreWaitGateRun(["t", "gap"])).toBe(0);
   });
 
+  it("signoff phase (SS): rc 0 when all terminal (ok / skipped)", async () => {
+    const art = seedList("t");
+    writeFileSync(join(art, "signoff-alpha.txt"), "OFFSET=1\nSS=ok\n");
+    writeFileSync(join(art, "signoff-alpha.done"), "");
+    writeFileSync(join(art, "signoff-charlie.txt"), "SS=skipped\n");
+    writeFileSync(join(art, "signoff-charlie.done"), "");
+    expect(await exploreWaitGateRun(["t", "signoff"])).toBe(0);
+  });
+
+  it("signoff phase: rc 1 while pending or in question", async () => {
+    const art = seedList("t");
+    writeFileSync(join(art, "signoff-alpha.txt"), "OFFSET=1\nSS=ok\n");
+    writeFileSync(join(art, "signoff-alpha.done"), "");
+    writeFileSync(join(art, "signoff-charlie.txt"), "OFFSET=2\n"); // pending: no SS line, no .done
+    expect(await exploreWaitGateRun(["t", "signoff"])).toBe(1);
+    writeFileSync(join(art, "signoff-charlie.txt"), "OFFSET=2\nSS=question\n");
+    writeFileSync(join(art, "signoff-charlie.done"), "");
+    expect(await exploreWaitGateRun(["t", "signoff"])).toBe(1); // question is not terminal
+  });
+
   it("bad/absent phase and missing list → rc 2", async () => {
     expect(await exploreWaitGateRun(["t"])).toBe(2);
     expect(await exploreWaitGateRun(["t", "verify"])).toBe(2);

@@ -43,7 +43,7 @@ export function researchLens(provider: string): string {
 }
 
 /** Research-phase prompt (port of meditate/research.md). Expose the landscape; do NOT recommend. */
-export function composeExploreResearchPrompt(topic: string, writeTo: string, lit: string, lens: string): string {
+export function composeExploreResearchPrompt(topic: string, writeTo: string, lit: string, lens: string, selfassessTo: string): string {
   const t = topic.trim();
   return [
     "Investigate the following topic from multiple angles. Your job is not to",
@@ -85,6 +85,20 @@ export function composeExploreResearchPrompt(topic: string, writeTo: string, lit
     "",
     "  ## Notes",
     "  <any free-form additions; not parsed by the Hub>",
+    "",
+    `SECOND output file — write your self-assessment to ${selfassessTo} with this structure:`,
+    "",
+    "  # Self-assessment",
+    "",
+    "  <one line per approach you listed: `<confidence>: <approach name>`,",
+    "  where <confidence> is high | medium | low>",
+    "",
+    "  ## Least sure",
+    "  - <the claim you are least confident in, with its [citation]>",
+    "  - ...",
+    "",
+    "The self-assessment is hub-side accountability material — do NOT embed it in the",
+    "findings file; keep the two files separate.",
     "",
     "Citation format options:",
     "  - <file path>:<line>          e.g. src/auth/store.py:42",
@@ -149,7 +163,7 @@ export const ADVERSARY_LENSES: readonly AdversaryLens[] = [
  *  distinct primary attack lens per worker. */
 export function composeAdversaryPrompt(
   landscapeDraft: string, agent: string, outPath: string,
-  opts: { peerFindingsPaths: string[]; lens: AdversaryLens; priorityTargets?: string[] },
+  opts: { peerFindingsPaths: string[]; lens: AdversaryLens; priorityTargets?: string[]; lowConfidenceClaims?: string[] },
 ): string {
   return [
     "You are now playing adversary against a synthesized landscape doc that",
@@ -180,6 +194,12 @@ export function composeAdversaryPrompt(
       "Priority targets — these citations are corroborated by only ONE worker; open each",
       "and verify the claim it anchors FIRST:",
       ...opts.priorityTargets.map((t) => `- ${t}`),
+      "",
+    ] : []),
+    ...(opts.lowConfidenceClaims?.length ? [
+      "Self-flagged low-confidence claims — the workers themselves are least sure of",
+      "these; verify them first:",
+      ...opts.lowConfidenceClaims.map((c) => `- ${c}`),
       "",
     ] : []),
     "Attack surface — prioritize these failure modes:",
@@ -260,5 +280,51 @@ export function composeGapPrompt(bucketItems: string[], outPath: string): string
     "Your answers feed ONLY the final landscape doc and the design handoff — the draft",
     "is not re-synthesized and the confidence gate does not re-run. If you cannot tell",
     "from available evidence, say so explicitly — do not pad.",
+  ].join("\n");
+}
+
+/** Phase 8b sign-off prompt (E2): one bounded fairness check per worker over the final doc's
+ *  Conclusion — a misquote/misattribution check, never a re-litigation and never new claims. The
+ *  solo bucket alone under-covers consensus claims at N=2, so the diff.md Agreed text rides along.
+ *  Same no-fence contract as the other builders in this file (inboxWrite appends the done line +
+ *  END_OF_INSTRUCTION). Empty soloBucketLines/agreedText omit their blocks (degraded N=1 runs). */
+export function composeSignoffPrompt(
+  conclusion: string, soloBucketLines: string[], agreedText: string, outPath: string,
+): string {
+  return [
+    "The run's final landscape doc has been written. Below is its Conclusion, plus",
+    "the claims you personally contributed. Check ONLY that your findings are fairly",
+    "represented — this is a misquote/misattribution check, NOT a re-litigation of",
+    "the synthesis, and you may NOT introduce new claims.",
+    "",
+    "The final doc's Conclusion:",
+    "",
+    conclusion,
+    "",
+    ...(soloBucketLines.length ? [
+      "Your solo claims (you were the only worker who raised these):",
+      ...soloBucketLines.map((l) => `- ${l}`),
+      "",
+    ] : []),
+    ...(agreedText.trim() ? [
+      "Consensus claims you co-authored (from the run's findings diff):",
+      agreedText.trimEnd(),
+      "",
+    ] : []),
+    `Write your sign-off to ${outPath} with this EXACT structure:`,
+    "",
+    "  # Sign-off",
+    "",
+    "  VERDICT: fair | misrepresented",
+    "",
+    "  ### Flag: <one-line summary of a specific misquote or misattribution>",
+    "  - **Where:** <the passage in the Conclusion>",
+    "  - **Should say:** <the faithful version, citing your original finding>",
+    "",
+    "  (one ### Flag: block per issue; none when the VERDICT is fair)",
+    "",
+    "Rules: no new claims, no re-litigation of peer claims or adversary critiques, no",
+    "style nits — flag only concrete misrepresentation of YOUR findings. An honest",
+    "'fair' is the common case; do not invent flags.",
   ].join("\n");
 }
