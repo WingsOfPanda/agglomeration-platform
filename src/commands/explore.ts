@@ -31,10 +31,11 @@ import { run as preflightRun } from "./preflight.js";
 import { readIfExists as readIf, readIfExistsOrNull } from "../core/fsread.js";
 import { parseOpenQuestions, assignOpenQuestions, formatOpenqClaims, parseOpenqClaims, composeOpenqPrompt } from "../core/exploreOpenq.js";
 import { parseAdversaryVerdict, tallyVerdicts } from "../core/exploreVerdict.js";
-import { diffFindings, type DiffPart } from "../core/designDiff.js";
+import { diffFindings, type DiffPart, type Claim } from "../core/designDiff.js";
+import { parseBucketLines, selectRebuttalTargets, composeRebuttalPrompt, type CritiqueInput } from "../core/exploreRebuttal.js";
 
 function usage(): number {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|" +
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|rebuttal-send|rebuttal-wait|wait-gate|synth-preliminary|" +
     "confidence|annotate|adversary-send|adversary-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
   return 2;
 }
@@ -54,6 +55,8 @@ export async function run(args: string[]): Promise<number> {
     case "diff": return diffExploreRun(rest);
     case "crossverify-send": return crossverifySendRun(rest);
     case "crossverify-wait": return crossverifyWaitRun(rest);
+    case "rebuttal-send": return rebuttalSendRun(rest);
+    case "rebuttal-wait": return rebuttalWaitRun(rest);
     case "wait-gate": return exploreWaitGateRun(rest);
     case "synth-preliminary": return synthPreliminaryRun(rest);
     case "confidence": return confidenceRun(rest);
@@ -416,6 +419,84 @@ export async function crossverifyWaitWith(topic: string, agent: string, provider
     ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
   writeFileSync(join(art, `crossverify-${agent}.done`), "");
   log.ok(`explore crossverify-wait: ${agent} VS=${vs}`);
+  return 0;
+}
+
+// ---- rebuttal-send / rebuttal-wait (Phase 7b bounded defend-or-concede) ----
+async function rebuttalSendRun(rest: string[]): Promise<number> {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: explore rebuttal-send <topic> <agent> <provider>"); return 2; }
+  return rebuttalSendWith(topic, agent, provider, liveResearchSendDeps);
+}
+export async function rebuttalSendWith(topic: string, agent: string, provider: string, d: ResearchSendDeps): Promise<number> {
+  const art = exploreArtDir(topic);
+  const stateFile = join(art, `rebuttal-${agent}.txt`);
+  if (existsSync(stateFile)) { log.error(`explore rebuttal-send: ${stateFile} exists — one rebuttal round per worker (the one-turn cap)`); return 1; }
+
+  const asTag = lastTag(readIf(join(art, `adversary-${agent}.txt`)), "AS"); // timeout-dispatch guard first
+  if (asTag === "timeout" || asTag === "failed") {
+    atomicWrite(stateFile, "RS=skipped\n");
+    log.warn(`explore rebuttal-send: ${agent} skipped — adversary ended AS=${asTag} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
+
+  const rows = parseListFile(readIf(join(art, "list.txt")));
+  if (!rows.some((r) => r.agent === agent)) { log.error(`explore rebuttal-send: ${agent} not in list.txt at ${art}`); return 1; }
+
+  const buckets = new Map<string, Claim[]>();
+  for (const r of rows) buckets.set(r.agent, parseBucketLines(readIf(join(art, `${r.agent}_only_items.txt`))));
+
+  const critiques: CritiqueInput[] = rows
+    .filter((r) => lastTag(readIf(join(art, `adversary-${r.agent}.txt`)), "AS") !== "skipped")
+    .map((r) => ({ agent: r.agent, text: readIf(join(art, `adversary-${r.agent}.md`)) }))
+    .filter((c) => c.text.trim().length > 0);
+
+  const mine = selectRebuttalTargets(critiques, buckets).get(agent);
+  if (!mine || mine.findings.length === 0) {
+    atomicWrite(stateFile, "RS=skipped\n");
+    log.ok(`explore rebuttal-send: ${agent} RS=skipped (no needs-attention findings attributed to it)`);
+    return 0;
+  }
+
+  const outPath = join(art, `rebuttal-${agent}.md`);
+  const promptFile = join(art, `${agent}_rebuttal_prompt.md`);
+  atomicWrite(promptFile, composeRebuttalPrompt(mine.claims, mine.findings, outPath));
+
+  const offset = d.offsetFor(agent, provider, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}\n`);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
+  if (rc !== 0) { log.error(`explore rebuttal-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`); return 1; }
+  log.ok(`explore rebuttal-send: ${agent} offset=${offset}`);
+  return 0;
+}
+
+async function rebuttalWaitRun(rest: string[]): Promise<number> {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: explore rebuttal-wait <topic> <agent> <provider>"); return 2; }
+  return rebuttalWaitWith(topic, agent, provider, liveResearchWaitDeps);
+}
+export async function rebuttalWaitWith(topic: string, agent: string, provider: string, d: ResearchWaitDeps): Promise<number> {
+  const art = exploreArtDir(topic);
+  const stateFile = join(art, `rebuttal-${agent}.txt`);
+  if (!existsSync(stateFile)) { log.error(`explore rebuttal-wait: ${stateFile} missing (run explore rebuttal-send first)`); return 1; }
+  const text = readFileSync(stateFile, "utf8");
+  if (lastTag(text, "RS") === "skipped") { // guard/no-targets short-circuit: nothing was sent
+    writeFileSync(join(art, `rebuttal-${agent}.done`), "");
+    log.ok(`explore rebuttal-wait: ${agent} RS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
+  if (offset === null) { log.error(`explore rebuttal-wait: OFFSET not set in ${stateFile}`); return 1; }
+
+  const timeout = scaledTimeout(consultTimeout("rebuttal"), d.multiplier(provider));
+  log.info(`explore rebuttal-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
+
+  const rs = verifyState(ev, readIfExistsOrNull(join(art, `rebuttal-${agent}.md`))); // done → ok iff responses non-empty
+  recordWaitOutcome(agent, provider, topic, stateFile, rs, "RS",
+    ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
+  writeFileSync(join(art, `rebuttal-${agent}.done`), "");
+  log.ok(`explore rebuttal-wait: ${agent} RS=${rs}`);
   return 0;
 }
 
