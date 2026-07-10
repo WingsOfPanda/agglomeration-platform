@@ -29,9 +29,10 @@ import { run as sendRun } from "./send.js";
 import { run as spawnRun } from "./spawn.js";
 import { run as preflightRun } from "./preflight.js";
 import { readIfExists as readIf, readIfExistsOrNull } from "../core/fsread.js";
+import { parseOpenQuestions, assignOpenQuestions, formatOpenqClaims } from "../core/exploreOpenq.js";
 
 function usage(): number {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|wait-gate|synth-preliminary|" +
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|wait-gate|synth-preliminary|" +
     "confidence|annotate|adversary-send|adversary-wait|synth-final|forensics|teardown|handoff-extract> ...");
   return 2;
 }
@@ -45,6 +46,7 @@ export async function run(args: string[]): Promise<number> {
     case "spawn-all": return spawnAllRun(rest);
     case "research-send": return researchSendRun(rest);
     case "research-wait": return researchWaitRun(rest);
+    case "openq-collate": return openqCollateRun(rest);
     case "wait-gate": return exploreWaitGateRun(rest);
     case "synth-preliminary": return synthPreliminaryRun(rest);
     case "confidence": return confidenceRun(rest);
@@ -203,6 +205,37 @@ export async function researchWaitWith(topic: string, agent: string, provider: s
     ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
   writeFileSync(join(art, `research-${agent}.done`), "");
   log.ok(`explore research-wait: ${agent} FS=${fs}`);
+  return 0;
+}
+
+// ---- openq-collate / openq-send / openq-wait (Phase 4b open-questions peer relay) ----
+export async function openqCollateRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: explore openq-collate <topic>"); return 2; }
+  const art = exploreArtDir(topic);
+  if (!existsSync(art)) { log.error(`explore openq-collate: ${art} not found — run explore init`); return 1; }
+  const rows = parseListFile(readIf(join(art, "list.txt")));
+  if (rows.length === 0) { log.error(`explore openq-collate: list.txt missing or empty at ${art}`); return 1; }
+
+  const questionsByAgent = new Map<string, string[]>();
+  for (const r of rows) questionsByAgent.set(r.agent, parseOpenQuestions(readIf(join(art, `findings-${r.agent}.md`))));
+
+  const assignments = assignOpenQuestions(rows, questionsByAgent);
+  if (assignments.size === 0) {
+    log.ok("explore openq-collate: no open questions in any findings — phase skips");
+    process.stdout.write("OPENQ=none\n");
+    return 0;
+  }
+  const collated = rows.map((r) => {
+    const qs = questionsByAgent.get(r.agent) ?? [];
+    return `## ${r.agent}\n` + (qs.length ? qs.map((q) => `- ${q}`).join("\n") : "(none)");
+  }).join("\n\n") + "\n";
+  atomicWrite(join(art, "open-questions.md"), collated);
+  for (const [target, list] of assignments) {
+    atomicWrite(join(art, `openq-claims-${target}.txt`), formatOpenqClaims(list));
+  }
+  log.ok(`explore openq-collate: routed questions to ${assignments.size} worker(s)`);
+  process.stdout.write(`OPENQ=${assignments.size}\n`);
   return 0;
 }
 

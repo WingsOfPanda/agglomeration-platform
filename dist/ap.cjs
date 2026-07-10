@@ -25516,6 +25516,47 @@ var init_exploreTurn = __esm({
   }
 });
 
+// src/core/exploreOpenq.ts
+function parseOpenQuestions(findingsText) {
+  const out = [];
+  let inSection = false;
+  for (const line of findingsText.split("\n")) {
+    if (/^## Open questions\s*$/i.test(line)) {
+      inSection = true;
+      continue;
+    }
+    if (/^## /.test(line)) {
+      inSection = false;
+      continue;
+    }
+    if (!inSection) continue;
+    const m = line.match(/^- +(.*\S)/);
+    if (m) out.push(m[1]);
+  }
+  return out;
+}
+function assignOpenQuestions(rows, questionsByAgent) {
+  const out = /* @__PURE__ */ new Map();
+  if (rows.length < 2) return out;
+  rows.forEach((row, i2) => {
+    const qs = questionsByAgent.get(row.agent) ?? [];
+    if (qs.length === 0) return;
+    const target = rows[(i2 + 1) % rows.length].agent;
+    const list = out.get(target) ?? [];
+    for (const q of qs) list.push({ from: row.agent, question: q });
+    out.set(target, list);
+  });
+  return out;
+}
+function formatOpenqClaims(list) {
+  return list.map((a2) => `${a2.from}	${a2.question}`).join("\n") + "\n";
+}
+var init_exploreOpenq = __esm({
+  "src/core/exploreOpenq.ts"() {
+    "use strict";
+  }
+});
+
 // src/commands/explore.ts
 var explore_exports = {};
 __export(explore_exports, {
@@ -25528,6 +25569,7 @@ __export(explore_exports, {
   forensicsRun: () => forensicsRun5,
   handoffExtractRun: () => handoffExtractRun,
   initWith: () => initWith5,
+  openqCollateRun: () => openqCollateRun,
   researchSendWith: () => researchSendWith2,
   researchWaitWith: () => researchWaitWith2,
   run: () => run14,
@@ -25537,7 +25579,7 @@ __export(explore_exports, {
   teardownWith: () => teardownWith2
 });
 function usage5() {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|synth-final|forensics|teardown|handoff-extract> ...");
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|synth-final|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 async function run14(args) {
@@ -25554,6 +25596,8 @@ async function run14(args) {
       return researchSendRun2(rest);
     case "research-wait":
       return researchWaitRun2(rest);
+    case "openq-collate":
+      return openqCollateRun(rest);
     case "wait-gate":
       return exploreWaitGateRun(rest);
     case "synth-preliminary":
@@ -25730,6 +25774,44 @@ async function researchWaitWith2(topic, agent, provider, d) {
   );
   (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `research-${agent}.done`), "");
   log.ok(`explore research-wait: ${agent} FS=${fs}`);
+  return 0;
+}
+async function openqCollateRun(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("usage: explore openq-collate <topic>");
+    return 2;
+  }
+  const art = exploreArtDir(topic);
+  if (!(0, import_node_fs37.existsSync)(art)) {
+    log.error(`explore openq-collate: ${art} not found \u2014 run explore init`);
+    return 1;
+  }
+  const rows = parseListFile(readIfExists((0, import_node_path34.join)(art, "list.txt")));
+  if (rows.length === 0) {
+    log.error(`explore openq-collate: list.txt missing or empty at ${art}`);
+    return 1;
+  }
+  const questionsByAgent = /* @__PURE__ */ new Map();
+  for (const r of rows) questionsByAgent.set(r.agent, parseOpenQuestions(readIfExists((0, import_node_path34.join)(art, `findings-${r.agent}.md`))));
+  const assignments = assignOpenQuestions(rows, questionsByAgent);
+  if (assignments.size === 0) {
+    log.ok("explore openq-collate: no open questions in any findings \u2014 phase skips");
+    process.stdout.write("OPENQ=none\n");
+    return 0;
+  }
+  const collated = rows.map((r) => {
+    const qs = questionsByAgent.get(r.agent) ?? [];
+    return `## ${r.agent}
+` + (qs.length ? qs.map((q) => `- ${q}`).join("\n") : "(none)");
+  }).join("\n\n") + "\n";
+  atomicWrite((0, import_node_path34.join)(art, "open-questions.md"), collated);
+  for (const [target, list] of assignments) {
+    atomicWrite((0, import_node_path34.join)(art, `openq-claims-${target}.txt`), formatOpenqClaims(list));
+  }
+  log.ok(`explore openq-collate: routed questions to ${assignments.size} worker(s)`);
+  process.stdout.write(`OPENQ=${assignments.size}
+`);
   return 0;
 }
 function missingListArtifacts(art, rows, prefix) {
@@ -26105,6 +26187,7 @@ var init_explore2 = __esm({
     init_spawn();
     init_preflight();
     init_fsread();
+    init_exploreOpenq();
     liveExploreInitDeps = {
       activeProviders: () => readProviderList(activeProvidersPath()),
       isValidated: agentConsultValidated,
