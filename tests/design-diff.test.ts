@@ -112,3 +112,51 @@ describe("diffFindings N=3", () => {
     expect(r.diffMd).toContain("## Bly-only\n- [b.ts:1] only bly\n");
   });
 });
+
+describe("parseClaims headings parameter (explore port)", () => {
+  const exploreFindings = [
+    "# Findings: X", "## Summary", "prose",
+    "## Approaches",
+    "1. [src/a.ts:4] FlashAttention — fused kernel",
+    "2. [paper:arxiv:2401.04088] MoE routing — sparse experts",
+    "prose line without a number is ignored",
+    "## Tradeoffs",
+    "- FlashAttention wins on speed because fused [src/a.ts:9]",
+    "## Open questions", "- q1",
+  ].join("\n");
+  it('["Approaches"] extracts explore-schema numbered claims, ignores Tradeoffs bullets and prose', () => {
+    expect(parseClaims(exploreFindings, ["Approaches"])).toEqual([
+      { cite: "src/a.ts:4", text: "FlashAttention — fused kernel" },
+      { cite: "paper:arxiv:2401.04088", text: "MoE routing — sparse experts" },
+    ]);
+  });
+  it("default headings still gate on ## Claims only (explore schema → [] by default)", () => {
+    expect(parseClaims(exploreFindings)).toEqual([]);
+  });
+});
+
+describe("citationOverlaps paper: branch", () => {
+  it("identical paper ids overlap (pins the fix — this was false before)", () => {
+    expect(citationOverlaps("paper:arxiv:2401.04088", "paper:arxiv:2401.04088")).toBe(true);
+  });
+  it("different paper ids do not overlap", () => {
+    expect(citationOverlaps("paper:arxiv:2401.04088", "paper:arxiv:2312.00001")).toBe(false);
+  });
+  it("paper: vs a file path never overlaps", () => {
+    expect(citationOverlaps("paper:arxiv:2401.04088", "src/a.ts:1")).toBe(false);
+    expect(citationOverlaps("paper/arxiv.ts:1", "paper:arxiv:2401.04088")).toBe(false);
+  });
+});
+
+describe("diffFindings explore schema (headings passthrough)", () => {
+  const approaches = (...items: string[]) =>
+    "## Approaches\n" + items.map((c, i) => `${i + 1}. ${c}`).join("\n") + "\n";
+  it("buckets two explore-schema findings via ['Approaches']", () => {
+    const rex = approaches("[src/a.ts:10] Shared — both see it", "[paper:arxiv:1] RexOnly — solo");
+    const cody = approaches("[src/a.ts:10] Shared — both see it", "[src/c.ts:1] CodyOnly — solo");
+    const r = diffFindings([{ name: "rex", findings: rex }, { name: "cody", findings: cody }], ["Approaches"]);
+    expect(r.files.find((f) => f.filename === "rex_only_items.txt")!.content).toBe("[paper:arxiv:1] RexOnly — solo\n");
+    expect(r.files.find((f) => f.filename === "cody_only_items.txt")!.content).toBe("[src/c.ts:1] CodyOnly — solo\n");
+    expect(r.diffMd).toContain("## Agreed\n- [src/a.ts:10] Shared — both see it | Shared — both see it\n");
+  });
+});
