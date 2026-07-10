@@ -25551,6 +25551,37 @@ function assignOpenQuestions(rows, questionsByAgent) {
 function formatOpenqClaims(list) {
   return list.map((a2) => `${a2.from}	${a2.question}`).join("\n") + "\n";
 }
+function parseOpenqClaims(text) {
+  const out = [];
+  for (const line of text.split("\n")) {
+    const i2 = line.indexOf("	");
+    if (i2 <= 0) continue;
+    out.push({ from: line.slice(0, i2), question: line.slice(i2 + 1) });
+  }
+  return out;
+}
+function composeOpenqPrompt(assignments, answersPath) {
+  const items = assignments.map((a2, i2) => `${i2 + 1}. (from ${a2.from}) ${a2.question}`).join("\n");
+  return [
+    "Your fellow workers could not resolve the questions below during their research",
+    "turn. Answer each one from your own investigation: use any tool available in",
+    "your environment (files, web search / fetch where present) and cite sources.",
+    "",
+    "Questions:",
+    items,
+    "",
+    `Output requirements \u2014 write to ${answersPath} with this EXACT structure:`,
+    "",
+    "  ## Q1 <question restated>",
+    "  <answer, with [citation] anchors>",
+    "",
+    "  ## Q2 <question restated>",
+    "  ...",
+    "",
+    "If you cannot answer one, say so explicitly under its heading \u2014 do not pad.",
+    'An honest "cannot resolve, because <reason>" is more useful than a weak guess.'
+  ].join("\n");
+}
 var init_exploreOpenq = __esm({
   "src/core/exploreOpenq.ts"() {
     "use strict";
@@ -25570,6 +25601,8 @@ __export(explore_exports, {
   handoffExtractRun: () => handoffExtractRun,
   initWith: () => initWith5,
   openqCollateRun: () => openqCollateRun,
+  openqSendWith: () => openqSendWith,
+  openqWaitWith: () => openqWaitWith,
   researchSendWith: () => researchSendWith2,
   researchWaitWith: () => researchWaitWith2,
   run: () => run14,
@@ -25579,7 +25612,7 @@ __export(explore_exports, {
   teardownWith: () => teardownWith2
 });
 function usage5() {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|synth-final|forensics|teardown|handoff-extract> ...");
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|synth-final|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 async function run14(args) {
@@ -25598,6 +25631,10 @@ async function run14(args) {
       return researchWaitRun2(rest);
     case "openq-collate":
       return openqCollateRun(rest);
+    case "openq-send":
+      return openqSendRun(rest);
+    case "openq-wait":
+      return openqWaitRun(rest);
     case "wait-gate":
       return exploreWaitGateRun(rest);
     case "synth-preliminary":
@@ -25812,6 +25849,91 @@ async function openqCollateRun(rest) {
   log.ok(`explore openq-collate: routed questions to ${assignments.size} worker(s)`);
   process.stdout.write(`OPENQ=${assignments.size}
 `);
+  return 0;
+}
+async function openqSendRun(rest) {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) {
+    log.error("usage: explore openq-send <topic> <agent> <provider>");
+    return 2;
+  }
+  return openqSendWith(topic, agent, provider, liveResearchSendDeps2);
+}
+async function openqSendWith(topic, agent, provider, d) {
+  const art = exploreArtDir(topic);
+  const stateFile = (0, import_node_path34.join)(art, `openq-${agent}.txt`);
+  if ((0, import_node_fs37.existsSync)(stateFile)) {
+    log.error(`explore openq-send: ${stateFile} exists; rm to retry`);
+    return 1;
+  }
+  const fsTag = lastTag(readIfExists((0, import_node_path34.join)(art, `research-${agent}.txt`)), "FS");
+  if (fsTag === "timeout" || fsTag === "failed") {
+    atomicWrite(stateFile, "QS=skipped\n");
+    log.warn(`explore openq-send: ${agent} skipped \u2014 research ended FS=${fsTag} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
+  const claims = parseOpenqClaims(readIfExists((0, import_node_path34.join)(art, `openq-claims-${agent}.txt`)));
+  if (claims.length === 0) {
+    atomicWrite(stateFile, "QS=skipped\n");
+    log.ok(`explore openq-send: ${agent} QS=skipped (no questions routed to it)`);
+    return 0;
+  }
+  const answersPath = (0, import_node_path34.join)(art, `openq-${agent}.md`);
+  const promptFile = (0, import_node_path34.join)(art, `${agent}_openq_prompt.md`);
+  atomicWrite(promptFile, composeOpenqPrompt(claims, answersPath));
+  const offset = d.offsetFor(agent, provider, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}
+`);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
+  if (rc !== 0) {
+    log.error(`explore openq-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`);
+    return 1;
+  }
+  log.ok(`explore openq-send: ${agent} offset=${offset}`);
+  return 0;
+}
+async function openqWaitRun(rest) {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) {
+    log.error("usage: explore openq-wait <topic> <agent> <provider>");
+    return 2;
+  }
+  return openqWaitWith(topic, agent, provider, liveResearchWaitDeps2);
+}
+async function openqWaitWith(topic, agent, provider, d) {
+  const art = exploreArtDir(topic);
+  const stateFile = (0, import_node_path34.join)(art, `openq-${agent}.txt`);
+  if (!(0, import_node_fs37.existsSync)(stateFile)) {
+    log.error(`explore openq-wait: ${stateFile} missing (run explore openq-send first)`);
+    return 1;
+  }
+  const text = (0, import_node_fs37.readFileSync)(stateFile, "utf8");
+  if (lastTag(text, "QS") === "skipped") {
+    (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `openq-${agent}.done`), "");
+    log.ok(`explore openq-wait: ${agent} QS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
+  if (offset === null) {
+    log.error(`explore openq-wait: OFFSET not set in ${stateFile}`);
+    return 1;
+  }
+  const timeout = scaledTimeout(consultTimeout("openq"), d.multiplier(provider));
+  log.info(`explore openq-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
+  const answersPath = (0, import_node_path34.join)(art, `openq-${agent}.md`);
+  const qs = verifyState(ev, readIfExistsOrNull(answersPath));
+  recordWaitOutcome(
+    agent,
+    provider,
+    topic,
+    stateFile,
+    qs,
+    "QS",
+    ev ? { file: (0, import_node_path34.join)(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : void 0
+  );
+  (0, import_node_fs37.writeFileSync)((0, import_node_path34.join)(art, `openq-${agent}.done`), "");
+  log.ok(`explore openq-wait: ${agent} QS=${qs}`);
   return 0;
 }
 function missingListArtifacts(art, rows, prefix) {
