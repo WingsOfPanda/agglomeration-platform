@@ -24,7 +24,7 @@ import { buildAnnotations } from "../core/exploreAnnotate.js";
 import { outboxOffset, outboxPath, TERMINAL_EVENTS, type OutboxEvent } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
 import { parseLatestOffset, scaledTimeout, researchState, verifyState, gateState, recordWaitOutcome, composeVerifyPrompt } from "../core/designTurn.js";
-import { composeExploreResearchPrompt, composeAdversaryPrompt, litGuidance, ADVERSARY_LENSES, researchLens } from "../core/exploreTurn.js";
+import { composeExploreResearchPrompt, composeAdversaryPrompt, composeGapPrompt, litGuidance, ADVERSARY_LENSES, researchLens } from "../core/exploreTurn.js";
 import { run as sendRun } from "./send.js";
 import { run as spawnRun } from "./spawn.js";
 import { run as preflightRun } from "./preflight.js";
@@ -35,8 +35,8 @@ import { diffFindings, type DiffPart, type Claim } from "../core/designDiff.js";
 import { parseBucketLines, selectRebuttalTargets, composeRebuttalPrompt, type CritiqueInput } from "../core/exploreRebuttal.js";
 
 function usage(): number {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|rebuttal-send|rebuttal-wait|wait-gate|synth-preliminary|" +
-    "confidence|annotate|adversary-send|adversary-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|" +
+    "confidence|annotate|adversary-send|adversary-wait|rebuttal-send|rebuttal-wait|gap-send|gap-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 
@@ -57,6 +57,8 @@ export async function run(args: string[]): Promise<number> {
     case "crossverify-wait": return crossverifyWaitRun(rest);
     case "rebuttal-send": return rebuttalSendRun(rest);
     case "rebuttal-wait": return rebuttalWaitRun(rest);
+    case "gap-send": return gapSendRun(rest);
+    case "gap-wait": return gapWaitRun(rest);
     case "wait-gate": return exploreWaitGateRun(rest);
     case "synth-preliminary": return synthPreliminaryRun(rest);
     case "confidence": return confidenceRun(rest);
@@ -497,6 +499,94 @@ export async function rebuttalWaitWith(topic: string, agent: string, provider: s
     ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
   writeFileSync(join(art, `rebuttal-${agent}.done`), "");
   log.ok(`explore rebuttal-wait: ${agent} RS=${rs}`);
+  return 0;
+}
+
+// ---- gap-send / gap-wait (Phase 7c post-gate gap enrichment; trigger = recorded S1/S2 false) ----
+async function gapSendRun(rest: string[]): Promise<number> {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: explore gap-send <topic> <agent> <provider>"); return 2; }
+  return gapSendWith(topic, agent, provider, liveResearchSendDeps);
+}
+export async function gapSendWith(topic: string, agent: string, provider: string, d: ResearchSendDeps): Promise<number> {
+  const art = exploreArtDir(topic);
+  const stateFile = join(art, `gap-${agent}.txt`);
+  if (existsSync(stateFile)) { log.error(`explore gap-send: ${stateFile} exists; rm to retry`); return 1; }
+
+  // Trigger: the Phase 5.5 record's signals_passed line — S1=false or S2=false fires the round.
+  // The record is READ ONLY here; the gate ran once and adversary-skip.txt is never rewritten.
+  const signalsLine = readIf(join(art, "adversary-skip.txt")).split("\n").find((l) => l.startsWith("signals_passed:")) ?? "";
+  if (!/\bS1=false\b/.test(signalsLine) && !/\bS2=false\b/.test(signalsLine)) {
+    atomicWrite(stateFile, "GS=skipped\n");
+    log.ok(`explore gap-send: ${agent} GS=skipped (no recorded S1/S2 failure — trigger not fired)`);
+    return 0;
+  }
+
+  // Latest-phase guard: first non-skipped tag among RS -> AS -> FS decides safety.
+  const tags: Array<[string, string | null]> = [
+    ["RS", lastTag(readIf(join(art, `rebuttal-${agent}.txt`)), "RS")],
+    ["AS", lastTag(readIf(join(art, `adversary-${agent}.txt`)), "AS")],
+    ["FS", lastTag(readIf(join(art, `research-${agent}.txt`)), "FS")],
+  ];
+  const latest = tags.find(([, v]) => v !== null && v !== "skipped");
+  if (latest && (latest[1] === "timeout" || latest[1] === "failed")) {
+    atomicWrite(stateFile, "GS=skipped\n");
+    log.warn(`explore gap-send: ${agent} skipped — latest phase ended ${latest[0]}=${latest[1]} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
+
+  const agents = parseListFile(readIf(join(art, "list.txt"))).map((r) => r.agent);
+  if (!agents.includes(agent)) { log.error(`explore gap-send: ${agent} not in list.txt at ${art}`); return 1; }
+
+  const items: string[] = [];
+  for (const f of verifyScopeFiles(agent, agents)) {
+    for (const l of readIf(join(art, f)).split("\n")) if (l.length > 0) items.push(l);
+  }
+  if (items.length === 0) {
+    atomicWrite(stateFile, "GS=skipped\n");
+    log.ok(`explore gap-send: ${agent} GS=skipped (no peer-only items to enrich)`);
+    return 0;
+  }
+
+  const outPath = join(art, `gap-${agent}.md`);
+  const promptFile = join(art, `${agent}_gap_prompt.md`);
+  atomicWrite(promptFile, composeGapPrompt(items, outPath));
+
+  const offset = d.offsetFor(agent, provider, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}\n`);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
+  if (rc !== 0) { log.error(`explore gap-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`); return 1; }
+  log.ok(`explore gap-send: ${agent} offset=${offset}`);
+  return 0;
+}
+
+async function gapWaitRun(rest: string[]): Promise<number> {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: explore gap-wait <topic> <agent> <provider>"); return 2; }
+  return gapWaitWith(topic, agent, provider, liveResearchWaitDeps);
+}
+export async function gapWaitWith(topic: string, agent: string, provider: string, d: ResearchWaitDeps): Promise<number> {
+  const art = exploreArtDir(topic);
+  const stateFile = join(art, `gap-${agent}.txt`);
+  if (!existsSync(stateFile)) { log.error(`explore gap-wait: ${stateFile} missing (run explore gap-send first)`); return 1; }
+  const text = readFileSync(stateFile, "utf8");
+  if (lastTag(text, "GS") === "skipped") { // trigger/guard/empty-scope short-circuit: nothing was sent
+    writeFileSync(join(art, `gap-${agent}.done`), "");
+    log.ok(`explore gap-wait: ${agent} GS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
+  if (offset === null) { log.error(`explore gap-wait: OFFSET not set in ${stateFile}`); return 1; }
+
+  const timeout = scaledTimeout(consultTimeout("gap"), d.multiplier(provider));
+  log.info(`explore gap-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
+
+  const gs = verifyState(ev, readIfExistsOrNull(join(art, `gap-${agent}.md`))); // done → ok iff answers non-empty
+  recordWaitOutcome(agent, provider, topic, stateFile, gs, "GS",
+    ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
+  writeFileSync(join(art, `gap-${agent}.done`), "");
+  log.ok(`explore gap-wait: ${agent} GS=${gs}`);
   return 0;
 }
 
