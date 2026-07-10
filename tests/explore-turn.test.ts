@@ -98,6 +98,22 @@ describe("composeAdversaryPrompt", () => {
     expect(p).not.toContain('{"event":"done"');
     expect(p).not.toContain("END_OF_INSTRUCTION");
   });
+  it("renders every priorityTargets token under a Priority targets block", () => {
+    const pt = composeAdversaryPrompt("d", "alpha", "/o.md", {
+      peerFindingsPaths: [], lens: ADVERSARY_LENSES[0], priorityTargets: ["src/a.ts:1", "https://x.test/solo"],
+    });
+    expect(pt).toContain("Priority targets");
+    expect(pt).toContain("- src/a.ts:1");
+    expect(pt).toContain("- https://x.test/solo");
+    expect(pt).toMatch(/corroborated by only ONE worker/);
+  });
+  it("omits the Priority targets block when priorityTargets is absent or empty", () => {
+    const without = composeAdversaryPrompt("d", "alpha", "/o.md", { peerFindingsPaths: [], lens: ADVERSARY_LENSES[0] });
+    const empty = composeAdversaryPrompt("d", "alpha", "/o.md", { peerFindingsPaths: [], lens: ADVERSARY_LENSES[0], priorityTargets: [] });
+    expect(without).not.toContain("Priority targets");
+    expect(empty).not.toContain("Priority targets");
+    expect(without).toBe(empty); // byte-identical to pre-change behavior
+  });
 });
 
 // Regression: the explore send path is `inboxWrite(i, m, t, composeX(...))`. Before the fix the
