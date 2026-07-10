@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { freshHome } from "./helpers/tmpHome.js";
-import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, verdictTallyRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
+import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, verdictTallyRun, diffExploreRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
 import { exploreArtDir } from "../src/core/explore.js";
 
 function initDeps(over: Partial<ExploreInitDeps> = {}): ExploreInitDeps {
@@ -759,5 +759,35 @@ describe("explore handoff-extract", () => {
   it("rc2 on a missing art-dir / no topic.txt", async () => {
     const art = mkdtempSync(join(tmpdir(), "explore-empty-"));
     expect(await handoffExtractRun([art])).toBe(2);
+  });
+});
+
+describe("explore diff", () => {
+  const approaches = (...items: string[]) =>
+    "## Approaches\n" + items.map((c, i) => `${i + 1}. ${c}`).join("\n") + "\n";
+  it("writes diff.md + buckets from explore-schema findings", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps()); // list: alpha(codex), charlie(claude)
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "findings-alpha.md"), approaches("[src/a.ts:10] Shared — both", "[src/only-a.ts:1] AlphaOnly — solo"));
+      writeFileSync(join(art, "findings-charlie.md"), approaches("[src/a.ts:10] Shared — both", "[paper:arxiv:9] CharlieOnly — solo"));
+      expect(await diffExploreRun(["x"])).toBe(0);
+      expect(readFileSync(join(art, "alpha_only_items.txt"), "utf8")).toBe("[src/only-a.ts:1] AlphaOnly — solo\n");
+      expect(readFileSync(join(art, "charlie_only_items.txt"), "utf8")).toBe("[paper:arxiv:9] CharlieOnly — solo\n");
+      expect(readFileSync(join(art, "diff.md"), "utf8")).toContain("## Agreed\n- [src/a.ts:10] Shared — both | Shared — both\n");
+    } finally { cleanup(); }
+  });
+  it("rc 1 when diff.md already exists or a findings file is missing", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      expect(await diffExploreRun(["x"])).toBe(1); // findings missing
+      writeFileSync(join(art, "findings-alpha.md"), approaches("[a.ts:1] A — a"));
+      writeFileSync(join(art, "findings-charlie.md"), approaches("[a.ts:1] A — a"));
+      expect(await diffExploreRun(["x"])).toBe(0);
+      expect(await diffExploreRun(["x"])).toBe(1); // diff.md exists; rm to retry
+    } finally { cleanup(); }
   });
 });

@@ -31,9 +31,10 @@ import { run as preflightRun } from "./preflight.js";
 import { readIfExists as readIf, readIfExistsOrNull } from "../core/fsread.js";
 import { parseOpenQuestions, assignOpenQuestions, formatOpenqClaims, parseOpenqClaims, composeOpenqPrompt } from "../core/exploreOpenq.js";
 import { parseAdversaryVerdict, tallyVerdicts } from "../core/exploreVerdict.js";
+import { diffFindings, type DiffPart } from "../core/designDiff.js";
 
 function usage(): number {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|wait-gate|synth-preliminary|" +
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|diff|wait-gate|synth-preliminary|" +
     "confidence|annotate|adversary-send|adversary-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
   return 2;
 }
@@ -50,6 +51,7 @@ export async function run(args: string[]): Promise<number> {
     case "openq-collate": return openqCollateRun(rest);
     case "openq-send": return openqSendRun(rest);
     case "openq-wait": return openqWaitRun(rest);
+    case "diff": return diffExploreRun(rest);
     case "wait-gate": return exploreWaitGateRun(rest);
     case "synth-preliminary": return synthPreliminaryRun(rest);
     case "confidence": return confidenceRun(rest);
@@ -305,6 +307,35 @@ export async function openqWaitWith(topic: string, agent: string, provider: stri
     ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
   writeFileSync(join(art, `openq-${agent}.done`), "");
   log.ok(`explore openq-wait: ${agent} QS=${qs}`);
+  return 0;
+}
+
+// ---- diff (Approaches-schema buckets; foundation for crossverify/rebuttal/gap rounds) ----
+export async function diffExploreRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: explore diff <topic>"); return 2; }
+  const art = exploreArtDir(topic);
+  if (!existsSync(art)) { log.error(`explore diff: ${art} not found — run explore init`); return 1; }
+  if (existsSync(join(art, "diff.md"))) { log.error("explore diff: diff.md exists; rm to retry"); return 1; }
+  const listPath = join(art, "list.txt");
+  if (!existsSync(listPath)) { log.error("explore diff: list.txt missing — run explore init first"); return 1; }
+  const rows = parseListFile(readFileSync(listPath, "utf8"));
+  if (rows.length < 2) { log.error(`explore diff: need >=2 workers in list.txt, got ${rows.length}`); return 1; }
+
+  const workers: DiffPart[] = [];
+  for (const r of rows) {
+    const f = join(art, `findings-${r.agent}.md`);
+    if (!existsSync(f)) { log.error(`explore diff: ${r.agent} findings missing: ${f}`); return 1; }
+    workers.push({ name: r.agent, findings: readFileSync(f, "utf8") });
+  }
+  const result = diffFindings(workers, ["Approaches"]);
+  for (const file of result.files) atomicWrite(join(art, file.filename), file.content);
+  atomicWrite(join(art, "diff.md"), result.diffMd);
+  const summary = result.files
+    .filter((f) => f.filename.endsWith("_only_items.txt") || f.filename === "consensus.txt")
+    .map((f) => `${f.filename.replace(/\.txt$/, "")}=${f.content.split("\n").filter(Boolean).length}`)
+    .join(" ");
+  log.ok(`explore diff: wrote ${join(art, "diff.md")} (${rows.length} workers) ${summary}`);
   return 0;
 }
 
