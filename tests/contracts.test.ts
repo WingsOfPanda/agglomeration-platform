@@ -77,6 +77,12 @@ describe("contracts", () => {
     expect(K.consultTimeout("experiment")).toBe(1800);
     expect(() => K.consultTimeout("bogus" as any)).toThrow();
   });
+  it("consultTimeout openq: default 300, contracts consult override respected", () => {
+    withContracts(SAMPLE);                       // no openq_timeout_s → default
+    expect(K.consultTimeout("openq")).toBe(300);
+    withContracts(SAMPLE + "  openq_timeout_s: 120\n"); // SAMPLE ends inside the consult: block
+    expect(K.consultTimeout("openq")).toBe(120);
+  });
   it("ignores a ~/.ap/contracts.yaml shadow; always reads shipped", () => {
     withContracts(SAMPLE);                                  // shipped: codex ready_timeout_s 90
     const shadow = mkdtempSync(join(tmpdir(), "shadow-"));
