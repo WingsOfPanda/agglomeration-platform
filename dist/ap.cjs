@@ -18326,11 +18326,11 @@ var init_turn = __esm({
 });
 
 // src/core/designDiff.ts
-function parseClaims(findings) {
+function parseClaims(findings, headings = ["Claims"]) {
   const out = [];
   let inClaims = false;
   for (const line of findings.split("\n")) {
-    if (/^## Claims/.test(line)) {
+    if (headings.some((h2) => line.startsWith(`## ${h2}`))) {
       inClaims = true;
       continue;
     }
@@ -18353,6 +18353,7 @@ function citationOverlaps(aRaw, bRaw) {
   const b = bRaw.replace(/^\.\//, "");
   if (a2.startsWith("http") || b.startsWith("http")) return a2 === b;
   if (a2.startsWith("runtime:") || b.startsWith("runtime:")) return a2 === b;
+  if (a2.startsWith("paper:") || b.startsWith("paper:")) return a2 === b;
   const aPath = a2.split(":")[0];
   const bPath = b.split(":")[0];
   if (aPath !== bPath) return false;
@@ -18369,7 +18370,7 @@ function citationOverlaps(aRaw, bRaw) {
 function mdSection(header, lines) {
   return header + "\n" + (lines && lines.length ? lines.map((l) => `- ${l}`).join("\n") + "\n" : "");
 }
-function diffFindings(workers) {
+function diffFindings(workers, headings) {
   const n2 = workers.length;
   if (n2 < 2) throw new Error(`diffFindings: need >=2 workers, got ${n2}`);
   const names = workers.map((p) => p.name);
@@ -18377,7 +18378,7 @@ function diffFindings(workers) {
   const start = [], end = [];
   for (let idx = 0; idx < n2; idx++) {
     start[idx] = owner.length;
-    for (const c3 of parseClaims(workers[idx].findings)) {
+    for (const c3 of parseClaims(workers[idx].findings, headings)) {
       owner.push(idx);
       cite.push(c3.cite);
       text.push(c3.text);
