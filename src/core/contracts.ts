@@ -57,10 +57,10 @@ export function agentConsultValidated(name: string): boolean {
   return inst(name)?.consult_validated === true;
 }
 
-export type ConsultKind = "research" | "verify" | "adversary" | "experiment" | "openq";
-const CONSULT_DEFAULTS: Record<ConsultKind, number> = { research: 600, verify: 300, adversary: 600, experiment: 1800, openq: 300 };
+export type ConsultKind = "research" | "verify" | "adversary" | "experiment" | "openq" | "rebuttal" | "gap";
+const CONSULT_DEFAULTS: Record<ConsultKind, number> = { research: 600, verify: 300, adversary: 600, experiment: 1800, openq: 300, rebuttal: 300, gap: 600 };
 export function consultTimeout(kind: ConsultKind): number {
-  if (!(kind in CONSULT_DEFAULTS)) throw new Error(`consultTimeout: kind must be 'research', 'verify', 'adversary', 'experiment', or 'openq'; got '${kind}'`);
+  if (!(kind in CONSULT_DEFAULTS)) throw new Error(`consultTimeout: kind must be 'research', 'verify', 'adversary', 'experiment', 'openq', 'rebuttal', or 'gap'; got '${kind}'`);
   const v = (load().consult ?? {})[`${kind}_timeout_s`];
   return /^[1-9][0-9]*$/.test(String(v)) ? Number(v) : CONSULT_DEFAULTS[kind];
 }

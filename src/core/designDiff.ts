@@ -1,11 +1,12 @@
 export interface Claim { cite: string; text: string; }
 
-/** Port of consult_parse_claims (lib/consult.sh:43): `N. [cite] text` lines under `## Claims`. */
-export function parseClaims(findings: string): Claim[] {
+/** Port of consult_parse_claims (lib/consult.sh:43): `N. [cite] text` lines under any listed
+ *  `## <heading>`. Default `["Claims"]` keeps design byte-identical; explore passes `["Approaches"]`. */
+export function parseClaims(findings: string, headings: string[] = ["Claims"]): Claim[] {
   const out: Claim[] = [];
   let inClaims = false;
   for (const line of findings.split("\n")) {
-    if (/^## Claims/.test(line)) { inClaims = true; continue; }
+    if (headings.some((h) => line.startsWith(`## ${h}`))) { inClaims = true; continue; }
     if (/^## /.test(line)) { inClaims = false; continue; }
     if (inClaims && /^[0-9]+\. \[[^\]]+\] /.test(line)) {
       const m = line.match(/\[[^\]]+\]/);
@@ -24,6 +25,7 @@ export function citationOverlaps(aRaw: string, bRaw: string): boolean {
   const b = bRaw.replace(/^\.\//, "");
   if (a.startsWith("http") || b.startsWith("http")) return a === b;
   if (a.startsWith("runtime:") || b.startsWith("runtime:")) return a === b;
+  if (a.startsWith("paper:") || b.startsWith("paper:")) return a === b;
   const aPath = a.split(":")[0];
   const bPath = b.split(":")[0];
   if (aPath !== bPath) return false;
@@ -50,7 +52,7 @@ function mdSection(header: string, lines: string[] | undefined): string {
 }
 
 /** Port of consult_diff (lib/consult.sh:149). N>=2 workers → bucket files + diff.md. */
-export function diffFindings(workers: DiffPart[]): DiffResult {
+export function diffFindings(workers: DiffPart[], headings?: string[]): DiffResult {
   const n = workers.length;
   if (n < 2) throw new Error(`diffFindings: need >=2 workers, got ${n}`);
   const names = workers.map((p) => p.name);
@@ -60,7 +62,7 @@ export function diffFindings(workers: DiffPart[]): DiffResult {
   const start: number[] = [], end: number[] = [];
   for (let idx = 0; idx < n; idx++) {
     start[idx] = owner.length;
-    for (const c of parseClaims(workers[idx].findings)) { owner.push(idx); cite.push(c.cite); text.push(c.text); flag.push(false); }
+    for (const c of parseClaims(workers[idx].findings, headings)) { owner.push(idx); cite.push(c.cite); text.push(c.text); flag.push(false); }
     end[idx] = owner.length;
   }
 
