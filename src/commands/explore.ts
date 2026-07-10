@@ -34,10 +34,11 @@ import { parseAdversaryVerdict, tallyVerdicts } from "../core/exploreVerdict.js"
 import { diffFindings, type DiffPart, type Claim } from "../core/designDiff.js";
 import { parseBucketLines, selectRebuttalTargets, composeRebuttalPrompt, type CritiqueInput } from "../core/exploreRebuttal.js";
 import { parseSelfAssessment } from "../core/exploreSelfAssess.js";
+import { buildContribution, renderContributionTsv, type ContributionArtifacts } from "../core/exploreContribution.js";
 
 function usage(): number {
   log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|survivors|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|" +
-    "confidence|annotate|adversary-send|adversary-wait|rebuttal-send|rebuttal-wait|gap-send|gap-wait|signoff-send|signoff-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
+    "confidence|annotate|adversary-send|adversary-wait|rebuttal-send|rebuttal-wait|gap-send|gap-wait|signoff-send|signoff-wait|synth-final|verdict-tally|contribution|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 
@@ -63,6 +64,7 @@ export async function run(args: string[]): Promise<number> {
     case "gap-wait": return gapWaitRun(rest);
     case "signoff-send": return signoffSendRun(rest);
     case "signoff-wait": return signoffWaitRun(rest);
+    case "contribution": return contributionRun(rest);
     case "wait-gate": return exploreWaitGateRun(rest);
     case "synth-preliminary": return synthPreliminaryRun(rest);
     case "confidence": return confidenceRun(rest);
@@ -692,6 +694,39 @@ export async function signoffWaitWith(topic: string, agent: string, provider: st
     ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
   writeFileSync(join(art, `signoff-${agent}.done`), "");
   log.ok(`explore signoff-wait: ${agent} SS=${ss}`);
+  return 0;
+}
+
+// ---- contribution (Phase 8a read-only per-provider scoreboard; archived, never gates) ----
+export async function contributionRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: explore contribution <topic>"); return 2; }
+  const art = exploreArtDir(topic);
+  if (!existsSync(art)) { log.error(`explore contribution: ${art} not found — run explore init`); return 1; }
+  // Roster = the ORIGINAL list when survivors rewrote it — dropped workers appear with their real
+  // (usually zero) counts instead of vanishing from the record.
+  const listRaw = readIf(join(art, "list-original.txt")) || readIf(join(art, "list.txt"));
+  const rows = parseListFile(listRaw);
+  if (rows.length === 0) { log.error(`explore contribution: list.txt missing or empty at ${art}`); return 1; }
+
+  const artifacts: Record<string, ContributionArtifacts> = {};
+  const crossverify: Record<string, string> = {};
+  for (const r of rows) {
+    artifacts[r.agent] = {
+      findings: readIf(join(art, `findings-${r.agent}.md`)),
+      soloBucket: readIf(join(art, `${r.agent}_only_items.txt`)),
+      adversary: readIf(join(art, `adversary-${r.agent}.md`)),
+      adversaryTag: lastTag(readIf(join(art, `adversary-${r.agent}.txt`)), "AS"),
+      rebuttal: readIf(join(art, `rebuttal-${r.agent}.md`)),
+      signoff: readIf(join(art, `signoff-${r.agent}.md`)),
+      signoffTag: lastTag(readIf(join(art, `signoff-${r.agent}.txt`)), "SS"),
+    };
+    crossverify[r.agent] = readIf(join(art, `crossverify-${r.agent}.md`));
+  }
+  const tsv = renderContributionTsv(buildContribution({ rows, artifacts, crossverify }));
+  atomicWrite(join(art, "contribution.tsv"), tsv);
+  process.stdout.write(tsv);
+  log.ok(`explore contribution: wrote ${join(art, "contribution.tsv")} (${rows.length} rows)`);
   return 0;
 }
 
