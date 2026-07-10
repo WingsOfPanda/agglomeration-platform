@@ -43,7 +43,7 @@ export function researchLens(provider: string): string {
 }
 
 /** Research-phase prompt (port of meditate/research.md). Expose the landscape; do NOT recommend. */
-export function composeExploreResearchPrompt(topic: string, writeTo: string, lit: string, lens: string): string {
+export function composeExploreResearchPrompt(topic: string, writeTo: string, lit: string, lens: string, selfassessTo: string): string {
   const t = topic.trim();
   return [
     "Investigate the following topic from multiple angles. Your job is not to",
@@ -85,6 +85,20 @@ export function composeExploreResearchPrompt(topic: string, writeTo: string, lit
     "",
     "  ## Notes",
     "  <any free-form additions; not parsed by the Hub>",
+    "",
+    `SECOND output file — write your self-assessment to ${selfassessTo} with this structure:`,
+    "",
+    "  # Self-assessment",
+    "",
+    "  <one line per approach you listed: `<confidence>: <approach name>`,",
+    "  where <confidence> is high | medium | low>",
+    "",
+    "  ## Least sure",
+    "  - <the claim you are least confident in, with its [citation]>",
+    "  - ...",
+    "",
+    "The self-assessment is hub-side accountability material — do NOT embed it in the",
+    "findings file; keep the two files separate.",
     "",
     "Citation format options:",
     "  - <file path>:<line>          e.g. src/auth/store.py:42",

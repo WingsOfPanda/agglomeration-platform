@@ -102,6 +102,7 @@ describe("explore research-send/wait", () => {
       expect(readFileSync(join(art, "research-alpha.txt"), "utf8")).toContain("OFFSET=7");
       const prompt = readFileSync(join(art, "alpha_research_prompt.md"), "utf8");
       expect(prompt).toContain(join(art, "findings-alpha.md"));
+      expect(prompt).toContain(join(art, "selfassess-alpha.md"));
       expect(sent).toEqual(["--from", "hub", "alpha", "x", `@${join(art, "alpha_research_prompt.md")}`]);
     } finally { cleanup(); }
   });
