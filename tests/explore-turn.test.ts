@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { composeExploreResearchPrompt, composeAdversaryPrompt, litGuidance } from "../src/core/exploreTurn.js";
+import { composeExploreResearchPrompt, composeAdversaryPrompt, litGuidance, ADVERSARY_LENSES } from "../src/core/exploreTurn.js";
 import { inboxWrite, inboxPath } from "../src/core/ipc.js";
 import { workerDir } from "../src/core/paths.js";
 
@@ -34,11 +34,28 @@ describe("composeExploreResearchPrompt", () => {
 });
 
 describe("composeAdversaryPrompt", () => {
-  const p = composeAdversaryPrompt("## Topic\nflash\n## Approaches\n1. A", "alpha", "/art/adversary-alpha.md");
+  const opts = { peerFindingsPaths: ["/art/findings-charlie.md"], lens: ADVERSARY_LENSES[0] };
+  const p = composeAdversaryPrompt("## Topic\nflash\n## Approaches\n1. A", "alpha", "/art/adversary-alpha.md", opts);
   it("inlines the draft, names the agent, targets the out-path", () => {
     expect(p).toContain("## Approaches");
     expect(p).toContain("alpha");
     expect(p).toContain("/art/adversary-alpha.md");
+  });
+  it("lists every peer findings path under the raw-evidence block", () => {
+    expect(p).toContain("Raw evidence behind the draft");
+    expect(p).toContain("/art/findings-charlie.md");
+  });
+  it("distinct lenses produce different emphasis text; both retain the full attack-surface list", () => {
+    const p0 = composeAdversaryPrompt("d", "alpha", "/o.md", { peerFindingsPaths: [], lens: ADVERSARY_LENSES[0] });
+    const p1 = composeAdversaryPrompt("d", "alpha", "/o.md", { peerFindingsPaths: [], lens: ADVERSARY_LENSES[1] });
+    expect(p0).not.toBe(p1);
+    expect(p0).toContain("citation-fidelity");
+    expect(p1).toContain("frame-exclusion");
+    for (const px of [p0, p1]) {
+      expect(px).toContain("Attack surface — prioritize these failure modes:");
+      expect(px).toContain("Approaches that were missed or wrongly excluded from the landscape");
+      expect(px).toContain("SOTA claims that are stale");
+    }
   });
   it("does NOT embed its own done-event line or END_OF_INSTRUCTION (inboxWrite owns them)", () => {
     expect(p).not.toContain('{"event":"done"');
@@ -70,7 +87,7 @@ describe("explore inbox carries a single done contract (no duplicate END_OF_INST
 
   it("adversary prompt → exactly one END_OF_INSTRUCTION and one done line", () => {
     seedPart("alpha", "codex", "demo");
-    inboxWrite("alpha", "codex", "demo", composeAdversaryPrompt("## Approaches\n1. A", "alpha", "/art/adversary-alpha.md"));
+    inboxWrite("alpha", "codex", "demo", composeAdversaryPrompt("## Approaches\n1. A", "alpha", "/art/adversary-alpha.md", { peerFindingsPaths: ["/art/findings-charlie.md"], lens: ADVERSARY_LENSES[1] }));
     const txt = readFileSync(inboxPath("alpha", "codex", "demo"), "utf8");
     expect(count(txt, "END_OF_INSTRUCTION")).toBe(1);
     expect(count(txt, '"event":"done"')).toBe(1);

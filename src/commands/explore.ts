@@ -24,7 +24,7 @@ import { buildAnnotations } from "../core/exploreAnnotate.js";
 import { outboxOffset, outboxPath, TERMINAL_EVENTS, type OutboxEvent } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
 import { parseLatestOffset, scaledTimeout, researchState, verifyState, gateState, recordWaitOutcome } from "../core/designTurn.js";
-import { composeExploreResearchPrompt, composeAdversaryPrompt, litGuidance } from "../core/exploreTurn.js";
+import { composeExploreResearchPrompt, composeAdversaryPrompt, litGuidance, ADVERSARY_LENSES } from "../core/exploreTurn.js";
 import { run as sendRun } from "./send.js";
 import { run as spawnRun } from "./spawn.js";
 import { run as preflightRun } from "./preflight.js";
@@ -315,9 +315,15 @@ export async function adversarySendWith(topic: string, agent: string, provider: 
   const stateFile = join(art, `adversary-${agent}.txt`);
   if (existsSync(stateFile)) { log.error(`explore adversary-send: ${stateFile} exists; rm to retry`); return 1; }
 
+  const rows = parseListFile(readIf(join(art, "list.txt")));
+  const index = rows.findIndex((r) => r.agent === agent);
+  if (index < 0) { log.error(`explore adversary-send: ${agent} not in list.txt at ${art}`); return 1; }
+  const peerFindingsPaths = rows.filter((r) => r.agent !== agent).map((r) => join(art, `findings-${r.agent}.md`));
+  const lens = ADVERSARY_LENSES[index % ADVERSARY_LENSES.length];
+
   const outPath = join(art, `adversary-${agent}.md`);
   const promptFile = join(art, `${agent}_adversary_prompt.md`);
-  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath));
+  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath, { peerFindingsPaths, lens }));
 
   const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}\n`);
