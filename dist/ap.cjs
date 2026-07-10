@@ -26747,15 +26747,16 @@ async function exploreWaitGateRun(rest) {
     crossverify: "VS",
     adversary: "AS",
     rebuttal: "RS",
-    gap: "GS"
+    gap: "GS",
+    signoff: "SS"
   };
   if (!topic || !phase) {
-    log.error("usage: explore wait-gate <topic> <research|openq|crossverify|adversary|rebuttal|gap>");
+    log.error("usage: explore wait-gate <topic> <research|openq|crossverify|adversary|rebuttal|gap|signoff>");
     return 2;
   }
   const key = KEYS[phase];
   if (!key) {
-    log.error(`explore wait-gate: phase must be research|openq|crossverify|adversary|rebuttal|gap (got ${phase})`);
+    log.error(`explore wait-gate: phase must be research|openq|crossverify|adversary|rebuttal|gap|signoff (got ${phase})`);
     return 2;
   }
   const art = exploreArtDir(topic);
