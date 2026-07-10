@@ -25881,6 +25881,87 @@ var init_exploreSelfAssess = __esm({
   }
 });
 
+// src/core/exploreContribution.ts
+function countResponses(text, tag) {
+  return text.split("\n").filter((l) => new RegExp(`^[0-9]+\\. ${tag}\\b`).test(l)).length;
+}
+function signoffVerdict(text, tag) {
+  if (tag === "skipped" || !text.trim()) return "skipped";
+  const m = text.match(/^VERDICT:[ \t]*(fair|misrepresented)[ \t]*$/im);
+  return m ? m[1].toLowerCase() : "malformed";
+}
+function buildContribution(input) {
+  return input.rows.map((r) => {
+    const a2 = input.artifacts[r.agent] ?? NO_ARTIFACTS;
+    const solo = parseBucketLines(a2.soloBucket);
+    const total = parseClaims(a2.findings, ["Approaches"]).length;
+    let agree = 0, dispute = 0, uncertain = 0;
+    for (const [verifier, text] of Object.entries(input.crossverify)) {
+      if (verifier === r.agent) continue;
+      for (const v of parseVerdicts(text)) {
+        if (solo.some((c3) => citationOverlaps(v.cite, c3.cite))) {
+          if (v.tag === "AGREE") agree++;
+          else if (v.tag === "DISPUTE") dispute++;
+          else uncertain++;
+        }
+      }
+    }
+    const adversary_verdict = a2.adversaryTag === "skipped" || !a2.adversary.trim() ? "skipped" : parseAdversaryVerdict(a2.adversary);
+    return {
+      agent: r.agent,
+      provider: r.provider,
+      claims_total: total,
+      claims_solo: solo.length,
+      claims_consensus: Math.max(0, total - solo.length),
+      peer_agree: agree,
+      peer_dispute: dispute,
+      peer_uncertain: uncertain,
+      adversary_verdict,
+      rebuttal_defended: countResponses(a2.rebuttal, "DEFEND"),
+      rebuttal_conceded: countResponses(a2.rebuttal, "CONCEDE"),
+      signoff: signoffVerdict(a2.signoff, a2.signoffTag)
+    };
+  });
+}
+function renderContributionTsv(rows) {
+  const scrub = (v) => String(v).replace(/[\t\n\r]+/g, " ");
+  return `# ${COLUMNS.join("	")}
+` + rows.map((r) => COLUMNS.map((c3) => scrub(r[c3])).join("	") + "\n").join("");
+}
+var NO_ARTIFACTS, COLUMNS;
+var init_exploreContribution = __esm({
+  "src/core/exploreContribution.ts"() {
+    "use strict";
+    init_designDiff();
+    init_designAdjudicate();
+    init_exploreRebuttal();
+    init_exploreVerdict();
+    NO_ARTIFACTS = {
+      findings: "",
+      soloBucket: "",
+      adversary: "",
+      adversaryTag: null,
+      rebuttal: "",
+      signoff: "",
+      signoffTag: null
+    };
+    COLUMNS = [
+      "agent",
+      "provider",
+      "claims_total",
+      "claims_solo",
+      "claims_consensus",
+      "peer_agree",
+      "peer_dispute",
+      "peer_uncertain",
+      "adversary_verdict",
+      "rebuttal_defended",
+      "rebuttal_conceded",
+      "signoff"
+    ];
+  }
+});
+
 // src/commands/explore.ts
 var explore_exports = {};
 __export(explore_exports, {
@@ -25889,6 +25970,7 @@ __export(explore_exports, {
   annotateRun: () => annotateRun,
   classifyRun: () => classifyRun,
   confidenceRun: () => confidenceRun,
+  contributionRun: () => contributionRun,
   crossverifySendWith: () => crossverifySendWith,
   crossverifyWaitWith: () => crossverifyWaitWith,
   diffExploreRun: () => diffExploreRun,
@@ -25916,7 +25998,7 @@ __export(explore_exports, {
   verdictTallyRun: () => verdictTallyRun
 });
 function usage5() {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|survivors|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|rebuttal-send|rebuttal-wait|gap-send|gap-wait|signoff-send|signoff-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|survivors|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|rebuttal-send|rebuttal-wait|gap-send|gap-wait|signoff-send|signoff-wait|synth-final|verdict-tally|contribution|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 async function run14(args) {
@@ -25959,6 +26041,8 @@ async function run14(args) {
       return signoffSendRun(rest);
     case "signoff-wait":
       return signoffWaitRun(rest);
+    case "contribution":
+      return contributionRun(rest);
     case "wait-gate":
       return exploreWaitGateRun(rest);
     case "synth-preliminary":
@@ -26728,6 +26812,43 @@ async function signoffWaitWith(topic, agent, provider, d) {
   log.ok(`explore signoff-wait: ${agent} SS=${ss}`);
   return 0;
 }
+async function contributionRun(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("usage: explore contribution <topic>");
+    return 2;
+  }
+  const art = exploreArtDir(topic);
+  if (!(0, import_node_fs37.existsSync)(art)) {
+    log.error(`explore contribution: ${art} not found \u2014 run explore init`);
+    return 1;
+  }
+  const listRaw = readIfExists((0, import_node_path34.join)(art, "list-original.txt")) || readIfExists((0, import_node_path34.join)(art, "list.txt"));
+  const rows = parseListFile(listRaw);
+  if (rows.length === 0) {
+    log.error(`explore contribution: list.txt missing or empty at ${art}`);
+    return 1;
+  }
+  const artifacts = {};
+  const crossverify = {};
+  for (const r of rows) {
+    artifacts[r.agent] = {
+      findings: readIfExists((0, import_node_path34.join)(art, `findings-${r.agent}.md`)),
+      soloBucket: readIfExists((0, import_node_path34.join)(art, `${r.agent}_only_items.txt`)),
+      adversary: readIfExists((0, import_node_path34.join)(art, `adversary-${r.agent}.md`)),
+      adversaryTag: lastTag(readIfExists((0, import_node_path34.join)(art, `adversary-${r.agent}.txt`)), "AS"),
+      rebuttal: readIfExists((0, import_node_path34.join)(art, `rebuttal-${r.agent}.md`)),
+      signoff: readIfExists((0, import_node_path34.join)(art, `signoff-${r.agent}.md`)),
+      signoffTag: lastTag(readIfExists((0, import_node_path34.join)(art, `signoff-${r.agent}.txt`)), "SS")
+    };
+    crossverify[r.agent] = readIfExists((0, import_node_path34.join)(art, `crossverify-${r.agent}.md`));
+  }
+  const tsv = renderContributionTsv(buildContribution({ rows, artifacts, crossverify }));
+  atomicWrite((0, import_node_path34.join)(art, "contribution.tsv"), tsv);
+  process.stdout.write(tsv);
+  log.ok(`explore contribution: wrote ${(0, import_node_path34.join)(art, "contribution.tsv")} (${rows.length} rows)`);
+  return 0;
+}
 function missingListArtifacts(art, rows, prefix) {
   return rows.filter((r) => !readIfExists((0, import_node_path34.join)(art, `${prefix}-${r.agent}.md`)).trim()).map((r) => `${prefix}-${r.agent}.md`);
 }
@@ -27214,6 +27335,7 @@ var init_explore2 = __esm({
     init_designDiff();
     init_exploreRebuttal();
     init_exploreSelfAssess();
+    init_exploreContribution();
     liveExploreInitDeps = {
       activeProviders: () => readProviderList(activeProvidersPath()),
       isValidated: agentConsultValidated,

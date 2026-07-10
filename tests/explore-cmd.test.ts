@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { freshHome } from "./helpers/tmpHome.js";
-import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, crossverifySendWith, crossverifyWaitWith, rebuttalSendWith, rebuttalWaitWith, gapSendWith, gapWaitWith, signoffSendWith, signoffWaitWith, survivorsRun, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, verdictTallyRun, diffExploreRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
+import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, crossverifySendWith, crossverifyWaitWith, rebuttalSendWith, rebuttalWaitWith, gapSendWith, gapWaitWith, signoffSendWith, signoffWaitWith, survivorsRun, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, verdictTallyRun, diffExploreRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, contributionRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
 import { exploreArtDir } from "../src/core/explore.js";
 
 function initDeps(over: Partial<ExploreInitDeps> = {}): ExploreInitDeps {
@@ -1343,5 +1343,67 @@ describe("explore signoff-send/wait", () => {
       expect(state).toContain("SS=question");
       expect(state.match(/OFFSET=/g)!.length).toBe(2); // re-armed past the question event
     } finally { cleanup(); delete process.env.CLAUDE_PLUGIN_ROOT; }
+  });
+});
+
+describe("explore contribution", () => {
+  function cap2(): { text: () => string; restore: () => void } {
+    const c: string[] = [];
+    const s = vi.spyOn(process.stdout, "write").mockImplementation(((x: unknown) => { c.push(String(x)); return true; }) as never);
+    return { text: () => c.join(""), restore: () => s.mockRestore() };
+  }
+  it("fully seeded N=2 art dir → exact TSV rows in file and stdout", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps()); // alpha(codex), charlie(claude)
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "findings-alpha.md"),
+        "## Approaches\n1. [src/a.ts:10] Shared — both\n2. [src/only-a.ts:1] AlphaOnly — solo\n");
+      writeFileSync(join(art, "findings-charlie.md"),
+        "## Approaches\n1. [src/a.ts:10] Shared — both\n");
+      writeFileSync(join(art, "alpha_only_items.txt"), "[src/only-a.ts:1] AlphaOnly — solo\n");
+      writeFileSync(join(art, "charlie_only_items.txt"), "");
+      writeFileSync(join(art, "crossverify-charlie.md"),
+        "# Verify\n## Verdicts\n1. AGREE [src/only-a.ts:1] AlphaOnly — solo\n   checked\n");
+      writeFileSync(join(art, "crossverify-alpha.md"), "");
+      writeFileSync(join(art, "adversary-alpha.txt"), "OFFSET=0\nAS=ok\n");
+      writeFileSync(join(art, "adversary-alpha.md"), "## Verdict\naccept\n");
+      writeFileSync(join(art, "adversary-charlie.txt"), "AS=skipped\n");
+      writeFileSync(join(art, "rebuttal-alpha.md"), "## Responses\n1. DEFEND holds\n");
+      writeFileSync(join(art, "signoff-alpha.txt"), "OFFSET=0\nSS=ok\n");
+      writeFileSync(join(art, "signoff-alpha.md"), "# Sign-off\nVERDICT: fair\n");
+      const out = cap2();
+      try { expect(await contributionRun(["x"])).toBe(0); } finally { out.restore(); }
+      const expected = [
+        "# agent\tprovider\tclaims_total\tclaims_solo\tclaims_consensus\tpeer_agree\tpeer_dispute\tpeer_uncertain\tadversary_verdict\trebuttal_defended\trebuttal_conceded\tsignoff",
+        "alpha\tcodex\t2\t1\t1\t1\t0\t0\taccept\t1\t0\tfair",
+        "charlie\tclaude\t1\t0\t1\t0\t0\t0\tskipped\t0\t0\tskipped",
+      ].join("\n") + "\n";
+      expect(readFileSync(join(art, "contribution.tsv"), "utf8")).toBe(expected);
+      expect(out.text()).toBe(expected);
+    } finally { cleanup(); }
+  });
+  it("with list-original.txt present the dropped worker appears as a zero row", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      // survivors dropped charlie: list.txt has alpha only, list-original preserves both
+      writeFileSync(join(art, "list-original.txt"), readFileSync(join(art, "list.txt"), "utf8"));
+      writeFileSync(join(art, "list.txt"), "# generated later by /ap:design\ncodex\talpha\n");
+      writeFileSync(join(art, "findings-alpha.md"), "## Approaches\n1. [src/a.ts:1] A — solo\n");
+      const out = cap2();
+      try { expect(await contributionRun(["x"])).toBe(0); } finally { out.restore(); }
+      const lines = readFileSync(join(art, "contribution.tsv"), "utf8").trimEnd().split("\n");
+      expect(lines.length).toBe(3); // header + BOTH roster rows
+      expect(lines[2]).toBe("charlie\tclaude\t0\t0\t0\t0\t0\t0\tskipped\t0\t0\tskipped");
+    } finally { cleanup(); }
+  });
+  it("rc2 without a topic; rc1 when the art dir is missing", async () => {
+    const { cleanup } = freshHome();
+    try {
+      expect(await contributionRun([])).toBe(2);
+      expect(await contributionRun(["nope"])).toBe(1);
+    } finally { cleanup(); }
   });
 });
