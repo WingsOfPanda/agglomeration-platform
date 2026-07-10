@@ -25605,6 +25605,51 @@ var init_exploreOpenq = __esm({
   }
 });
 
+// src/core/exploreVerdict.ts
+function isVerdict(v) {
+  return SEVERITY.includes(v);
+}
+function parseAdversaryVerdict(text) {
+  let inVerdict = false;
+  for (const line of text.split("\n")) {
+    if (/^## Verdict\b/.test(line)) {
+      inVerdict = true;
+      continue;
+    }
+    if (/^## /.test(line)) {
+      inVerdict = false;
+      continue;
+    }
+    if (!inVerdict || !line.trim()) continue;
+    const v = line.trim().toLowerCase();
+    return isVerdict(v) ? v : "malformed";
+  }
+  return "malformed";
+}
+function tallyVerdicts(rows) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const r of rows) {
+    if (isVerdict(r.verdict)) counts.set(r.verdict, (counts.get(r.verdict) ?? 0) + 1);
+  }
+  let tally = "unavailable";
+  let best = 0;
+  for (const v of SEVERITY) {
+    const n2 = counts.get(v) ?? 0;
+    if (n2 > best) {
+      tally = v;
+      best = n2;
+    }
+  }
+  return { tally };
+}
+var SEVERITY;
+var init_exploreVerdict = __esm({
+  "src/core/exploreVerdict.ts"() {
+    "use strict";
+    SEVERITY = ["needs-attention", "minor-revisions", "accept"];
+  }
+});
+
 // src/commands/explore.ts
 var explore_exports = {};
 __export(explore_exports, {
@@ -25626,10 +25671,11 @@ __export(explore_exports, {
   spawnAllWith: () => spawnAllWith3,
   synthFinalRun: () => synthFinalRun,
   synthPreliminaryRun: () => synthPreliminaryRun,
-  teardownWith: () => teardownWith2
+  teardownWith: () => teardownWith2,
+  verdictTallyRun: () => verdictTallyRun
 });
 function usage5() {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|synth-final|forensics|teardown|handoff-extract> ...");
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 async function run14(args) {
@@ -25666,6 +25712,8 @@ async function run14(args) {
       return adversaryWaitRun(rest);
     case "synth-final":
       return synthFinalRun(rest);
+    case "verdict-tally":
+      return verdictTallyRun(rest);
     case "forensics":
       return forensicsRun5(rest);
     case "flag":
@@ -26256,6 +26304,36 @@ async function synthFinalRun(rest) {
   process.stdout.write(out + "\n");
   return 0;
 }
+async function verdictTallyRun(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("usage: explore verdict-tally <topic>");
+    return 2;
+  }
+  const art = exploreArtDir(topic);
+  if (!(0, import_node_fs37.existsSync)(art)) {
+    log.error(`explore verdict-tally: ${art} not found \u2014 run explore init`);
+    return 1;
+  }
+  const listRaw = readIfExists((0, import_node_path34.join)(art, "list.txt"));
+  if (!listRaw.trim()) {
+    log.error(`explore verdict-tally: list.txt missing or empty at ${art}`);
+    return 1;
+  }
+  const rows = parseListFile(listRaw);
+  const verdictRows = rows.map((r) => {
+    const as = lastTag(readIfExists((0, import_node_path34.join)(art, `adversary-${r.agent}.txt`)), "AS");
+    const verdict = as === "skipped" ? "skipped" : parseAdversaryVerdict(readIfExists((0, import_node_path34.join)(art, `adversary-${r.agent}.md`)));
+    return { agent: r.agent, verdict };
+  });
+  for (const v of verdictRows) process.stdout.write(`VERDICT=${v.agent}:${v.verdict}
+`);
+  const { tally } = tallyVerdicts(verdictRows);
+  process.stdout.write(`TALLY=${tally}
+`);
+  log.ok(`explore verdict-tally: ${tally}`);
+  return 0;
+}
 async function forensicsRun5(rest) {
   return runForensics("explore", exploreArtDir, rest[0]);
 }
@@ -26349,6 +26427,7 @@ var init_explore2 = __esm({
     init_preflight();
     init_fsread();
     init_exploreOpenq();
+    init_exploreVerdict();
     liveExploreInitDeps = {
       activeProviders: () => readProviderList(activeProvidersPath()),
       isValidated: agentConsultValidated,

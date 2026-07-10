@@ -30,10 +30,11 @@ import { run as spawnRun } from "./spawn.js";
 import { run as preflightRun } from "./preflight.js";
 import { readIfExists as readIf, readIfExistsOrNull } from "../core/fsread.js";
 import { parseOpenQuestions, assignOpenQuestions, formatOpenqClaims, parseOpenqClaims, composeOpenqPrompt } from "../core/exploreOpenq.js";
+import { parseAdversaryVerdict, tallyVerdicts } from "../core/exploreVerdict.js";
 
 function usage(): number {
   log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|wait-gate|synth-preliminary|" +
-    "confidence|annotate|adversary-send|adversary-wait|synth-final|forensics|teardown|handoff-extract> ...");
+    "confidence|annotate|adversary-send|adversary-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 
@@ -56,6 +57,7 @@ export async function run(args: string[]): Promise<number> {
     case "adversary-send": return adversarySendRun(rest);
     case "adversary-wait": return adversaryWaitRun(rest);
     case "synth-final": return synthFinalRun(rest);
+    case "verdict-tally": return verdictTallyRun(rest);
     case "forensics": return forensicsRun(rest);
     case "flag": return runFlag("explore", rest[0], rest.slice(1).join(" "));
     case "teardown": return teardownRun(rest);
@@ -540,6 +542,27 @@ export async function synthFinalRun(rest: string[]): Promise<number> {
   const out = join(art, `landscape-${today}-${topic}.md`);
   log.ok(`explore synth-final: inputs validated for ${topic} (adversary_ran=${skipped ? 0 : 1})`);
   process.stdout.write(out + "\n");
+  return 0;
+}
+
+// ---- verdict-tally (deterministic adversary consensus; Phase 8 consumes the stdout) ----
+export async function verdictTallyRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic) { log.error("usage: explore verdict-tally <topic>"); return 2; }
+  const art = exploreArtDir(topic);
+  if (!existsSync(art)) { log.error(`explore verdict-tally: ${art} not found — run explore init`); return 1; }
+  const listRaw = readIf(join(art, "list.txt"));
+  if (!listRaw.trim()) { log.error(`explore verdict-tally: list.txt missing or empty at ${art}`); return 1; }
+  const rows = parseListFile(listRaw);
+  const verdictRows = rows.map((r) => {
+    const as = lastTag(readIf(join(art, `adversary-${r.agent}.txt`)), "AS");
+    const verdict = as === "skipped" ? "skipped" : parseAdversaryVerdict(readIf(join(art, `adversary-${r.agent}.md`)));
+    return { agent: r.agent, verdict };
+  });
+  for (const v of verdictRows) process.stdout.write(`VERDICT=${v.agent}:${v.verdict}\n`);
+  const { tally } = tallyVerdicts(verdictRows);
+  process.stdout.write(`TALLY=${tally}\n`);
+  log.ok(`explore verdict-tally: ${tally}`);
   return 0;
 }
 
