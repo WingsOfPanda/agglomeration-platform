@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { freshHome } from "./helpers/tmpHome.js";
-import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, crossverifySendWith, crossverifyWaitWith, rebuttalSendWith, rebuttalWaitWith, gapSendWith, gapWaitWith, survivorsRun, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, verdictTallyRun, diffExploreRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
+import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, crossverifySendWith, crossverifyWaitWith, rebuttalSendWith, rebuttalWaitWith, gapSendWith, gapWaitWith, signoffSendWith, signoffWaitWith, survivorsRun, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, verdictTallyRun, diffExploreRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
 import { exploreArtDir } from "../src/core/explore.js";
 
 function initDeps(over: Partial<ExploreInitDeps> = {}): ExploreInitDeps {
@@ -1218,5 +1218,130 @@ describe("explore survivors", () => {
       expect(await annotateRun(["x"])).toBe(0);
       expect(await confidenceRun(["x"])).toBe(0);
     } finally { cleanup(); }
+  });
+});
+
+describe("explore signoff-send/wait", () => {
+  function seedSignoff(art: string) {
+    writeFileSync(join(art, "landscape-2026-07-10-x.md"),
+      "## Topic\nx\n## Approaches\n1. A\n## Conclusion\nAdopt FlashAttention; caveats apply.\n## Citations\n- c\n");
+    writeFileSync(join(art, "alpha_only_items.txt"), "[src/only-a.ts:1] AlphaOnly — solo\n");
+    writeFileSync(join(art, "charlie_only_items.txt"), "");
+    writeFileSync(join(art, "diff.md"),
+      "## Agreed\n- [https://x.test/p] Shared — both\n\n## Alpha-only\n- [src/only-a.ts:1] AlphaOnly — solo\n\n## Charlie-only\n");
+    writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+    writeFileSync(join(art, "adversary-alpha.txt"), "OFFSET=0\nAS=ok\n");
+  }
+  it("send one-turn cap: existing signoff-<agent>.txt → rc 1, no send", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      seedSignoff(art);
+      writeFileSync(join(art, "signoff-alpha.txt"), "OFFSET=5\nSS=ok\n");
+      const send = vi.fn(async () => 0);
+      expect(await signoffSendWith("x", "alpha", "codex", { offsetFor: () => 0, send })).toBe(1);
+      expect(send).not.toHaveBeenCalled();
+    } finally { cleanup(); }
+  });
+  for (const [key, file] of [["GS", "gap-alpha.txt"], ["RS", "rebuttal-alpha.txt"], ["AS", "adversary-alpha.txt"], ["QS", "openq-alpha.txt"], ["FS", "research-alpha.txt"]] as const) {
+    it(`send guard: latest phase ${key}=timeout → SS=skipped, no send`, async () => {
+      const { cleanup } = freshHome();
+      try {
+        await initWith(["x"], initDeps());
+        const art = exploreArtDir("x");
+        seedSignoff(art);
+        // seedSignoff leaves AS=ok/FS=ok; neutralize them to skipped so the injected phase is the
+        // latest non-skipped one (the guard walks past skipped). Otherwise seed AS=ok — adversary is
+        // a LATER phase than openq/research in the GS->RS->AS->QS->FS order — masks a QS/FS timeout.
+        writeFileSync(join(art, "adversary-alpha.txt"), "AS=skipped\n");
+        writeFileSync(join(art, "research-alpha.txt"), "FS=skipped\n");
+        writeFileSync(join(art, file), `OFFSET=0\n${key}=timeout\n`);
+        const send = vi.fn(async () => 0);
+        expect(await signoffSendWith("x", "alpha", "codex", { offsetFor: () => 0, send })).toBe(0);
+        expect(send).not.toHaveBeenCalled();
+        expect(readFileSync(join(art, "signoff-alpha.txt"), "utf8")).toBe("SS=skipped\n");
+      } finally { cleanup(); }
+    });
+  }
+  it("send guard walks PAST skipped tags: GS=skipped + RS=skipped + AS=ok → proceeds", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      seedSignoff(art);
+      writeFileSync(join(art, "gap-alpha.txt"), "GS=skipped\n");
+      writeFileSync(join(art, "rebuttal-alpha.txt"), "RS=skipped\n");
+      const send = vi.fn(async () => 0);
+      expect(await signoffSendWith("x", "alpha", "codex", { offsetFor: () => 2, send })).toBe(0);
+      expect(send).toHaveBeenCalled();
+    } finally { cleanup(); }
+  });
+  it("send happy path: prompt carries Conclusion + solo bucket + Agreed text; OFFSET captured", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      seedSignoff(art);
+      let sent: string[] = [];
+      expect(await signoffSendWith("x", "alpha", "codex", { offsetFor: () => 5, send: async (a) => { sent = a; return 0; } })).toBe(0);
+      expect(readFileSync(join(art, "signoff-alpha.txt"), "utf8")).toBe("OFFSET=5\n");
+      const prompt = readFileSync(join(art, "alpha_signoff_prompt.md"), "utf8");
+      expect(prompt).toContain("Adopt FlashAttention; caveats apply.");
+      expect(prompt).toContain("- [src/only-a.ts:1] AlphaOnly — solo");
+      expect(prompt).toContain("- [https://x.test/p] Shared — both");
+      expect(prompt).toContain("VERDICT: fair | misrepresented");
+      expect(prompt).toContain(join(art, "signoff-alpha.md"));
+      expect(prompt).not.toContain("END_OF_INSTRUCTION");
+      expect(sent).toEqual(["--from", "hub", "alpha", "x", `@${join(art, "alpha_signoff_prompt.md")}`]);
+    } finally { cleanup(); }
+  });
+  it("send rc1 when the final landscape doc (or its Conclusion) is missing", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+      expect(await signoffSendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => 0 })).toBe(1);
+    } finally { cleanup(); }
+  });
+  it("send tolerates missing bucket/diff (degraded N=1): prompt still renders the Conclusion", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-2026-07-10-x.md"), "## Conclusion\nSingle-source survey.\n");
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+      const send = vi.fn(async () => 0);
+      expect(await signoffSendWith("x", "alpha", "codex", { offsetFor: () => 0, send })).toBe(0);
+      expect(send).toHaveBeenCalled();
+      const prompt = readFileSync(join(art, "alpha_signoff_prompt.md"), "utf8");
+      expect(prompt).toContain("Single-source survey.");
+      expect(prompt).not.toContain("Your solo claims");
+    } finally { cleanup(); }
+  });
+  it("wait: skipped fast-path; done+non-empty → SS=ok; no event → SS=timeout; question bumps OFFSET", async () => {
+    const { cleanup } = freshHome();
+    try {
+      process.env.CLAUDE_PLUGIN_ROOT = process.cwd();
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "signoff-alpha.txt"), "SS=skipped\n");
+      expect(await signoffWaitWith("x", "alpha", "codex", { wait: async () => { throw new Error("must not wait"); }, multiplier: () => "1" })).toBe(0);
+      expect(existsSync(join(art, "signoff-alpha.done"))).toBe(true);
+      writeFileSync(join(art, "signoff-charlie.txt"), "OFFSET=0\n");
+      writeFileSync(join(art, "signoff-charlie.md"), "# Sign-off\nVERDICT: fair\n");
+      expect(await signoffWaitWith("x", "charlie", "claude", { wait: async () => ({ event: "done" } as any), multiplier: () => "1" })).toBe(0);
+      expect(readFileSync(join(art, "signoff-charlie.txt"), "utf8")).toContain("SS=ok");
+      writeFileSync(join(art, "signoff-golf.txt"), "OFFSET=0\n");
+      expect(await signoffWaitWith("x", "golf", "codex", { wait: async () => null, multiplier: () => "1" })).toBe(0);
+      expect(readFileSync(join(art, "signoff-golf.txt"), "utf8")).toContain("SS=timeout");
+      writeFileSync(join(art, "signoff-hotel.txt"), "OFFSET=0\n");
+      expect(await signoffWaitWith("x", "hotel", "claude", { wait: async () => ({ event: "question", message: "which passage?" } as any), multiplier: () => "1" })).toBe(0);
+      expect(readFileSync(join(art, "question-hotel.txt"), "utf8")).toContain("which passage?");
+      const state = readFileSync(join(art, "signoff-hotel.txt"), "utf8");
+      expect(state).toContain("SS=question");
+      expect(state.match(/OFFSET=/g)!.length).toBe(2); // re-armed past the question event
+    } finally { cleanup(); delete process.env.CLAUDE_PLUGIN_ROOT; }
   });
 });

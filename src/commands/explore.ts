@@ -1,7 +1,7 @@
 // src/commands/explore.ts — /ap:explore CLI verbs (port of meditate). Built on design's DI
 // pattern + IPC/wait/archive helpers; meditate-specific logic lives in src/core/explore*.ts.
 // NOTE: verbs are added task-by-task; the dispatcher's switch grows as each verb lands.
-import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync, rmSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile } from "../args.js";
@@ -24,7 +24,7 @@ import { buildAnnotations } from "../core/exploreAnnotate.js";
 import { outboxOffset, outboxPath, TERMINAL_EVENTS, type OutboxEvent } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
 import { parseLatestOffset, scaledTimeout, researchState, verifyState, gateState, recordWaitOutcome, composeVerifyPrompt } from "../core/designTurn.js";
-import { composeExploreResearchPrompt, composeAdversaryPrompt, composeGapPrompt, litGuidance, ADVERSARY_LENSES, researchLens } from "../core/exploreTurn.js";
+import { composeExploreResearchPrompt, composeAdversaryPrompt, composeGapPrompt, composeSignoffPrompt, litGuidance, ADVERSARY_LENSES, researchLens } from "../core/exploreTurn.js";
 import { run as sendRun } from "./send.js";
 import { run as spawnRun } from "./spawn.js";
 import { run as preflightRun } from "./preflight.js";
@@ -37,7 +37,7 @@ import { parseSelfAssessment } from "../core/exploreSelfAssess.js";
 
 function usage(): number {
   log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|survivors|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|" +
-    "confidence|annotate|adversary-send|adversary-wait|rebuttal-send|rebuttal-wait|gap-send|gap-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
+    "confidence|annotate|adversary-send|adversary-wait|rebuttal-send|rebuttal-wait|gap-send|gap-wait|signoff-send|signoff-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 
@@ -61,6 +61,8 @@ export async function run(args: string[]): Promise<number> {
     case "rebuttal-wait": return rebuttalWaitRun(rest);
     case "gap-send": return gapSendRun(rest);
     case "gap-wait": return gapWaitRun(rest);
+    case "signoff-send": return signoffSendRun(rest);
+    case "signoff-wait": return signoffWaitRun(rest);
     case "wait-gate": return exploreWaitGateRun(rest);
     case "synth-preliminary": return synthPreliminaryRun(rest);
     case "confidence": return confidenceRun(rest);
@@ -589,6 +591,107 @@ export async function gapWaitWith(topic: string, agent: string, provider: string
     ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
   writeFileSync(join(art, `gap-${agent}.done`), "");
   log.ok(`explore gap-wait: ${agent} GS=${gs}`);
+  return 0;
+}
+
+// ---- signoff-send / signoff-wait (Phase 8b bounded final-doc fairness check) ----
+/** The final landscape doc (`landscape-<date>-<topic>.md`), newest by name; null when unwritten.
+ *  `landscape-draft.md` never matches (the date segment is required). */
+function finalLandscapePath(art: string): string | null {
+  let names: string[];
+  try { names = readdirSync(art); } catch { return null; }
+  const finals = names.filter((f) => /^landscape-\d{4}-\d{2}-\d{2}-.+\.md$/.test(f)).sort();
+  return finals.length ? join(art, finals[finals.length - 1]) : null;
+}
+
+/** Body of the first matching `## <heading>` section (until the next `## `), "" when absent. */
+function sectionText(text: string, headings: string[]): string {
+  const out: string[] = [];
+  let inSection = false;
+  for (const line of text.split("\n")) {
+    if (headings.some((h) => line.startsWith(`## ${h}`))) { inSection = true; continue; }
+    if (/^## /.test(line)) { if (inSection) break; continue; }
+    if (inSection) out.push(line);
+  }
+  return out.join("\n").trim();
+}
+
+async function signoffSendRun(rest: string[]): Promise<number> {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: explore signoff-send <topic> <agent> <provider>"); return 2; }
+  return signoffSendWith(topic, agent, provider, liveResearchSendDeps);
+}
+export async function signoffSendWith(topic: string, agent: string, provider: string, d: ResearchSendDeps): Promise<number> {
+  const art = exploreArtDir(topic);
+  const stateFile = join(art, `signoff-${agent}.txt`);
+  if (existsSync(stateFile)) { log.error(`explore signoff-send: ${stateFile} exists — one sign-off turn per worker (the one-turn cap)`); return 1; }
+
+  // Latest-phase guard: first non-skipped tag among GS -> RS -> AS -> QS -> FS decides safety.
+  const tags: Array<[string, string | null]> = [
+    ["GS", lastTag(readIf(join(art, `gap-${agent}.txt`)), "GS")],
+    ["RS", lastTag(readIf(join(art, `rebuttal-${agent}.txt`)), "RS")],
+    ["AS", lastTag(readIf(join(art, `adversary-${agent}.txt`)), "AS")],
+    ["QS", lastTag(readIf(join(art, `openq-${agent}.txt`)), "QS")],
+    ["FS", lastTag(readIf(join(art, `research-${agent}.txt`)), "FS")],
+  ];
+  const latest = tags.find(([, v]) => v !== null && v !== "skipped");
+  if (latest && (latest[1] === "timeout" || latest[1] === "failed")) {
+    atomicWrite(stateFile, "SS=skipped\n");
+    log.warn(`explore signoff-send: ${agent} skipped — latest phase ended ${latest[0]}=${latest[1]} (worker may still be busy; sending would clobber its inbox)`);
+    return 0;
+  }
+
+  const rows = parseListFile(readIf(join(art, "list.txt")));
+  if (!rows.some((r) => r.agent === agent)) { log.error(`explore signoff-send: ${agent} not in list.txt at ${art}`); return 1; }
+
+  const finalPath = finalLandscapePath(art);
+  const conclusion = finalPath ? sectionText(readIf(finalPath), ["Conclusion"]) : "";
+  if (!conclusion) { log.error(`explore signoff-send: final landscape doc missing or has no ## Conclusion at ${art} — author it (Phase 8) first`); return 1; }
+
+  // Solo bucket + diff.md Agreed/Consensus text are tolerant-empty: a degraded N=1 run never ran
+  // diff, and sign-off is exactly the misattribution check a single-source survey needs.
+  const soloBucketLines = readIf(join(art, `${agent}_only_items.txt`)).split("\n").filter((l) => l.length > 0);
+  const agreedText = sectionText(readIf(join(art, "diff.md")), ["Agreed", "Consensus"]);
+
+  const outPath = join(art, `signoff-${agent}.md`);
+  const promptFile = join(art, `${agent}_signoff_prompt.md`);
+  atomicWrite(promptFile, composeSignoffPrompt(conclusion, soloBucketLines, agreedText, outPath));
+
+  const offset = d.offsetFor(agent, provider, topic);
+  atomicWrite(stateFile, `OFFSET=${offset}\n`);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
+  if (rc !== 0) { log.error(`explore signoff-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`); return 1; }
+  log.ok(`explore signoff-send: ${agent} offset=${offset}`);
+  return 0;
+}
+
+async function signoffWaitRun(rest: string[]): Promise<number> {
+  const [topic, agent, provider] = rest;
+  if (!topic || !agent || !provider) { log.error("usage: explore signoff-wait <topic> <agent> <provider>"); return 2; }
+  return signoffWaitWith(topic, agent, provider, liveResearchWaitDeps);
+}
+export async function signoffWaitWith(topic: string, agent: string, provider: string, d: ResearchWaitDeps): Promise<number> {
+  const art = exploreArtDir(topic);
+  const stateFile = join(art, `signoff-${agent}.txt`);
+  if (!existsSync(stateFile)) { log.error(`explore signoff-wait: ${stateFile} missing (run explore signoff-send first)`); return 1; }
+  const text = readFileSync(stateFile, "utf8");
+  if (lastTag(text, "SS") === "skipped") { // guard short-circuit: nothing was sent
+    writeFileSync(join(art, `signoff-${agent}.done`), "");
+    log.ok(`explore signoff-wait: ${agent} SS=skipped (already)`);
+    return 0;
+  }
+  const offset = parseLatestOffset(text);
+  if (offset === null) { log.error(`explore signoff-wait: OFFSET not set in ${stateFile}`); return 1; }
+
+  const timeout = scaledTimeout(consultTimeout("signoff"), d.multiplier(provider));
+  log.info(`explore signoff-wait: ${agent} offset=${offset} timeout=${timeout}s`);
+  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
+
+  const ss = verifyState(ev, readIfExistsOrNull(join(art, `signoff-${agent}.md`))); // done → ok iff sign-off non-empty
+  recordWaitOutcome(agent, provider, topic, stateFile, ss, "SS",
+    ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
+  writeFileSync(join(art, `signoff-${agent}.done`), "");
+  log.ok(`explore signoff-wait: ${agent} SS=${ss}`);
   return 0;
 }
 
