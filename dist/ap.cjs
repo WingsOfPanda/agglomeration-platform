@@ -25869,13 +25869,14 @@ __export(explore_exports, {
   researchWaitWith: () => researchWaitWith2,
   run: () => run14,
   spawnAllWith: () => spawnAllWith3,
+  survivorsRun: () => survivorsRun,
   synthFinalRun: () => synthFinalRun,
   synthPreliminaryRun: () => synthPreliminaryRun,
   teardownWith: () => teardownWith2,
   verdictTallyRun: () => verdictTallyRun
 });
 function usage5() {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|rebuttal-send|rebuttal-wait|gap-send|gap-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|survivors|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|rebuttal-send|rebuttal-wait|gap-send|gap-wait|synth-final|verdict-tally|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 async function run14(args) {
@@ -25892,6 +25893,8 @@ async function run14(args) {
       return researchSendRun2(rest);
     case "research-wait":
       return researchWaitRun2(rest);
+    case "survivors":
+      return survivorsRun(rest);
     case "openq-collate":
       return openqCollateRun(rest);
     case "openq-send":
@@ -26559,6 +26562,47 @@ async function gapWaitWith(topic, agent, provider, d) {
 }
 function missingListArtifacts(art, rows, prefix) {
   return rows.filter((r) => !readIfExists((0, import_node_path34.join)(art, `${prefix}-${r.agent}.md`)).trim()).map((r) => `${prefix}-${r.agent}.md`);
+}
+async function survivorsRun(rest) {
+  const topic = rest[0];
+  if (!topic) {
+    log.error("usage: explore survivors <topic>");
+    return 2;
+  }
+  const art = exploreArtDir(topic);
+  if (!(0, import_node_fs37.existsSync)(art)) {
+    log.error(`explore survivors: ${art} not found \u2014 run explore init`);
+    return 1;
+  }
+  const listPath = (0, import_node_path34.join)(art, "list.txt");
+  const rows = parseListFile(readIfExists(listPath));
+  if (rows.length === 0) {
+    log.error(`explore survivors: list.txt missing or empty at ${art}`);
+    return 1;
+  }
+  const missing = new Set(missingListArtifacts(art, rows, "findings"));
+  const survivors = rows.filter((r) => !missing.has(`findings-${r.agent}.md`));
+  const dropped = rows.filter((r) => missing.has(`findings-${r.agent}.md`));
+  if (survivors.length === 0) {
+    log.error("explore survivors: zero survivors \u2014 every findings file is missing or empty");
+    return 1;
+  }
+  if (dropped.length === 0) {
+    log.ok(`explore survivors: all ${rows.length} workers produced findings`);
+    process.stdout.write(`SURVIVORS=${rows.length}
+`);
+    return 0;
+  }
+  const originalPath = (0, import_node_path34.join)(art, "list-original.txt");
+  if (!(0, import_node_fs37.existsSync)(originalPath)) atomicWrite(originalPath, (0, import_node_fs37.readFileSync)(listPath, "utf8"));
+  atomicWrite(listPath, formatListFile(survivors, isoUtc()));
+  log.warn(`explore survivors: dropped ${dropped.map((r) => r.agent).join(", ")} \u2014 ${survivors.length} of ${rows.length} continue`);
+  process.stdout.write(`SURVIVORS=${survivors.length}
+`);
+  for (const r of dropped) process.stdout.write(`DROPPED=${r.agent}
+`);
+  if (survivors.length === 1) process.stdout.write("DEGRADED=1\n");
+  return 0;
 }
 async function synthPreliminaryRun(rest) {
   const topic = rest[0];
