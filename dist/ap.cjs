@@ -8482,7 +8482,7 @@ function agentConsultValidated(name) {
   return inst(name)?.consult_validated === true;
 }
 function consultTimeout(kind) {
-  if (!(kind in CONSULT_DEFAULTS)) throw new Error(`consultTimeout: kind must be 'research', 'verify', 'adversary', 'experiment', 'openq', 'rebuttal', or 'gap'; got '${kind}'`);
+  if (!(kind in CONSULT_DEFAULTS)) throw new Error(`consultTimeout: kind must be 'research', 'verify', 'adversary', 'experiment', 'openq', 'rebuttal', 'gap', or 'signoff'; got '${kind}'`);
   const v = (load().consult ?? {})[`${kind}_timeout_s`];
   return /^[1-9][0-9]*$/.test(String(v)) ? Number(v) : CONSULT_DEFAULTS[kind];
 }
@@ -8497,7 +8497,7 @@ var init_contracts = __esm({
     import_node_path7 = require("node:path");
     import_yaml2 = __toESM(require_dist(), 1);
     init_paths();
-    CONSULT_DEFAULTS = { research: 600, verify: 300, adversary: 600, experiment: 1800, openq: 300, rebuttal: 300, gap: 600 };
+    CONSULT_DEFAULTS = { research: 600, verify: 300, adversary: 600, experiment: 1800, openq: 300, rebuttal: 300, gap: 600, signoff: 300 };
   }
 });
 
