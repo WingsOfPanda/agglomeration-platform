@@ -25347,7 +25347,10 @@ var init_exploreAnnotate = __esm({
 function litGuidance(track) {
   return track === "ON" ? "The topic is academic / SOTA-shaped. Prioritize peer-reviewed papers (arXiv, conference proceedings) over blog posts or vendor docs. List 3+ recent papers, projects, or benchmarks with citations including authors, year, venue, URL/DOI where available." : "The topic is not academic-shaped. Brief SOTA-evidence section is fine \u2014 list 1-2 anchor sources or write 'Not applicable' with a one-line reason.";
 }
-function composeExploreResearchPrompt(topic, writeTo, lit) {
+function researchLens(provider) {
+  return RESEARCH_LENSES[provider] ?? NEUTRAL_LENS;
+}
+function composeExploreResearchPrompt(topic, writeTo, lit, lens) {
   const t = topic.trim();
   return [
     "Investigate the following topic from multiple angles. Your job is not to",
@@ -25355,6 +25358,8 @@ function composeExploreResearchPrompt(topic, writeTo, lit) {
     "SOTA evidence, and open questions.",
     "",
     `Topic: ${t}`,
+    "",
+    `Research lens: ${lens}`,
     "",
     `Output requirements \u2014 write to ${writeTo} with this EXACT structure:`,
     "",
@@ -25483,10 +25488,16 @@ function composeAdversaryPrompt(landscapeDraft, agent, outPath, opts) {
     "  cited evidence, not speculative"
   ].join("\n");
 }
-var ADVERSARY_LENSES;
+var LENS_GUARD, RESEARCH_LENSES, NEUTRAL_LENS, ADVERSARY_LENSES;
 var init_exploreTurn = __esm({
   "src/core/exploreTurn.ts"() {
     "use strict";
+    LENS_GUARD = "This is an emphasis, not a boundary \u2014 you must still cover the WHOLE landscape; do not skip an approach because it sits outside your emphasis.";
+    RESEARCH_LENSES = {
+      codex: "Weight your investigation toward repo-code evidence: read the implementation, run runtime probes/experiments where cheap, judge implementation feasibility first-hand. " + LENS_GUARD,
+      claude: "Weight your investigation toward literature and web synthesis: papers, RFCs, vendor docs, cross-domain analogues, conceptual frames. " + LENS_GUARD
+    };
+    NEUTRAL_LENS = "No special emphasis \u2014 balance code and literature evidence as the topic demands. " + LENS_GUARD;
     ADVERSARY_LENSES = [
       {
         name: "citation-fidelity",
@@ -25762,7 +25773,7 @@ async function researchSendWith2(topic, agent, provider, d) {
   const track = readIfExists((0, import_node_path34.join)(art, "lit-track.txt")).startsWith("ON") ? "ON" : "OFF";
   const findingsPath = (0, import_node_path34.join)(art, `findings-${agent}.md`);
   const promptFile = (0, import_node_path34.join)(art, `${agent}_research_prompt.md`);
-  atomicWrite(promptFile, composeExploreResearchPrompt(topicText, findingsPath, litGuidance(track)));
+  atomicWrite(promptFile, composeExploreResearchPrompt(topicText, findingsPath, litGuidance(track), researchLens(provider)));
   const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}
 `);
