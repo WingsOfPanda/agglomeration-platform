@@ -18,6 +18,9 @@ describe("dispatcher (requires npm run build first)", () => {
   it("unknown subcommand → exit 2", () => {
     expect(run(["nope"]).code).toBe(2);
   });
+  it("hook (the always-on UserPromptSubmit dispatch) → exit 0", () => {
+    expect(run(["hook", "user-prompt-submit"]).code).toBe(0);
+  });
   it("--mint-args-file prints a path under _args and creates nothing harmful", () => {
     const home = mkdtempSync(join(tmpdir(), "disp-"));
     const r = run(["list", "--mint-args-file"], { AP_HOME: home });

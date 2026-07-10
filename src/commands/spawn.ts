@@ -7,6 +7,7 @@ import { topicDir, workerDir, repoRoot } from "../core/paths.js";
 import { stateInit, stateArchive, isoUtc } from "../core/archive.js";
 import { readIfExists } from "../core/fsread.js";
 import { atomicWrite } from "../core/atomic.js";
+import { validateSlug } from "../core/slug.js";
 import { identityWrite, identityPath, inboxWrite, inboxPath, paneMetaWrite, outboxWait, outboxDump } from "../core/ipc.js";
 import { paneListedFor } from "../core/design.js";
 import { pickRandomAgent, agentInUse, formatCollisionError } from "../core/agents.js";
@@ -15,8 +16,7 @@ import { wrapLaunch, splitRight, splitDown, respawn, paneAlive, paneLabelSet, pa
 import { labelFor } from "../core/colors.js";
 import { captureFailure, captureSpawnFailure, bootstrapFailureArgs } from "../core/forensics.js";
 
-const SLUG = /^[a-z0-9-]+$/;
-export function validateSlug(s: string): boolean { return SLUG.test(s) && s.length >= 1 && s.length <= 32; }
+export { validateSlug };
 export function resolveMode(explicit: string | undefined, dflt: string | undefined): string { return explicit || dflt || "full"; }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

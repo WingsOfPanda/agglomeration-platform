@@ -1,10 +1,12 @@
 import { kvParse } from "../args.js";
 import { log } from "../core/log.js";
 import { resolveModel, outboxWait, outboxDump } from "../core/ipc.js";
+import { validateSlug } from "../core/slug.js";
 
 export async function run(args: string[]): Promise<number> {
   if (args.length < 2) { log.error("usage: collect <agent> <topic> [--timeout n]"); return 2; }
   const [agent, topic] = args;
+  if (!validateSlug(agent) || !validateSlug(topic)) { log.error(`agent/topic must match [a-z0-9-]+ and be <= 32 chars; got agent='${agent}' topic='${topic}'`); return 2; }
   let timeout = 600;
   for (let i = 2; i < args.length; i++) {
     const a = args[i];

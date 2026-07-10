@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, mkdirSync } from "node:fs";
+import { readFileSync, readdirSync, mkdirSync, existsSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { globalRoot, repoHash, workerDir } from "./paths.js";
 import { atomicWrite } from "./atomic.js";
@@ -122,6 +122,16 @@ export function scrapeArtDir(artDir: string): Finding[] {
   return out.filter((f) => { const k = `${f.source}|${f.key}|${f.context}`; if (seen.has(k)) return false; seen.add(k); return true; });
 }
 
+/** A collision-free path under `dir` for `name`: `name` itself if free, else `<stem>-2.md`,
+ *  `<stem>-3.md`, ... (splitting the `.md` extension). Gives up after 999 (last writer wins). */
+function freeFeedPath(dir: string, name: string): string {
+  if (!existsSync(join(dir, name))) return join(dir, name);
+  const ext = name.endsWith(".md") ? ".md" : "";
+  const stem = ext ? name.slice(0, -ext.length) : name;
+  for (let n = 2; n <= 999; n++) { const c = join(dir, `${stem}-${n}${ext}`); if (!existsSync(c)) return c; }
+  return join(dir, name);
+}
+
 export interface ForensicsMeta { command: string; topicSlug: string; repoHash: string; artDir: string; invokedAt: string; }
 
 /** Common review-feed write shared by all three feed writers. Splits the single `now` instant into
@@ -139,7 +149,10 @@ function writeForensicsFeed(opts: {
   let hash = "unknown"; try { hash = repoHash(); } catch { /* keep unknown */ }
   const dir = join(globalRoot(), "forensics", date);
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, opts.fileNameFor(time));
+  // Collision-free: the leaf name has only 1-second resolution, so two captures for the same
+  // command+topic in one UTC second (e.g. concurrent spawn-failures) would otherwise overwrite the
+  // earlier finding set. Suffix `-2`, `-3`, ... on collision instead.
+  const path = freeFeedPath(dir, opts.fileNameFor(time));
   const md = renderArtForensics(
     { command: opts.command, topicSlug: opts.topicSlug, repoHash: hash, artDir: opts.artDir, invokedAt: isoUtc(opts.now) },
     opts.findings,

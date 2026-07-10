@@ -523,6 +523,18 @@ var init_fsread = __esm({
   }
 });
 
+// src/core/slug.ts
+function validateSlug(s) {
+  return SLUG.test(s) && s.length >= 1 && s.length <= 32;
+}
+var SLUG;
+var init_slug = __esm({
+  "src/core/slug.ts"() {
+    "use strict";
+    SLUG = /^[a-z0-9-]+$/;
+  }
+});
+
 // src/core/ipc.ts
 function inboxPath(i2, m, t) {
   return (0, import_node_path3.join)(workerDir(i2, m, t), "inbox.md");
@@ -17031,6 +17043,16 @@ function scrapeArtDir(artDir) {
     return true;
   });
 }
+function freeFeedPath(dir, name) {
+  if (!(0, import_node_fs17.existsSync)((0, import_node_path14.join)(dir, name))) return (0, import_node_path14.join)(dir, name);
+  const ext = name.endsWith(".md") ? ".md" : "";
+  const stem = ext ? name.slice(0, -ext.length) : name;
+  for (let n2 = 2; n2 <= 999; n2++) {
+    const c3 = (0, import_node_path14.join)(dir, `${stem}-${n2}${ext}`);
+    if (!(0, import_node_fs17.existsSync)(c3)) return c3;
+  }
+  return (0, import_node_path14.join)(dir, name);
+}
 function writeForensicsFeed(opts) {
   const iso = opts.now.toISOString();
   const date = iso.slice(0, 10);
@@ -17042,7 +17064,7 @@ function writeForensicsFeed(opts) {
   }
   const dir = (0, import_node_path14.join)(globalRoot(), "forensics", date);
   (0, import_node_fs17.mkdirSync)(dir, { recursive: true });
-  const path6 = (0, import_node_path14.join)(dir, opts.fileNameFor(time));
+  const path6 = freeFeedPath(dir, opts.fileNameFor(time));
   const md = renderArtForensics(
     { command: opts.command, topicSlug: opts.topicSlug, repoHash: hash, artDir: opts.artDir, invokedAt: isoUtc(opts.now) },
     opts.findings
@@ -17170,9 +17192,6 @@ __export(spawn_exports, {
   run: () => run,
   validateSlug: () => validateSlug
 });
-function validateSlug(s) {
-  return SLUG.test(s) && s.length >= 1 && s.length <= 32;
-}
 function resolveMode(explicit, dflt) {
   return explicit || dflt || "full";
 }
@@ -17346,7 +17365,7 @@ ${ob}
     throw e;
   }
 }
-var import_node_fs18, import_node_path15, SLUG, sleep2;
+var import_node_fs18, import_node_path15, sleep2;
 var init_spawn = __esm({
   "src/commands/spawn.ts"() {
     "use strict";
@@ -17359,6 +17378,7 @@ var init_spawn = __esm({
     init_archive();
     init_fsread();
     init_atomic();
+    init_slug();
     init_ipc();
     init_design();
     init_agents();
@@ -17366,7 +17386,6 @@ var init_spawn = __esm({
     init_tmux();
     init_colors();
     init_forensics();
-    SLUG = /^[a-z0-9-]+$/;
     sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
   }
 });
@@ -17392,6 +17411,10 @@ async function run2(args) {
     return 2;
   }
   const [agent, topic] = a2;
+  if (!validateSlug(agent) || !validateSlug(topic)) {
+    log.error(`agent/topic must match [a-z0-9-]+ and be <= 32 chars; got agent='${agent}' topic='${topic}'`);
+    return 2;
+  }
   let msg = a2.slice(2).join(" ");
   const model = resolveModel(agent, topic);
   if (!model) {
@@ -17436,6 +17459,7 @@ var init_send2 = __esm({
     init_log();
     init_ipc();
     init_tmux();
+    init_slug();
   }
 });
 
@@ -17450,6 +17474,10 @@ async function run3(args) {
     return 2;
   }
   const [agent, topic] = args;
+  if (!validateSlug(agent) || !validateSlug(topic)) {
+    log.error(`agent/topic must match [a-z0-9-]+ and be <= 32 chars; got agent='${agent}' topic='${topic}'`);
+    return 2;
+  }
   let timeout = 600;
   for (let i2 = 2; i2 < args.length; i2++) {
     const a2 = args[i2];
@@ -17489,6 +17517,7 @@ var init_collect = __esm({
     init_args();
     init_log();
     init_ipc();
+    init_slug();
   }
 });
 
@@ -20255,6 +20284,16 @@ function percentDecode(s) {
   out = out.split("%25").join("%");
   return out;
 }
+function percentEncode(s) {
+  let out = s;
+  out = out.split("%").join("%25");
+  out = out.split("\n").join("%0A");
+  out = out.split("	").join("%09");
+  out = out.split('"').join("%22");
+  out = out.split("\\").join("%5C");
+  out = out.split(",").join("%2C");
+  return out;
+}
 function parseQuestionPayload(body) {
   const first = (key) => {
     for (const line of body.split("\n")) {
@@ -20283,6 +20322,7 @@ function validateQuestionLine(ev) {
     const kind = typeof claim.kind === "string" ? claim.kind : "";
     const value = typeof claim.value === "string" ? claim.value : "";
     if (!KNOWN_KINDS.has(kind) || value === "") return false;
+    if (/[\r\n]/.test(value)) return false;
   }
   return true;
 }
@@ -20292,7 +20332,7 @@ function extractQuestionPayload(ev, askedAt) {
   const claim = ev.claim;
   const route = claim ? "verify" : /^OBJECTION:/.test(message) ? "objection" : "escalate";
   if (route === "objection") message = message.replace(/^OBJECTION: ?/, "");
-  const encoded = message.split("\n").join("%0A");
+  const encoded = percentEncode(message);
   const kind = claim && typeof claim.kind === "string" ? claim.kind : "";
   const value = claim && typeof claim.value === "string" ? claim.value : "";
   return `TEXT=${encoded}
@@ -21690,9 +21730,10 @@ function validateResult(json, opts = {}) {
   return { ok: true };
 }
 function renderScoreboardRow(metric, runtime, metricName, status, approach) {
+  const cell = (s) => s.replace(/[|\r\n]/g, " ");
   const metricFmt = NUM_RE.test(metric) ? parseFloat(metric).toFixed(4) : metric;
   const runtimeFmt = NUM_RE.test(runtime) ? `${parseFloat(runtime).toFixed(2)}s` : runtime;
-  return `${metricFmt} | ${status} | ${runtimeFmt} | ${approach} | ${metricName}`;
+  return `${cell(metricFmt)} | ${cell(status)} | ${cell(runtimeFmt)} | ${cell(approach)} | ${cell(metricName)}`;
 }
 function expNum(expId) {
   const n2 = parseInt(expId.replace(/^exp-/, ""), 10);
