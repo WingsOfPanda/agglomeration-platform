@@ -416,9 +416,12 @@ export async function adversarySendWith(topic: string, agent: string, provider: 
   if (existsSync(stateFile)) { log.error(`explore adversary-send: ${stateFile} exists; rm to retry`); return 1; }
 
   const fsTag = lastTag(readIf(join(art, `research-${agent}.txt`)), "FS");
-  if (fsTag === "timeout" || fsTag === "failed") {
+  const qsTag = lastTag(readIf(join(art, `openq-${agent}.txt`)), "QS");
+  const unsafe = fsTag === "timeout" || fsTag === "failed" ? `FS=${fsTag}`
+    : qsTag === "timeout" || qsTag === "failed" ? `QS=${qsTag}` : null;
+  if (unsafe) {
     atomicWrite(stateFile, "AS=skipped\n");
-    log.warn(`explore adversary-send: ${agent} skipped — research ended FS=${fsTag} (worker may still be busy; sending would clobber its inbox)`);
+    log.warn(`explore adversary-send: ${agent} skipped — previous phase ended ${unsafe} (worker may still be busy; sending would clobber its inbox)`);
     return 0;
   }
 

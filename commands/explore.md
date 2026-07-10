@@ -278,8 +278,9 @@ the pre-send `OFFSET=` into `$ART/adversary-<agent>.txt`, and nudges the pane.
 
 The verb also assigns each worker a DISTINCT primary attack lens (by list order) and lists its
 peers' raw `findings-<agent>.md` paths in the prompt. A worker whose research ended
-`FS=timeout`/`FS=failed` is soft-skipped (`AS=skipped`, no send) — dispatching to a
-possibly-still-churning worker would clobber its single-slot inbox.
+`FS=timeout`/`FS=failed` — or whose Phase 4b relay turn ended `QS=timeout`/`QS=failed` — is
+soft-skipped (`AS=skipped`, no send): dispatching to a possibly-still-churning worker would
+clobber its single-slot inbox.
 
 Set task `6` → `completed`.
 
