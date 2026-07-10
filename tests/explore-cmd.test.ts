@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { freshHome } from "./helpers/tmpHome.js";
-import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
+import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, verdictTallyRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
 import { exploreArtDir } from "../src/core/explore.js";
 
 function initDeps(over: Partial<ExploreInitDeps> = {}): ExploreInitDeps {
@@ -648,6 +648,60 @@ describe("explore synth-final", () => {
       writeFileSync(join(art, "adversary-alpha.md"), "c");           // alpha critiqued
       writeFileSync(join(art, "adversary-charlie.txt"), "AS=skipped\n"); // charlie skipped, no .md
       expect(await synthFinalRun(["x"])).toBe(0);
+    } finally { cleanup(); }
+  });
+});
+
+describe("explore verdict-tally", () => {
+  function cap(): { text: () => string; restore: () => void } {
+    const c: string[] = [];
+    const s = vi.spyOn(process.stdout, "write").mockImplementation(((x: unknown) => { c.push(String(x)); return true; }) as never);
+    return { text: () => c.join(""), restore: () => s.mockRestore() };
+  }
+  it("prints one VERDICT= line per list row and a TALLY= majority (tie → most severe)", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps()); // list: alpha(codex), charlie(claude)
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "adversary-alpha.md"), "# c\n## Verdict\nneeds-attention\n## Material findings\n");
+      writeFileSync(join(art, "adversary-charlie.md"), "# c\n## Verdict\naccept\n");
+      const out = cap();
+      try { expect(await verdictTallyRun(["x"])).toBe(0); } finally { out.restore(); }
+      const lines = out.text().trim().split("\n");
+      expect(lines).toEqual(["VERDICT=alpha:needs-attention", "VERDICT=charlie:accept", "TALLY=needs-attention"]);
+    } finally { cleanup(); }
+  });
+  it("AS=skipped rows report skipped and never enter the majority", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "adversary-alpha.md"), "## Verdict\naccept\n");
+      writeFileSync(join(art, "adversary-charlie.txt"), "AS=skipped\n"); // no .md
+      const out = cap();
+      try { expect(await verdictTallyRun(["x"])).toBe(0); } finally { out.restore(); }
+      const lines = out.text().trim().split("\n");
+      expect(lines).toEqual(["VERDICT=alpha:accept", "VERDICT=charlie:skipped", "TALLY=accept"]);
+    } finally { cleanup(); }
+  });
+  it("missing or heading-less critique reports malformed; all-uncountable → TALLY=unavailable", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "adversary-alpha.md"), "no heading here\n");
+      // charlie has neither .txt nor .md → malformed too
+      const out = cap();
+      try { expect(await verdictTallyRun(["x"])).toBe(0); } finally { out.restore(); }
+      const lines = out.text().trim().split("\n");
+      expect(lines).toEqual(["VERDICT=alpha:malformed", "VERDICT=charlie:malformed", "TALLY=unavailable"]);
+    } finally { cleanup(); }
+  });
+  it("rc2 without a topic; rc1 when the art dir is missing", async () => {
+    const { cleanup } = freshHome();
+    try {
+      expect(await verdictTallyRun([])).toBe(2);
+      expect(await verdictTallyRun(["nope"])).toBe(1);
     } finally { cleanup(); }
   });
 });
