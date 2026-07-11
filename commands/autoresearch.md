@@ -101,13 +101,18 @@ Step 5 may add a per-dispatch `<agent> exp-NNN on <approach-label>` sub-row.
    Capture `TOPIC` and `ART`. Non-zero exit aborts: rc 2 = bad args / empty slug / in-flight / bad --metric; rc 3 = codex unavailable (tell the user to install codex + run /ap:check); rc 1 = --seed-from missing. Surface stderr verbatim and stop.
 4. **Re-entry (interrupted campaign):** when init fails rc 2 with "topic already in flight",
    check the art path in the error message for `campaign-ledger.jsonl`:
-   - **Ledger present** → re-enter instead of aborting: run `$CS autoresearch resume <TOPIC>` and
-     parse its stdout — `GEN=<n>` (pass `--gen <n>` on every subsequent `experiment-send`),
-     `WORKER=<agent>:<phase>:<alive>` rows, `REDISPATCH=<agent>:<exp-id>` rows,
+   - **Ledger present** → re-enter instead of aborting: run `$CS autoresearch resume <TOPIC>`.
+     `resume` accepts the topic text as typed — it derives the same slug `init` used, so no
+     separate slug capture is needed (the slug is also visible as the directory name above
+     `_autoresearch` in the error's art path). Parse its stdout — `GEN=<n>` (pass `--gen <n>`
+     on every subsequent `experiment-send`),
+     `WORKER=<agent>:<phase>:<yes|no>` rows, `REDISPATCH=<agent>:<exp-id>` rows,
      `MONITOR=<agent>` rows, `LAST_SEQ=<n>`. Re-seed ONE persistent Monitor task per
      `MONITOR=` row (same Monitor tool config as Phase 4 step 2; append the new task ids to
      `$ART/monitor-tasks.txt`), re-dispatch each `REDISPATCH=<agent>:<exp-id>` row via
-     `experiment-send` with the SAME exp-id (never mint a new id for an unresolved intent),
+     `experiment-send` with the SAME exp-id, re-applying the same `--operator` if
+     `$ART/workers/<agent>/experiments/<exp-id>/operator.txt` exists (read its `operator=` value)
+     (never mint a new id for an unresolved intent),
      then continue the loop at Step 5. Skip Phases 1-4 entirely.
    - **No ledger** (pre-spine campaign) → surface stderr verbatim and stop (previous behavior).
 
