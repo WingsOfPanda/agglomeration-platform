@@ -39,6 +39,7 @@ import { parseVerdicts } from "../core/autoresearchInfeasible.js";
 import { metricFamilyOf, lessonVerdictOf, policyFromMetric, buildLessonDraft, type LessonDraft } from "../core/autoresearchLessonMap.js";
 import { writeLessonsAtFinalize, retrieveForDispatch, liveMemoryIo, type MemoryIo } from "../core/autoresearchMemoryStore.js";
 import { type LessonVerdict } from "../core/autoresearchMemory.js";
+import { buildCorpusDigest, leaderMetricOf, type CorpusEntry } from "../core/autoresearchCorpus.js";
 import { agentBinary, consultTimeout } from "../core/contracts.js";
 import { inboxWrite, inboxPath, outboxPath, outboxOffset, paneMetaRead, resolveModel, parseEvent } from "../core/ipc.js";
 import { ledgerPath, controllerGenPath, appendEvent, replayLedger, readGen, renderGen, type LedgerEventKind } from "../core/autoresearchLedger.js";
@@ -76,7 +77,7 @@ function controllerGen(art: string): number {
 }
 
 function usage(): number {
-  log.error("usage: autoresearch <init|metric|sota|spawn-all|drop-worker|verify-plan|verify-check|inspect-plan|inspect-check|experiment-send|score|monitor|status-brief|finalize|refine|resume|handoff-extract|teardown|fresh-worker|forensics|abort|consensus|memory-retrieve> ...");
+  log.error("usage: autoresearch <init|metric|sota|spawn-all|drop-worker|verify-plan|verify-check|inspect-plan|inspect-check|experiment-send|score|monitor|status-brief|finalize|refine|resume|handoff-extract|teardown|fresh-worker|forensics|abort|consensus|memory-retrieve|corpus-digest> ...");
   return 2;
 }
 
@@ -2169,6 +2170,85 @@ export async function memoryRetrieveWith(args: string[], deps: MemoryRetrieveDep
 
 const liveMemoryRetrieveDeps: MemoryRetrieveDeps = { now: () => isoUtc() };
 
+// ---- Campaign spine: corpus-digest — governed read-only digest of prior campaigns. ----
+
+export interface CorpusDigestDeps {
+  now(): string;
+  writeAtomic?(path: string, body: string): void;   // spy seam: the ONLY writer this verb uses
+  stdout?: (line: string) => void;
+  opts?: PathOpts;
+  archiveRoot?: string;                             // default globalRoot()/archive/<repoHash()>
+  forensicsRoot?: string;                           // default globalRoot()/forensics
+}
+
+/** readdir dir names / file names, [] on any error (nullglob semantics). */
+function listNames(dir: string, kind: "dir" | "file"): string[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((e) => (kind === "dir" ? e.isDirectory() : e.isFile()))
+      .map((e) => e.name).sort();
+  } catch { return []; }
+}
+
+export async function corpusDigestWith(args: string[], deps: CorpusDigestDeps): Promise<number> {
+  const out = deps.stdout ?? stdoutLine;
+  const writeAtomic = deps.writeAtomic ?? atomicWrite;
+  const topic = args.find((a) => !a.startsWith("-")) ?? "";
+  if (!topic) { log.error("usage: autoresearch corpus-digest <topic>"); return 2; }
+
+  const art = autoresearchArtDir(topic, deps.opts);
+  if (!existsSync(art)) { log.error(`autoresearch corpus-digest: art dir missing: ${art}`); return 1; }
+  const metricPath = join(art, "metric.md");
+  if (!existsSync(metricPath)) return 0; // nothing to scope against (fail-closed, like memory-retrieve)
+  const family = metricFamilyOf(parseMetricMd(readFileSync(metricPath, "utf8")).primaryMetric);
+  if (family === null) return 0;
+
+  // Forensics flag counts per topic slug (frontmatter command: autoresearch). READ-ONLY.
+  const forensicsRoot = deps.forensicsRoot ?? join(globalRoot(), "forensics");
+  const flags = new Map<string, number>();
+  for (const date of listNames(forensicsRoot, "dir")) {
+    for (const name of listNames(join(forensicsRoot, date), "file")) {
+      if (!name.endsWith(".md")) continue;
+      const body = readIfExists(join(forensicsRoot, date, name));
+      if (!/^command: autoresearch$/m.test(body)) continue;
+      const slug = /^topic_slug: (.*)$/m.exec(body)?.[1]?.trim() ?? "";
+      if (slug) flags.set(slug, (flags.get(slug) ?? 0) + 1);
+    }
+  }
+
+  // Archived campaigns: <archiveRoot>/<slug>/_autoresearch-<ts>[-N]/. READ-ONLY.
+  const archiveRoot = deps.archiveRoot ?? join(globalRoot(), "archive", repoHash());
+  const dated: { ts: string; e: CorpusEntry }[] = [];
+  for (const slug of listNames(archiveRoot, "dir")) {
+    for (const artName of listNames(join(archiveRoot, slug), "dir")) {
+      if (!artName.startsWith("_autoresearch-")) continue;
+      const dir = join(archiveRoot, slug, artName);
+      const mm = readIfExistsOrNull(join(dir, "metric.md"));
+      const fam = mm ? metricFamilyOf(parseMetricMd(mm).primaryMetric) : null;
+      if (fam === null) continue;
+      const verified = (readIfExistsOrNull(join(dir, "verification.tsv")) ?? "")
+        .split("\n").filter((l) => l && !l.startsWith("exp_id\t") && l.split("\t")[2] === "verified").length;
+      const halt = readHaltFlag(readIfExistsOrNull(join(dir, "halt.flag")));
+      const haltReason = halt.format === "structured"
+        ? (halt.fields?.reason ?? halt.fields?.halted_by ?? "halted")
+        : halt.format === "prose" ? (halt.reason ?? "halted") : "completed";
+      dated.push({ ts: artName.slice("_autoresearch-".length), e: {
+        topicSlug: slug, metricFamily: fam,
+        leaderMetric: leaderMetricOf(readIfExistsOrNull(join(dir, "scoreboard.md"))),
+        verifiedLessons: verified, haltReason, forensicsFlags: flags.get(slug) ?? 0,
+      }});
+    }
+  }
+  dated.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0)); // newest first
+
+  const block = buildCorpusDigest(dated.map((x) => x.e), { metricFamily: family });
+  writeAtomic(join(art, "corpus-digest.md"), block || "(no prior same-family campaigns)\n");
+  if (block) for (const line of block.split("\n")) if (line) out(line);
+  return 0;
+}
+
+const liveCorpusDigestDeps: CorpusDigestDeps = { now: () => isoUtc() };
+
 function appendVerificationRow(art: string, agent: string, expId: string, row: VerificationRow): void {
   const tsv = join(art, "verification.tsv");
   const prior = existsSync(tsv) ? readFileSync(tsv, "utf8") : VERIFICATION_TSV_HEADER;
@@ -2244,6 +2324,7 @@ export async function run(args: string[]): Promise<number> {
     case "abort": return abortWith(applyArgsFile(rest), liveAbortDeps);
     case "consensus": return consensusWith(rest, liveConsensusDeps);
     case "memory-retrieve": return memoryRetrieveWith(rest, liveMemoryRetrieveDeps);
+    case "corpus-digest": return corpusDigestWith(rest, liveCorpusDigestDeps);
     default: return usage();
   }
 }
