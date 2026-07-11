@@ -761,6 +761,7 @@ export interface AutoresearchScoreDeps {
   removeFile(path: string): void;
   now(): string;
   stdout?: (line: string) => void;
+  appendFile?(path: string, text: string): void;       // ledger tail (default appendFileSync)
   opts?: PathOpts;
 }
 
@@ -788,6 +789,25 @@ export async function scoreWith(args: string[], deps: AutoresearchScoreDeps): Pr
   deps.writeAtomic(join(art, "coverage.tsv"), COVERAGE_TSV_HEADER + c.coverageRows.map(coverageRow).join(""));
   deps.writeAtomic(join(art, "lineage.tsv"), LINEAGE_TSV_HEADER + c.lineageRows.map(lineageRow).join(""));
   for (const w of c.warnings) log.warn(w);
+
+  // Ledger tail (best-effort): record any completed experiment the ledger has not
+  // seen, so completionOrder converges even when a Monitor died mid-campaign. Old
+  // campaigns (no ledger) skip entirely; failures never affect the score run.
+  try {
+    const lp = ledgerPath(art);
+    if (deps.fs.exists(lp)) {
+      const append = deps.appendFile ?? appendFileSync;
+      const gen = readGen(deps.fs.read(controllerGenPath(art))).gen || 1;
+      const seen = new Set(replayLedger(deps.fs.read(lp) ?? "").completionOrder);
+      for (const line of c.resultsTsv.split("\n")) {
+        if (!line || line.startsWith("exp_id\t")) continue;
+        const [expId, agent] = line.split("\t");
+        if (!expId || !agent || seen.has(`${agent}/${expId}`)) continue;
+        append(lp, appendEvent(deps.fs.read(lp) ?? "", { gen, ts: deps.now(), kind: "result-recorded", agent, exp_id: expId }));
+        seen.add(`${agent}/${expId}`);
+      }
+    }
+  } catch (e) { log.warn(`autoresearch score: ledger tail skipped (best-effort): ${String(e)}`); }
   return 0;
 }
 
@@ -950,8 +970,14 @@ function gatherCompletion(art: string): { scoreboardMd: string | null; completio
   const sbPath = join(art, "scoreboard.md");
   const scoreboardMd = readIfExistsOrNull(sbPath);
   const metricPath = join(art, "metric.md");
+  // Ledger-derived completion chronology (absent/garbled -> undefined = today's window).
+  let completionOrder: string[] | undefined;
+  const lp = ledgerPath(art);
+  if (existsSync(lp)) {
+    try { completionOrder = replayLedger(readFileSync(lp, "utf8")).completionOrder; } catch { completionOrder = undefined; }
+  }
   const completion = scoreboardMd !== null && existsSync(metricPath)
-    ? checkCompletion(scoreboardMd, readFileSync(metricPath, "utf8"))
+    ? checkCompletion(scoreboardMd, readFileSync(metricPath, "utf8"), completionOrder)
     : null;
   return { scoreboardMd, completion };
 }
