@@ -705,7 +705,22 @@ Set task `9` → `completed`.
 
 ## Phase 10 — present
 
-Print to the user:
+**Conclusion first — print it to the screen.** Read the final landscape doc
+(`$ART/landscape-<date>-<topic>.md`; `$ART` is the rebound archive path) and render its
+`## Conclusion` section body VERBATIM in your reply, so the user knows the outcome without
+opening any file. This is chat output ONLY — write no new file for it. Rules:
+
+- Lead with a one-line header: `== Explore conclusion: <topic> ==`, then the full `## Conclusion`
+  body (strongest approach, caveats, suggested `/ap:design` invocation — Phase 8 already requires
+  all three).
+- **Degraded run** (single survivor): print the `DEGRADED RUN — no independent corroboration`
+  caveat line FIRST, before the conclusion body.
+- **No-convergence run** (`mode=explore-no-convergence`): the Conclusion states the survey did
+  not converge — print it as-is; do not invent a recommendation.
+- Missing `## Conclusion` section (should not happen — Phase 8 requires it): say so explicitly
+  and point at the landscape doc path instead of fabricating a summary.
+
+Then print the artifact block:
 
 ```
 Explore complete.
