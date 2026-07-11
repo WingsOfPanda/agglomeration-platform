@@ -18,7 +18,7 @@ import { computeScore, type ScoreFs, type ScoreComputation } from "../core/autor
 import { sanityRow, SANITY_TSV_HEADER } from "../core/autoresearchSanity.js";
 import { coverageRow, COVERAGE_TSV_HEADER, type CoverageRow } from "../core/autoresearchCoverage.js";
 import { lineageRow, LINEAGE_TSV_HEADER } from "../core/autoresearchLineage.js";
-import { parseState, mergeState, reconcileFromOutbox, readHaltFlag } from "../core/autoresearchState.js";
+import { parseState, mergeState, reconcileFromOutbox, reconcileFromOutboxSince, readHaltFlag } from "../core/autoresearchState.js";
 import { checkCompletion, checkTimeBudget } from "../core/autoresearchComplete.js";
 import { normalizeResult, type ResultJson } from "../core/autoresearchResult.js";
 import { renderSessionSummary, type StatusRow, type EventRow } from "../core/autoresearchSummary.js";
@@ -40,7 +40,7 @@ import { metricFamilyOf, lessonVerdictOf, policyFromMetric, buildLessonDraft, ty
 import { writeLessonsAtFinalize, retrieveForDispatch, liveMemoryIo, type MemoryIo } from "../core/autoresearchMemoryStore.js";
 import { type LessonVerdict } from "../core/autoresearchMemory.js";
 import { agentBinary, consultTimeout } from "../core/contracts.js";
-import { inboxWrite, inboxPath, outboxPath, outboxOffset, paneMetaRead, resolveModel } from "../core/ipc.js";
+import { inboxWrite, inboxPath, outboxPath, outboxOffset, paneMetaRead, resolveModel, parseEvent } from "../core/ipc.js";
 import { ledgerPath, controllerGenPath, appendEvent, replayLedger, readGen, renderGen, type LedgerEventKind } from "../core/autoresearchLedger.js";
 import { paneSend, killNow, paneAlive } from "../core/tmux.js";
 import { haveCmd } from "../core/deps.js";
@@ -76,7 +76,7 @@ function controllerGen(art: string): number {
 }
 
 function usage(): number {
-  log.error("usage: autoresearch <init|metric|sota|spawn-all|drop-worker|verify-plan|verify-check|inspect-plan|inspect-check|experiment-send|score|monitor|status-brief|finalize|refine|handoff-extract|teardown|fresh-worker|forensics|abort|consensus|memory-retrieve> ...");
+  log.error("usage: autoresearch <init|metric|sota|spawn-all|drop-worker|verify-plan|verify-check|inspect-plan|inspect-check|experiment-send|score|monitor|status-brief|finalize|refine|resume|handoff-extract|teardown|fresh-worker|forensics|abort|consensus|memory-retrieve> ...");
   return 2;
 }
 
@@ -1811,6 +1811,152 @@ const liveFreshWorkerDeps: AutoresearchFreshWorkerDeps = {
   now: () => isoUtc(),
 };
 
+// ---- Campaign spine: resume — idempotent, fenced re-entry for an interrupted campaign. ----
+// Acquires a new controller generation (fencing stale writers), replays the ledger,
+// reconciles every worker from its dispatch-time outbox offset, backfills missing
+// result-recorded events, resolves unresolved intents deterministically (§2.4 of the
+// design), respawns dead panes via the existing fresh-worker path, and prints the
+// machine-parsed report the directive acts on. Errors to stderr; stdout is the report.
+
+export interface AutoresearchResumeDeps {
+  now(): string;
+  paneAlive(pane: string): Promise<boolean>;
+  freshWorker(topic: string, agent: string): Promise<number>;
+  stdout?: (line: string) => void;
+  opts?: PathOpts;
+}
+
+export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): Promise<number> {
+  const out = deps.stdout ?? stdoutLine;
+  const topic = args.find((a) => !a.startsWith("--")) ?? "";
+  if (!topic) { log.error("usage: autoresearch resume <topic>"); return 2; }
+
+  const art = autoresearchArtDir(topic, deps.opts);
+  if (!existsSync(art)) { log.error(`autoresearch resume: no art dir for topic '${topic}' (${art}); nothing to resume`); return 1; }
+  const lp = ledgerPath(art);
+  if (!existsSync(lp)) { log.error(`autoresearch resume: no campaign ledger under ${art}; pre-ledger campaigns cannot be resumed (init remains the creation path)`); return 1; }
+
+  // 1. Fenced lease: bump the controller generation, then record the resume event under it.
+  const prior = replayLedger(readFileSync(lp, "utf8"));
+  const gen = Math.max(readGen(readIfExistsOrNull(controllerGenPath(art))).gen, prior.gen) + 1;
+  atomicWrite(controllerGenPath(art), renderGen(gen, deps.now(), "resume"));
+  ledgerAppend(art, { gen, ts: deps.now(), kind: "resume" });
+
+  const workersFile = join(art, "workers.txt");
+  const agents = existsSync(workersFile) ? splitNonCommentLines(readFileSync(workersFile, "utf8")) : [];
+  const redispatch = new Set<string>();
+
+  const readOutbox = (agent: string): { model: string | null; text: string } => {
+    const model = resolveModel(agent, topic);
+    const ob = model ? outboxPath(agent, model, topic) : "";
+    let text = "";
+    if (ob && existsSync(ob)) { try { text = readFileSync(ob, "utf8"); } catch { text = ""; } }
+    return { model, text };
+  };
+
+  // 2. Pass 1 — per-worker reconcile from the recorded delivery offset + result backfill.
+  let replay = replayLedger(readFileSync(lp, "utf8"));
+  for (const agent of agents) {
+    const stateTxt = join(workerStateDir(art, agent), "state.txt");
+    if (!existsSync(stateTxt)) continue;
+    const { text: obText } = readOutbox(agent);
+    const offset = replay.lastDeliveredOffset.get(agent) ?? 0;
+    const curExp = parseState(readOr(stateTxt)).current_exp_id ?? "";
+    const doneResultExists = !!curExp && existsSync(join(experimentDir(art, agent, curExp), "result.json"));
+    const recon = reconcileFromOutboxSince(obText, offset, doneResultExists);
+    if (recon === "failed" || recon === "idle") atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: recon }));
+
+    const seen = new Set(replay.completionOrder);
+    for (const expId of listExpDirs(experimentsDir(art, agent))) {
+      if (!existsSync(join(experimentDir(art, agent, expId), "result.json"))) continue;
+      if (!seen.has(`${agent}/${expId}`)) ledgerAppend(art, { gen, ts: deps.now(), kind: "result-recorded", agent, exp_id: expId });
+    }
+  }
+
+  // 3. Pass 2 — resolve unresolved intents (the §2.4 crash signatures), including backfills.
+  replay = replayLedger(readFileSync(lp, "utf8"));
+  for (const intent of replay.intents.values()) {
+    if (intent.delivered) continue;
+    const { agent, expId } = intent;
+    const { text: obText } = readOutbox(agent);
+    const reconstructed = replay.lastDeliveredOffset.get(agent) ?? 0;
+    const tail = Buffer.from(obText, "utf8").subarray(reconstructed).toString("utf8");
+    let accepted = false;
+    for (const line of tail.split("\n")) {
+      const o = parseEvent(line.trim());
+      if (o && (o.event === "ack" || o.event === "done")) { accepted = true; break; }
+    }
+    const stateTxt = join(workerStateDir(art, agent), "state.txt");
+    if (accepted) {
+      // Hazard-1 window (inbox written, state bump lost): treat as delivered with the
+      // reconstructed offset, repair the state to the dispatch-equivalent, then re-run
+      // the offset-scoped reconcile so a finished-while-dead experiment settles too.
+      ledgerAppend(art, { gen, ts: deps.now(), kind: "dispatch-delivered", agent, exp_id: expId, data: { outboxOffset: reconstructed, reconstructed: true } });
+      if (existsSync(stateTxt)) {
+        const st = parseState(readOr(stateTxt));
+        const stateN = /^[0-9]+$/.test((st.exp_counter ?? "").trim()) ? parseInt(st.exp_counter, 10) : 0;
+        const intentN = parseInt(expId.slice("exp-".length), 10) || 0;
+        atomicWrite(stateTxt, mergeState(readOr(stateTxt), {
+          phase: "working", current_exp_id: expId, exp_counter: String(Math.max(stateN, intentN)),
+          last_event: "dispatched", last_event_ts: deps.now(),
+        }));
+        const resultExists = existsSync(join(experimentDir(art, agent, expId), "result.json"));
+        const recon = reconcileFromOutboxSince(obText, reconstructed, resultExists);
+        if (recon === "failed" || recon === "idle") atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: recon }));
+      }
+    } else {
+      const phase = existsSync(stateTxt) ? (parseState(readOr(stateTxt)).phase ?? "") : "";
+      if (phase !== "working") redispatch.add(`${agent}:${expId}`);
+    }
+  }
+
+  // 4. Pass 3 — pane liveness: interrupt dead working lanes, respawn dead idle ones, report.
+  const rows: string[] = [];
+  const monitors: string[] = [];
+  for (const agent of agents) {
+    const stateTxt = join(workerStateDir(art, agent), "state.txt");
+    if (!existsSync(stateTxt)) { rows.push(`WORKER=${agent}:?:no`); continue; }
+    const model = resolveModel(agent, topic);
+    const pane = model ? paneMetaRead(agent, model, topic) : null;
+    let alive = false;
+    if (pane) { try { alive = await deps.paneAlive(pane); } catch { alive = false; } }
+
+    let phase = parseState(readOr(stateTxt)).phase ?? "";
+    if (!alive && phase === "working") {
+      const workingExp = parseState(readOr(stateTxt)).current_exp_id ?? "";
+      ledgerAppend(art, { gen, ts: deps.now(), kind: "interrupted", agent, ...(workingExp ? { exp_id: workingExp } : {}) });
+      atomicWrite(stateTxt, mergeState(readOr(stateTxt), {
+        phase: "idle", current_exp_id: "", last_event: "interrupted", last_event_ts: deps.now(),
+      }));
+      if (workingExp) redispatch.add(`${agent}:${workingExp}`);
+      phase = "idle";
+    }
+    if (!alive && phase !== "working") {
+      const rc = await deps.freshWorker(topic, agent);
+      if (rc === 0) { ledgerAppend(art, { gen, ts: deps.now(), kind: "fresh-worker-respawn", agent }); alive = true; }
+      else log.warn(`autoresearch resume: fresh-worker failed for ${agent} (rc ${rc}); lane left as-is`);
+    }
+
+    phase = parseState(readOr(stateTxt)).phase ?? "";
+    rows.push(`WORKER=${agent}:${phase}:${alive ? "yes" : "no"}`);
+    if (alive) monitors.push(`MONITOR=${agent}`);
+  }
+
+  // 5. Machine-parsed report (the directive re-seeds Monitors + acts on REDISPATCH rows).
+  out(`GEN=${gen}`);
+  for (const r of rows) out(r);
+  for (const rd of redispatch) out(`REDISPATCH=${rd}`);
+  for (const m of monitors) out(m);
+  out(`LAST_SEQ=${replayLedger(readFileSync(lp, "utf8")).lastSeq}`);
+  return 0;
+}
+
+const liveResumeDeps: AutoresearchResumeDeps = {
+  now: () => isoUtc(),
+  paneAlive,
+  freshWorker: (t, i) => freshWorkerWith([t, i], liveFreshWorkerDeps),
+};
+
 // ---- Phase D: abort — graceful one-shot teardown. ----
 // Ports deep-research-abort.sh: capture Monitor task ids BEFORE teardown (teardown
 // archives monitor-tasks.txt away), write halt.flag, finalize, teardown, then print a
@@ -2054,6 +2200,7 @@ export async function run(args: string[]): Promise<number> {
     case "handoff-extract": return handoffExtractWith(rest, liveHandoffDeps);
     case "teardown": return teardownWith(rest, liveTeardownDeps);
     case "fresh-worker": return freshWorkerWith(rest, liveFreshWorkerDeps);
+    case "resume": return resumeWith(rest, liveResumeDeps);
     case "forensics": return forensicsRun(rest);
     case "flag": return runFlag("autoresearch", rest[0], rest.slice(1).join(" "));
     case "abort": return abortWith(applyArgsFile(rest), liveAbortDeps);
