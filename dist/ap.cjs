@@ -21535,6 +21535,11 @@ function reconcileFromOutbox(outboxTail, doneResultExists) {
   if (sawDone) return doneResultExists ? "idle" : null;
   return null;
 }
+function reconcileFromOutboxSince(outboxText, offset, doneResultExists) {
+  const buf = Buffer.from(outboxText, "utf8");
+  const start = buf.length < offset ? 0 : offset;
+  return reconcileFromOutbox(buf.subarray(start).toString("utf8"), doneResultExists);
+}
 function readHaltFlag(body) {
   if (body === null || body.trim() === "") return { format: "missing" };
   const firstLine = body.split("\n").find((l) => l.trim() !== "") ?? "";
@@ -23242,6 +23247,7 @@ __export(autoresearch_exports, {
   metricWith: () => metricWith,
   monitorRun: () => monitorRun,
   refineWith: () => refineWith,
+  resumeWith: () => resumeWith,
   run: () => run13,
   scoreWith: () => scoreWith,
   sotaWith: () => sotaWith,
@@ -23267,7 +23273,7 @@ function controllerGen(art) {
   }
 }
 function usage4() {
-  log.error("usage: autoresearch <init|metric|sota|spawn-all|drop-worker|verify-plan|verify-check|inspect-plan|inspect-check|experiment-send|score|monitor|status-brief|finalize|refine|handoff-extract|teardown|fresh-worker|forensics|abort|consensus|memory-retrieve> ...");
+  log.error("usage: autoresearch <init|metric|sota|spawn-all|drop-worker|verify-plan|verify-check|inspect-plan|inspect-check|experiment-send|score|monitor|status-brief|finalize|refine|resume|handoff-extract|teardown|fresh-worker|forensics|abort|consensus|memory-retrieve> ...");
   return 2;
 }
 function parseInitArgs(args) {
@@ -24819,6 +24825,146 @@ async function freshWorkerWith(args, deps) {
   log.ok(`[fresh-worker] ${agent} respawned on ${topic}; state preserved (exp_counter=${prevCounter})`);
   return 0;
 }
+async function resumeWith(args, deps) {
+  const out = deps.stdout ?? stdoutLine;
+  const topic = args.find((a2) => !a2.startsWith("--")) ?? "";
+  if (!topic) {
+    log.error("usage: autoresearch resume <topic>");
+    return 2;
+  }
+  const art = autoresearchArtDir(topic, deps.opts);
+  if (!(0, import_node_fs35.existsSync)(art)) {
+    log.error(`autoresearch resume: no art dir for topic '${topic}' (${art}); nothing to resume`);
+    return 1;
+  }
+  const lp = ledgerPath(art);
+  if (!(0, import_node_fs35.existsSync)(lp)) {
+    log.error(`autoresearch resume: no campaign ledger under ${art}; pre-ledger campaigns cannot be resumed (init remains the creation path)`);
+    return 1;
+  }
+  const prior = replayLedger((0, import_node_fs35.readFileSync)(lp, "utf8"));
+  const gen = Math.max(readGen(readIfExistsOrNull(controllerGenPath(art))).gen, prior.gen) + 1;
+  atomicWrite(controllerGenPath(art), renderGen(gen, deps.now(), "resume"));
+  ledgerAppend(art, { gen, ts: deps.now(), kind: "resume" });
+  const workersFile = (0, import_node_path32.join)(art, "workers.txt");
+  const agents = (0, import_node_fs35.existsSync)(workersFile) ? splitNonCommentLines((0, import_node_fs35.readFileSync)(workersFile, "utf8")) : [];
+  const redispatch = /* @__PURE__ */ new Set();
+  const readOutbox = (agent) => {
+    const model = resolveModel(agent, topic);
+    const ob = model ? outboxPath(agent, model, topic) : "";
+    let text = "";
+    if (ob && (0, import_node_fs35.existsSync)(ob)) {
+      try {
+        text = (0, import_node_fs35.readFileSync)(ob, "utf8");
+      } catch {
+        text = "";
+      }
+    }
+    return { model, text };
+  };
+  let replay = replayLedger((0, import_node_fs35.readFileSync)(lp, "utf8"));
+  for (const agent of agents) {
+    const stateTxt = (0, import_node_path32.join)(workerStateDir(art, agent), "state.txt");
+    if (!(0, import_node_fs35.existsSync)(stateTxt)) continue;
+    const { text: obText } = readOutbox(agent);
+    const offset = replay.lastDeliveredOffset.get(agent) ?? 0;
+    const curExp = parseState(readOr(stateTxt)).current_exp_id ?? "";
+    const doneResultExists = !!curExp && (0, import_node_fs35.existsSync)((0, import_node_path32.join)(experimentDir(art, agent, curExp), "result.json"));
+    const recon = reconcileFromOutboxSince(obText, offset, doneResultExists);
+    if (recon === "failed" || recon === "idle") atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: recon }));
+    const seen = new Set(replay.completionOrder);
+    for (const expId of listExpDirs(experimentsDir(art, agent))) {
+      if (!(0, import_node_fs35.existsSync)((0, import_node_path32.join)(experimentDir(art, agent, expId), "result.json"))) continue;
+      if (!seen.has(`${agent}/${expId}`)) ledgerAppend(art, { gen, ts: deps.now(), kind: "result-recorded", agent, exp_id: expId });
+    }
+  }
+  replay = replayLedger((0, import_node_fs35.readFileSync)(lp, "utf8"));
+  for (const intent of replay.intents.values()) {
+    if (intent.delivered) continue;
+    const { agent, expId } = intent;
+    const { text: obText } = readOutbox(agent);
+    const reconstructed = replay.lastDeliveredOffset.get(agent) ?? 0;
+    const tail = Buffer.from(obText, "utf8").subarray(reconstructed).toString("utf8");
+    let accepted = false;
+    for (const line of tail.split("\n")) {
+      const o2 = parseEvent(line.trim());
+      if (o2 && (o2.event === "ack" || o2.event === "done")) {
+        accepted = true;
+        break;
+      }
+    }
+    const stateTxt = (0, import_node_path32.join)(workerStateDir(art, agent), "state.txt");
+    if (accepted) {
+      ledgerAppend(art, { gen, ts: deps.now(), kind: "dispatch-delivered", agent, exp_id: expId, data: { outboxOffset: reconstructed, reconstructed: true } });
+      if ((0, import_node_fs35.existsSync)(stateTxt)) {
+        const st = parseState(readOr(stateTxt));
+        const stateN = /^[0-9]+$/.test((st.exp_counter ?? "").trim()) ? parseInt(st.exp_counter, 10) : 0;
+        const intentN = parseInt(expId.slice("exp-".length), 10) || 0;
+        atomicWrite(stateTxt, mergeState(readOr(stateTxt), {
+          phase: "working",
+          current_exp_id: expId,
+          exp_counter: String(Math.max(stateN, intentN)),
+          last_event: "dispatched",
+          last_event_ts: deps.now()
+        }));
+        const resultExists = (0, import_node_fs35.existsSync)((0, import_node_path32.join)(experimentDir(art, agent, expId), "result.json"));
+        const recon = reconcileFromOutboxSince(obText, reconstructed, resultExists);
+        if (recon === "failed" || recon === "idle") atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: recon }));
+      }
+    } else {
+      const phase = (0, import_node_fs35.existsSync)(stateTxt) ? parseState(readOr(stateTxt)).phase ?? "" : "";
+      if (phase !== "working") redispatch.add(`${agent}:${expId}`);
+    }
+  }
+  const rows = [];
+  const monitors = [];
+  for (const agent of agents) {
+    const stateTxt = (0, import_node_path32.join)(workerStateDir(art, agent), "state.txt");
+    if (!(0, import_node_fs35.existsSync)(stateTxt)) {
+      rows.push(`WORKER=${agent}:?:no`);
+      continue;
+    }
+    const model = resolveModel(agent, topic);
+    const pane = model ? paneMetaRead(agent, model, topic) : null;
+    let alive = false;
+    if (pane) {
+      try {
+        alive = await deps.paneAlive(pane);
+      } catch {
+        alive = false;
+      }
+    }
+    let phase = parseState(readOr(stateTxt)).phase ?? "";
+    if (!alive && phase === "working") {
+      const workingExp = parseState(readOr(stateTxt)).current_exp_id ?? "";
+      ledgerAppend(art, { gen, ts: deps.now(), kind: "interrupted", agent, ...workingExp ? { exp_id: workingExp } : {} });
+      atomicWrite(stateTxt, mergeState(readOr(stateTxt), {
+        phase: "idle",
+        current_exp_id: "",
+        last_event: "interrupted",
+        last_event_ts: deps.now()
+      }));
+      if (workingExp) redispatch.add(`${agent}:${workingExp}`);
+      phase = "idle";
+    }
+    if (!alive && phase !== "working") {
+      const rc = await deps.freshWorker(topic, agent);
+      if (rc === 0) {
+        ledgerAppend(art, { gen, ts: deps.now(), kind: "fresh-worker-respawn", agent });
+        alive = true;
+      } else log.warn(`autoresearch resume: fresh-worker failed for ${agent} (rc ${rc}); lane left as-is`);
+    }
+    phase = parseState(readOr(stateTxt)).phase ?? "";
+    rows.push(`WORKER=${agent}:${phase}:${alive ? "yes" : "no"}`);
+    if (alive) monitors.push(`MONITOR=${agent}`);
+  }
+  out(`GEN=${gen}`);
+  for (const r of rows) out(r);
+  for (const rd of redispatch) out(`REDISPATCH=${rd}`);
+  for (const m of monitors) out(m);
+  out(`LAST_SEQ=${replayLedger((0, import_node_fs35.readFileSync)(lp, "utf8")).lastSeq}`);
+  return 0;
+}
 async function abortWith(args, deps) {
   if (args.length < 1 || args.length > 2) {
     log.error("autoresearch abort: usage: <topic> [reason]");
@@ -25016,6 +25162,8 @@ async function run13(args) {
       return teardownWith(rest, liveTeardownDeps);
     case "fresh-worker":
       return freshWorkerWith(rest, liveFreshWorkerDeps);
+    case "resume":
+      return resumeWith(rest, liveResumeDeps);
     case "forensics":
       return forensicsRun4(rest);
     case "flag":
@@ -25030,7 +25178,7 @@ async function run13(args) {
       return usage4();
   }
 }
-var import_node_fs35, import_node_child_process11, import_node_path32, stdoutLine, liveInitDeps4, liveSpawnAllDeps2, liveDropWorkerDeps, liveExperimentSendDeps, liveScoreDeps, sleep4, GIB, liveFinalizeDeps, liveRefineDeps, liveHandoffDeps, liveTeardownDeps, liveFreshWorkerDeps, liveAbortDeps, liveConsensusDeps, liveMemoryRetrieveDeps, liveVerifyPlanDeps, readMetricMd, liveVerifyCheckDeps, liveInspectPlanDeps, liveInspectCheckDeps;
+var import_node_fs35, import_node_child_process11, import_node_path32, stdoutLine, liveInitDeps4, liveSpawnAllDeps2, liveDropWorkerDeps, liveExperimentSendDeps, liveScoreDeps, sleep4, GIB, liveFinalizeDeps, liveRefineDeps, liveHandoffDeps, liveTeardownDeps, liveFreshWorkerDeps, liveResumeDeps, liveAbortDeps, liveConsensusDeps, liveMemoryRetrieveDeps, liveVerifyPlanDeps, readMetricMd, liveVerifyCheckDeps, liveInspectPlanDeps, liveInspectCheckDeps;
 var init_autoresearch2 = __esm({
   "src/commands/autoresearch.ts"() {
     "use strict";
@@ -25156,6 +25304,11 @@ var init_autoresearch2 = __esm({
       teardown: (t, i2) => run5(["--pairs", t, i2]).then(() => void 0),
       spawn: (a2) => run(a2),
       now: () => isoUtc()
+    };
+    liveResumeDeps = {
+      now: () => isoUtc(),
+      paneAlive,
+      freshWorker: (t, i2) => freshWorkerWith([t, i2], liveFreshWorkerDeps)
     };
     liveAbortDeps = {
       finalize: (t) => finalizeWith([t], liveFinalizeDeps),
