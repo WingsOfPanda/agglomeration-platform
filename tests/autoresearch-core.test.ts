@@ -508,7 +508,7 @@ describe("buildConsensus", () => {
 });
 
 import {
-  parseState, renderState, mergeState, reconcileFromOutbox, readHaltFlag,
+  parseState, renderState, mergeState, reconcileFromOutbox, reconcileFromOutboxSince, readHaltFlag,
 } from "../src/core/autoresearchState.js";
 import { buildResultsTsv, computeScore, type ScoreFs } from "../src/core/autoresearchScore.js";
 import { initScanState, monitorScan, type MonitorScanState, type MonitorDeps } from "../src/core/autoresearchMonitor.js";
@@ -551,6 +551,29 @@ describe("reconcileFromOutbox", () => {
   });
   it("no terminal event -> no write", () => {
     expect(reconcileFromOutbox('{"event":"progress"}\n{"event":"heartbeat"}', true)).toBeNull();
+  });
+});
+
+describe("reconcileFromOutboxSince (offset-scoped reconcile)", () => {
+  const oldDone = '{"event":"done","summary":"old","ts":"t"}\n';
+  const newDone = '{"event":"done","summary":"new","ts":"t"}\n';
+  it("an old done BEFORE the offset is not this experiment's completion", () => {
+    expect(reconcileFromOutboxSince(oldDone, Buffer.byteLength(oldDone), true)).toBeNull();
+  });
+  it("a done AFTER the offset reconciles (result present -> idle; absent -> null)", () => {
+    const text = oldDone + newDone;
+    expect(reconcileFromOutboxSince(text, Buffer.byteLength(oldDone), true)).toBe("idle");
+    expect(reconcileFromOutboxSince(text, Buffer.byteLength(oldDone), false)).toBeNull();
+  });
+  it("error after the offset wins -> failed", () => {
+    const text = oldDone + '{"event":"error","message":"x","fatal":true,"ts":"t"}\n';
+    expect(reconcileFromOutboxSince(text, Buffer.byteLength(oldDone), true)).toBe("failed");
+  });
+  it("offset past EOF (recreated/shrunk outbox) re-reads from the start", () => {
+    expect(reconcileFromOutboxSince(newDone, 9999, true)).toBe("idle");
+  });
+  it("offset 0 delegates over the whole text (old-caller equivalence)", () => {
+    expect(reconcileFromOutboxSince(oldDone, 0, true)).toBe("idle");
   });
 });
 
