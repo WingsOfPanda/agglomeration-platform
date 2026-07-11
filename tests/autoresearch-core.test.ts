@@ -439,6 +439,56 @@ describe("checkCompletion", () => {
   });
 });
 
+describe("checkCompletion completionOrder rider (plateau chronology)", () => {
+  // Four single-member families keep familiesImproving=0 and familiesActive=4>=min_families=1,
+  // so `plateau` reflects the GLOBAL window directly — the only way the ranked-tail vs
+  // completion-tail divergence is observable (CompletionSignals exposes no raw globalFlat).
+  // plateau_window 3, threshold 0.01 (the parser wants the lowercase `**plateau_window:**`
+  // spelling; formatMetricBlock does not emit min_families, so it is appended by hand).
+  const riderMetric = formatMetricBlock({
+    primary_metric: "accuracy", direction: "maximize",
+    K_corroboration: "1", plateau_window: "3", plateau_threshold: "0.01",
+  }) + "**min_families:** 1\n";
+  // buildScoreboard sorts maximize DESC -> ranked order is 0.90, 0.50, 0.495, 0.492.
+  const sb = buildScoreboard([
+    { expId: "exp-004", agent: "bravo", metric: "0.90",  status: "ok", runtime: "10", approach: "fam-d", metricName: "accuracy" },
+    { expId: "exp-001", agent: "bravo", metric: "0.50",  status: "ok", runtime: "10", approach: "fam-a", metricName: "accuracy" },
+    { expId: "exp-002", agent: "bravo", metric: "0.495", status: "ok", runtime: "10", approach: "fam-b", metricName: "accuracy" },
+    { expId: "exp-003", agent: "bravo", metric: "0.492", status: "ok", runtime: "10", approach: "fam-c", metricName: "accuracy" },
+  ]);
+
+  it("without completionOrder the window is the ranked tail (today's behavior, pinned)", () => {
+    // ranked tail = [0.50, 0.495, 0.492] -> spread 0.008 < 0.01 -> globalFlat -> plateau.
+    const base = checkCompletion(sb, riderMetric);
+    expect(base.familiesImproving).toBe(0);
+    expect(base.familiesActive).toBe(4);
+    expect(base.plateau).toBe(true);
+  });
+
+  it("with completionOrder the window follows completion order, not rank", () => {
+    // completions 001,002,003,004 -> last 3 = [0.495, 0.492, 0.90] -> spread 0.408 -> NOT flat.
+    const chron = checkCompletion(sb, riderMetric, ["bravo/exp-001", "bravo/exp-002", "bravo/exp-003", "bravo/exp-004"]);
+    expect(chron.plateau).toBe(false);
+    // a genuinely flat completion tail plateaus: last 3 completions = [0.50, 0.495, 0.492].
+    const flatTail = checkCompletion(sb, riderMetric, ["bravo/exp-004", "bravo/exp-001", "bravo/exp-002", "bravo/exp-003"]);
+    expect(flatTail.plateau).toBe(true);
+  });
+
+  it("completionOrder keys with no ok row are skipped (dropped, not counted as a break)", () => {
+    // a bogus key excised from an otherwise-flat tail leaves the SAME window -> plateau intact.
+    const withBogus = checkCompletion(sb, riderMetric, ["bravo/exp-004", "bravo/exp-999", "bravo/exp-001", "bravo/exp-002", "bravo/exp-003"]);
+    expect(withBogus.plateau).toBe(true);
+    // after skipping the miss, too few completions remain for a window.
+    const tooShort = checkCompletion(sb, riderMetric, ["bravo/exp-404", "bravo/exp-001"]);
+    expect(tooShort.plateau).toBe(false);
+  });
+
+  it("empty completionOrder is a too-short window (no plateau); absent === undefined (byte-identical)", () => {
+    expect(checkCompletion(sb, riderMetric, []).plateau).toBe(false);
+    expect(checkCompletion(sb, riderMetric)).toEqual(checkCompletion(sb, riderMetric, undefined));
+  });
+});
+
 import { checkTimeBudget } from "../src/core/autoresearchComplete.js";
 
 describe("checkTimeBudget", () => {
@@ -508,7 +558,7 @@ describe("buildConsensus", () => {
 });
 
 import {
-  parseState, renderState, mergeState, reconcileFromOutbox, readHaltFlag,
+  parseState, renderState, mergeState, reconcileFromOutbox, reconcileFromOutboxSince, readHaltFlag,
 } from "../src/core/autoresearchState.js";
 import { buildResultsTsv, computeScore, type ScoreFs } from "../src/core/autoresearchScore.js";
 import { initScanState, monitorScan, type MonitorScanState, type MonitorDeps } from "../src/core/autoresearchMonitor.js";
@@ -551,6 +601,29 @@ describe("reconcileFromOutbox", () => {
   });
   it("no terminal event -> no write", () => {
     expect(reconcileFromOutbox('{"event":"progress"}\n{"event":"heartbeat"}', true)).toBeNull();
+  });
+});
+
+describe("reconcileFromOutboxSince (offset-scoped reconcile)", () => {
+  const oldDone = '{"event":"done","summary":"old","ts":"t"}\n';
+  const newDone = '{"event":"done","summary":"new","ts":"t"}\n';
+  it("an old done BEFORE the offset is not this experiment's completion", () => {
+    expect(reconcileFromOutboxSince(oldDone, Buffer.byteLength(oldDone), true)).toBeNull();
+  });
+  it("a done AFTER the offset reconciles (result present -> idle; absent -> null)", () => {
+    const text = oldDone + newDone;
+    expect(reconcileFromOutboxSince(text, Buffer.byteLength(oldDone), true)).toBe("idle");
+    expect(reconcileFromOutboxSince(text, Buffer.byteLength(oldDone), false)).toBeNull();
+  });
+  it("error after the offset wins -> failed", () => {
+    const text = oldDone + '{"event":"error","message":"x","fatal":true,"ts":"t"}\n';
+    expect(reconcileFromOutboxSince(text, Buffer.byteLength(oldDone), true)).toBe("failed");
+  });
+  it("offset past EOF (recreated/shrunk outbox) re-reads from the start", () => {
+    expect(reconcileFromOutboxSince(newDone, 9999, true)).toBe("idle");
+  });
+  it("offset 0 delegates over the whole text (old-caller equivalence)", () => {
+    expect(reconcileFromOutboxSince(oldDone, 0, true)).toBe("idle");
   });
 });
 

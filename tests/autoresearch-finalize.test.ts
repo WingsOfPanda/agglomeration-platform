@@ -334,6 +334,63 @@ describe("autoresearch finalize", () => {
     expect(rendered.join("\n")).toContain("resnet50");
   });
 
+  /** A capturing MemoryIo: parses every lessons.jsonl record written via writeAtomic. */
+  function captureIo(): { io: MemoryIo; records: Array<Record<string, unknown>> } {
+    const files: Record<string, string> = {};
+    const records: Array<Record<string, unknown>> = [];
+    const io: MemoryIo = {
+      exists: (p) => p in files,
+      readFile: (p) => files[p] ?? "",
+      mkdir: () => {},
+      writeAtomic: (dest, content) => {
+        files[dest] = content;
+        for (const line of content.split("\n")) { if (line.trim()) records.push(JSON.parse(line)); }
+      },
+    };
+    return { io, records };
+  }
+
+  it("WRITE: operator.txt drives the lesson draft's operator field", async () => {
+    const h = home();
+    const { art } = scaffoldArt(h, ["kilo"]);
+    scaffoldPart(h, art, "kilo", "phase=idle\n", "");
+    writeFileSync(join(art, "metric.md"),
+      "# Research goal\n\n**Primary metric:** accuracy\n**Direction:** maximize\n");
+    const ed = writeResult(art, "kilo", "exp-001", {
+      branch_id: "exp-001", approach_label: "resnet50", metric_name: "accuracy", metric_value: 0.91,
+      status: "ok", runtime_s: 1, log_paths: [], checkpoint_path: null, notes: "",
+    });
+    writeFileSync(join(ed, "operator.txt"), "operator=ablate\n");
+    writeFileSync(join(art, "verification.tsv"),
+      "exp_id\tagent\tverdict\tts\nexp-001\tkilo\tverified\tT\n");
+
+    const { io, records } = captureIo();
+    const rc = await finalizeWith([TOPIC], deps(h, { memoryIo: io, memoryStoreRoot: tempStore() }));
+    expect(rc).toBe(0);
+    expect(records.length).toBe(1);
+    expect(records[0].operator).toBe("ablate");
+  });
+
+  it("WRITE: no operator.txt keeps buildLessonDraft's improve/draft default", async () => {
+    const h = home();
+    const { art } = scaffoldArt(h, ["lima"]);
+    scaffoldPart(h, art, "lima", "phase=idle\n", "");
+    writeFileSync(join(art, "metric.md"),
+      "# Research goal\n\n**Primary metric:** accuracy\n**Direction:** maximize\n");
+    writeResult(art, "lima", "exp-001", {
+      branch_id: "exp-001", approach_label: "resnet50", metric_name: "accuracy", metric_value: 0.91,
+      status: "ok", runtime_s: 1, log_paths: [], checkpoint_path: null, notes: "",
+    });
+    writeFileSync(join(art, "verification.tsv"),
+      "exp_id\tagent\tverdict\tts\nexp-001\tlima\tverified\tT\n");
+
+    const { io, records } = captureIo();
+    const rc = await finalizeWith([TOPIC], deps(h, { memoryIo: io, memoryStoreRoot: tempStore() }));
+    expect(rc).toBe(0);
+    expect(records.length).toBe(1);
+    expect(records[0].operator).toBe("draft"); // no parent -> draft default
+  });
+
   it("NON-REGRESSION: a throwing memoryIo cannot change finalize rc or its artifacts", async () => {
     const h = home();
     const { art } = scaffoldArt(h, ["juliet"]);

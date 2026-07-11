@@ -50,6 +50,16 @@ export function reconcileFromOutbox(outboxTail: string, doneResultExists: boolea
   return null;
 }
 
+/** Offset-scoped reconcile: slice the outbox at a BYTE offset, then delegate to
+ *  reconcileFromOutbox (which stays byte-identical for old callers). Mirrors
+ *  ipc.readFrom's shrink guard: an offset past EOF (a crash/rotation recreated
+ *  the file) re-reads from the start — a recreated outbox holds only new events. */
+export function reconcileFromOutboxSince(outboxText: string, offset: number, doneResultExists: boolean): "failed" | "idle" | null {
+  const buf = Buffer.from(outboxText, "utf8");
+  const start = buf.length < offset ? 0 : offset;
+  return reconcileFromOutbox(buf.subarray(start).toString("utf8"), doneResultExists);
+}
+
 export interface HaltFlag {
   format: "structured" | "prose" | "missing";
   fields?: Record<string, string>;
