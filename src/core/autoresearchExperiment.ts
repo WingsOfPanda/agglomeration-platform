@@ -124,3 +124,12 @@ export function buildDispatchState(existing: string | null, expId: string, nowIs
     last_event: "dispatched", last_event_ts: nowIso,
   });
 }
+
+/** Next dispatch id from the reconstructible counter rule: max(state.txt
+ *  exp_counter, the ledger's highest intent number for the agent) + 1 —
+ *  a crash that lost the state bump can never cause an exp-id reuse. */
+export function nextExpId(stateText: string | null, ledgerIntentMax: number): string {
+  const prev = stateText?.split("\n").find((l) => l.startsWith("exp_counter="))?.slice("exp_counter=".length) ?? "";
+  const n = /^[0-9]+$/.test(prev.trim()) ? parseInt(prev, 10) : 0;
+  return `exp-${String(Math.max(n, ledgerIntentMax) + 1).padStart(3, "0")}`;
+}
