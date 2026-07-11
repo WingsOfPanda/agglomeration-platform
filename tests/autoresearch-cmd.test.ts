@@ -758,6 +758,24 @@ describe("autoresearch score", () => {
     expect(lin).toBeDefined();
     expect(lin!.content).toBe("exp_id\tagent\tparent_id\tknobs_changed\tverdict\tts\nexp-003\tgolf\texp-002\t2\timprove-multi\tT\n");
   });
+
+  it("appends result-recorded ledger rows once per completed experiment (idempotent)", async () => {
+    const h = home();
+    const art = scaffold(h, {
+      alto: { expId: "exp-001", body: result({ metric: 0.95 }) },
+      bass: { expId: "exp-001", body: result({ metric: 0.90 }) },
+    });
+    // Seed a ledger so the score-time tail engages (old campaigns without one skip entirely).
+    writeFileSync(ledgerPath(art), appendEvent("", { gen: 1, ts: "T", kind: "campaign-init" }));
+
+    // Two runs with the default appendFile (real appendFileSync under the freshHome art dir).
+    expect(await scoreWith(["topic"], SCORE_OPTS(h))).toBe(0);
+    expect(await scoreWith(["topic"], SCORE_OPTS(h))).toBe(0);
+
+    const recorded = parseLedger(readFileSync(ledgerPath(art), "utf8")).filter((e) => e.kind === "result-recorded");
+    // Exactly one result-recorded per completed key, no duplicates across the two runs.
+    expect(recorded.map((e) => `${e.agent}/${e.exp_id}`).sort()).toEqual(["alto/exp-001", "bass/exp-001"]);
+  });
 });
 
 // ---- Phase C: monitor — per-worker liveness scan loop (C7) ----

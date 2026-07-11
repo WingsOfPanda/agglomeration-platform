@@ -47,7 +47,7 @@ function parseRows(scoreboardMd: string): SbRow[] {
 }
 
 /** Compute completion signals from a rendered scoreboard + metric.md. */
-export function checkCompletion(scoreboardMd: string, metricMd: string): CompletionSignals {
+export function checkCompletion(scoreboardMd: string, metricMd: string, completionOrder?: string[]): CompletionSignals {
   const t = parseMetricMd(metricMd);
   const matchesMetric = (r: SbRow) => !(t.primaryMetric && r.metricName && r.metricName !== t.primaryMetric);
 
@@ -90,10 +90,20 @@ export function checkCompletion(scoreboardMd: string, metricMd: string): Complet
   }
   if (chain > kSoFar) kSoFar = chain;
 
-  // plateau: today's global last-N spread check (semantics unchanged).
+  // plateau window: with a ledger-derived completionOrder the window is the LAST N
+  // completions (true chronology); without one (old campaigns) it is today's ranked
+  // tail, byte-identical. Keys are "<agent>/<exp-id>"; keys with no ok row are skipped.
+  let windowMetrics = metrics;
+  if (completionOrder !== undefined) {
+    const okByKey = new Map<string, number>();
+    for (const r of okRows) okByKey.set(`${r.agent}/${r.exp}`, parseFloat(r.metric));
+    windowMetrics = completionOrder
+      .map((key) => okByKey.get(key))
+      .filter((v): v is number => v !== undefined);
+  }
   let globalFlat = false;
-  if (metrics.length >= t.plateauWindow) {
-    const lastN = metrics.slice(-t.plateauWindow);
+  if (windowMetrics.length >= t.plateauWindow) {
+    const lastN = windowMetrics.slice(-t.plateauWindow);
     if (Math.max(...lastN) - Math.min(...lastN) < t.plateauThreshold) globalFlat = true;
   }
 

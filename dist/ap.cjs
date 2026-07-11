@@ -22292,7 +22292,7 @@ function parseRows(scoreboardMd) {
   }
   return out;
 }
-function checkCompletion(scoreboardMd, metricMd) {
+function checkCompletion(scoreboardMd, metricMd, completionOrder) {
   const t = parseMetricMd(metricMd);
   const matchesMetric = (r) => !(t.primaryMetric && r.metricName && r.metricName !== t.primaryMetric);
   const allRows = parseRows(scoreboardMd).filter(matchesMetric);
@@ -22328,9 +22328,15 @@ function checkCompletion(scoreboardMd, metricMd) {
     }
   }
   if (chain > kSoFar) kSoFar = chain;
+  let windowMetrics = metrics;
+  if (completionOrder !== void 0) {
+    const okByKey = /* @__PURE__ */ new Map();
+    for (const r of okRows) okByKey.set(`${r.agent}/${r.exp}`, parseFloat(r.metric));
+    windowMetrics = completionOrder.map((key) => okByKey.get(key)).filter((v) => v !== void 0);
+  }
   let globalFlat = false;
-  if (metrics.length >= t.plateauWindow) {
-    const lastN = metrics.slice(-t.plateauWindow);
+  if (windowMetrics.length >= t.plateauWindow) {
+    const lastN = windowMetrics.slice(-t.plateauWindow);
     if (Math.max(...lastN) - Math.min(...lastN) < t.plateauThreshold) globalFlat = true;
   }
   const byFam = /* @__PURE__ */ new Map();
@@ -23976,6 +23982,23 @@ async function scoreWith(args, deps) {
   deps.writeAtomic((0, import_node_path32.join)(art, "coverage.tsv"), COVERAGE_TSV_HEADER + c3.coverageRows.map(coverageRow).join(""));
   deps.writeAtomic((0, import_node_path32.join)(art, "lineage.tsv"), LINEAGE_TSV_HEADER + c3.lineageRows.map(lineageRow).join(""));
   for (const w of c3.warnings) log.warn(w);
+  try {
+    const lp = ledgerPath(art);
+    if (deps.fs.exists(lp)) {
+      const append = deps.appendFile ?? import_node_fs35.appendFileSync;
+      const gen = readGen(deps.fs.read(controllerGenPath(art))).gen || 1;
+      const seen = new Set(replayLedger(deps.fs.read(lp) ?? "").completionOrder);
+      for (const line of c3.resultsTsv.split("\n")) {
+        if (!line || line.startsWith("exp_id	")) continue;
+        const [expId, agent] = line.split("	");
+        if (!expId || !agent || seen.has(`${agent}/${expId}`)) continue;
+        append(lp, appendEvent(deps.fs.read(lp) ?? "", { gen, ts: deps.now(), kind: "result-recorded", agent, exp_id: expId }));
+        seen.add(`${agent}/${expId}`);
+      }
+    }
+  } catch (e) {
+    log.warn(`autoresearch score: ledger tail skipped (best-effort): ${String(e)}`);
+  }
   return 0;
 }
 function readSlice(path6, start, end) {
@@ -24099,7 +24122,16 @@ function gatherCompletion(art) {
   const sbPath = (0, import_node_path32.join)(art, "scoreboard.md");
   const scoreboardMd = readIfExistsOrNull(sbPath);
   const metricPath = (0, import_node_path32.join)(art, "metric.md");
-  const completion = scoreboardMd !== null && (0, import_node_fs35.existsSync)(metricPath) ? checkCompletion(scoreboardMd, (0, import_node_fs35.readFileSync)(metricPath, "utf8")) : null;
+  let completionOrder;
+  const lp = ledgerPath(art);
+  if ((0, import_node_fs35.existsSync)(lp)) {
+    try {
+      completionOrder = replayLedger((0, import_node_fs35.readFileSync)(lp, "utf8")).completionOrder;
+    } catch {
+      completionOrder = void 0;
+    }
+  }
+  const completion = scoreboardMd !== null && (0, import_node_fs35.existsSync)(metricPath) ? checkCompletion(scoreboardMd, (0, import_node_fs35.readFileSync)(metricPath, "utf8"), completionOrder) : null;
   return { scoreboardMd, completion };
 }
 function parseStatusBriefArgs(args) {
