@@ -22782,6 +22782,9 @@ var init_autoresearchArbiter = __esm({
 });
 
 // src/core/autoresearchMemory.ts
+function containsInjection(text) {
+  return SENTINELS.some((re) => re.test(text));
+}
 function hasInjection(draft) {
   const fields = [
     draft?.claim,
@@ -22793,7 +22796,7 @@ function hasInjection(draft) {
   ].filter((v) => typeof v === "string");
   const spaceJoined = fields.join(" ");
   const concatenated = fields.join("");
-  return SENTINELS.some((re) => re.test(spaceJoined) || re.test(concatenated));
+  return containsInjection(spaceJoined) || containsInjection(concatenated);
 }
 function fingerprint(d) {
   const basis = [
@@ -23116,6 +23119,31 @@ var init_autoresearchMemoryStore = __esm({
   }
 });
 
+// src/core/autoresearchCorpus.ts
+function leaderMetricOf(scoreboardMd) {
+  if (!scoreboardMd) return "";
+  for (const line of scoreboardMd.split("\n")) {
+    if (/^\|\s+1\s+\|\s+exp-/.test(line)) return line.split("|").map((s) => s.trim())[4] ?? "";
+  }
+  return "";
+}
+function buildCorpusDigest(entries, opts) {
+  const cap = opts.cap ?? 5;
+  const kept = entries.filter((e) => e.metricFamily === opts.metricFamily).filter((e) => !containsInjection([e.topicSlug, e.leaderMetric, e.haltReason].join(" "))).slice(0, cap);
+  if (kept.length === 0) return "";
+  return [
+    "## Prior campaigns (data-only)",
+    "",
+    ...kept.map((e) => `- ${e.topicSlug}: leader=${e.leaderMetric || "n/a"} verified_lessons=${e.verifiedLessons} halt=${e.haltReason || "completed"} forensics_flags=${e.forensicsFlags}`)
+  ].join("\n") + "\n";
+}
+var init_autoresearchCorpus = __esm({
+  "src/core/autoresearchCorpus.ts"() {
+    "use strict";
+    init_autoresearchMemory();
+  }
+});
+
 // src/core/autoresearchLedger.ts
 function ledgerPath(art) {
   return (0, import_node_path31.join)(art, "campaign-ledger.jsonl");
@@ -23240,6 +23268,7 @@ var autoresearch_exports = {};
 __export(autoresearch_exports, {
   abortWith: () => abortWith,
   consensusWith: () => consensusWith,
+  corpusDigestWith: () => corpusDigestWith,
   dropWorkerWith: () => dropWorkerWith,
   experimentSendWith: () => experimentSendWith,
   experimentTimeoutDefault: () => experimentTimeoutDefault,
@@ -23281,7 +23310,7 @@ function controllerGen(art) {
   }
 }
 function usage4() {
-  log.error("usage: autoresearch <init|metric|sota|spawn-all|drop-worker|verify-plan|verify-check|inspect-plan|inspect-check|experiment-send|score|monitor|status-brief|finalize|refine|resume|handoff-extract|teardown|fresh-worker|forensics|abort|consensus|memory-retrieve> ...");
+  log.error("usage: autoresearch <init|metric|sota|spawn-all|drop-worker|verify-plan|verify-check|inspect-plan|inspect-check|experiment-send|score|monitor|status-brief|finalize|refine|resume|handoff-extract|teardown|fresh-worker|forensics|abort|consensus|memory-retrieve|corpus-digest> ...");
   return 2;
 }
 function parseInitArgs(args) {
@@ -25149,6 +25178,71 @@ async function memoryRetrieveWith(args, deps) {
   for (const line of lessons) out(line);
   return 0;
 }
+function listNames(dir, kind) {
+  try {
+    return (0, import_node_fs35.readdirSync)(dir, { withFileTypes: true }).filter((e) => kind === "dir" ? e.isDirectory() : e.isFile()).map((e) => e.name).sort();
+  } catch {
+    return [];
+  }
+}
+async function corpusDigestWith(args, deps) {
+  const out = deps.stdout ?? stdoutLine;
+  const writeAtomic = deps.writeAtomic ?? atomicWrite;
+  const topic = args.find((a2) => !a2.startsWith("-")) ?? "";
+  if (!topic) {
+    log.error("usage: autoresearch corpus-digest <topic>");
+    return 2;
+  }
+  const art = autoresearchArtDir(topic, deps.opts);
+  if (!(0, import_node_fs35.existsSync)(art)) {
+    log.error(`autoresearch corpus-digest: art dir missing: ${art}`);
+    return 1;
+  }
+  const metricPath = (0, import_node_path32.join)(art, "metric.md");
+  if (!(0, import_node_fs35.existsSync)(metricPath)) return 0;
+  const family = metricFamilyOf(parseMetricMd((0, import_node_fs35.readFileSync)(metricPath, "utf8")).primaryMetric);
+  if (family === null) return 0;
+  const forensicsRoot2 = deps.forensicsRoot ?? (0, import_node_path32.join)(globalRoot(), "forensics");
+  const flags = /* @__PURE__ */ new Map();
+  for (const date of listNames(forensicsRoot2, "dir")) {
+    for (const name of listNames((0, import_node_path32.join)(forensicsRoot2, date), "file")) {
+      if (!name.endsWith(".md")) continue;
+      const body = readIfExists((0, import_node_path32.join)(forensicsRoot2, date, name));
+      if (!/^command: autoresearch$/m.test(body)) continue;
+      const slug = /^topic_slug: (.*)$/m.exec(body)?.[1]?.trim() ?? "";
+      if (slug) flags.set(slug, (flags.get(slug) ?? 0) + 1);
+    }
+  }
+  const archiveRoot = deps.archiveRoot ?? (0, import_node_path32.join)(globalRoot(), "archive", repoHash());
+  const dated = [];
+  for (const slug of listNames(archiveRoot, "dir")) {
+    for (const artName of listNames((0, import_node_path32.join)(archiveRoot, slug), "dir")) {
+      if (!artName.startsWith("_autoresearch-")) continue;
+      const dir = (0, import_node_path32.join)(archiveRoot, slug, artName);
+      const mm = readIfExistsOrNull((0, import_node_path32.join)(dir, "metric.md"));
+      const fam = mm ? metricFamilyOf(parseMetricMd(mm).primaryMetric) : null;
+      if (fam === null) continue;
+      const verified = (readIfExistsOrNull((0, import_node_path32.join)(dir, "verification.tsv")) ?? "").split("\n").filter((l) => l && !l.startsWith("exp_id	") && l.split("	")[2] === "verified").length;
+      const halt = readHaltFlag(readIfExistsOrNull((0, import_node_path32.join)(dir, "halt.flag")));
+      const haltReason = halt.format === "structured" ? halt.fields?.reason ?? halt.fields?.halted_by ?? "halted" : halt.format === "prose" ? halt.reason ?? "halted" : "completed";
+      dated.push({ ts: artName.slice("_autoresearch-".length), e: {
+        topicSlug: slug,
+        metricFamily: fam,
+        leaderMetric: leaderMetricOf(readIfExistsOrNull((0, import_node_path32.join)(dir, "scoreboard.md"))),
+        verifiedLessons: verified,
+        haltReason,
+        forensicsFlags: flags.get(slug) ?? 0
+      } });
+    }
+  }
+  dated.sort((a2, b) => a2.ts < b.ts ? 1 : a2.ts > b.ts ? -1 : 0);
+  const block = buildCorpusDigest(dated.map((x) => x.e), { metricFamily: family });
+  writeAtomic((0, import_node_path32.join)(art, "corpus-digest.md"), block || "(no prior same-family campaigns)\n");
+  if (block) {
+    for (const line of block.split("\n")) if (line) out(line);
+  }
+  return 0;
+}
 function appendVerificationRow(art, agent, expId, row) {
   const tsv = (0, import_node_path32.join)(art, "verification.tsv");
   const prior = (0, import_node_fs35.existsSync)(tsv) ? (0, import_node_fs35.readFileSync)(tsv, "utf8") : VERIFICATION_TSV_HEADER;
@@ -25220,11 +25314,13 @@ async function run13(args) {
       return consensusWith(rest, liveConsensusDeps);
     case "memory-retrieve":
       return memoryRetrieveWith(rest, liveMemoryRetrieveDeps);
+    case "corpus-digest":
+      return corpusDigestWith(rest, liveCorpusDigestDeps);
     default:
       return usage4();
   }
 }
-var import_node_fs35, import_node_child_process11, import_node_path32, stdoutLine, liveInitDeps4, liveSpawnAllDeps2, liveDropWorkerDeps, liveExperimentSendDeps, liveScoreDeps, sleep4, GIB, liveFinalizeDeps, liveRefineDeps, liveHandoffDeps, liveTeardownDeps, liveFreshWorkerDeps, liveResumeDeps, liveAbortDeps, liveConsensusDeps, liveMemoryRetrieveDeps, liveVerifyPlanDeps, readMetricMd, liveVerifyCheckDeps, liveInspectPlanDeps, liveInspectCheckDeps;
+var import_node_fs35, import_node_child_process11, import_node_path32, stdoutLine, liveInitDeps4, liveSpawnAllDeps2, liveDropWorkerDeps, liveExperimentSendDeps, liveScoreDeps, sleep4, GIB, liveFinalizeDeps, liveRefineDeps, liveHandoffDeps, liveTeardownDeps, liveFreshWorkerDeps, liveResumeDeps, liveAbortDeps, liveConsensusDeps, liveMemoryRetrieveDeps, liveCorpusDigestDeps, liveVerifyPlanDeps, readMetricMd, liveVerifyCheckDeps, liveInspectPlanDeps, liveInspectCheckDeps;
 var init_autoresearch2 = __esm({
   "src/commands/autoresearch.ts"() {
     "use strict";
@@ -25262,6 +25358,7 @@ var init_autoresearch2 = __esm({
     init_autoresearchInfeasible();
     init_autoresearchLessonMap();
     init_autoresearchMemoryStore();
+    init_autoresearchCorpus();
     init_contracts();
     init_ipc();
     init_autoresearchLedger();
@@ -25363,6 +25460,7 @@ var init_autoresearch2 = __esm({
     };
     liveConsensusDeps = { now: () => isoUtc() };
     liveMemoryRetrieveDeps = { now: () => isoUtc() };
+    liveCorpusDigestDeps = { now: () => isoUtc() };
     liveVerifyPlanDeps = {
       readResult: (art, i2, e) => {
         const p = (0, import_node_path32.join)(experimentDir(art, i2, e), "result.json");
