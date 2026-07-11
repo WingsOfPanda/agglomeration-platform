@@ -24902,9 +24902,14 @@ async function freshWorkerWith(args, deps) {
 }
 async function resumeWith(args, deps) {
   const out = deps.stdout ?? stdoutLine;
-  const topic = args.find((a2) => !a2.startsWith("--")) ?? "";
-  if (!topic) {
+  const rawTopic = args.find((a2) => !a2.startsWith("--")) ?? "";
+  if (!rawTopic) {
     log.error("usage: autoresearch resume <topic>");
+    return 2;
+  }
+  const topic = deriveSlug(rawTopic);
+  if (!topic) {
+    log.error("autoresearch resume: topic produced an empty slug");
     return 2;
   }
   const art = autoresearchArtDir(topic, deps.opts);

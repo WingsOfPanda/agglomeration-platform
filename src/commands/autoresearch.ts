@@ -1867,8 +1867,12 @@ export interface AutoresearchResumeDeps {
 
 export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): Promise<number> {
   const out = deps.stdout ?? stdoutLine;
-  const topic = args.find((a) => !a.startsWith("--")) ?? "";
-  if (!topic) { log.error("usage: autoresearch resume <topic>"); return 2; }
+  const rawTopic = args.find((a) => !a.startsWith("--")) ?? "";
+  if (!rawTopic) { log.error("usage: autoresearch resume <topic>"); return 2; }
+  // Symmetric with init: accept the topic text as typed and derive the same slug
+  // init used, so the re-entry path needs no separate slug capture.
+  const topic = deriveSlug(rawTopic);
+  if (!topic) { log.error("autoresearch resume: topic produced an empty slug"); return 2; }
 
   const art = autoresearchArtDir(topic, deps.opts);
   if (!existsSync(art)) { log.error(`autoresearch resume: no art dir for topic '${topic}' (${art}); nothing to resume`); return 1; }

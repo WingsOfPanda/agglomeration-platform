@@ -67,6 +67,20 @@ describe("resume: guards", () => {
   });
 });
 
+describe("resume: slugifies its topic arg", () => {
+  it("re-entry symmetry with init: raw topic text resolves the slug art dir (rc 0, GEN=2)", async () => {
+    const h = home();
+    // Seed under the slug (scaffold's TOPIC "rs-topic" IS already a slug).
+    scaffold(h);
+    const out: string[] = [];
+    // The Hub's re-entry path only has the raw topic text; deriveSlug("rs topic") === "rs-topic",
+    // so the slugified positional resolves the same art dir init created (was: verbatim -> rc 1).
+    const rc = await resumeWith(["rs topic"], { ...deps(h), stdout: (l) => out.push(l) });
+    expect(rc).toBe(0);
+    expect(out).toContain("GEN=2");
+  });
+});
+
 describe("resume: crash matrix", () => {
   it("1. crash AFTER intent, BEFORE inbox -> REDISPATCH with the SAME exp id; counter unchanged", async () => {
     const h = home();
