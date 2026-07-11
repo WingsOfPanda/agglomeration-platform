@@ -40,7 +40,8 @@ import { metricFamilyOf, lessonVerdictOf, policyFromMetric, buildLessonDraft, ty
 import { writeLessonsAtFinalize, retrieveForDispatch, liveMemoryIo, type MemoryIo } from "../core/autoresearchMemoryStore.js";
 import { type LessonVerdict } from "../core/autoresearchMemory.js";
 import { agentBinary, consultTimeout } from "../core/contracts.js";
-import { inboxWrite, inboxPath, outboxPath, paneMetaRead, resolveModel } from "../core/ipc.js";
+import { inboxWrite, inboxPath, outboxPath, outboxOffset, paneMetaRead, resolveModel } from "../core/ipc.js";
+import { ledgerPath, controllerGenPath, appendEvent, replayLedger, readGen, renderGen, type LedgerEventKind } from "../core/autoresearchLedger.js";
 import { paneSend, killNow, paneAlive } from "../core/tmux.js";
 import { haveCmd } from "../core/deps.js";
 import { spawnListArg, parsePanesFile, spawnResultsTsv, spawnTally, type SpawnResult } from "../core/design.js";
@@ -55,6 +56,24 @@ type PathOpts = { home?: string; cwd?: string };
 
 /** Default line-writer used wherever a deps.stdout override is absent. */
 const stdoutLine = (l: string): void => { process.stdout.write(l + "\n"); };
+
+/** Append ONE event to the campaign ledger (single-line appendFileSync; append-only
+ *  JSONL). No-op returning false when the ledger file is absent — old campaigns
+ *  never grow one. Throws on a stale gen (appendEvent's fencing). */
+function ledgerAppend(art: string, ev: { gen: number; ts: string; kind: LedgerEventKind; agent?: string; exp_id?: string; data?: Record<string, unknown> }): boolean {
+  const path = ledgerPath(art);
+  if (!existsSync(path)) return false;
+  appendFileSync(path, appendEvent(readFileSync(path, "utf8"), ev));
+  return true;
+}
+
+/** Current controller generation: controller.gen, falling back to the ledger's
+ *  replayed gen, then 1 (a ledgered campaign always has a generation). */
+function controllerGen(art: string): number {
+  const fromFile = readGen(readIfExistsOrNull(controllerGenPath(art))).gen;
+  if (fromFile > 0) return fromFile;
+  try { return replayLedger(readFileSync(ledgerPath(art), "utf8")).gen || 1; } catch { return 1; }
+}
 
 function usage(): number {
   log.error("usage: autoresearch <init|metric|sota|spawn-all|drop-worker|verify-plan|verify-check|inspect-plan|inspect-check|experiment-send|score|monitor|status-brief|finalize|refine|handoff-extract|teardown|fresh-worker|forensics|abort|consensus|memory-retrieve> ...");
@@ -139,7 +158,7 @@ export async function initWith(args: string[], deps: AutoresearchInitDeps): Prom
   if (!slug) { log.error("autoresearch init: topic produced an empty slug; provide alphanumerics"); return 2; }
 
   const art = autoresearchArtDir(slug, deps.opts);
-  if (existsSync(art)) { log.error(`autoresearch init: topic already in flight: ${art}`); return 2; }
+  if (existsSync(art)) { log.error(`autoresearch init: topic already in flight: ${art} (re-enter with 'autoresearch resume <topic>')`); return 2; }
   if (p.seedFrom && !existsSync(p.seedFrom)) { log.error(`autoresearch init: --seed-from not found: ${p.seedFrom}`); return 1; }
 
   mkdirSync(art, { recursive: true });
@@ -163,6 +182,10 @@ export async function initWith(args: string[], deps: AutoresearchInitDeps): Prom
     atomicWrite(join(art, "session-start.txt"), deps.now() + "\n");
   }
   if (autonomous) atomicWrite(join(art, "autonomous.txt"), "1\n");
+
+  // Campaign spine: the durable event ledger + the fenced controller generation.
+  atomicWrite(ledgerPath(art), appendEvent("", { gen: 1, ts: deps.now(), kind: "campaign-init" }));
+  atomicWrite(controllerGenPath(art), renderGen(1, deps.now(), "init"));
 
   out(`TOPIC=${slug}`);
   out(`ART=${art}`);
@@ -484,19 +507,20 @@ export interface ExperimentSendDeps {
   runSmokeTest?(script: string, cwd: string, timeoutSec: number): { ok: boolean; stderr: string };
   smokeTimeoutSec?: number;                            // default 60
   dryRun?: boolean;                                    // skip the pane nudge (tests)
+  inboxWrite?: typeof inboxWrite;                      // DI seam (crash-injection tests)
   stdout?: (line: string) => void;
   opts?: PathOpts;
 }
 
 interface ExperimentSendArgs {
   topic: string; agent: string; expId: string; approachLabel: string; approachBrief: string;
-  inputs?: string; contextFile?: string; smokeTest?: string; timeout?: string; parentId?: string;
+  inputs?: string; contextFile?: string; smokeTest?: string; timeout?: string; parentId?: string; gen?: string;
   badArgs?: boolean;
 }
 
 /** Flags-first then exactly 5 positionals (port of experiment-send.sh's getopts loop). */
 function parseExperimentSendArgs(args: string[]): ExperimentSendArgs {
-  let inputs: string | undefined, contextFile: string | undefined, smokeTest: string | undefined, timeout: string | undefined, parentId: string | undefined;
+  let inputs: string | undefined, contextFile: string | undefined, smokeTest: string | undefined, timeout: string | undefined, parentId: string | undefined, gen: string | undefined;
   let i = 0;
   for (; i < args.length; i++) {
     const a = args[i];
@@ -506,12 +530,13 @@ function parseExperimentSendArgs(args: string[]): ExperimentSendArgs {
     else if (a === "--smoke-test" || a.startsWith("--smoke-test=")) { const r = kvParse(a, args[i + 1]); smokeTest = r.value; i += r.shift - 1; }
     else if (a === "--timeout" || a.startsWith("--timeout=")) { const r = kvParse(a, args[i + 1]); timeout = r.value; i += r.shift - 1; }
     else if (a === "--parent" || a.startsWith("--parent=")) { const r = kvParse(a, args[i + 1]); parentId = r.value; i += r.shift - 1; }
+    else if (a === "--gen" || a.startsWith("--gen=")) { const r = kvParse(a, args[i + 1]); gen = r.value; i += r.shift - 1; }
     else { return { topic: "", agent: "", expId: "", approachLabel: "", approachBrief: "", badArgs: true }; }
   }
   const pos = args.slice(i);
   if (pos.length !== 5) return { topic: "", agent: "", expId: "", approachLabel: "", approachBrief: "", badArgs: true };
   const [topic, agent, expId, approachLabel, approachBrief] = pos;
-  return { topic, agent, expId, approachLabel, approachBrief, inputs, contextFile, smokeTest, timeout, parentId };
+  return { topic, agent, expId, approachLabel, approachBrief, inputs, contextFile, smokeTest, timeout, parentId, gen };
 }
 
 /** Best-effort peer snapshot for the {{PEERS_BLOCK}} slot. Reads workers.txt (one agent/line)
@@ -572,6 +597,10 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   if (p.timeout !== undefined && !/^[1-9][0-9]*$/.test(p.timeout)) {
     log.error(`autoresearch experiment-send: --timeout must be a positive integer (seconds); got '${p.timeout}'`); return 2;
   }
+  // --gen: positive integer (the caller's claimed controller generation).
+  if (p.gen !== undefined && !/^[1-9][0-9]*$/.test(p.gen)) {
+    log.error(`autoresearch experiment-send: --gen must be a positive integer; got '${p.gen}'`); return 2;
+  }
   // --smoke-test: file must exist + be executable.
   if (p.smokeTest) {
     try { accessSync(p.smokeTest, fsConstants.X_OK); }
@@ -591,6 +620,15 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   const stateDir = workerStateDir(art, agent);
   const stateTxt = join(stateDir, "state.txt");
   if (!existsSync(stateTxt)) { log.error(`autoresearch experiment-send: worker state.txt missing: ${stateTxt}`); return 1; }
+
+  // Fenced dispatch: a writer holding a stale controller generation refuses LOUDLY
+  // (rc 3) before any effect. Old campaigns (no ledger) skip the fence entirely.
+  const hasLedger = existsSync(ledgerPath(art));
+  const effGen = hasLedger ? controllerGen(art) : 1;
+  if (hasLedger && p.gen !== undefined && Number(p.gen) !== effGen) {
+    log.error(`autoresearch experiment-send: stale controller generation (--gen ${p.gen}, current ${effGen}); re-enter via 'autoresearch resume ${topic}'`);
+    return 3;
+  }
 
   // 3-outcome phase gate: abandoned (2, distinct) / not-idle (1) / idle (proceed).
   const phase = parseState(readFileSync(stateTxt, "utf8")).phase ?? "";
@@ -652,11 +690,16 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   } catch (e) { log.error(`autoresearch experiment-send: ${(e as Error).message}`); return 1; }
   if (prompt.trim() === "") { log.error(`autoresearch experiment-send: prompt rendered empty (template substitution failed)`); return 1; }
 
-  // Persist prompt.md, write the inbox (canonical fence), transition state.
+  // Replay-safe dispatch: record the intent BEFORE any worker-visible effect and the
+  // delivery AFTER, carrying the outbox offset captured before the inbox write so
+  // completions are scoped to THIS dispatch without touching the wire protocol.
+  const preOffset = outboxOffset(outbox);
+  if (hasLedger) ledgerAppend(art, { gen: effGen, ts: deps.now(), kind: "dispatch-intent", agent, exp_id: expId });
   atomicWrite(join(branchDir, "prompt.md"), prompt);
   if (p.parentId !== undefined) atomicWrite(join(branchDir, "lineage.txt"), `parent_id=${p.parentId}\n`);
-  inboxWrite(agent, model, topic, prompt, { from: "hub", noDoneInstruction: true });
+  (deps.inboxWrite ?? inboxWrite)(agent, model, topic, prompt, { from: "hub", noDoneInstruction: true });
   atomicWrite(stateTxt, buildDispatchState(readFileSync(stateTxt, "utf8"), expId, deps.now()));
+  if (hasLedger) ledgerAppend(art, { gen: effGen, ts: deps.now(), kind: "dispatch-delivered", agent, exp_id: expId, data: { outboxOffset: preOffset } });
 
   // Best-effort pane nudge (NON-FATAL; inbox + state already committed).
   if (!deps.dryRun) {
