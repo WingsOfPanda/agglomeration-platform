@@ -96,6 +96,19 @@ describe("resume: crash matrix", () => {
     expect(st.exp_counter).toBe("1");
   });
 
+  it("2b. resolved-as-delivered repair keeps a HIGHER existing counter (max rule, protective direction)", async () => {
+    const h = home();
+    const { art, sd, outbox } = scaffold(h, { expCounter: "5" });
+    ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-intent", agent: INST, exp_id: "exp-002" });
+    appendFileSync(outbox, '{"event":"ack","task_summary":"exp-002","ts":"t"}\n');
+    const { rc } = await run(h, deps(h));
+    expect(rc).toBe(0);
+    const st = state(sd);
+    expect(st.phase).toBe("working");
+    expect(st.current_exp_id).toBe("exp-002");
+    expect(st.exp_counter).toBe("5"); // max(5, 2) — repair must never lower the counter
+  });
+
   it("3. worker finished while hub was dead -> result-recorded backfilled, state reconciles to idle", async () => {
     const h = home();
     const { art, sd, outbox } = scaffold(h, { phase: "working", expCounter: "1", currentExp: "exp-001" });
@@ -128,7 +141,11 @@ describe("resume: crash matrix", () => {
     appendFileSync(outbox, oldDone);
     ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-intent", agent: INST, exp_id: "exp-002" });
     ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-delivered", agent: INST, exp_id: "exp-002", data: { outboxOffset: Buffer.byteLength(oldDone) } });
-    // exp-002's result exists on disk? No — and the old done must not flip state to idle.
+    // exp-002's result IS on disk — so a broken offset (reading from 0) would see the old
+    // done + doneResultExists=true and flip phase to "idle"; only correct offset scoping keeps
+    // the tail empty and leaves phase "working". This is what makes the assertion discriminate.
+    mkdirSync(experimentDir(art, INST, "exp-002"), { recursive: true });
+    writeFileSync(join(experimentDir(art, INST, "exp-002"), "result.json"), JSON.stringify({ status: "ok", metric_value: 0.5 }));
     const { rc, out } = await run(h, deps(h));
     expect(rc).toBe(0);
     expect(state(sd).phase).toBe("working"); // un-keyed-completion hazard closed
