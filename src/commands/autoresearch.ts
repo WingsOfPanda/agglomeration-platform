@@ -27,7 +27,7 @@ import { buildStatusBrief, type WorkerBrief } from "../core/autoresearchBrief.js
 import { initScanState, monitorScan, type MonitorScanState } from "../core/autoresearchMonitor.js";
 import {
   renderExperimentPrompt, buildSotaBlock, assembleHardwareBlock, hardwareDiffAlert,
-  formatPeersBlock, buildDispatchState, EXP_ID_RE, AGENT_RE, type PeerRow,
+  formatPeersBlock, buildDispatchState, EXP_ID_RE, AGENT_RE, DISPATCH_OPERATORS, type PeerRow,
 } from "../core/autoresearchExperiment.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { parseScoreboard, buildHandoffKv, type HandoffInput } from "../core/autoresearchHandoff.js";
@@ -515,12 +515,13 @@ export interface ExperimentSendDeps {
 interface ExperimentSendArgs {
   topic: string; agent: string; expId: string; approachLabel: string; approachBrief: string;
   inputs?: string; contextFile?: string; smokeTest?: string; timeout?: string; parentId?: string; gen?: string;
+  operator?: string;
   badArgs?: boolean;
 }
 
 /** Flags-first then exactly 5 positionals (port of experiment-send.sh's getopts loop). */
 function parseExperimentSendArgs(args: string[]): ExperimentSendArgs {
-  let inputs: string | undefined, contextFile: string | undefined, smokeTest: string | undefined, timeout: string | undefined, parentId: string | undefined, gen: string | undefined;
+  let inputs: string | undefined, contextFile: string | undefined, smokeTest: string | undefined, timeout: string | undefined, parentId: string | undefined, gen: string | undefined, operator: string | undefined;
   let i = 0;
   for (; i < args.length; i++) {
     const a = args[i];
@@ -531,12 +532,13 @@ function parseExperimentSendArgs(args: string[]): ExperimentSendArgs {
     else if (a === "--timeout" || a.startsWith("--timeout=")) { const r = kvParse(a, args[i + 1]); timeout = r.value; i += r.shift - 1; }
     else if (a === "--parent" || a.startsWith("--parent=")) { const r = kvParse(a, args[i + 1]); parentId = r.value; i += r.shift - 1; }
     else if (a === "--gen" || a.startsWith("--gen=")) { const r = kvParse(a, args[i + 1]); gen = r.value; i += r.shift - 1; }
+    else if (a === "--operator" || a.startsWith("--operator=")) { const r = kvParse(a, args[i + 1]); operator = r.value; i += r.shift - 1; }
     else { return { topic: "", agent: "", expId: "", approachLabel: "", approachBrief: "", badArgs: true }; }
   }
   const pos = args.slice(i);
   if (pos.length !== 5) return { topic: "", agent: "", expId: "", approachLabel: "", approachBrief: "", badArgs: true };
   const [topic, agent, expId, approachLabel, approachBrief] = pos;
-  return { topic, agent, expId, approachLabel, approachBrief, inputs, contextFile, smokeTest, timeout, parentId, gen };
+  return { topic, agent, expId, approachLabel, approachBrief, inputs, contextFile, smokeTest, timeout, parentId, gen, operator };
 }
 
 /** Best-effort peer snapshot for the {{PEERS_BLOCK}} slot. Reads workers.txt (one agent/line)
@@ -600,6 +602,10 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   // --gen: positive integer (the caller's claimed controller generation).
   if (p.gen !== undefined && !/^[1-9][0-9]*$/.test(p.gen)) {
     log.error(`autoresearch experiment-send: --gen must be a positive integer; got '${p.gen}'`); return 2;
+  }
+  // --operator: the dispatch-flag subset of the operator enum.
+  if (p.operator !== undefined && !(DISPATCH_OPERATORS as readonly string[]).includes(p.operator)) {
+    log.error(`autoresearch experiment-send: --operator must be one of ${DISPATCH_OPERATORS.join("|")}; got '${p.operator}'`); return 2;
   }
   // --smoke-test: file must exist + be executable.
   if (p.smokeTest) {
@@ -694,9 +700,10 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   // delivery AFTER, carrying the outbox offset captured before the inbox write so
   // completions are scoped to THIS dispatch without touching the wire protocol.
   const preOffset = outboxOffset(outbox);
-  if (hasLedger) ledgerAppend(art, { gen: effGen, ts: deps.now(), kind: "dispatch-intent", agent, exp_id: expId });
+  if (hasLedger) ledgerAppend(art, { gen: effGen, ts: deps.now(), kind: "dispatch-intent", agent, exp_id: expId, ...(p.operator !== undefined ? { data: { operator: p.operator } } : {}) });
   atomicWrite(join(branchDir, "prompt.md"), prompt);
   if (p.parentId !== undefined) atomicWrite(join(branchDir, "lineage.txt"), `parent_id=${p.parentId}\n`);
+  if (p.operator !== undefined) atomicWrite(join(branchDir, "operator.txt"), `operator=${p.operator}\n`);
   (deps.inboxWrite ?? inboxWrite)(agent, model, topic, prompt, { from: "hub", noDoneInstruction: true });
   atomicWrite(stateTxt, buildDispatchState(readFileSync(stateTxt, "utf8"), expId, deps.now()));
   if (hasLedger) ledgerAppend(art, { gen: effGen, ts: deps.now(), kind: "dispatch-delivered", agent, exp_id: expId, data: { outboxOffset: preOffset } });
@@ -1310,6 +1317,10 @@ function writeFinalizeLessons(art: string, agents: string[], deps: AutoresearchF
           } catch { /* no parent result -> rootless draft */ }
         }
 
+        // Operator recorded at dispatch (phase-A wiring); absent file keeps the
+        // improve/draft default inside buildLessonDraft.
+        const operator = (parseState(readOr(join(expDir, "operator.txt"))).operator ?? "").trim() || undefined;
+
         drafts.push(buildLessonDraft({
           approachLabel: r.approach_label,
           metricName: r.metric_name,
@@ -1317,6 +1328,7 @@ function writeFinalizeLessons(art: string, agents: string[], deps: AutoresearchF
           parentMetric,
           direction,
           family,
+          operator,
           runId: expId,   // result.json has no run_id; the exp-id is the per-run identity
           expId,
           verdict,

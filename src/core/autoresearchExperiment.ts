@@ -11,6 +11,10 @@ export function isOperator(s: string): boolean {
   return (OPERATORS as readonly string[]).includes(s);
 }
 
+/** The dispatch-flag subset of OPERATORS shipped in phase A. `debug`/`crossover`
+ *  stay lesson-enum-only; `literature-refresh` is reserved pending a literature gate. */
+export const DISPATCH_OPERATORS = ["draft", "improve", "ablate", "replicate"] as const;
+
 /** ^exp-[0-9]+$ — 1+ digit experiment id (bash experiment-send.sh:61). */
 export const EXP_ID_RE = /^exp-[0-9]+$/;
 /** ^[a-z][a-z0-9-]*$ — agent name (bash experiment-send.sh:64). */

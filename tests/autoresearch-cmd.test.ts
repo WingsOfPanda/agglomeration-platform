@@ -425,6 +425,29 @@ describe("autoresearch experiment-send", () => {
     expect(await experimentSendWith(["--gen", "zero", TOPIC, INST, "exp-001", "x", "y"], deps(h))).toBe(2);
   });
 
+  it("--operator ablate: recorded in operator.txt + the dispatch-intent event", async () => {
+    const h = home();
+    const { art } = scaffold(h);
+    seedLedger(art);
+    const rc = await experimentSendWith(["--operator", "ablate", TOPIC, INST, "exp-001", "x", "y"], deps(h));
+    expect(rc).toBe(0);
+    expect(readFileSync(join(art, "workers", INST, "experiments", "exp-001", "operator.txt"), "utf8")).toBe("operator=ablate\n");
+    const intent = parseLedger(readFileSync(ledgerPath(art), "utf8")).find((e) => e.kind === "dispatch-intent");
+    expect(intent?.data?.operator).toBe("ablate");
+  });
+  it("--operator literature-refresh (reserved, unwired) and junk -> rc 2", async () => {
+    const h = home();
+    scaffold(h);
+    expect(await experimentSendWith(["--operator", "literature-refresh", TOPIC, INST, "exp-001", "x", "y"], deps(h))).toBe(2);
+    expect(await experimentSendWith(["--operator", "bogus", TOPIC, INST, "exp-001", "x", "y"], deps(h))).toBe(2);
+  });
+  it("no --operator: no operator.txt (byte-identical default)", async () => {
+    const h = home();
+    const { art } = scaffold(h);
+    await experimentSendWith([TOPIC, INST, "exp-001", "x", "y"], deps(h));
+    expect(existsSync(join(art, "workers", INST, "experiments", "exp-001", "operator.txt"))).toBe(false);
+  });
+
   it("idle worker -> rc 0: renders prompt.md, writes inbox + transitions state", async () => {
     const h = home();
     const { art, sd, o } = scaffold(h);
