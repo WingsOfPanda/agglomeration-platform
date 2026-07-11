@@ -34,15 +34,17 @@ export function metricFamilyOf(primaryMetric: string): string | null {
 
 /**
  * Collapse the A1 (verify-by-re-execution) and C1 (independent re-implementation)
- * verifier verdicts into the single positive lesson verdict v1 will persist.
- * C1 reproduction is the stronger signal and wins when present; otherwise an A1
- * `verified` yields the weaker positive. Anything else (mismatch / infeasible /
- * unverified / absent) yields `null` — v1 writes ONLY confirmed positives, so a
- * non-positive outcome produces no lesson.
+ * verifier verdicts into the lesson verdict to persist. C1 reproduction is the
+ * stronger positive and wins when present; an A1 `verified` yields the weaker
+ * positive. A REFUTED outcome — A1 `mismatch` or C1 `not-reproduced` — yields
+ * `"negative"`: a verified do-not-repeat signal, single-run-promotable by design
+ * (see `promotable`). INFEASIBLE stays null: `infeasible`/`unverified`/absent is
+ * "couldn't be validly executed", not evidence for or against the idea.
  */
 export function lessonVerdictOf(a1?: string, c1?: string): LessonVerdict | null {
   if (c1 === "reproduced") return "c1-reimpl-ok";
   if (a1 === "verified") return "a1-verified";
+  if (a1 === "mismatch" || c1 === "not-reproduced") return "negative";
   return null;
 }
 

@@ -11,6 +11,10 @@ export function isOperator(s: string): boolean {
   return (OPERATORS as readonly string[]).includes(s);
 }
 
+/** The dispatch-flag subset of OPERATORS shipped in phase A. `debug`/`crossover`
+ *  stay lesson-enum-only; `literature-refresh` is reserved pending a literature gate. */
+export const DISPATCH_OPERATORS = ["draft", "improve", "ablate", "replicate"] as const;
+
 /** ^exp-[0-9]+$ — 1+ digit experiment id (bash experiment-send.sh:61). */
 export const EXP_ID_RE = /^exp-[0-9]+$/;
 /** ^[a-z][a-z0-9-]*$ — agent name (bash experiment-send.sh:64). */
@@ -123,4 +127,13 @@ export function buildDispatchState(existing: string | null, expId: string, nowIs
     phase: "working", current_exp_id: expId, exp_counter: String(n + 1),
     last_event: "dispatched", last_event_ts: nowIso,
   });
+}
+
+/** Next dispatch id from the reconstructible counter rule: max(state.txt
+ *  exp_counter, the ledger's highest intent number for the agent) + 1 —
+ *  a crash that lost the state bump can never cause an exp-id reuse. */
+export function nextExpId(stateText: string | null, ledgerIntentMax: number): string {
+  const prev = stateText?.split("\n").find((l) => l.startsWith("exp_counter="))?.slice("exp_counter=".length) ?? "";
+  const n = /^[0-9]+$/.test(prev.trim()) ? parseInt(prev, 10) : 0;
+  return `exp-${String(Math.max(n, ledgerIntentMax) + 1).padStart(3, "0")}`;
 }

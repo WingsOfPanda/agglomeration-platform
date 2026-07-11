@@ -86,6 +86,13 @@ const SENTINELS: RegExp[] = [
   /\bdo not (mention|reveal|disclose)\b/i,
 ];
 
+/** True when ONE free-text string carries an injection token (the shared denylist).
+ *  Exported for the read-only corpus digest, which EXCLUDES matching entries
+ *  (fail-closed) with the SAME sentinel set the lesson write gate applies. */
+export function containsInjection(text: string): boolean {
+  return SENTINELS.some((re) => re.test(text));
+}
+
 /**
  * True if any free-text lesson field carries an injection token.
  *
@@ -111,7 +118,7 @@ function hasInjection(draft: any): boolean {
   ].filter((v) => typeof v === "string");
   const spaceJoined = fields.join(" ");
   const concatenated = fields.join("");
-  return SENTINELS.some((re) => re.test(spaceJoined) || re.test(concatenated));
+  return containsInjection(spaceJoined) || containsInjection(concatenated);
 }
 
 /**

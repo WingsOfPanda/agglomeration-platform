@@ -1,6 +1,6 @@
 // tests/autoresearch-cmd.test.ts — autoresearch CLI verbs (Phase B).
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { freshHome } from "./helpers/tmpHome.js";
 import { initWith, type AutoresearchInitDeps } from "../src/commands/autoresearch.js";
 import { metricWith, sotaWith } from "../src/commands/autoresearch.js";
@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { autoresearchArtDir, workerStateDir, experimentDir, workersDir } from "../src/core/autoresearch.js";
 import { workerDir } from "../src/core/paths.js";
 import { inboxPath } from "../src/core/ipc.js";
+import { ledgerPath, controllerGenPath, parseLedger, appendEvent, renderGen } from "../src/core/autoresearchLedger.js";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => { while (cleanups.length) cleanups.pop()!(); });
@@ -77,6 +78,26 @@ describe("autoresearch init", () => {
     const d = okDeps({ opts: { home: h.home, cwd: h.home } });
     expect(await initWith(["same topic"], d)).toBe(0);
     expect(await initWith(["same topic"], d)).toBe(2);
+  });
+  it("bootstraps the campaign ledger: campaign-init gen=1 + controller.gen", async () => {
+    const h = home();
+    const rc = await initWith(["ledger topic"], okDeps({ opts: { home: h.home, cwd: h.home } }));
+    expect(rc).toBe(0);
+    const art = autoresearchArtDir("ledger-topic", { home: h.home, cwd: h.home });
+    const evs = parseLedger(readFileSync(ledgerPath(art), "utf8"));
+    expect(evs).toHaveLength(1);
+    expect(evs[0]).toMatchObject({ seq: 1, gen: 1, kind: "campaign-init" });
+    expect(readFileSync(controllerGenPath(art), "utf8")).toContain("gen=1");
+  });
+  it("in-flight refusal points at resume", async () => {
+    const h = home();
+    const d = okDeps({ opts: { home: h.home, cwd: h.home } });
+    await initWith(["same topic"], d);
+    const errs: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((s: any) => { errs.push(String(s)); return true; });
+    expect(await initWith(["same topic"], d)).toBe(2);
+    spy.mockRestore();
+    expect(errs.join("")).toContain("resume");
   });
   it("--metric pre-writes metric.md; --time-budget pre-writes time-budget.txt + session-start.txt", async () => {
     const h = home();
@@ -335,6 +356,97 @@ describe("autoresearch experiment-send", () => {
       ...over,
     };
   }
+
+  /** Seed a campaign ledger + controller.gen into an already-scaffolded art dir. */
+  function seedLedger(art: string, gen = 1) {
+    writeFileSync(ledgerPath(art), appendEvent("", { gen: 1, ts: "T", kind: "campaign-init" }));
+    writeFileSync(join(art, "controller.gen"), renderGen(gen, "T", "test"));
+  }
+
+  it("with a ledger: intent before delivered; delivered carries the pre-send outbox offset", async () => {
+    const h = home();
+    const { art, pd } = scaffold(h);
+    seedLedger(art);
+    writeFileSync(join(pd, "outbox.jsonl"), '{"event":"ready","ts":"t"}\n'); // non-zero pre-send offset
+    const pre = statSync(join(pd, "outbox.jsonl")).size;
+    const rc = await experimentSendWith([TOPIC, INST, "exp-001", "baseline", "b"], deps(h));
+    expect(rc).toBe(0);
+    const evs = parseLedger(readFileSync(ledgerPath(art), "utf8"));
+    const intent = evs.find((e) => e.kind === "dispatch-intent");
+    const delivered = evs.find((e) => e.kind === "dispatch-delivered");
+    expect(intent).toMatchObject({ agent: INST, exp_id: "exp-001", gen: 1 });
+    expect(delivered).toMatchObject({ agent: INST, exp_id: "exp-001" });
+    expect(intent!.seq).toBeLessThan(delivered!.seq);
+    expect(delivered!.data?.outboxOffset).toBe(pre);
+  });
+
+  it("crash injection: DI inboxWrite throws -> intent recorded, no delivered, state.txt untouched", async () => {
+    const h = home();
+    const { art, sd } = scaffold(h);
+    seedLedger(art);
+    const boom = () => { throw new Error("crash between intent and delivery"); };
+    await expect(experimentSendWith([TOPIC, INST, "exp-001", "x", "y"], deps(h, { inboxWrite: boom })))
+      .rejects.toThrow(/crash between/);
+    const evs = parseLedger(readFileSync(ledgerPath(art), "utf8"));
+    expect(evs.some((e) => e.kind === "dispatch-intent" && e.exp_id === "exp-001")).toBe(true);
+    expect(evs.some((e) => e.kind === "dispatch-delivered")).toBe(false);
+    expect(readFileSync(join(sd, "state.txt"), "utf8")).toContain("phase=idle"); // no transition
+  });
+
+  it("stale --gen refuses with rc 3 BEFORE any effect (no intent, no inbox)", async () => {
+    const h = home();
+    const { art } = scaffold(h);
+    seedLedger(art, 2); // controller bumped to gen 2 (a resume happened)
+    const spy = vi.fn();
+    const rc = await experimentSendWith(["--gen", "1", TOPIC, INST, "exp-001", "x", "y"], deps(h, { inboxWrite: spy }));
+    expect(rc).toBe(3);
+    expect(spy).not.toHaveBeenCalled();
+    expect(parseLedger(readFileSync(ledgerPath(art), "utf8")).some((e) => e.kind === "dispatch-intent")).toBe(false);
+  });
+
+  it("matching --gen dispatches normally (rc 0)", async () => {
+    const h = home();
+    const { art } = scaffold(h);
+    seedLedger(art, 1);
+    expect(await experimentSendWith(["--gen", "1", TOPIC, INST, "exp-001", "x", "y"], deps(h))).toBe(0);
+    void art;
+  });
+
+  it("no ledger (old campaign): no ledger file created, dispatch behaves as today", async () => {
+    const h = home();
+    const { art } = scaffold(h);
+    expect(await experimentSendWith([TOPIC, INST, "exp-001", "x", "y"], deps(h))).toBe(0);
+    expect(existsSync(ledgerPath(art))).toBe(false);
+  });
+
+  it("malformed --gen -> rc 2", async () => {
+    const h = home();
+    scaffold(h);
+    expect(await experimentSendWith(["--gen", "zero", TOPIC, INST, "exp-001", "x", "y"], deps(h))).toBe(2);
+  });
+
+  it("--operator ablate: recorded in operator.txt + the dispatch-intent event", async () => {
+    const h = home();
+    const { art } = scaffold(h);
+    seedLedger(art);
+    const rc = await experimentSendWith(["--operator", "ablate", TOPIC, INST, "exp-001", "x", "y"], deps(h));
+    expect(rc).toBe(0);
+    expect(readFileSync(join(art, "workers", INST, "experiments", "exp-001", "operator.txt"), "utf8")).toBe("operator=ablate\n");
+    const intent = parseLedger(readFileSync(ledgerPath(art), "utf8")).find((e) => e.kind === "dispatch-intent");
+    expect(intent?.data?.operator).toBe("ablate");
+  });
+  it("--operator literature-refresh (reserved, unwired) and junk -> rc 2", async () => {
+    const h = home();
+    scaffold(h);
+    expect(await experimentSendWith(["--operator", "literature-refresh", TOPIC, INST, "exp-001", "x", "y"], deps(h))).toBe(2);
+    expect(await experimentSendWith(["--operator", "bogus", TOPIC, INST, "exp-001", "x", "y"], deps(h))).toBe(2);
+  });
+  it("no --operator: no operator.txt (byte-identical default)", async () => {
+    const h = home();
+    const { art } = scaffold(h);
+    await experimentSendWith([TOPIC, INST, "exp-001", "x", "y"], deps(h));
+    expect(existsSync(join(art, "workers", INST, "experiments", "exp-001", "operator.txt"))).toBe(false);
+  });
 
   it("idle worker -> rc 0: renders prompt.md, writes inbox + transitions state", async () => {
     const h = home();
@@ -668,6 +780,24 @@ describe("autoresearch score", () => {
     const lin = writes.find((w) => w.path === join(art, "lineage.tsv"));
     expect(lin).toBeDefined();
     expect(lin!.content).toBe("exp_id\tagent\tparent_id\tknobs_changed\tverdict\tts\nexp-003\tgolf\texp-002\t2\timprove-multi\tT\n");
+  });
+
+  it("appends result-recorded ledger rows once per completed experiment (idempotent)", async () => {
+    const h = home();
+    const art = scaffold(h, {
+      alto: { expId: "exp-001", body: result({ metric: 0.95 }) },
+      bass: { expId: "exp-001", body: result({ metric: 0.90 }) },
+    });
+    // Seed a ledger so the score-time tail engages (old campaigns without one skip entirely).
+    writeFileSync(ledgerPath(art), appendEvent("", { gen: 1, ts: "T", kind: "campaign-init" }));
+
+    // Two runs with the default appendFile (real appendFileSync under the freshHome art dir).
+    expect(await scoreWith(["topic"], SCORE_OPTS(h))).toBe(0);
+    expect(await scoreWith(["topic"], SCORE_OPTS(h))).toBe(0);
+
+    const recorded = parseLedger(readFileSync(ledgerPath(art), "utf8")).filter((e) => e.kind === "result-recorded");
+    // Exactly one result-recorded per completed key, no duplicates across the two runs.
+    expect(recorded.map((e) => `${e.agent}/${e.exp_id}`).sort()).toEqual(["alto/exp-001", "bass/exp-001"]);
   });
 });
 

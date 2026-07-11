@@ -18,7 +18,7 @@ import { computeScore, type ScoreFs, type ScoreComputation } from "../core/autor
 import { sanityRow, SANITY_TSV_HEADER } from "../core/autoresearchSanity.js";
 import { coverageRow, COVERAGE_TSV_HEADER, type CoverageRow } from "../core/autoresearchCoverage.js";
 import { lineageRow, LINEAGE_TSV_HEADER } from "../core/autoresearchLineage.js";
-import { parseState, mergeState, reconcileFromOutbox, readHaltFlag } from "../core/autoresearchState.js";
+import { parseState, mergeState, reconcileFromOutbox, reconcileFromOutboxSince, readHaltFlag } from "../core/autoresearchState.js";
 import { checkCompletion, checkTimeBudget } from "../core/autoresearchComplete.js";
 import { normalizeResult, type ResultJson } from "../core/autoresearchResult.js";
 import { renderSessionSummary, type StatusRow, type EventRow } from "../core/autoresearchSummary.js";
@@ -27,7 +27,7 @@ import { buildStatusBrief, type WorkerBrief } from "../core/autoresearchBrief.js
 import { initScanState, monitorScan, type MonitorScanState } from "../core/autoresearchMonitor.js";
 import {
   renderExperimentPrompt, buildSotaBlock, assembleHardwareBlock, hardwareDiffAlert,
-  formatPeersBlock, buildDispatchState, EXP_ID_RE, AGENT_RE, type PeerRow,
+  formatPeersBlock, buildDispatchState, EXP_ID_RE, AGENT_RE, DISPATCH_OPERATORS, type PeerRow,
 } from "../core/autoresearchExperiment.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { parseScoreboard, buildHandoffKv, type HandoffInput } from "../core/autoresearchHandoff.js";
@@ -39,8 +39,10 @@ import { parseVerdicts } from "../core/autoresearchInfeasible.js";
 import { metricFamilyOf, lessonVerdictOf, policyFromMetric, buildLessonDraft, type LessonDraft } from "../core/autoresearchLessonMap.js";
 import { writeLessonsAtFinalize, retrieveForDispatch, liveMemoryIo, type MemoryIo } from "../core/autoresearchMemoryStore.js";
 import { type LessonVerdict } from "../core/autoresearchMemory.js";
+import { buildCorpusDigest, leaderMetricOf, type CorpusEntry } from "../core/autoresearchCorpus.js";
 import { agentBinary, consultTimeout } from "../core/contracts.js";
-import { inboxWrite, inboxPath, outboxPath, paneMetaRead, resolveModel } from "../core/ipc.js";
+import { inboxWrite, inboxPath, outboxPath, outboxOffset, paneMetaRead, resolveModel, parseEvent } from "../core/ipc.js";
+import { ledgerPath, controllerGenPath, appendEvent, replayLedger, readGen, renderGen, type LedgerEventKind } from "../core/autoresearchLedger.js";
 import { paneSend, killNow, paneAlive } from "../core/tmux.js";
 import { haveCmd } from "../core/deps.js";
 import { spawnListArg, parsePanesFile, spawnResultsTsv, spawnTally, type SpawnResult } from "../core/design.js";
@@ -56,8 +58,26 @@ type PathOpts = { home?: string; cwd?: string };
 /** Default line-writer used wherever a deps.stdout override is absent. */
 const stdoutLine = (l: string): void => { process.stdout.write(l + "\n"); };
 
+/** Append ONE event to the campaign ledger (single-line appendFileSync; append-only
+ *  JSONL). No-op returning false when the ledger file is absent — old campaigns
+ *  never grow one. Throws on a stale gen (appendEvent's fencing). */
+function ledgerAppend(art: string, ev: { gen: number; ts: string; kind: LedgerEventKind; agent?: string; exp_id?: string; data?: Record<string, unknown> }): boolean {
+  const path = ledgerPath(art);
+  if (!existsSync(path)) return false;
+  appendFileSync(path, appendEvent(readFileSync(path, "utf8"), ev));
+  return true;
+}
+
+/** Current controller generation: controller.gen, falling back to the ledger's
+ *  replayed gen, then 1 (a ledgered campaign always has a generation). */
+function controllerGen(art: string): number {
+  const fromFile = readGen(readIfExistsOrNull(controllerGenPath(art))).gen;
+  if (fromFile > 0) return fromFile;
+  try { return replayLedger(readFileSync(ledgerPath(art), "utf8")).gen || 1; } catch { return 1; }
+}
+
 function usage(): number {
-  log.error("usage: autoresearch <init|metric|sota|spawn-all|drop-worker|verify-plan|verify-check|inspect-plan|inspect-check|experiment-send|score|monitor|status-brief|finalize|refine|handoff-extract|teardown|fresh-worker|forensics|abort|consensus|memory-retrieve> ...");
+  log.error("usage: autoresearch <init|metric|sota|spawn-all|drop-worker|verify-plan|verify-check|inspect-plan|inspect-check|experiment-send|score|monitor|status-brief|finalize|refine|resume|handoff-extract|teardown|fresh-worker|forensics|abort|consensus|memory-retrieve|corpus-digest> ...");
   return 2;
 }
 
@@ -139,7 +159,7 @@ export async function initWith(args: string[], deps: AutoresearchInitDeps): Prom
   if (!slug) { log.error("autoresearch init: topic produced an empty slug; provide alphanumerics"); return 2; }
 
   const art = autoresearchArtDir(slug, deps.opts);
-  if (existsSync(art)) { log.error(`autoresearch init: topic already in flight: ${art}`); return 2; }
+  if (existsSync(art)) { log.error(`autoresearch init: topic already in flight: ${art} (re-enter with 'autoresearch resume <topic>')`); return 2; }
   if (p.seedFrom && !existsSync(p.seedFrom)) { log.error(`autoresearch init: --seed-from not found: ${p.seedFrom}`); return 1; }
 
   mkdirSync(art, { recursive: true });
@@ -163,6 +183,10 @@ export async function initWith(args: string[], deps: AutoresearchInitDeps): Prom
     atomicWrite(join(art, "session-start.txt"), deps.now() + "\n");
   }
   if (autonomous) atomicWrite(join(art, "autonomous.txt"), "1\n");
+
+  // Campaign spine: the durable event ledger + the fenced controller generation.
+  atomicWrite(ledgerPath(art), appendEvent("", { gen: 1, ts: deps.now(), kind: "campaign-init" }));
+  atomicWrite(controllerGenPath(art), renderGen(1, deps.now(), "init"));
 
   out(`TOPIC=${slug}`);
   out(`ART=${art}`);
@@ -484,19 +508,21 @@ export interface ExperimentSendDeps {
   runSmokeTest?(script: string, cwd: string, timeoutSec: number): { ok: boolean; stderr: string };
   smokeTimeoutSec?: number;                            // default 60
   dryRun?: boolean;                                    // skip the pane nudge (tests)
+  inboxWrite?: typeof inboxWrite;                      // DI seam (crash-injection tests)
   stdout?: (line: string) => void;
   opts?: PathOpts;
 }
 
 interface ExperimentSendArgs {
   topic: string; agent: string; expId: string; approachLabel: string; approachBrief: string;
-  inputs?: string; contextFile?: string; smokeTest?: string; timeout?: string; parentId?: string;
+  inputs?: string; contextFile?: string; smokeTest?: string; timeout?: string; parentId?: string; gen?: string;
+  operator?: string;
   badArgs?: boolean;
 }
 
 /** Flags-first then exactly 5 positionals (port of experiment-send.sh's getopts loop). */
 function parseExperimentSendArgs(args: string[]): ExperimentSendArgs {
-  let inputs: string | undefined, contextFile: string | undefined, smokeTest: string | undefined, timeout: string | undefined, parentId: string | undefined;
+  let inputs: string | undefined, contextFile: string | undefined, smokeTest: string | undefined, timeout: string | undefined, parentId: string | undefined, gen: string | undefined, operator: string | undefined;
   let i = 0;
   for (; i < args.length; i++) {
     const a = args[i];
@@ -506,12 +532,14 @@ function parseExperimentSendArgs(args: string[]): ExperimentSendArgs {
     else if (a === "--smoke-test" || a.startsWith("--smoke-test=")) { const r = kvParse(a, args[i + 1]); smokeTest = r.value; i += r.shift - 1; }
     else if (a === "--timeout" || a.startsWith("--timeout=")) { const r = kvParse(a, args[i + 1]); timeout = r.value; i += r.shift - 1; }
     else if (a === "--parent" || a.startsWith("--parent=")) { const r = kvParse(a, args[i + 1]); parentId = r.value; i += r.shift - 1; }
+    else if (a === "--gen" || a.startsWith("--gen=")) { const r = kvParse(a, args[i + 1]); gen = r.value; i += r.shift - 1; }
+    else if (a === "--operator" || a.startsWith("--operator=")) { const r = kvParse(a, args[i + 1]); operator = r.value; i += r.shift - 1; }
     else { return { topic: "", agent: "", expId: "", approachLabel: "", approachBrief: "", badArgs: true }; }
   }
   const pos = args.slice(i);
   if (pos.length !== 5) return { topic: "", agent: "", expId: "", approachLabel: "", approachBrief: "", badArgs: true };
   const [topic, agent, expId, approachLabel, approachBrief] = pos;
-  return { topic, agent, expId, approachLabel, approachBrief, inputs, contextFile, smokeTest, timeout, parentId };
+  return { topic, agent, expId, approachLabel, approachBrief, inputs, contextFile, smokeTest, timeout, parentId, gen, operator };
 }
 
 /** Best-effort peer snapshot for the {{PEERS_BLOCK}} slot. Reads workers.txt (one agent/line)
@@ -572,6 +600,14 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   if (p.timeout !== undefined && !/^[1-9][0-9]*$/.test(p.timeout)) {
     log.error(`autoresearch experiment-send: --timeout must be a positive integer (seconds); got '${p.timeout}'`); return 2;
   }
+  // --gen: positive integer (the caller's claimed controller generation).
+  if (p.gen !== undefined && !/^[1-9][0-9]*$/.test(p.gen)) {
+    log.error(`autoresearch experiment-send: --gen must be a positive integer; got '${p.gen}'`); return 2;
+  }
+  // --operator: the dispatch-flag subset of the operator enum.
+  if (p.operator !== undefined && !(DISPATCH_OPERATORS as readonly string[]).includes(p.operator)) {
+    log.error(`autoresearch experiment-send: --operator must be one of ${DISPATCH_OPERATORS.join("|")}; got '${p.operator}'`); return 2;
+  }
   // --smoke-test: file must exist + be executable.
   if (p.smokeTest) {
     try { accessSync(p.smokeTest, fsConstants.X_OK); }
@@ -591,6 +627,15 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   const stateDir = workerStateDir(art, agent);
   const stateTxt = join(stateDir, "state.txt");
   if (!existsSync(stateTxt)) { log.error(`autoresearch experiment-send: worker state.txt missing: ${stateTxt}`); return 1; }
+
+  // Fenced dispatch: a writer holding a stale controller generation refuses LOUDLY
+  // (rc 3) before any effect. Old campaigns (no ledger) skip the fence entirely.
+  const hasLedger = existsSync(ledgerPath(art));
+  const effGen = hasLedger ? controllerGen(art) : 1;
+  if (hasLedger && p.gen !== undefined && Number(p.gen) !== effGen) {
+    log.error(`autoresearch experiment-send: stale controller generation (--gen ${p.gen}, current ${effGen}); re-enter via 'autoresearch resume ${topic}'`);
+    return 3;
+  }
 
   // 3-outcome phase gate: abandoned (2, distinct) / not-idle (1) / idle (proceed).
   const phase = parseState(readFileSync(stateTxt, "utf8")).phase ?? "";
@@ -652,11 +697,17 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   } catch (e) { log.error(`autoresearch experiment-send: ${(e as Error).message}`); return 1; }
   if (prompt.trim() === "") { log.error(`autoresearch experiment-send: prompt rendered empty (template substitution failed)`); return 1; }
 
-  // Persist prompt.md, write the inbox (canonical fence), transition state.
+  // Replay-safe dispatch: record the intent BEFORE any worker-visible effect and the
+  // delivery AFTER, carrying the outbox offset captured before the inbox write so
+  // completions are scoped to THIS dispatch without touching the wire protocol.
+  const preOffset = outboxOffset(outbox);
+  if (hasLedger) ledgerAppend(art, { gen: effGen, ts: deps.now(), kind: "dispatch-intent", agent, exp_id: expId, ...(p.operator !== undefined ? { data: { operator: p.operator } } : {}) });
   atomicWrite(join(branchDir, "prompt.md"), prompt);
   if (p.parentId !== undefined) atomicWrite(join(branchDir, "lineage.txt"), `parent_id=${p.parentId}\n`);
-  inboxWrite(agent, model, topic, prompt, { from: "hub", noDoneInstruction: true });
+  if (p.operator !== undefined) atomicWrite(join(branchDir, "operator.txt"), `operator=${p.operator}\n`);
+  (deps.inboxWrite ?? inboxWrite)(agent, model, topic, prompt, { from: "hub", noDoneInstruction: true });
   atomicWrite(stateTxt, buildDispatchState(readFileSync(stateTxt, "utf8"), expId, deps.now()));
+  if (hasLedger) ledgerAppend(art, { gen: effGen, ts: deps.now(), kind: "dispatch-delivered", agent, exp_id: expId, data: { outboxOffset: preOffset } });
 
   // Best-effort pane nudge (NON-FATAL; inbox + state already committed).
   if (!deps.dryRun) {
@@ -718,6 +769,7 @@ export interface AutoresearchScoreDeps {
   removeFile(path: string): void;
   now(): string;
   stdout?: (line: string) => void;
+  appendFile?(path: string, text: string): void;       // ledger tail (default appendFileSync)
   opts?: PathOpts;
 }
 
@@ -745,6 +797,25 @@ export async function scoreWith(args: string[], deps: AutoresearchScoreDeps): Pr
   deps.writeAtomic(join(art, "coverage.tsv"), COVERAGE_TSV_HEADER + c.coverageRows.map(coverageRow).join(""));
   deps.writeAtomic(join(art, "lineage.tsv"), LINEAGE_TSV_HEADER + c.lineageRows.map(lineageRow).join(""));
   for (const w of c.warnings) log.warn(w);
+
+  // Ledger tail (best-effort): record any completed experiment the ledger has not
+  // seen, so completionOrder converges even when a Monitor died mid-campaign. Old
+  // campaigns (no ledger) skip entirely; failures never affect the score run.
+  try {
+    const lp = ledgerPath(art);
+    if (deps.fs.exists(lp)) {
+      const append = deps.appendFile ?? appendFileSync;
+      const gen = readGen(deps.fs.read(controllerGenPath(art))).gen || 1;
+      const seen = new Set(replayLedger(deps.fs.read(lp) ?? "").completionOrder);
+      for (const line of c.resultsTsv.split("\n")) {
+        if (!line || line.startsWith("exp_id\t")) continue;
+        const [expId, agent] = line.split("\t");
+        if (!expId || !agent || seen.has(`${agent}/${expId}`)) continue;
+        append(lp, appendEvent(deps.fs.read(lp) ?? "", { gen, ts: deps.now(), kind: "result-recorded", agent, exp_id: expId }));
+        seen.add(`${agent}/${expId}`);
+      }
+    }
+  } catch (e) { log.warn(`autoresearch score: ledger tail skipped (best-effort): ${String(e)}`); }
   return 0;
 }
 
@@ -907,8 +978,14 @@ function gatherCompletion(art: string): { scoreboardMd: string | null; completio
   const sbPath = join(art, "scoreboard.md");
   const scoreboardMd = readIfExistsOrNull(sbPath);
   const metricPath = join(art, "metric.md");
+  // Ledger-derived completion chronology (absent/garbled -> undefined = today's window).
+  let completionOrder: string[] | undefined;
+  const lp = ledgerPath(art);
+  if (existsSync(lp)) {
+    try { completionOrder = replayLedger(readFileSync(lp, "utf8")).completionOrder; } catch { completionOrder = undefined; }
+  }
   const completion = scoreboardMd !== null && existsSync(metricPath)
-    ? checkCompletion(scoreboardMd, readFileSync(metricPath, "utf8"))
+    ? checkCompletion(scoreboardMd, readFileSync(metricPath, "utf8"), completionOrder)
     : null;
   return { scoreboardMd, completion };
 }
@@ -1241,6 +1318,10 @@ function writeFinalizeLessons(art: string, agents: string[], deps: AutoresearchF
           } catch { /* no parent result -> rootless draft */ }
         }
 
+        // Operator recorded at dispatch (phase-A wiring); absent file keeps the
+        // improve/draft default inside buildLessonDraft.
+        const operator = (parseState(readOr(join(expDir, "operator.txt"))).operator ?? "").trim() || undefined;
+
         drafts.push(buildLessonDraft({
           approachLabel: r.approach_label,
           metricName: r.metric_name,
@@ -1248,6 +1329,7 @@ function writeFinalizeLessons(art: string, agents: string[], deps: AutoresearchF
           parentMetric,
           direction,
           family,
+          operator,
           runId: expId,   // result.json has no run_id; the exp-id is the per-run identity
           expId,
           verdict,
@@ -1768,6 +1850,156 @@ const liveFreshWorkerDeps: AutoresearchFreshWorkerDeps = {
   now: () => isoUtc(),
 };
 
+// ---- Campaign spine: resume — idempotent, fenced re-entry for an interrupted campaign. ----
+// Acquires a new controller generation (fencing stale writers), replays the ledger,
+// reconciles every worker from its dispatch-time outbox offset, backfills missing
+// result-recorded events, resolves unresolved intents deterministically (§2.4 of the
+// design), respawns dead panes via the existing fresh-worker path, and prints the
+// machine-parsed report the directive acts on. Errors to stderr; stdout is the report.
+
+export interface AutoresearchResumeDeps {
+  now(): string;
+  paneAlive(pane: string): Promise<boolean>;
+  freshWorker(topic: string, agent: string): Promise<number>;
+  stdout?: (line: string) => void;
+  opts?: PathOpts;
+}
+
+export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): Promise<number> {
+  const out = deps.stdout ?? stdoutLine;
+  const rawTopic = args.find((a) => !a.startsWith("--")) ?? "";
+  if (!rawTopic) { log.error("usage: autoresearch resume <topic>"); return 2; }
+  // Symmetric with init: accept the topic text as typed and derive the same slug
+  // init used, so the re-entry path needs no separate slug capture.
+  const topic = deriveSlug(rawTopic);
+  if (!topic) { log.error("autoresearch resume: topic produced an empty slug"); return 2; }
+
+  const art = autoresearchArtDir(topic, deps.opts);
+  if (!existsSync(art)) { log.error(`autoresearch resume: no art dir for topic '${topic}' (${art}); nothing to resume`); return 1; }
+  const lp = ledgerPath(art);
+  if (!existsSync(lp)) { log.error(`autoresearch resume: no campaign ledger under ${art}; pre-ledger campaigns cannot be resumed (init remains the creation path)`); return 1; }
+
+  // 1. Fenced lease: bump the controller generation, then record the resume event under it.
+  const prior = replayLedger(readFileSync(lp, "utf8"));
+  const gen = Math.max(readGen(readIfExistsOrNull(controllerGenPath(art))).gen, prior.gen) + 1;
+  atomicWrite(controllerGenPath(art), renderGen(gen, deps.now(), "resume"));
+  ledgerAppend(art, { gen, ts: deps.now(), kind: "resume" });
+
+  const workersFile = join(art, "workers.txt");
+  const agents = existsSync(workersFile) ? splitNonCommentLines(readFileSync(workersFile, "utf8")) : [];
+  const redispatch = new Set<string>();
+
+  const readOutbox = (agent: string): { model: string | null; text: string } => {
+    const model = resolveModel(agent, topic);
+    const ob = model ? outboxPath(agent, model, topic) : "";
+    let text = "";
+    if (ob && existsSync(ob)) { try { text = readFileSync(ob, "utf8"); } catch { text = ""; } }
+    return { model, text };
+  };
+
+  // 2. Pass 1 — per-worker reconcile from the recorded delivery offset + result backfill.
+  let replay = replayLedger(readFileSync(lp, "utf8"));
+  for (const agent of agents) {
+    const stateTxt = join(workerStateDir(art, agent), "state.txt");
+    if (!existsSync(stateTxt)) continue;
+    const { text: obText } = readOutbox(agent);
+    const offset = replay.lastDeliveredOffset.get(agent) ?? 0;
+    const curExp = parseState(readOr(stateTxt)).current_exp_id ?? "";
+    const doneResultExists = !!curExp && existsSync(join(experimentDir(art, agent, curExp), "result.json"));
+    const recon = reconcileFromOutboxSince(obText, offset, doneResultExists);
+    if (recon === "failed" || recon === "idle") atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: recon }));
+
+    const seen = new Set(replay.completionOrder);
+    for (const expId of listExpDirs(experimentsDir(art, agent))) {
+      if (!existsSync(join(experimentDir(art, agent, expId), "result.json"))) continue;
+      if (!seen.has(`${agent}/${expId}`)) ledgerAppend(art, { gen, ts: deps.now(), kind: "result-recorded", agent, exp_id: expId });
+    }
+  }
+
+  // 3. Pass 2 — resolve unresolved intents (the §2.4 crash signatures), including backfills.
+  replay = replayLedger(readFileSync(lp, "utf8"));
+  for (const intent of replay.intents.values()) {
+    if (intent.delivered) continue;
+    const { agent, expId } = intent;
+    const { text: obText } = readOutbox(agent);
+    const reconstructed = replay.lastDeliveredOffset.get(agent) ?? 0;
+    const tail = Buffer.from(obText, "utf8").subarray(reconstructed).toString("utf8");
+    let accepted = false;
+    for (const line of tail.split("\n")) {
+      const o = parseEvent(line.trim());
+      if (o && (o.event === "ack" || o.event === "done")) { accepted = true; break; }
+    }
+    const stateTxt = join(workerStateDir(art, agent), "state.txt");
+    if (accepted) {
+      // Hazard-1 window (inbox written, state bump lost): treat as delivered with the
+      // reconstructed offset, repair the state to the dispatch-equivalent, then re-run
+      // the offset-scoped reconcile so a finished-while-dead experiment settles too.
+      ledgerAppend(art, { gen, ts: deps.now(), kind: "dispatch-delivered", agent, exp_id: expId, data: { outboxOffset: reconstructed, reconstructed: true } });
+      if (existsSync(stateTxt)) {
+        const st = parseState(readOr(stateTxt));
+        const stateN = /^[0-9]+$/.test((st.exp_counter ?? "").trim()) ? parseInt(st.exp_counter, 10) : 0;
+        const intentN = parseInt(expId.slice("exp-".length), 10) || 0;
+        atomicWrite(stateTxt, mergeState(readOr(stateTxt), {
+          phase: "working", current_exp_id: expId, exp_counter: String(Math.max(stateN, intentN)),
+          last_event: "dispatched", last_event_ts: deps.now(),
+        }));
+        const resultExists = existsSync(join(experimentDir(art, agent, expId), "result.json"));
+        const recon = reconcileFromOutboxSince(obText, reconstructed, resultExists);
+        if (recon === "failed" || recon === "idle") atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: recon }));
+      }
+    } else {
+      const phase = existsSync(stateTxt) ? (parseState(readOr(stateTxt)).phase ?? "") : "";
+      if (phase !== "working") redispatch.add(`${agent}:${expId}`);
+    }
+  }
+
+  // 4. Pass 3 — pane liveness: interrupt dead working lanes, respawn dead idle ones, report.
+  const rows: string[] = [];
+  const monitors: string[] = [];
+  for (const agent of agents) {
+    const stateTxt = join(workerStateDir(art, agent), "state.txt");
+    if (!existsSync(stateTxt)) { rows.push(`WORKER=${agent}:?:no`); continue; }
+    const model = resolveModel(agent, topic);
+    const pane = model ? paneMetaRead(agent, model, topic) : null;
+    let alive = false;
+    if (pane) { try { alive = await deps.paneAlive(pane); } catch { alive = false; } }
+
+    let phase = parseState(readOr(stateTxt)).phase ?? "";
+    if (!alive && phase === "working") {
+      const workingExp = parseState(readOr(stateTxt)).current_exp_id ?? "";
+      ledgerAppend(art, { gen, ts: deps.now(), kind: "interrupted", agent, ...(workingExp ? { exp_id: workingExp } : {}) });
+      atomicWrite(stateTxt, mergeState(readOr(stateTxt), {
+        phase: "idle", current_exp_id: "", last_event: "interrupted", last_event_ts: deps.now(),
+      }));
+      if (workingExp) redispatch.add(`${agent}:${workingExp}`);
+      phase = "idle";
+    }
+    if (!alive && phase !== "working") {
+      const rc = await deps.freshWorker(topic, agent);
+      if (rc === 0) { ledgerAppend(art, { gen, ts: deps.now(), kind: "fresh-worker-respawn", agent }); alive = true; }
+      else log.warn(`autoresearch resume: fresh-worker failed for ${agent} (rc ${rc}); lane left as-is`);
+    }
+
+    phase = parseState(readOr(stateTxt)).phase ?? "";
+    rows.push(`WORKER=${agent}:${phase}:${alive ? "yes" : "no"}`);
+    if (alive) monitors.push(`MONITOR=${agent}`);
+  }
+
+  // 5. Machine-parsed report (the directive re-seeds Monitors + acts on REDISPATCH rows).
+  out(`GEN=${gen}`);
+  for (const r of rows) out(r);
+  for (const rd of redispatch) out(`REDISPATCH=${rd}`);
+  for (const m of monitors) out(m);
+  out(`LAST_SEQ=${replayLedger(readFileSync(lp, "utf8")).lastSeq}`);
+  return 0;
+}
+
+const liveResumeDeps: AutoresearchResumeDeps = {
+  now: () => isoUtc(),
+  paneAlive,
+  freshWorker: (t, i) => freshWorkerWith([t, i], liveFreshWorkerDeps),
+};
+
 // ---- Phase D: abort — graceful one-shot teardown. ----
 // Ports deep-research-abort.sh: capture Monitor task ids BEFORE teardown (teardown
 // archives monitor-tasks.txt away), write halt.flag, finalize, teardown, then print a
@@ -1942,6 +2174,85 @@ export async function memoryRetrieveWith(args: string[], deps: MemoryRetrieveDep
 
 const liveMemoryRetrieveDeps: MemoryRetrieveDeps = { now: () => isoUtc() };
 
+// ---- Campaign spine: corpus-digest — governed read-only digest of prior campaigns. ----
+
+export interface CorpusDigestDeps {
+  now(): string;
+  writeAtomic?(path: string, body: string): void;   // spy seam: the ONLY writer this verb uses
+  stdout?: (line: string) => void;
+  opts?: PathOpts;
+  archiveRoot?: string;                             // default globalRoot()/archive/<repoHash()>
+  forensicsRoot?: string;                           // default globalRoot()/forensics
+}
+
+/** readdir dir names / file names, [] on any error (nullglob semantics). */
+function listNames(dir: string, kind: "dir" | "file"): string[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((e) => (kind === "dir" ? e.isDirectory() : e.isFile()))
+      .map((e) => e.name).sort();
+  } catch { return []; }
+}
+
+export async function corpusDigestWith(args: string[], deps: CorpusDigestDeps): Promise<number> {
+  const out = deps.stdout ?? stdoutLine;
+  const writeAtomic = deps.writeAtomic ?? atomicWrite;
+  const topic = args.find((a) => !a.startsWith("-")) ?? "";
+  if (!topic) { log.error("usage: autoresearch corpus-digest <topic>"); return 2; }
+
+  const art = autoresearchArtDir(topic, deps.opts);
+  if (!existsSync(art)) { log.error(`autoresearch corpus-digest: art dir missing: ${art}`); return 1; }
+  const metricPath = join(art, "metric.md");
+  if (!existsSync(metricPath)) return 0; // nothing to scope against (fail-closed, like memory-retrieve)
+  const family = metricFamilyOf(parseMetricMd(readFileSync(metricPath, "utf8")).primaryMetric);
+  if (family === null) return 0;
+
+  // Forensics flag counts per topic slug (frontmatter command: autoresearch). READ-ONLY.
+  const forensicsRoot = deps.forensicsRoot ?? join(globalRoot(), "forensics");
+  const flags = new Map<string, number>();
+  for (const date of listNames(forensicsRoot, "dir")) {
+    for (const name of listNames(join(forensicsRoot, date), "file")) {
+      if (!name.endsWith(".md")) continue;
+      const body = readIfExists(join(forensicsRoot, date, name));
+      if (!/^command: autoresearch$/m.test(body)) continue;
+      const slug = /^topic_slug: (.*)$/m.exec(body)?.[1]?.trim() ?? "";
+      if (slug) flags.set(slug, (flags.get(slug) ?? 0) + 1);
+    }
+  }
+
+  // Archived campaigns: <archiveRoot>/<slug>/_autoresearch-<ts>[-N]/. READ-ONLY.
+  const archiveRoot = deps.archiveRoot ?? join(globalRoot(), "archive", repoHash());
+  const dated: { ts: string; e: CorpusEntry }[] = [];
+  for (const slug of listNames(archiveRoot, "dir")) {
+    for (const artName of listNames(join(archiveRoot, slug), "dir")) {
+      if (!artName.startsWith("_autoresearch-")) continue;
+      const dir = join(archiveRoot, slug, artName);
+      const mm = readIfExistsOrNull(join(dir, "metric.md"));
+      const fam = mm ? metricFamilyOf(parseMetricMd(mm).primaryMetric) : null;
+      if (fam === null) continue;
+      const verified = (readIfExistsOrNull(join(dir, "verification.tsv")) ?? "")
+        .split("\n").filter((l) => l && !l.startsWith("exp_id\t") && l.split("\t")[2] === "verified").length;
+      const halt = readHaltFlag(readIfExistsOrNull(join(dir, "halt.flag")));
+      const haltReason = halt.format === "structured"
+        ? (halt.fields?.reason ?? halt.fields?.halted_by ?? "halted")
+        : halt.format === "prose" ? (halt.reason ?? "halted") : "completed";
+      dated.push({ ts: artName.slice("_autoresearch-".length), e: {
+        topicSlug: slug, metricFamily: fam,
+        leaderMetric: leaderMetricOf(readIfExistsOrNull(join(dir, "scoreboard.md"))),
+        verifiedLessons: verified, haltReason, forensicsFlags: flags.get(slug) ?? 0,
+      }});
+    }
+  }
+  dated.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0)); // newest first
+
+  const block = buildCorpusDigest(dated.map((x) => x.e), { metricFamily: family });
+  writeAtomic(join(art, "corpus-digest.md"), block || "(no prior same-family campaigns)\n");
+  if (block) for (const line of block.split("\n")) if (line) out(line);
+  return 0;
+}
+
+const liveCorpusDigestDeps: CorpusDigestDeps = { now: () => isoUtc() };
+
 function appendVerificationRow(art: string, agent: string, expId: string, row: VerificationRow): void {
   const tsv = join(art, "verification.tsv");
   const prior = existsSync(tsv) ? readFileSync(tsv, "utf8") : VERIFICATION_TSV_HEADER;
@@ -2011,11 +2322,13 @@ export async function run(args: string[]): Promise<number> {
     case "handoff-extract": return handoffExtractWith(rest, liveHandoffDeps);
     case "teardown": return teardownWith(rest, liveTeardownDeps);
     case "fresh-worker": return freshWorkerWith(rest, liveFreshWorkerDeps);
+    case "resume": return resumeWith(rest, liveResumeDeps);
     case "forensics": return forensicsRun(rest);
     case "flag": return runFlag("autoresearch", rest[0], rest.slice(1).join(" "));
     case "abort": return abortWith(applyArgsFile(rest), liveAbortDeps);
     case "consensus": return consensusWith(rest, liveConsensusDeps);
     case "memory-retrieve": return memoryRetrieveWith(rest, liveMemoryRetrieveDeps);
+    case "corpus-digest": return corpusDigestWith(rest, liveCorpusDigestDeps);
     default: return usage();
   }
 }
