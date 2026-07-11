@@ -22984,6 +22984,7 @@ function metricFamilyOf(primaryMetric) {
 function lessonVerdictOf(a1, c1) {
   if (c1 === "reproduced") return "c1-reimpl-ok";
   if (a1 === "verified") return "a1-verified";
+  if (a1 === "mismatch" || c1 === "not-reproduced") return "negative";
   return null;
 }
 function policyFromMetric(t) {
