@@ -21632,11 +21632,12 @@ function buildDispatchState(existing, expId, nowIso) {
     last_event_ts: nowIso
   });
 }
-var EXP_ID_RE, AGENT_RE, TOKENS, SOTA_AFFORDANCE;
+var DISPATCH_OPERATORS, EXP_ID_RE, AGENT_RE, TOKENS, SOTA_AFFORDANCE;
 var init_autoresearchExperiment = __esm({
   "src/core/autoresearchExperiment.ts"() {
     "use strict";
     init_autoresearchState();
+    DISPATCH_OPERATORS = ["draft", "improve", "ablate", "replicate"];
     EXP_ID_RE = /^exp-[0-9]+$/;
     AGENT_RE = /^[a-z][a-z0-9-]*$/;
     TOKENS = [
@@ -23687,7 +23688,7 @@ async function inspectCheckWith(args, deps) {
   return 0;
 }
 function parseExperimentSendArgs(args) {
-  let inputs, contextFile, smokeTest, timeout, parentId, gen;
+  let inputs, contextFile, smokeTest, timeout, parentId, gen, operator;
   let i2 = 0;
   for (; i2 < args.length; i2++) {
     const a2 = args[i2];
@@ -23716,6 +23717,10 @@ function parseExperimentSendArgs(args) {
       const r = kvParse(a2, args[i2 + 1]);
       gen = r.value;
       i2 += r.shift - 1;
+    } else if (a2 === "--operator" || a2.startsWith("--operator=")) {
+      const r = kvParse(a2, args[i2 + 1]);
+      operator = r.value;
+      i2 += r.shift - 1;
     } else {
       return { topic: "", agent: "", expId: "", approachLabel: "", approachBrief: "", badArgs: true };
     }
@@ -23723,7 +23728,7 @@ function parseExperimentSendArgs(args) {
   const pos = args.slice(i2);
   if (pos.length !== 5) return { topic: "", agent: "", expId: "", approachLabel: "", approachBrief: "", badArgs: true };
   const [topic, agent, expId, approachLabel, approachBrief] = pos;
-  return { topic, agent, expId, approachLabel, approachBrief, inputs, contextFile, smokeTest, timeout, parentId, gen };
+  return { topic, agent, expId, approachLabel, approachBrief, inputs, contextFile, smokeTest, timeout, parentId, gen, operator };
 }
 function gatherPeers(art, self) {
   const workersFile = (0, import_node_path32.join)(art, "workers.txt");
@@ -23789,6 +23794,10 @@ async function experimentSendWith(args, deps) {
   }
   if (p.gen !== void 0 && !/^[1-9][0-9]*$/.test(p.gen)) {
     log.error(`autoresearch experiment-send: --gen must be a positive integer; got '${p.gen}'`);
+    return 2;
+  }
+  if (p.operator !== void 0 && !DISPATCH_OPERATORS.includes(p.operator)) {
+    log.error(`autoresearch experiment-send: --operator must be one of ${DISPATCH_OPERATORS.join("|")}; got '${p.operator}'`);
     return 2;
   }
   if (p.smokeTest) {
@@ -23918,9 +23927,11 @@ async function experimentSendWith(args, deps) {
     return 1;
   }
   const preOffset = outboxOffset(outbox);
-  if (hasLedger) ledgerAppend(art, { gen: effGen, ts: deps.now(), kind: "dispatch-intent", agent, exp_id: expId });
+  if (hasLedger) ledgerAppend(art, { gen: effGen, ts: deps.now(), kind: "dispatch-intent", agent, exp_id: expId, ...p.operator !== void 0 ? { data: { operator: p.operator } } : {} });
   atomicWrite((0, import_node_path32.join)(branchDir, "prompt.md"), prompt);
   if (p.parentId !== void 0) atomicWrite((0, import_node_path32.join)(branchDir, "lineage.txt"), `parent_id=${p.parentId}
+`);
+  if (p.operator !== void 0) atomicWrite((0, import_node_path32.join)(branchDir, "operator.txt"), `operator=${p.operator}
 `);
   (deps.inboxWrite ?? inboxWrite)(agent, model, topic, prompt, { from: "hub", noDoneInstruction: true });
   atomicWrite(stateTxt, buildDispatchState((0, import_node_fs35.readFileSync)(stateTxt, "utf8"), expId, deps.now()));
@@ -24424,6 +24435,7 @@ function writeFinalizeLessons(art, agents, deps) {
           } catch {
           }
         }
+        const operator = (parseState(readOr((0, import_node_path32.join)(expDir, "operator.txt"))).operator ?? "").trim() || void 0;
         drafts.push(buildLessonDraft({
           approachLabel: r.approach_label,
           metricName: r.metric_name,
@@ -24431,6 +24443,7 @@ function writeFinalizeLessons(art, agents, deps) {
           parentMetric,
           direction,
           family,
+          operator,
           runId: expId,
           // result.json has no run_id; the exp-id is the per-run identity
           expId,
