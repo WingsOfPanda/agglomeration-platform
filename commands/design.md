@@ -53,7 +53,7 @@ Decide fast-path vs escalation, in order:
 1. `ENSEMBLE=yes` → **escalate**. Path label = `escalated-from-flag`.
 2. Otherwise, run a **time-boxed quick research pass** on the topic (Read/Grep/Bash for repo code;
    WebSearch + any `mcp__tavily`/`mcp__anysearch` per the user's triple-search rule; `mcp__context7`
-   for library docs; `mcp__codegraph` for code intelligence; relevant `superpowers:*` skills), then
+   for library docs; `mcp__codegraph` for code intelligence), then
    run the **4-signal complexity check** — escalate if **any one** fires (favor rigor):
    - **Conflicting evidence** — sources disagreed on a key claim.
    - **Significant assumptions** — you had to assume facts not in evidence.
