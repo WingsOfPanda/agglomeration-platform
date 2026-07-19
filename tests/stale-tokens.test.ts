@@ -1,11 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { execSync } from "node:child_process";
 
-// Fails if Star-Wars / clone-wars residue appears in shipped source, config, or commands.
+// Fails if retired branding or external workflow-plugin dependencies appear in shipped source,
+// config, or commands.
 // Excludes node_modules, dist, docs (the design doc legitimately discusses the rename),
 // and this test file itself.
 describe("stale-token gate", () => {
-  const banned = ["clone-wars", "cw_", "master-yoda", "MISSION ACCOMPLISHED", "@cw_", "@cs_"];
+  const banned = ["clone-wars", "cw_", "master-yoda", "MISSION ACCOMPLISHED", "@cw_", "@cs_", "superpowers:"];
   // Rebrand worker-noun residue: "trooper" -> "worker", "commander" -> "agent".
   // Checked case-insensitively so prose ("Troopers") and identifiers alike are caught.
   // The shipped tree must use worker/agent, never these.

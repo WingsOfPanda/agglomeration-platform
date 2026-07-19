@@ -1,14 +1,15 @@
 SKILL HINT — this design run is design-shaped.
 
-Use the `superpowers:brainstorming` skill to structure your thinking. The
-skill normally asks design questions one at a time; the protocol below
-lets you do that without deadlocking the run.
+Use a structured design pass: clarify the objective and constraints, surface
+assumptions, compare viable approaches and tradeoffs, and document the design
+decision. The protocol below lets you ask grounding questions without
+deadlocking the run.
 
 AUTONOMY CONTRACT
 
-This design run is automated. The skill you invoke may try to ask design
-questions one at a time. You may ask questions back to the Hub
-via your outbox, but follow these rules:
+This design run is automated. If a missing answer would materially change the
+design, you may ask questions back to the Hub via your outbox, but follow these
+rules:
 
 1. Ask ONE question at a time. Wait for the answer before asking the next.
 
@@ -45,6 +46,6 @@ via your outbox, but follow these rules:
    This lets the findings reader see the design choices that shaped the
    findings.
 
-7. If the skill says "ask the user X", you ask the Hub X via this
-   protocol. The Hub will relay to the user only if the question is
-   critical. Otherwise the Hub answers from topic context.
+7. When you need user input, ask the Hub via this protocol. The Hub will relay
+   to the user only if the question is critical. Otherwise the Hub answers from
+   topic context.
