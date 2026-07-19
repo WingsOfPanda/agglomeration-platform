@@ -201,7 +201,8 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
 > deferred verify v2). Do not point `/ap:implement` at an untrusted repository expecting this step to
 > be a sandboxed check.
 
-**Step B — read-based cross-verify.** Invoke `superpowers:verification-before-completion`. Read (capped):
+**Step B — read-based cross-verify.** Verify with fresh evidence — claim only what you ran and
+observed this round, never the worker's say-so. Read (capped):
 - `$ART/verify-report-<ROUND>.md` (the worker's self-verify),
 - `$ART/hub-test-output-<ROUND>.log` (the HUB's own run — authoritative) and, only as the worker's
   claim, `$ART/test-output-<ROUND>.log`,
