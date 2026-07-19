@@ -99,18 +99,26 @@ describe("composeRound1Prompt", () => {
     expect(p).toContain("TEST_DURATION_S");
     expect(p).toContain("/a/worker-test-duration-1.txt");
   });
+  it("encodes planning, scoped implementation, and fresh verification without an external skill dependency", () => {
+    expect(p).toContain("task-by-task implementation plan");
+    expect(p).toContain("Keep each change scoped to its task");
+    expect(p).toContain("Verify with fresh evidence");
+    expect(p).not.toContain("superpowers:");
+  });
 });
 
 describe("composeFixPrompt", () => {
   const bundle = "1. [bug] test foo crashes on null input\n2. [spec-gap] missing retry path";
   const p = composeFixPrompt(2, bundle, "/state/topic/_implement/verify-report-2.md", "");
-  it("names the round + fix loop, embeds the bundle verbatim under ISSUES, names the routing skills", () => {
+  it("names the round + fix loop, embeds the bundle verbatim, and spells out issue routing", () => {
     expect(p).toContain("ROUND 2 of /ap:implement (fix loop)");
     expect(p).toContain("ISSUES TO ADDRESS:");
     expect(p).toContain(bundle);
-    expect(p).toMatch(/systematic-debugging/);
-    expect(p).toMatch(/writing-plans/);
-    expect(p).toMatch(/requesting-code-review/);
+    expect(p).toContain("supported root");
+    expect(p).toContain("re-plan the gap");
+    expect(p).toContain("code-review subagent");
+    expect(p).toContain("commit's SHA");
+    expect(p).not.toContain("superpowers:");
   });
   it("tees the per-round test-output log into the verify dir and requires the VERDICT line", () => {
     expect(p).toContain("/state/topic/_implement/test-output-2.log");
