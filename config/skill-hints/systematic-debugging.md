@@ -1,15 +1,16 @@
 SKILL HINT — this design run is bug-hunt shaped.
 
-Use the `superpowers:systematic-debugging` skill to structure your
-investigation. The skill walks through hypothesis → reproduction → root
-cause; the protocol below lets you ask grounding questions without
+Use a systematic debugging loop: state a concrete hypothesis, reproduce or
+collect evidence, and trace the failure to a supported root cause before
+proposing a fix. Do not stack speculative fixes; if an attempt fails, stop and
+reassess. The protocol below lets you ask grounding questions without
 deadlocking the run.
 
 AUTONOMY CONTRACT
 
-This design run is automated. The skill you invoke may try to ask
-clarifying questions one at a time. You may ask questions back to the
-Hub via your outbox, but follow these rules:
+This design run is automated. If missing information would materially change
+the investigation, you may ask questions back to the Hub via your outbox, but
+follow these rules:
 
 1. Ask ONE question at a time. Wait for the answer before asking the next.
 
@@ -35,6 +36,6 @@ Hub via your outbox, but follow these rules:
 6. Document each Q&A in your findings.md as:
      [Q&A] question: <q> // answer: <a> (resolved by Hub)
 
-7. If the skill says "ask the user X", you ask the Hub X via this
-   protocol. The Hub will relay to the user only if the question is
-   critical. Otherwise the Hub answers from topic context.
+7. When you need user input, ask the Hub via this protocol. The Hub will relay
+   to the user only if the question is critical. Otherwise the Hub answers from
+   topic context.
