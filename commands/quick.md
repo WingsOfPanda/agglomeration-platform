@@ -17,6 +17,11 @@ gates**.
 
 Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
 
+> **Claude** workers' task nudges carry the `ultracode` keyword by default — each dispatched turn
+> opts into Claude Code's multi-agent Workflow orchestration (deeper work, more tokens; a harmless
+> no-op without the Workflows feature). For a lean run, prefix every worker dispatch with
+> `AP_ULTRACODE=0`.
+
 ## Flagging suspicions
 
 At any point in the run, if something looks weird, surprising, or suspicious — even a likely false
