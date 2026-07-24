@@ -104,3 +104,28 @@ stale-tokens gate is untouched ("ultracode" is not a banned token).
 - With the env var unset, every nudge in the system is byte-identical to 0.5.2 behavior.
 - A codex/agy/opencode worker's nudge never contains the keyword, env var or not.
 - `commands/explore.md` documents the opt-in prefix; full suite green; dist committed.
+
+## Revision — 2026-07-24: default-on for claude workers (0.5.4)
+
+Same-day user follow-up to the 0.5.3 opt-in ("can we default all claude workers to 'with
+ultracode'?"). The polarity flips; the mechanism is unchanged:
+
+- **Gate** — `taskNudge` now emits the keyword when `env.AP_ULTRACODE !== "0" && model ===
+  "claude"`. Claude workers get ultracode by default; `AP_ULTRACODE=0` (exactly `"0"`) is the
+  per-dispatch opt-out. `AP_ULTRACODE=1` remains valid and means the same as unset.
+- **Coverage** — `taskNudge` is now also adopted at the two task-nudge sites 0.5.3 skipped, so
+  ALL claude worker task dispatches carry it: the spawn initial-task nudge
+  (`src/commands/spawn.ts`) and autoresearch's best-effort dispatch nudge
+  (`src/commands/autoresearch.ts`). The spawn **identity/bootstrap** nudge stays plain by design —
+  bootstrap must read `identity.md` and emit `ready` fast, not orchestrate.
+- **Scope** — the base spec's "directive wiring ships for explore only" bullet is SUPERSEDED by
+  this revision: the user's ask was "default ALL claude workers", so default-on deliberately
+  reaches every command's claude workers through the shared send path (quick/design/implement/
+  bridge/autoresearch included). This revision is the spec covering that widening.
+- **Directives** — `commands/explore.md`'s section retitled "Ultracode workers (default for
+  claude)"; the five other worker-dispatching directives (`design`/`implement`/`bridge`/`quick`/
+  `autoresearch`.md) each gained a short note stating the default and the `AP_ULTRACODE=0`
+  lean-run opt-out.
+- **Invariants kept** — non-claude nudges byte-identical always; frozen wall untouched; the
+  entitlement caveat stands (without Workflows the keyword is a harmless no-op).
+- Version 0.5.3 → 0.5.4; tests updated to the new polarity; dist rebuilt and committed.

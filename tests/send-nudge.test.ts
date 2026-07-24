@@ -3,27 +3,28 @@ import { taskNudge } from "../src/commands/send.js";
 
 const INBOX = "/abs/state/alpha-claude/topic/inbox.md";
 const PLAIN = `Read ${INBOX} and execute the task. Reply when done.`;
+const ULTRA = `Read ${INBOX} and execute the task with ultracode. Reply when done.`;
 
 describe("taskNudge", () => {
-  it("env unset -> legacy line, byte-identical", () => {
-    expect(taskNudge(INBOX, "claude", {})).toBe(PLAIN);
+  it("claude + env unset -> ultracode by default", () => {
+    expect(taskNudge(INBOX, "claude", {})).toBe(ULTRA);
   });
 
-  it("AP_ULTRACODE=1 + claude -> keyword in the typed line", () => {
-    expect(taskNudge(INBOX, "claude", { AP_ULTRACODE: "1" })).toBe(
-      `Read ${INBOX} and execute the task with ultracode. Reply when done.`,
-    );
+  it("claude + AP_ULTRACODE=0 -> plain line (the opt-out)", () => {
+    expect(taskNudge(INBOX, "claude", { AP_ULTRACODE: "0" })).toBe(PLAIN);
   });
 
-  it("AP_ULTRACODE=1 + non-claude providers -> legacy line", () => {
-    for (const model of ["codex", "agy", "opencode"]) {
-      expect(taskNudge(INBOX, model, { AP_ULTRACODE: "1" })).toBe(PLAIN);
+  it("claude + non-'0' values -> ultracode (off iff exactly '0')", () => {
+    for (const v of ["1", "true", ""]) {
+      expect(taskNudge(INBOX, "claude", { AP_ULTRACODE: v })).toBe(ULTRA);
     }
   });
 
-  it("non-'1' values -> legacy line (strict '1' semantics)", () => {
-    for (const v of ["0", "true", "yes", ""]) {
-      expect(taskNudge(INBOX, "claude", { AP_ULTRACODE: v })).toBe(PLAIN);
+  it("non-claude providers -> plain line regardless of env", () => {
+    for (const model of ["codex", "agy", "opencode"]) {
+      for (const env of [{}, { AP_ULTRACODE: "1" }, { AP_ULTRACODE: "0" }]) {
+        expect(taskNudge(INBOX, model, env)).toBe(PLAIN);
+      }
     }
   });
 });
