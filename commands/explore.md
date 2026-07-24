@@ -24,6 +24,17 @@ explore's Conclusion feeds design's next research round.
 
 Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
 
+## Ultracode workers (opt-in)
+
+If the user's request asks for ultracode workers (the word "ultracode" in the ask), prefix EVERY
+worker dispatch in this run — each `$CS explore *-send` verb and any `$CS send --from hub …`
+relay — with `AP_ULTRACODE=1`, e.g. `AP_ULTRACODE=1 $CS explore research-send <TOPIC> <agent>
+<provider>`. The CLI then appends the `ultracode` keyword to the typed nudge line of **claude**
+workers only, opting each such turn into Claude Code's multi-agent Workflow orchestration (deeper
+research; real extra token volume, and long workflow runs eat into the turn timeout). It requires
+the worker account's Workflows feature — without it the keyword is a harmless no-op. Non-claude
+providers are unaffected, and without the prefix nothing changes.
+
 ## Flagging suspicions
 
 At any point in the run, if something looks weird, surprising, or suspicious — even a likely false
