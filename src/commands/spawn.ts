@@ -14,6 +14,7 @@ import { pickRandomAgent, agentInUse, formatCollisionError } from "../core/agent
 import { agentBinary, agentDefaultMode, agentModeArgs, agentReadyTimeout, agentBootstrapSleep } from "../core/contracts.js";
 import { wrapLaunch, splitRight, splitDown, respawn, paneAlive, paneLabelSet, paneSend, killNow, capturePane, ensurePaneBorders, ensureWindowBorderStatus } from "../core/tmux.js";
 import { labelFor } from "../core/colors.js";
+import { taskNudge } from "./send.js";
 import { captureFailure, captureSpawnFailure, bootstrapFailureArgs } from "../core/forensics.js";
 
 export { validateSlug };
@@ -127,7 +128,7 @@ export async function run(args: string[]): Promise<number> {
     if (initial) {
       initial = initial.replace(/^"|"$/g, "");
       inboxWrite(agent, model, topic, initial);
-      await paneSend(pane, `Read ${inboxPath(agent, model, topic)} and execute the task. Reply when done.`);
+      await paneSend(pane, taskNudge(inboxPath(agent, model, topic), model));
       log.info(`use: ap collect ${agent} ${topic}  (to wait for {done})`);
     }
 

@@ -4,12 +4,12 @@ import { resolveModel, paneMetaRead, inboxWrite, inboxPath } from "../core/ipc.j
 import { paneAlive, paneSend } from "../core/tmux.js";
 import { validateSlug } from "../core/slug.js";
 
-/** The typed pane prompt that points a worker at its inbox. With AP_ULTRACODE=1 a claude
- *  worker's line carries the "ultracode" keyword — Claude Code's per-prompt Workflow opt-in
- *  scans the typed prompt only, so the keyword must ride the nudge, not the inbox file.
- *  Other providers have no such trigger and always get the plain line. */
+/** The typed pane prompt that points a worker at its inbox. A claude worker's line carries the
+ *  "ultracode" keyword BY DEFAULT — Claude Code's per-prompt Workflow opt-in scans the typed
+ *  prompt, so the keyword must ride the nudge, not the inbox file. AP_ULTRACODE=0 (exactly "0")
+ *  opts a dispatch out. Other providers have no such trigger and always get the plain line. */
 export function taskNudge(inbox: string, model: string, env: NodeJS.ProcessEnv = process.env): string {
-  const ultra = env.AP_ULTRACODE === "1" && model === "claude";
+  const ultra = env.AP_ULTRACODE !== "0" && model === "claude";
   return `Read ${inbox} and execute the task${ultra ? " with ultracode" : ""}. Reply when done.`;
 }
 

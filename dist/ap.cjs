@@ -16928,6 +16928,84 @@ var init_tmux = __esm({
   }
 });
 
+// src/commands/send.ts
+var send_exports = {};
+__export(send_exports, {
+  run: () => run,
+  taskNudge: () => taskNudge
+});
+function taskNudge(inbox, model, env = process.env) {
+  const ultra = env.AP_ULTRACODE !== "0" && model === "claude";
+  return `Read ${inbox} and execute the task${ultra ? " with ultracode" : ""}. Reply when done.`;
+}
+async function run(args) {
+  let from;
+  let a2 = [...args];
+  if (a2[0] === "--from") {
+    if (!a2[1]) {
+      log.error("--from requires a sender name");
+      return 2;
+    }
+    from = a2[1];
+    a2 = a2.slice(2);
+  }
+  if (a2.length < 3) {
+    log.error("usage: send [--from s] <agent> <topic> <message|@file>");
+    return 2;
+  }
+  const [agent, topic] = a2;
+  if (!validateSlug(agent) || !validateSlug(topic)) {
+    log.error(`agent/topic must match [a-z0-9-]+ and be <= 32 chars; got agent='${agent}' topic='${topic}'`);
+    return 2;
+  }
+  let msg = a2.slice(2).join(" ");
+  const model = resolveModel(agent, topic);
+  if (!model) {
+    log.error(`no worker '${agent}' on topic '${topic}' (state dir absent)`);
+    log.error(`  spawn first: ap spawn ${agent} <model> ${topic}`);
+    return 1;
+  }
+  const pane = paneMetaRead(agent, model, topic);
+  if (!pane) {
+    log.error(`pane.json missing for ${agent}-${model} on ${topic}`);
+    return 1;
+  }
+  if (!await paneAlive(pane)) {
+    log.error(`${agent}'s pane ${pane} is gone (orphan); run ap stop ${agent} ${topic}`);
+    return 1;
+  }
+  if (msg.startsWith("@")) {
+    const f = msg.slice(1);
+    if (!(0, import_node_fs17.existsSync)(f)) {
+      log.error(`file not found: ${f}`);
+      return 1;
+    }
+    msg = (0, import_node_fs17.readFileSync)(f, "utf8");
+  }
+  inboxWrite(agent, model, topic, msg, from ? { from } : void 0);
+  const inbox = inboxPath(agent, model, topic);
+  log.info(`wrote inbox at ${inbox}; nudging pane ${pane}`);
+  await paneSend(pane, taskNudge(inbox, model));
+  process.stdout.write(`
+  worker:    ${agent}-${model} on ${topic}
+  pane:    ${pane}
+  inbox:   ${inbox}
+  status:  queued \u2014 use: ap collect ${agent} ${topic}  (to wait for {done})
+`);
+  return 0;
+}
+var import_node_fs17;
+var init_send2 = __esm({
+  "src/commands/send.ts"() {
+    "use strict";
+    import_node_fs17 = require("node:fs");
+    init_log();
+    init_ipc();
+    init_tmux();
+    init_slug();
+  }
+});
+
 // src/core/forensics.ts
 function renderFailureReport(f) {
   const meta = `timestamp:     ${f.timestamp}
@@ -17006,7 +17084,7 @@ function scrapeArtDir(artDir) {
   const out = [];
   const read = (p) => {
     try {
-      return (0, import_node_fs17.readFileSync)(p, "utf8");
+      return (0, import_node_fs18.readFileSync)(p, "utf8");
     } catch {
       return null;
     }
@@ -17016,7 +17094,7 @@ function scrapeArtDir(artDir) {
   const sr = read((0, import_node_path14.join)(artDir, "spawn-results.tsv"));
   if (sr !== null) out.push(...scrapeSpawnResults(sr));
   try {
-    for (const f of (0, import_node_fs17.readdirSync)(artDir)) {
+    for (const f of (0, import_node_fs18.readdirSync)(artDir)) {
       if (f.endsWith(".log") || f === "session-summary.md") {
         const t = read((0, import_node_path14.join)(artDir, f));
         if (t !== null) out.push(...scrapeLogs(t, f));
@@ -17026,7 +17104,7 @@ function scrapeArtDir(artDir) {
   }
   const topicDir2 = (0, import_node_path14.dirname)(artDir);
   try {
-    for (const d of (0, import_node_fs17.readdirSync)(topicDir2, { withFileTypes: true })) {
+    for (const d of (0, import_node_fs18.readdirSync)(topicDir2, { withFileTypes: true })) {
       if (!d.isDirectory() || d.name.startsWith("_") || d.name.startsWith(".")) continue;
       const ob = read((0, import_node_path14.join)(topicDir2, d.name, "outbox.jsonl"));
       if (ob !== null) out.push(...scrapeOutbox(ob, d.name));
@@ -17044,12 +17122,12 @@ function scrapeArtDir(artDir) {
   });
 }
 function freeFeedPath(dir, name) {
-  if (!(0, import_node_fs17.existsSync)((0, import_node_path14.join)(dir, name))) return (0, import_node_path14.join)(dir, name);
+  if (!(0, import_node_fs18.existsSync)((0, import_node_path14.join)(dir, name))) return (0, import_node_path14.join)(dir, name);
   const ext = name.endsWith(".md") ? ".md" : "";
   const stem = ext ? name.slice(0, -ext.length) : name;
   for (let n2 = 2; n2 <= 999; n2++) {
     const c3 = (0, import_node_path14.join)(dir, `${stem}-${n2}${ext}`);
-    if (!(0, import_node_fs17.existsSync)(c3)) return c3;
+    if (!(0, import_node_fs18.existsSync)(c3)) return c3;
   }
   return (0, import_node_path14.join)(dir, name);
 }
@@ -17063,7 +17141,7 @@ function writeForensicsFeed(opts) {
   } catch {
   }
   const dir = (0, import_node_path14.join)(globalRoot(), "forensics", date);
-  (0, import_node_fs17.mkdirSync)(dir, { recursive: true });
+  (0, import_node_fs18.mkdirSync)(dir, { recursive: true });
   const path6 = freeFeedPath(dir, opts.fileNameFor(time));
   const md = renderArtForensics(
     { command: opts.command, topicSlug: opts.topicSlug, repoHash: hash, artDir: opts.artDir, invokedAt: isoUtc(opts.now) },
@@ -17168,11 +17246,11 @@ function runFlag(command, topic, note) {
   } else log.info(`${command} flag: nothing recorded`);
   return 0;
 }
-var import_node_fs17, import_node_path14, SCROLLBACK_LINES, NO_EVENT_SENTINEL, FAILURE_FILENAME;
+var import_node_fs18, import_node_path14, SCROLLBACK_LINES, NO_EVENT_SENTINEL, FAILURE_FILENAME;
 var init_forensics = __esm({
   "src/core/forensics.ts"() {
     "use strict";
-    import_node_fs17 = require("node:fs");
+    import_node_fs18 = require("node:fs");
     import_node_path14 = require("node:path");
     init_paths();
     init_atomic();
@@ -17189,13 +17267,13 @@ var init_forensics = __esm({
 var spawn_exports = {};
 __export(spawn_exports, {
   resolveMode: () => resolveMode,
-  run: () => run,
+  run: () => run2,
   validateSlug: () => validateSlug
 });
 function resolveMode(explicit, dflt) {
   return explicit || dflt || "full";
 }
-async function run(args) {
+async function run2(args) {
   if (args.length < 3) {
     log.error("usage: spawn <agent|random> <model> <topic> [--mode m] [--cwd abs] [--target-pane id] [initial-prompt]");
     return 2;
@@ -17234,7 +17312,7 @@ async function run(args) {
     log.error(`agent must match [a-z0-9-]+ and be <= 32 chars (or 'random'); got: '${agent}'`);
     return 2;
   }
-  if (cwd && (!cwd.startsWith("/") || !(0, import_node_fs18.existsSync)(cwd))) {
+  if (cwd && (!cwd.startsWith("/") || !(0, import_node_fs19.existsSync)(cwd))) {
     log.error(`spawn --cwd must be an existing absolute path: ${cwd}`);
     return 1;
   }
@@ -17293,7 +17371,7 @@ async function run(args) {
     if (targetPane) {
       if (preflightArtDir) {
         const pf = (0, import_node_path15.join)(preflightArtDir, "preflight-panes.txt");
-        const ok = (0, import_node_fs18.existsSync)(pf) && paneListedFor((0, import_node_fs18.readFileSync)(pf, "utf8"), agent, targetPane);
+        const ok = (0, import_node_fs19.existsSync)(pf) && paneListedFor((0, import_node_fs19.readFileSync)(pf, "utf8"), agent, targetPane);
         if (!ok) {
           captureSpawnFailure({ agent, model, topic, reason: "pane_failed", detail: `--target-pane ${targetPane} not listed for ${agent} in ${pf}` });
           log.error(`--target-pane ${targetPane} is not a preflight pane for ${agent} (checked ${pf})`);
@@ -17313,7 +17391,7 @@ async function run(args) {
       if (prior && await paneAlive(prior)) pane = await splitDown(launch, prior, startDir);
       else pane = await splitRight(launch, void 0, startDir);
       await paneLabelSet(pane, agent, model, topic);
-      (0, import_node_fs18.mkdirSync)(topicDir(topic), { recursive: true });
+      (0, import_node_fs19.mkdirSync)(topicDir(topic), { recursive: true });
       atomicWrite(lastFile, pane + "\n");
     }
     if (!await ensureWindowBorderStatus(pane)) log.warn(`could not force pane-border-status on the spawn window; '${labelFor(agent, model, topic)}' label may not render`);
@@ -17338,7 +17416,7 @@ ${ob}
       }
       const fr = await captureFailure(
         { agent, model, topic, paneId: pane, reason, eventLine: ev ? JSON.stringify(ev) : void 0, readyTimeout },
-        { workerDir, capturePane: (p, n2) => capturePane(p, n2), atomicWriteSync: (d, c3) => (0, import_node_fs18.writeFileSync)(d, c3), isWritableDir: (d) => (0, import_node_fs18.existsSync)(d), now: () => isoUtc() }
+        { workerDir, capturePane: (p, n2) => capturePane(p, n2), atomicWriteSync: (d, c3) => (0, import_node_fs19.writeFileSync)(d, c3), isWritableDir: (d) => (0, import_node_fs19.existsSync)(d), now: () => isoUtc() }
       );
       captureSpawnFailure({ agent, model, topic, ...bootstrapFailureArgs(ev ?? null, fr.ok ? fr.path : void 0) });
       await killNow(pane);
@@ -17350,7 +17428,7 @@ ${ob}
     if (initial) {
       initial = initial.replace(/^"|"$/g, "");
       inboxWrite(agent, model, topic, initial);
-      await paneSend(pane, `Read ${inboxPath(agent, model, topic)} and execute the task. Reply when done.`);
+      await paneSend(pane, taskNudge(inboxPath(agent, model, topic), model));
       log.info(`use: ap collect ${agent} ${topic}  (to wait for {done})`);
     }
     process.stdout.write(`
@@ -17365,11 +17443,11 @@ ${ob}
     throw e;
   }
 }
-var import_node_fs18, import_node_path15, sleep2;
+var import_node_fs19, import_node_path15, sleep2;
 var init_spawn = __esm({
   "src/commands/spawn.ts"() {
     "use strict";
-    import_node_fs18 = require("node:fs");
+    import_node_fs19 = require("node:fs");
     import_node_path15 = require("node:path");
     init_args();
     init_log();
@@ -17385,86 +17463,9 @@ var init_spawn = __esm({
     init_contracts();
     init_tmux();
     init_colors();
+    init_send2();
     init_forensics();
     sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
-  }
-});
-
-// src/commands/send.ts
-var send_exports = {};
-__export(send_exports, {
-  run: () => run2,
-  taskNudge: () => taskNudge
-});
-function taskNudge(inbox, model, env = process.env) {
-  const ultra = env.AP_ULTRACODE === "1" && model === "claude";
-  return `Read ${inbox} and execute the task${ultra ? " with ultracode" : ""}. Reply when done.`;
-}
-async function run2(args) {
-  let from;
-  let a2 = [...args];
-  if (a2[0] === "--from") {
-    if (!a2[1]) {
-      log.error("--from requires a sender name");
-      return 2;
-    }
-    from = a2[1];
-    a2 = a2.slice(2);
-  }
-  if (a2.length < 3) {
-    log.error("usage: send [--from s] <agent> <topic> <message|@file>");
-    return 2;
-  }
-  const [agent, topic] = a2;
-  if (!validateSlug(agent) || !validateSlug(topic)) {
-    log.error(`agent/topic must match [a-z0-9-]+ and be <= 32 chars; got agent='${agent}' topic='${topic}'`);
-    return 2;
-  }
-  let msg = a2.slice(2).join(" ");
-  const model = resolveModel(agent, topic);
-  if (!model) {
-    log.error(`no worker '${agent}' on topic '${topic}' (state dir absent)`);
-    log.error(`  spawn first: ap spawn ${agent} <model> ${topic}`);
-    return 1;
-  }
-  const pane = paneMetaRead(agent, model, topic);
-  if (!pane) {
-    log.error(`pane.json missing for ${agent}-${model} on ${topic}`);
-    return 1;
-  }
-  if (!await paneAlive(pane)) {
-    log.error(`${agent}'s pane ${pane} is gone (orphan); run ap stop ${agent} ${topic}`);
-    return 1;
-  }
-  if (msg.startsWith("@")) {
-    const f = msg.slice(1);
-    if (!(0, import_node_fs19.existsSync)(f)) {
-      log.error(`file not found: ${f}`);
-      return 1;
-    }
-    msg = (0, import_node_fs19.readFileSync)(f, "utf8");
-  }
-  inboxWrite(agent, model, topic, msg, from ? { from } : void 0);
-  const inbox = inboxPath(agent, model, topic);
-  log.info(`wrote inbox at ${inbox}; nudging pane ${pane}`);
-  await paneSend(pane, taskNudge(inbox, model));
-  process.stdout.write(`
-  worker:    ${agent}-${model} on ${topic}
-  pane:    ${pane}
-  inbox:   ${inbox}
-  status:  queued \u2014 use: ap collect ${agent} ${topic}  (to wait for {done})
-`);
-  return 0;
-}
-var import_node_fs19;
-var init_send2 = __esm({
-  "src/commands/send.ts"() {
-    "use strict";
-    import_node_fs19 = require("node:fs");
-    init_log();
-    init_ipc();
-    init_tmux();
-    init_slug();
   }
 });
 
@@ -18761,7 +18762,7 @@ async function turnSendRun(rest) {
   }
   return turnSendWith(topic, round, {
     offsetFor: (i2, m, t) => outboxOffset(outboxPath(i2, m, t)),
-    send: (args) => run2(args)
+    send: (args) => run(args)
   });
 }
 async function turnSendWith(topic, round, d) {
@@ -19935,10 +19936,10 @@ var init_design2 = __esm({
       isValidated: agentConsultValidated,
       pickAgents
     };
-    liveSpawnAllDeps = { preflight: run7, spawn: run, repoRoot };
+    liveSpawnAllDeps = { preflight: run7, spawn: run2, repoRoot };
     liveResearchSendDeps = {
       offsetFor: (i2, m, t) => outboxOffset(outboxPath(i2, m, t)),
-      send: run2
+      send: run
     };
     liveResearchWaitDeps = {
       wait: liveOutboxWait,
@@ -21065,7 +21066,7 @@ var init_implement2 = __esm({
     WORKER = "lead";
     IMPLEMENT_TURN_TIMEOUT = () => envNum("AP_IMPLEMENT_TURN_TIMEOUT_S", DEFAULT_TURN_BUDGET_S);
     liveInitDeps3 = { repoRoot };
-    liveSendDeps = { offsetFor: (i2, m, t) => outboxOffset(outboxPath(i2, m, t)), send: run2 };
+    liveSendDeps = { offsetFor: (i2, m, t) => outboxOffset(outboxPath(i2, m, t)), send: run };
     liveWaitDeps = { wait: liveOutboxWait, multiplier: agentTimeoutMultiplier, now: () => Math.floor(Date.now() / 1e3) };
     liveScopeDeps = { runnerFor: runnerAt };
     liveVerifyTestsDeps = { runner: liveTestRunner, detect: detectTestCommand, now: isoUtc };
@@ -23978,7 +23979,7 @@ async function experimentSendWith(args, deps) {
     const pane = paneMetaRead(agent, model, topic);
     if (pane) {
       try {
-        await deps.paneSend(pane, `Read ${inboxPath(agent, model, topic)} and execute the task. Reply when done.`);
+        await deps.paneSend(pane, taskNudge(inboxPath(agent, model, topic), model));
       } catch (e) {
         log.warn(`autoresearch experiment-send: pane nudge failed (${e.message}); worker may not have noticed inbox`);
       }
@@ -25396,7 +25397,7 @@ var init_autoresearch2 = __esm({
     };
     liveSpawnAllDeps2 = {
       preflight: run7,
-      spawn: run,
+      spawn: run2,
       repoRoot,
       pickAgents
     };
@@ -25448,7 +25449,7 @@ var init_autoresearch2 = __esm({
       sizeWarnGb: envNum("AP_AUTORESEARCH_SIZE_WARN_GB", 2)
     };
     liveRefineDeps = {
-      send: (a2) => run2(a2),
+      send: (a2) => run(a2),
       dryRun: process.env.AP_DRY_RUN === "1"
     };
     liveHandoffDeps = { now: () => isoUtc() };
@@ -25459,7 +25460,7 @@ var init_autoresearch2 = __esm({
     };
     liveFreshWorkerDeps = {
       teardown: (t, i2) => run5(["--pairs", t, i2]).then(() => void 0),
-      spawn: (a2) => run(a2),
+      spawn: (a2) => run2(a2),
       now: () => isoUtc()
     };
     liveResumeDeps = {
@@ -27806,10 +27807,10 @@ var init_explore2 = __esm({
       isValidated: agentConsultValidated,
       pickAgents
     };
-    liveExploreSpawnAllDeps = { preflight: run7, spawn: run, repoRoot };
+    liveExploreSpawnAllDeps = { preflight: run7, spawn: run2, repoRoot };
     liveResearchSendDeps2 = {
       offsetFor: (i2, m, t) => outboxOffset(outboxPath(i2, m, t)),
-      send: run2
+      send: run
     };
     liveResearchWaitDeps2 = {
       wait: liveOutboxWait,
@@ -28130,7 +28131,7 @@ async function roundSendRun(rest) {
   }
   return roundSendWith(topic, round, {
     offsetFor: (i2, m, t) => outboxOffset(outboxPath(i2, m, t)),
-    send: (args) => run2(args)
+    send: (args) => run(args)
   });
 }
 async function roundSendWith(topic, round, d) {
@@ -28233,7 +28234,7 @@ async function relayRun(rest) {
     return 1;
   }
   const answer = answerParts.join(" ");
-  const rc = await run2(["--from", "hub", agent, topic, answer]);
+  const rc = await run(["--from", "hub", agent, topic, answer]);
   if (rc !== 0) {
     log.error(`bridge relay: send failed (rc=${rc})`);
     return 1;

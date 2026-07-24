@@ -50,7 +50,7 @@ import { pickAgents } from "../core/agents.js";
 import { repoRoot, pluginRoot, globalRoot, repoHash } from "../core/paths.js";
 import { run as spawnRun } from "./spawn.js";
 import { run as preflightRun } from "./preflight.js";
-import { run as sendRun } from "./send.js";
+import { run as sendRun, taskNudge } from "./send.js";
 import { run as stopRun } from "./stop.js";
 
 type PathOpts = { home?: string; cwd?: string };
@@ -713,7 +713,7 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   if (!deps.dryRun) {
     const pane = paneMetaRead(agent, model, topic);
     if (pane) {
-      try { await deps.paneSend(pane, `Read ${inboxPath(agent, model, topic)} and execute the task. Reply when done.`); }
+      try { await deps.paneSend(pane, taskNudge(inboxPath(agent, model, topic), model)); }
       catch (e) { log.warn(`autoresearch experiment-send: pane nudge failed (${(e as Error).message}); worker may not have noticed inbox`); }
     }
   }
