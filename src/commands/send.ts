@@ -4,6 +4,15 @@ import { resolveModel, paneMetaRead, inboxWrite, inboxPath } from "../core/ipc.j
 import { paneAlive, paneSend } from "../core/tmux.js";
 import { validateSlug } from "../core/slug.js";
 
+/** The typed pane prompt that points a worker at its inbox. With AP_ULTRACODE=1 a claude
+ *  worker's line carries the "ultracode" keyword — Claude Code's per-prompt Workflow opt-in
+ *  scans the typed prompt only, so the keyword must ride the nudge, not the inbox file.
+ *  Other providers have no such trigger and always get the plain line. */
+export function taskNudge(inbox: string, model: string, env: NodeJS.ProcessEnv = process.env): string {
+  const ultra = env.AP_ULTRACODE === "1" && model === "claude";
+  return `Read ${inbox} and execute the task${ultra ? " with ultracode" : ""}. Reply when done.`;
+}
+
 export async function run(args: string[]): Promise<number> {
   let from: string | undefined;
   let a = [...args];
@@ -27,7 +36,7 @@ export async function run(args: string[]): Promise<number> {
   inboxWrite(agent, model, topic, msg, from ? { from } : undefined);
   const inbox = inboxPath(agent, model, topic);
   log.info(`wrote inbox at ${inbox}; nudging pane ${pane}`);
-  await paneSend(pane, `Read ${inbox} and execute the task. Reply when done.`);
+  await paneSend(pane, taskNudge(inbox, model));
   process.stdout.write(`\n  worker:    ${agent}-${model} on ${topic}\n  pane:    ${pane}\n  inbox:   ${inbox}\n  status:  queued — use: ap collect ${agent} ${topic}  (to wait for {done})\n`);
   return 0;
 }

@@ -17393,8 +17393,13 @@ var init_spawn = __esm({
 // src/commands/send.ts
 var send_exports = {};
 __export(send_exports, {
-  run: () => run2
+  run: () => run2,
+  taskNudge: () => taskNudge
 });
+function taskNudge(inbox, model, env = process.env) {
+  const ultra = env.AP_ULTRACODE === "1" && model === "claude";
+  return `Read ${inbox} and execute the task${ultra ? " with ultracode" : ""}. Reply when done.`;
+}
 async function run2(args) {
   let from;
   let a2 = [...args];
@@ -17442,7 +17447,7 @@ async function run2(args) {
   inboxWrite(agent, model, topic, msg, from ? { from } : void 0);
   const inbox = inboxPath(agent, model, topic);
   log.info(`wrote inbox at ${inbox}; nudging pane ${pane}`);
-  await paneSend(pane, `Read ${inbox} and execute the task. Reply when done.`);
+  await paneSend(pane, taskNudge(inbox, model));
   process.stdout.write(`
   worker:    ${agent}-${model} on ${topic}
   pane:    ${pane}
