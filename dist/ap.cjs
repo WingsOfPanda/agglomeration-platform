@@ -660,8 +660,10 @@ function lastMatch(text, events) {
 async function outboxWaitSince(i2, m, t, offset, events, timeoutSec, live) {
   const path6 = outboxPath(i2, m, t);
   const everyS = live?.everyS ?? 15;
+  const extendMult = live?.paneId ? Math.min(10, Math.max(1, live.extendMult ?? 1)) : 1;
+  const capSec = timeoutSec * extendMult;
   let deadPolls = 0;
-  for (let n2 = 0; n2 < timeoutSec; n2++) {
+  for (let n2 = 0; n2 < capSec; n2++) {
     const hit = lastMatch(readFrom(path6, offset), events);
     if (hit) return hit;
     if (live && live.paneId && n2 > 0 && n2 % everyS === 0) {
@@ -673,6 +675,9 @@ async function outboxWaitSince(i2, m, t, offset, events, timeoutSec, live) {
       }
       if (alive) deadPolls = 0;
       else if (++deadPolls >= 2) return { event: "error", note: "pane-died", ts: isoUtc() };
+    }
+    if (n2 === timeoutSec && capSec > timeoutSec) {
+      log.warn(`outbox-wait: ${i2} budget ${timeoutSec}s elapsed, pane not confirmed dead \u2014 extending up to ${extendMult}x`);
     }
     await sleep(1e3);
   }
@@ -18264,15 +18269,32 @@ var init_gitwork = __esm({
   }
 });
 
+// src/core/env.ts
+function envNum(name, def) {
+  return Number(process.env[name]) || def;
+}
+var DEFAULT_TURN_BUDGET_S;
+var init_env = __esm({
+  "src/core/env.ts"() {
+    "use strict";
+    DEFAULT_TURN_BUDGET_S = 14400;
+  }
+});
+
 // src/core/waitLive.ts
 function liveOutboxWait(i2, m, t, offset, events, timeoutSec) {
-  return outboxWaitSince(i2, m, t, offset, events, timeoutSec, { paneAlive, paneId: paneMetaRead(i2, m, t) });
+  return outboxWaitSince(i2, m, t, offset, events, timeoutSec, {
+    paneAlive,
+    paneId: paneMetaRead(i2, m, t),
+    extendMult: envNum("AP_WAIT_EXTEND_MULT", 3)
+  });
 }
 var init_waitLive = __esm({
   "src/core/waitLive.ts"() {
     "use strict";
     init_ipc();
     init_tmux();
+    init_env();
   }
 });
 
@@ -18553,6 +18575,16 @@ function gateState(workers, key) {
     return { agent: p.agent, status };
   });
 }
+function gateAnomalies(workers, key) {
+  const out = [];
+  for (const p of workers) {
+    if (!p.doneExists) continue;
+    const matches = (p.stateText ?? "").split("\n").filter((l) => l.startsWith(`${key}=`));
+    const last = matches.length ? matches[matches.length - 1].slice(key.length + 1).trim() : null;
+    if (last === "timeout" || last === "failed") out.push({ agent: p.agent, value: last });
+  }
+  return out;
+}
 function composeVerifyPrompt(itemsText, verifyPath) {
   const items = itemsText.split("\n").filter((l) => l.length > 0).map((l, i2) => `${i2 + 1}. ${l}`).join("\n");
   return [
@@ -18611,18 +18643,6 @@ var init_designTurn = __esm({
     init_atomic();
     init_designDiff();
     RESEARCH_BLOCKERS = 'IF YOU ARE BLOCKED:\n- If a referenced path, file, command, env var, or assumption is wrong or missing, do NOT guess\n  or silently work around it. Append a question event to your outbox and stop:\n  {"event":"question","message":"<what you need and why>","ts":"<iso>"}\n  The Hub will reply via your inbox, then re-engage you.\n';
-  }
-});
-
-// src/core/env.ts
-function envNum(name, def) {
-  return Number(process.env[name]) || def;
-}
-var DEFAULT_TURN_BUDGET_S;
-var init_env = __esm({
-  "src/core/env.ts"() {
-    "use strict";
-    DEFAULT_TURN_BUDGET_S = 14400;
   }
 });
 
@@ -19811,6 +19831,9 @@ async function waitGateRun(rest) {
   const states = gateState(workers, key);
   for (const s of states) process.stdout.write(`${s.agent}	${s.status}
 `);
+  for (const a2 of gateAnomalies(workers, key)) {
+    log.warn(`design wait-gate: ${a2.agent} is terminal via ${key}=${a2.value} \u2014 its ${phase} artifact may be missing`);
+  }
   return states.every((s) => s.status === "terminal") ? 0 : 1;
 }
 async function drilldownRun(rest) {
@@ -26974,10 +26997,16 @@ async function rebuttalSendWith(topic, agent, provider, d) {
     log.error(`explore rebuttal-send: ${stateFile} exists \u2014 one rebuttal round per worker (the one-turn cap)`);
     return 1;
   }
-  const asTag = lastTag(readIfExists((0, import_node_path35.join)(art, `adversary-${agent}.txt`)), "AS");
-  if (asTag === "timeout" || asTag === "failed") {
+  const tags = [
+    ["AS", lastTag(readIfExists((0, import_node_path35.join)(art, `adversary-${agent}.txt`)), "AS")],
+    ["VS", lastTag(readIfExists((0, import_node_path35.join)(art, `crossverify-${agent}.txt`)), "VS")],
+    ["QS", lastTag(readIfExists((0, import_node_path35.join)(art, `openq-${agent}.txt`)), "QS")],
+    ["FS", lastTag(readIfExists((0, import_node_path35.join)(art, `research-${agent}.txt`)), "FS")]
+  ];
+  const latest = tags.find(([, v]) => v !== null && v !== "skipped");
+  if (latest && (latest[1] === "timeout" || latest[1] === "failed")) {
     atomicWrite(stateFile, "RS=skipped\n");
-    log.warn(`explore rebuttal-send: ${agent} skipped \u2014 adversary ended AS=${asTag} (worker may still be busy; sending would clobber its inbox)`);
+    log.warn(`explore rebuttal-send: ${agent} skipped \u2014 latest phase ended ${latest[0]}=${latest[1]} (worker may still be busy; sending would clobber its inbox)`);
     return 0;
   }
   const rows = parseListFile(readIfExists((0, import_node_path35.join)(art, "list.txt")));
@@ -27075,6 +27104,8 @@ async function gapSendWith(topic, agent, provider, d) {
   const tags = [
     ["RS", lastTag(readIfExists((0, import_node_path35.join)(art, `rebuttal-${agent}.txt`)), "RS")],
     ["AS", lastTag(readIfExists((0, import_node_path35.join)(art, `adversary-${agent}.txt`)), "AS")],
+    ["VS", lastTag(readIfExists((0, import_node_path35.join)(art, `crossverify-${agent}.txt`)), "VS")],
+    ["QS", lastTag(readIfExists((0, import_node_path35.join)(art, `openq-${agent}.txt`)), "QS")],
     ["FS", lastTag(readIfExists((0, import_node_path35.join)(art, `research-${agent}.txt`)), "FS")]
   ];
   const latest = tags.find(([, v]) => v !== null && v !== "skipped");
@@ -27199,6 +27230,7 @@ async function signoffSendWith(topic, agent, provider, d) {
     ["GS", lastTag(readIfExists((0, import_node_path35.join)(art, `gap-${agent}.txt`)), "GS")],
     ["RS", lastTag(readIfExists((0, import_node_path35.join)(art, `rebuttal-${agent}.txt`)), "RS")],
     ["AS", lastTag(readIfExists((0, import_node_path35.join)(art, `adversary-${agent}.txt`)), "AS")],
+    ["VS", lastTag(readIfExists((0, import_node_path35.join)(art, `crossverify-${agent}.txt`)), "VS")],
     ["QS", lastTag(readIfExists((0, import_node_path35.join)(art, `openq-${agent}.txt`)), "QS")],
     ["FS", lastTag(readIfExists((0, import_node_path35.join)(art, `research-${agent}.txt`)), "FS")]
   ];
@@ -27512,9 +27544,10 @@ async function adversarySendWith(topic, agent, provider, d) {
     log.error(`explore adversary-send: ${stateFile} exists; rm to retry`);
     return 1;
   }
-  const fsTag = lastTag(readIfExists((0, import_node_path35.join)(art, `research-${agent}.txt`)), "FS");
+  const vsTag = lastTag(readIfExists((0, import_node_path35.join)(art, `crossverify-${agent}.txt`)), "VS");
   const qsTag = lastTag(readIfExists((0, import_node_path35.join)(art, `openq-${agent}.txt`)), "QS");
-  const unsafe = fsTag === "timeout" || fsTag === "failed" ? `FS=${fsTag}` : qsTag === "timeout" || qsTag === "failed" ? `QS=${qsTag}` : null;
+  const fsTag = lastTag(readIfExists((0, import_node_path35.join)(art, `research-${agent}.txt`)), "FS");
+  const unsafe = vsTag === "timeout" || vsTag === "failed" ? `VS=${vsTag}` : qsTag === "timeout" || qsTag === "failed" ? `QS=${qsTag}` : fsTag === "timeout" || fsTag === "failed" ? `FS=${fsTag}` : null;
   if (unsafe) {
     atomicWrite(stateFile, "AS=skipped\n");
     log.warn(`explore adversary-send: ${agent} skipped \u2014 previous phase ended ${unsafe} (worker may still be busy; sending would clobber its inbox)`);
@@ -27636,6 +27669,9 @@ async function exploreWaitGateRun(rest) {
   const states = gateState(workers, key);
   for (const s of states) process.stdout.write(`${s.agent}	${s.status}
 `);
+  for (const a2 of gateAnomalies(workers, key)) {
+    log.warn(`explore wait-gate: ${a2.agent} is terminal via ${key}=${a2.value} \u2014 its ${phase} artifact may be missing`);
+  }
   return states.every((s) => s.status === "terminal") ? 0 : 1;
 }
 async function synthFinalRun(rest) {

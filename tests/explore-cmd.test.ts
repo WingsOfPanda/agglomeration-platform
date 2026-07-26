@@ -1407,3 +1407,97 @@ describe("explore contribution", () => {
     } finally { cleanup(); }
   });
 });
+
+describe("wait-liveness guard-chain (VS gap, 2026-07-26 spec)", () => {
+  it("adversary-send soft-skips (AS=skipped, no send) when crossverify ended VS=timeout", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "## Approaches\n1. A");
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+      writeFileSync(join(art, "openq-alpha.txt"), "OFFSET=0\nQS=ok\n");
+      writeFileSync(join(art, "crossverify-alpha.txt"), "OFFSET=0\nVS=timeout\n");
+      let sendCalled = false;
+      const rc = await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => { sendCalled = true; return 0; } });
+      expect(rc).toBe(0);
+      expect(sendCalled).toBe(false);
+      expect(readFileSync(join(art, "adversary-alpha.txt"), "utf8")).toBe("AS=skipped\n");
+    } finally { cleanup(); }
+  });
+  it("adversary-send proceeds when crossverify is VS=skipped (skipped never blocks)", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "landscape-draft.md"), "## Approaches\n1. A");
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+      writeFileSync(join(art, "crossverify-alpha.txt"), "VS=skipped\n");
+      let sendCalled = false;
+      const rc = await adversarySendWith("x", "alpha", "codex", { offsetFor: () => 4, send: async () => { sendCalled = true; return 0; } });
+      expect(rc).toBe(0);
+      expect(sendCalled).toBe(true);
+      expect(readFileSync(join(art, "adversary-alpha.txt"), "utf8")).toContain("OFFSET=4");
+    } finally { cleanup(); }
+  });
+  it("gap-send soft-skips (GS=skipped, no send) when crossverify ended VS=timeout", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "adversary-skip.txt"), "signals_passed: S1=false S2=true S3=true S4=true S5=true\n");
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+      writeFileSync(join(art, "crossverify-alpha.txt"), "OFFSET=0\nVS=timeout\n");
+      let sendCalled = false;
+      const rc = await gapSendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => { sendCalled = true; return 0; } });
+      expect(rc).toBe(0);
+      expect(sendCalled).toBe(false);
+      expect(readFileSync(join(art, "gap-alpha.txt"), "utf8")).toBe("GS=skipped\n");
+    } finally { cleanup(); }
+  });
+  it("signoff-send soft-skips (SS=skipped, no send) when crossverify ended VS=timeout", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+      writeFileSync(join(art, "crossverify-alpha.txt"), "OFFSET=0\nVS=timeout\n");
+      let sendCalled = false;
+      const rc = await signoffSendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => { sendCalled = true; return 0; } });
+      expect(rc).toBe(0);
+      expect(sendCalled).toBe(false);
+      expect(readFileSync(join(art, "signoff-alpha.txt"), "utf8")).toBe("SS=skipped\n");
+    } finally { cleanup(); }
+  });
+});
+
+describe("rebuttal-send latest-phase walk (AS=skipped falls through to VS)", () => {
+  it("soft-skips (RS=skipped, no send) when adversary was skipped over a VS=timeout crossverify", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
+      writeFileSync(join(art, "crossverify-alpha.txt"), "OFFSET=0\nVS=timeout\n");
+      writeFileSync(join(art, "adversary-alpha.txt"), "AS=skipped\n");
+      let sendCalled = false;
+      const rc = await rebuttalSendWith("x", "alpha", "codex", { offsetFor: () => 7, send: async () => { sendCalled = true; return 0; } });
+      expect(rc).toBe(0);
+      expect(sendCalled).toBe(false);
+      expect(readFileSync(join(art, "rebuttal-alpha.txt"), "utf8")).toBe("RS=skipped\n");
+    } finally { cleanup(); }
+  });
+  it("still soft-skips on a direct AS=timeout (pre-existing behavior preserved)", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "adversary-alpha.txt"), "OFFSET=0\nAS=timeout\n");
+      let sendCalled = false;
+      const rc = await rebuttalSendWith("x", "alpha", "codex", { offsetFor: () => 0, send: async () => { sendCalled = true; return 0; } });
+      expect(rc).toBe(0);
+      expect(sendCalled).toBe(false);
+      expect(readFileSync(join(art, "rebuttal-alpha.txt"), "utf8")).toBe("RS=skipped\n");
+    } finally { cleanup(); }
+  });
+});
