@@ -127,7 +127,10 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
         description="hub await lead round=$ROUND")
    ```
    The default turn budget is 4 hours (`AP_IMPLEMENT_TURN_TIMEOUT_S=14400`); override the env var
-   for unusually large or small tasks.
+   for unusually large or small tasks. Since 0.5.5 the budget is liveness-extended: while the
+   worker's pane stays alive the wait runs up to `AP_WAIT_EXTEND_MULT`× the budget (default 3,
+   so worst case 12h; set `AP_WAIT_EXTEND_MULT=1` for a hard cap) — a pane death still fails
+   fast regardless.
 3. On completion, read `TS=` from `$ART/turn-lead-<ROUND>.txt` (the **last** `TS=` line). Branch:
    - **`TS=ok`** → Stage 2.
    - **`TS=failed` / `TS=timeout`** → auto-retry **once**: if `RETRY==0`, set `RETRY=1`,
