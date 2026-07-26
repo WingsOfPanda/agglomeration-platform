@@ -3,14 +3,21 @@
 // probe as an injected function; this is the one place that binds it to the real tmux probe).
 import { outboxWaitSince, paneMetaRead, type OutboxEvent } from "./ipc.js";
 import { paneAlive } from "./tmux.js";
+import { envNum } from "./env.js";
 
 /** Drop-in replacement for the wait verbs' live `outboxWaitSince` call: identical signature, but with
  *  a pane-liveness escape hatch wired in. Reads the worker's pane id from pane.json once at wait
  *  start; if pane.json is absent the id is null and the wait degrades to the plain outbox-only poll
  *  (no behavior change). When the pane later vanishes with no terminal event, the wait returns a
- *  synthetic `error` event so the turn fails fast instead of blocking out the full turn budget. */
+ *  synthetic `error` event so the turn fails fast instead of blocking out the full turn budget.
+ *  Conversely, a pane not confirmed dead at budget expiry extends the wait up to
+ *  AP_WAIT_EXTEND_MULT x the budget — a live worker outrunning its budget is mid-turn, not dead.
+ *  Knob semantics: default 3; set 1 to DISABLE (envNum's `|| def` means 0/unset also fall back
+ *  to 3, so 1 is the only off-switch); clamped to <=10 so a typo cannot yield a multi-day wait. */
 export function liveOutboxWait(
   i: string, m: string, t: string, offset: number, events: string[], timeoutSec: number,
 ): Promise<OutboxEvent | null> {
-  return outboxWaitSince(i, m, t, offset, events, timeoutSec, { paneAlive, paneId: paneMetaRead(i, m, t) });
+  return outboxWaitSince(i, m, t, offset, events, timeoutSec, {
+    paneAlive, paneId: paneMetaRead(i, m, t), extendMult: envNum("AP_WAIT_EXTEND_MULT", 3),
+  });
 }

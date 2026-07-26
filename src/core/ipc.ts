@@ -134,13 +134,21 @@ export interface WaitLivenessOpts {
   paneAlive: (pane: string) => Promise<boolean>;
   paneId: string | null;   // the worker's pane id (pane.json); null (absent) disables the check
   everyS?: number;         // liveness poll cadence in seconds (default 15)
+  extendMult?: number;     // budget extension cap while the pane stays alive (default 1 = off; liveOutboxWait wires 3)
 }
 
 export async function outboxWaitSince(i: string, m: string, t: string, offset: number, events: string[], timeoutSec: number, live?: WaitLivenessOpts): Promise<OutboxEvent | null> {
   const path = outboxPath(i, m, t);
   const everyS = live?.everyS ?? 15;
+  // Liveness-extended budget: a pane that is ALIVE at budget expiry is a worker mid-turn, not a
+  // dead one — the 2026-07-26 forensics review found zero real failures among all recorded wait
+  // timeouts. With liveness opts present, keep polling up to extendMult x the base budget; the
+  // dead-pane check below still governs throughout, so a pane death during the extension fails
+  // fast as before. Without liveness opts the behavior is unchanged (hard stop at timeoutSec).
+  const extendMult = live?.paneId ? Math.min(10, Math.max(1, live.extendMult ?? 1)) : 1;
+  const capSec = timeoutSec * extendMult;
   let deadPolls = 0;
-  for (let n = 0; n < timeoutSec; n++) {
+  for (let n = 0; n < capSec; n++) {
     const hit = lastMatch(readFrom(path, offset), events);
     if (hit) return hit;   // a terminal event in the outbox always wins over a liveness check
     if (live && live.paneId && n > 0 && n % everyS === 0) {
@@ -148,6 +156,9 @@ export async function outboxWaitSince(i: string, m: string, t: string, offset: n
       try { alive = await live.paneAlive(live.paneId); } catch { alive = false; } // tmux server gone -> dead
       if (alive) deadPolls = 0;
       else if (++deadPolls >= 2) return { event: "error", note: "pane-died", ts: isoUtc() };
+    }
+    if (n === timeoutSec && capSec > timeoutSec) {
+      log.warn(`outbox-wait: ${i} budget ${timeoutSec}s elapsed, pane not confirmed dead — extending up to ${extendMult}x`);
     }
     await sleep(1000);
   }

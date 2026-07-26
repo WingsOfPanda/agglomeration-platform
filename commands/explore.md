@@ -388,10 +388,10 @@ Each `adversary-send` renders that worker's adversary prompt against `landscape-
 the pre-send `OFFSET=` into `$ART/adversary-<agent>.txt`, and nudges the pane.
 
 The verb also assigns each worker a DISTINCT primary attack lens (by list order) and lists its
-peers' raw `findings-<agent>.md` paths in the prompt. A worker whose research ended
-`FS=timeout`/`FS=failed` — or whose Phase 4b relay turn ended `QS=timeout`/`QS=failed` — is
-soft-skipped (`AS=skipped`, no send): dispatching to a possibly-still-churning worker would
-clobber its single-slot inbox.
+peers' raw `findings-<agent>.md` paths in the prompt. A worker whose crossverify, relay, or
+research turn ended `timeout`/`failed` (checked `VS` → `QS` → `FS`) is soft-skipped
+(`AS=skipped`, no send): dispatching to a possibly-still-churning worker would clobber its
+single-slot inbox.
 
 When Phase 5b's `annotations.json` recorded solo citations (`unverified` / `approaches-flagged`
 items), each adversary prompt additionally lists those tokens under a `Priority targets` block —
@@ -442,7 +442,7 @@ never open-ended:
    each Material finding to its originating worker via diff-bucket citation overlap (a finding
    whose tokens match zero buckets or tie across two stays unattributed — you weigh it alone in
    Phase 8, as today), and soft-skips (`RS=skipped`, no send) a worker with nothing attributed
-   to it or whose adversary turn ended `AS=timeout`/`failed`. A second `rebuttal-send` for the
+   to it or whose latest phase (AS→VS→QS→FS walk) ended `timeout`/`failed`. A second `rebuttal-send` for the
    same worker returns rc 1 — the one-turn cap is state-file existence; NEVER `rm` a rebuttal
    state file to force a second round.
 2. **Wait:** read the CURRENT list rows (same grep), then issue one background-await Bash call per row:
@@ -594,7 +594,7 @@ findings — a misquote/misattribution check, never a re-litigation, never new c
 
    The verb carries the final doc's `## Conclusion`, the worker's own solo-bucket lines, and
    diff.md's Agreed section; it soft-skips (`SS=skipped`, no send) a worker whose latest phase
-   (GS→RS→AS→QS→FS walk) ended `timeout`/`failed`. A second signoff-send for the same worker
+   (GS→RS→AS→VS→QS→FS walk) ended `timeout`/`failed`. A second signoff-send for the same worker
    returns rc 1 — the one-turn cap is state-file existence; NEVER `rm` a signoff state file to
    force a second round.
 2. **Wait:** read the CURRENT list rows, then issue one background-await Bash call per row:
