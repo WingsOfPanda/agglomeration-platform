@@ -160,6 +160,24 @@ export function gateState(
   });
 }
 
+/** Terminal-but-anomalous workers for the wait gate's stderr warning: `.done` exists and the
+ *  LAST `<key>=` line is `timeout` or `failed` — a state the run treats as terminal even though
+ *  the phase artifact is likely missing (the 2026-07-26 review's silent-degrade class). Pure,
+ *  same inputs as gateState; callers render the warning. */
+export function gateAnomalies(
+  workers: Array<{ agent: string; doneExists: boolean; stateText: string | null }>,
+  key: "FS" | "VS" | "AS" | "QS" | "RS" | "GS" | "SS",
+): Array<{ agent: string; value: string }> {
+  const out: Array<{ agent: string; value: string }> = [];
+  for (const p of workers) {
+    if (!p.doneExists) continue;
+    const matches = (p.stateText ?? "").split("\n").filter((l) => l.startsWith(`${key}=`));
+    const last = matches.length ? matches[matches.length - 1].slice(key.length + 1).trim() : null;
+    if (last === "timeout" || last === "failed") out.push({ agent: p.agent, value: last });
+  }
+  return out;
+}
+
 /** Verify-phase prompt body (port of config/prompt-templates/consult/verify.md, rebranded).
  *  Numbers the items (nl -ba -w1 -s'. '). No END_OF_INSTRUCTION/done-line — inboxWrite appends them. */
 export function composeVerifyPrompt(itemsText: string, verifyPath: string): string {

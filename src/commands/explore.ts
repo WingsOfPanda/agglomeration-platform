@@ -23,7 +23,7 @@ import { computeSignals, renderSkipRecord, type Decision } from "../core/explore
 import { buildAnnotations } from "../core/exploreAnnotate.js";
 import { outboxOffset, outboxPath, TERMINAL_EVENTS, type OutboxEvent } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
-import { parseLatestOffset, scaledTimeout, researchState, verifyState, gateState, recordWaitOutcome, composeVerifyPrompt } from "../core/designTurn.js";
+import { parseLatestOffset, scaledTimeout, researchState, verifyState, gateState, gateAnomalies, recordWaitOutcome, composeVerifyPrompt } from "../core/designTurn.js";
 import { composeExploreResearchPrompt, composeAdversaryPrompt, composeGapPrompt, composeSignoffPrompt, litGuidance, ADVERSARY_LENSES, researchLens } from "../core/exploreTurn.js";
 import { run as sendRun } from "./send.js";
 import { run as spawnRun } from "./spawn.js";
@@ -441,10 +441,19 @@ export async function rebuttalSendWith(topic: string, agent: string, provider: s
   const stateFile = join(art, `rebuttal-${agent}.txt`);
   if (existsSync(stateFile)) { log.error(`explore rebuttal-send: ${stateFile} exists — one rebuttal round per worker (the one-turn cap)`); return 1; }
 
-  const asTag = lastTag(readIf(join(art, `adversary-${agent}.txt`)), "AS"); // timeout-dispatch guard first
-  if (asTag === "timeout" || asTag === "failed") {
+  // Latest-phase guard: first non-skipped tag among AS -> VS -> QS -> FS decides safety. An
+  // AS=skipped produced by the adversary-send VS guard must fall through to the state that
+  // caused it — checking AS alone would clobber a worker still mid-crossverify.
+  const tags: Array<[string, string | null]> = [
+    ["AS", lastTag(readIf(join(art, `adversary-${agent}.txt`)), "AS")],
+    ["VS", lastTag(readIf(join(art, `crossverify-${agent}.txt`)), "VS")],
+    ["QS", lastTag(readIf(join(art, `openq-${agent}.txt`)), "QS")],
+    ["FS", lastTag(readIf(join(art, `research-${agent}.txt`)), "FS")],
+  ];
+  const latest = tags.find(([, v]) => v !== null && v !== "skipped");
+  if (latest && (latest[1] === "timeout" || latest[1] === "failed")) {
     atomicWrite(stateFile, "RS=skipped\n");
-    log.warn(`explore rebuttal-send: ${agent} skipped — adversary ended AS=${asTag} (worker may still be busy; sending would clobber its inbox)`);
+    log.warn(`explore rebuttal-send: ${agent} skipped — latest phase ended ${latest[0]}=${latest[1]} (worker may still be busy; sending would clobber its inbox)`);
     return 0;
   }
 
@@ -528,10 +537,12 @@ export async function gapSendWith(topic: string, agent: string, provider: string
     return 0;
   }
 
-  // Latest-phase guard: first non-skipped tag among RS -> AS -> FS decides safety.
+  // Latest-phase guard: first non-skipped tag among RS -> AS -> VS -> QS -> FS decides safety.
   const tags: Array<[string, string | null]> = [
     ["RS", lastTag(readIf(join(art, `rebuttal-${agent}.txt`)), "RS")],
     ["AS", lastTag(readIf(join(art, `adversary-${agent}.txt`)), "AS")],
+    ["VS", lastTag(readIf(join(art, `crossverify-${agent}.txt`)), "VS")],
+    ["QS", lastTag(readIf(join(art, `openq-${agent}.txt`)), "QS")],
     ["FS", lastTag(readIf(join(art, `research-${agent}.txt`)), "FS")],
   ];
   const latest = tags.find(([, v]) => v !== null && v !== "skipped");
@@ -628,11 +639,12 @@ export async function signoffSendWith(topic: string, agent: string, provider: st
   const stateFile = join(art, `signoff-${agent}.txt`);
   if (existsSync(stateFile)) { log.error(`explore signoff-send: ${stateFile} exists — one sign-off turn per worker (the one-turn cap)`); return 1; }
 
-  // Latest-phase guard: first non-skipped tag among GS -> RS -> AS -> QS -> FS decides safety.
+  // Latest-phase guard: first non-skipped tag among GS -> RS -> AS -> VS -> QS -> FS decides safety.
   const tags: Array<[string, string | null]> = [
     ["GS", lastTag(readIf(join(art, `gap-${agent}.txt`)), "GS")],
     ["RS", lastTag(readIf(join(art, `rebuttal-${agent}.txt`)), "RS")],
     ["AS", lastTag(readIf(join(art, `adversary-${agent}.txt`)), "AS")],
+    ["VS", lastTag(readIf(join(art, `crossverify-${agent}.txt`)), "VS")],
     ["QS", lastTag(readIf(join(art, `openq-${agent}.txt`)), "QS")],
     ["FS", lastTag(readIf(join(art, `research-${agent}.txt`)), "FS")],
   ];
@@ -890,10 +902,12 @@ export async function adversarySendWith(topic: string, agent: string, provider: 
   const stateFile = join(art, `adversary-${agent}.txt`);
   if (existsSync(stateFile)) { log.error(`explore adversary-send: ${stateFile} exists; rm to retry`); return 1; }
 
-  const fsTag = lastTag(readIf(join(art, `research-${agent}.txt`)), "FS");
+  const vsTag = lastTag(readIf(join(art, `crossverify-${agent}.txt`)), "VS"); // latest phase first
   const qsTag = lastTag(readIf(join(art, `openq-${agent}.txt`)), "QS");
-  const unsafe = fsTag === "timeout" || fsTag === "failed" ? `FS=${fsTag}`
-    : qsTag === "timeout" || qsTag === "failed" ? `QS=${qsTag}` : null;
+  const fsTag = lastTag(readIf(join(art, `research-${agent}.txt`)), "FS");
+  const unsafe = vsTag === "timeout" || vsTag === "failed" ? `VS=${vsTag}`
+    : qsTag === "timeout" || qsTag === "failed" ? `QS=${qsTag}`
+    : fsTag === "timeout" || fsTag === "failed" ? `FS=${fsTag}` : null;
   if (unsafe) {
     atomicWrite(stateFile, "AS=skipped\n");
     log.warn(`explore adversary-send: ${agent} skipped — previous phase ended ${unsafe} (worker may still be busy; sending would clobber its inbox)`);
@@ -981,6 +995,9 @@ export async function exploreWaitGateRun(rest: string[]): Promise<number> {
   });
   const states = gateState(workers, key);
   for (const s of states) process.stdout.write(`${s.agent}\t${s.status}\n`);
+  for (const a of gateAnomalies(workers, key)) {
+    log.warn(`explore wait-gate: ${a.agent} is terminal via ${key}=${a.value} — its ${phase} artifact may be missing`);
+  }
   return states.every((s) => s.status === "terminal") ? 0 : 1;
 }
 

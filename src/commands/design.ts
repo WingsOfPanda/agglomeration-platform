@@ -20,7 +20,7 @@ import { pickAgents } from "../core/agents.js";
 import { outboxOffset, outboxPath, TERMINAL_EVENTS, type OutboxEvent } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
 import { agentConsultValidated, consultTimeout, agentTimeoutMultiplier } from "../core/contracts.js";
-import { composeResearchPrompt, researchState, parseLatestOffset, scaledTimeout, composeVerifyPrompt, verifyState, composeDrilldownPrompt, drilldownState, gateState, recordWaitOutcome } from "../core/designTurn.js";
+import { composeResearchPrompt, researchState, parseLatestOffset, scaledTimeout, composeVerifyPrompt, verifyState, composeDrilldownPrompt, drilldownState, gateState, gateAnomalies, recordWaitOutcome } from "../core/designTurn.js";
 import { envNum } from "../core/env.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { diffFindings, type DiffPart } from "../core/designDiff.js";
@@ -433,6 +433,9 @@ export async function waitGateRun(rest: string[]): Promise<number> {
   });
   const states = gateState(workers, key);
   for (const s of states) process.stdout.write(`${s.agent}\t${s.status}\n`);
+  for (const a of gateAnomalies(workers, key)) {
+    log.warn(`design wait-gate: ${a.agent} is terminal via ${key}=${a.value} — its ${phase} artifact may be missing`);
+  }
   return states.every((s) => s.status === "terminal") ? 0 : 1;
 }
 
