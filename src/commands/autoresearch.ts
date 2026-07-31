@@ -1,13 +1,13 @@
 // /ap:autoresearch CLI verbs. Ports deep-research-init.sh
 // (slug/codex-gate/flags/scaffolding) + the deep-research.md Phase 0-3 surface.
 // Phase C: experiment-send (dispatch ONE experiment to a persistent codex worker).
-import { accessSync, appendFileSync, closeSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, closeSync, constants as fsConstants, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { join, relative, resolve } from "node:path";
+import { join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile, kvParse } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
-import { readIfExists, readIfExistsOrNull, readOr } from "../core/fsread.js";
+import { readIfExists, readIfExistsOrNull, readJsonOr, readOr } from "../core/fsread.js";
 import { envNum } from "../core/env.js";
 import { splitNonCommentLines } from "../core/text.js";
 import { archiveTopic, isoUtc } from "../core/archive.js";
@@ -20,9 +20,12 @@ import { coverageRow, COVERAGE_TSV_HEADER, type CoverageRow } from "../core/auto
 import { lineageRow, LINEAGE_TSV_HEADER } from "../core/autoresearchLineage.js";
 import { parseState, mergeState, reconcileFromOutbox, reconcileFromOutboxSince, readHaltFlag } from "../core/autoresearchState.js";
 import { checkCompletion, checkTimeBudget } from "../core/autoresearchComplete.js";
-import { normalizeResult, type ResultJson } from "../core/autoresearchResult.js";
 import { renderSessionSummary, type StatusRow, type EventRow } from "../core/autoresearchSummary.js";
-import { finalizePhase, parseHardConstraints } from "../core/autoresearchFinalize.js";
+import {
+  finalizePhase, listExpDirs, normalizeResults, pruneIntermediate, linkPaneArtifacts, computeSizeWarnings,
+  computeAuditWarnings, writeFinalizeLessons, renderWarningLines, GIB,
+  type AutoresearchFinalizeDeps,
+} from "../core/autoresearchFinalize.js";
 import { buildStatusBrief, type WorkerBrief } from "../core/autoresearchBrief.js";
 import { initScanState, monitorScan, type MonitorScanState } from "../core/autoresearchMonitor.js";
 import {
@@ -36,16 +39,15 @@ import { frameMetric, defaultTimeBudget } from "../core/autoresearchArbiter.js";
 import { parseVerifyBlock, planVerify, checkVerify, recomputedFromOutput, verificationRow, VERIFICATION_TSV_HEADER, type VerifyManifest, type VerificationRow } from "../core/autoresearchVerify.js";
 import { classifyInspect, inspectionRow, parseInspections, INSPECTION_TSV_HEADER, type InspectVerdict, type InspectionRow } from "../core/autoresearchInspect.js";
 import { parseVerdicts } from "../core/autoresearchInfeasible.js";
-import { metricFamilyOf, lessonVerdictOf, policyFromMetric, buildLessonDraft, type LessonDraft } from "../core/autoresearchLessonMap.js";
-import { writeLessonsAtFinalize, retrieveForDispatch, liveMemoryIo, type MemoryIo } from "../core/autoresearchMemoryStore.js";
-import { type LessonVerdict } from "../core/autoresearchMemory.js";
+import { metricFamilyOf, policyFromMetric } from "../core/autoresearchLessonMap.js";
+import { retrieveForDispatch, liveMemoryIo, type MemoryIo } from "../core/autoresearchMemoryStore.js";
 import { buildCorpusDigest, leaderMetricOf, type CorpusEntry } from "../core/autoresearchCorpus.js";
 import { agentBinary, consultTimeout } from "../core/contracts.js";
 import { inboxWrite, inboxPath, outboxPath, outboxOffset, paneMetaRead, resolveModel, parseEvent } from "../core/ipc.js";
 import { ledgerPath, controllerGenPath, appendEvent, replayLedger, readGen, renderGen, type LedgerEventKind } from "../core/autoresearchLedger.js";
 import { paneSend, killNow, paneAlive, livePanes } from "../core/tmux.js";
 import { haveCmd } from "../core/deps.js";
-import { spawnListArg, parsePanesFile, spawnResultsTsv, spawnTally, type SpawnResult } from "../core/design.js";
+import { spawnListArg, parsePanesFile, spawnResultsTsv, spawnTally, type SpawnResult } from "../core/roster.js";
 import { pickAgents } from "../core/agents.js";
 import { repoRoot, pluginRoot, globalRoot, repoHash } from "../core/paths.js";
 import { run as spawnRun } from "./spawn.js";
@@ -57,13 +59,6 @@ type PathOpts = { home?: string; cwd?: string };
 
 /** Default line-writer used wherever a deps.stdout override is absent. */
 const stdoutLine = (l: string): void => { process.stdout.write(l + "\n"); };
-
-/** Read + JSON.parse a file, returning `fallback` when it is absent or unparseable — the one
- *  guarded parse this file's result.json / audit.json / manifest reads share. */
-function readJsonOr<T>(path: string, fallback: T | null): T | null {
-  if (!existsSync(path)) return fallback;
-  try { return JSON.parse(readFileSync(path, "utf8")) as T; } catch { return fallback; }
-}
 
 type LedgerEventArgs = { gen: number; ts: string; kind: LedgerEventKind; agent?: string; exp_id?: string; data?: Record<string, unknown> };
 
@@ -1139,269 +1134,14 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
 // size + audit warnings, and a wholesale session-summary.md re-render. ap
 // adaptations: NO active-marker lifecycle (omit the rm -f active-<sid>.txt step;
 // hook.ts is a no-op), and session-summary.md is the FULL renderSessionSummary.
+// The steps themselves live in core/autoresearchFinalize.ts; what stays here is the
+// sequencing plus the two per-worker FS gathers the summary render needs.
 
-export interface AutoresearchFinalizeDeps {
-  now(): string;
-  keepIntermediate?: boolean;
-  sizeWarnGb?: number;
-  stdout?: (l: string) => void;
-  opts?: PathOpts;
-  // M2 cross-run memory WRITE seams (best-effort tail step). All optional; the live
-  // path leaves them undefined so the node-fs defaults apply. A test injects a temp
-  // store root (+ optionally a throwing io) to exercise the write without touching ~/.ap.
-  memoryIo?: MemoryIo;
-  memoryStoreRoot?: string;
-  repoHash?: string;
-}
-
-const GIB = 1073741824;
-
-/** List the exp-NNN dirs directly under a worker's experiments root (ENOENT-safe). */
-function listExpDirs(expsRoot: string): string[] {
-  try {
-    return readdirSync(expsRoot, { withFileTypes: true })
-      .filter((e) => e.isDirectory() && EXP_ID_RE.test(e.name))
-      .map((e) => e.name).sort();
-  } catch { return []; }
-}
-
-/** Recursive byte size (sum of regular-file sizes) under dir. */
-function dirByteSize(dir: string): number {
-  let total = 0;
-  let entries: import("node:fs").Dirent[];
-  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return 0; }
-  for (const e of entries) {
-    const p = join(dir, e.name);
-    if (e.isDirectory()) total += dirByteSize(p);
-    else if (e.isFile()) { try { total += statSync(p).size; } catch { /* skip */ } }
-  }
-  return total;
-}
-
-/** Count regular files at depth 1 of dir. */
-function fileCountDepth1(dir: string): number {
-  try {
-    return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile()).length;
-  } catch { return 0; }
-}
-
-/** Step 4: enforce status/metric_value joint validity per exp (normalize_result). */
-function normalizeResults(art: string, agents: string[]): void {
-  for (const agent of agents) {
-    const expsRoot = experimentsDir(art, agent);
-    for (const expId of listExpDirs(expsRoot)) {
-      const resultPath = join(expsRoot, expId, "result.json");
-      const parsed = readJsonOr<ResultJson>(resultPath, null);
-      if (parsed === null) continue;
-      const norm = normalizeResult(parsed);
-      if (norm.status !== parsed.status || norm.metric_value !== parsed.metric_value) {
-        atomicWrite(resultPath, JSON.stringify(norm));
-        log.info(`normalize: ${agent}/${expId} -> ${norm.status}`);
-      }
-    }
-  }
-}
-
-/** Step 5: prune intermediate checkpoints (caller guards with !keep). */
-function pruneIntermediate(art: string, agents: string[]): void {
-  for (const agent of agents) {
-    const expsRoot = experimentsDir(art, agent);
-    for (const expId of listExpDirs(expsRoot)) {
-      const expDir = join(expsRoot, expId);
-      const r = readJsonOr<{ checkpoint_path?: unknown }>(join(expDir, "result.json"), null);
-      if (r === null) continue;
-      const keptRel = r.checkpoint_path != null ? String(r.checkpoint_path) : "";
-      if (!keptRel || keptRel === "null") continue;
-      // Resolve relative to the exp dir; reject paths that escape it.
-      const keptAbs = resolve(expDir, keptRel);
-      if (keptAbs !== expDir && !keptAbs.startsWith(expDir + "/")) {
-        log.warn(`prune: checkpoint_path escapes exp dir: ${keptRel} (in ${expDir}); skipping`);
-        continue;
-      }
-      let entries: string[];
-      try { entries = readdirSync(expDir); } catch { continue; }
-      for (const name of entries) {
-        if (!name.endsWith(".pt")) continue;
-        const pt = join(expDir, name);
-        if (pt === keptAbs) continue;
-        try { if (statSync(pt).isFile()) rmSync(pt, { force: true }); } catch { /* best-effort */ }
-      }
-    }
-  }
-}
-
-/** Step 6: link pane artifacts (relative symlinks of outbox/inbox into the art tree). */
-function linkPaneArtifacts(art: string, agents: string[], topic: string): void {
-  for (const agent of agents) {
-    const model = resolveModel(agent, topic);
-    if (!model) continue;
-    const targetDir = workerStateDir(art, agent);
-    mkdirSync(targetDir, { recursive: true });
-    const paneFiles: Array<[string, string]> = [
-      ["outbox.jsonl", outboxPath(agent, model, topic)],
-      ["inbox.md", inboxPath(agent, model, topic)],
-    ];
-    for (const [name, src] of paneFiles) {
-      if (!existsSync(src)) { log.warn(`link_pane_artifacts: pane file missing for ${agent}: ${name}`); continue; }
-      const linkPath = join(targetDir, name);
-      const rel = relative(targetDir, src);
-      try {
-        try { if (lstatSync(linkPath)) unlinkSync(linkPath); } catch { /* nothing to replace */ }
-        symlinkSync(rel, linkPath);
-      } catch { /* best-effort */ }
-    }
-  }
-}
-
-/** Step 7: compute size warnings (post-prune); TRUNCATE warnings.txt first. */
-function computeSizeWarnings(art: string, agents: string[], threshold: number): void {
-  const warningsPath = join(art, "warnings.txt");
-  const sizeLines: string[] = [];
-  for (const agent of agents) {
-    const expsRoot = experimentsDir(art, agent);
-    for (const expId of listExpDirs(expsRoot)) {
-      const expDir = join(expsRoot, expId);
-      const bytes = dirByteSize(expDir);
-      if (bytes >= threshold) {
-        const gb = (bytes / GIB).toFixed(1);
-        sizeLines.push(`size_warn\t${agent}/${expId}\t${gb}\t${fileCountDepth1(expDir)}`);
-      }
-    }
-  }
-  atomicWrite(warningsPath, sizeLines.length ? sizeLines.join("\n") + "\n" : "");
-}
-
-/** Step 8: audit diff — append audit_warn rows for prompt/audit knob mismatches (AFTER size). */
-function computeAuditWarnings(art: string, agents: string[], warningsPath: string): void {
-  const auditLines: string[] = [];
-  for (const agent of agents) {
-    const expsRoot = experimentsDir(art, agent);
-    for (const expId of listExpDirs(expsRoot)) {
-      const expDir = join(expsRoot, expId);
-      const promptMd = join(expDir, "prompt.md");
-      const auditJson = join(expDir, "audit.json");
-      if (!existsSync(promptMd)) continue;
-      const audit = readJsonOr<Record<string, unknown>>(auditJson, null);
-      if (audit === null) continue;
-      for (const { key, value } of parseHardConstraints(readFileSync(promptMd, "utf8"))) {
-        const actual = audit[key];
-        if (actual == null || String(actual) === "null") continue;
-        if (String(value) !== String(actual)) {
-          auditLines.push(`audit_warn\t${agent}/${expId}\t${key}\tprompt=${value}  actual=${String(actual)}`);
-        }
-      }
-    }
-  }
-  if (auditLines.length) {
-    const existing = readOr(warningsPath);
-    atomicWrite(warningsPath, existing + auditLines.join("\n") + "\n");
-  }
-}
-
-/**
- * M2 — finalize-time cross-run memory WRITE (best-effort, NON-FATAL).
- *
- * Walks `agents x listExpDirs` (mirroring computeAuditWarnings), turning each ok
- * experiment whose A1/C1 verifier confirmed a positive into a lesson draft, then
- * does ONE governed `writeLessonsAtFinalize` per metric family. EVERY error is
- * swallowed: this helper can NEVER throw into finalize, change its return code,
- * or touch any existing finalize output. An unknown metric family or an empty
- * draft set is a silent no-op. The whole body is inside one try/catch.
- */
-function writeFinalizeLessons(art: string, agents: string[], deps: AutoresearchFinalizeDeps): void {
-  try {
-    const thresholds = parseMetricMd(readOr(join(art, "metric.md")));
-    const family = metricFamilyOf(thresholds.primaryMetric);
-    if (!family) return; // unknown / outside taxonomy -> skip (fail-closed, no lessons)
-
-    const direction: "maximize" | "minimize" = thresholds.direction ?? "maximize";
-    const a1 = parseVerdicts(readOr(join(art, "verification.tsv")));
-    const c1 = parseInspections(readOr(join(art, "inspection.tsv")));
-    const now = deps.now();
-
-    const drafts: LessonDraft[] = [];
-    const verdicts: LessonVerdict[] = [];
-
-    for (const agent of agents) {
-      const expsRoot = experimentsDir(art, agent);
-      for (const expId of listExpDirs(expsRoot)) {
-        const expDir = join(expsRoot, expId);
-        const r = readJsonOr<ResultJson>(join(expDir, "result.json"), null);
-        if (r === null) continue;
-        if (r.status !== "ok" || r.metric_value == null) continue;
-
-        const key = `${agent}/${expId}`;
-        const verdict = lessonVerdictOf(a1[key], c1[key]);
-        if (!verdict) continue; // not a confirmed positive -> no lesson
-
-        // Resolve the parent (baseline) metric from this exp's lineage.txt parent_id.
-        let parentMetric: number | null = null;
-        const parentId = (parseState(readOr(join(expDir, "lineage.txt"))).parent_id ?? "").trim();
-        if (parentId) {
-          const pr = readJsonOr<ResultJson>(join(expsRoot, parentId, "result.json"), null);   // absent/garbled -> rootless draft
-          if (pr && pr.metric_value != null) parentMetric = pr.metric_value;
-        }
-
-        // Operator recorded at dispatch (phase-A wiring); absent file keeps the
-        // improve/draft default inside buildLessonDraft.
-        const operator = (parseState(readOr(join(expDir, "operator.txt"))).operator ?? "").trim() || undefined;
-
-        drafts.push(buildLessonDraft({
-          approachLabel: r.approach_label,
-          metricName: r.metric_name,
-          metricValue: r.metric_value,
-          parentMetric,
-          direction,
-          family,
-          operator,
-          runId: expId,   // result.json has no run_id; the exp-id is the per-run identity
-          expId,
-          verdict,
-          createdTs: now,
-        }));
-        verdicts.push(verdict);
-      }
-    }
-
-    if (!drafts.length) return;
-
-    writeLessonsAtFinalize(deps.memoryIo ?? liveMemoryIo, {
-      storeRoot: deps.memoryStoreRoot ?? join(globalRoot(), "autoresearch-memory"),
-      repoHash: deps.repoHash ?? repoHash(),
-      metricFamily: family,
-      drafts,
-      verdicts,
-      policy: policyFromMetric(thresholds),
-      now,
-    });
-  } catch (e) {
-    // best-effort: a memory-write failure must NEVER fail finalize.
-    log.error(`finalize: lesson-write skipped (best-effort): ${String(e)}`);
-  }
-}
-
-export async function finalizeWith(args: string[], deps: AutoresearchFinalizeDeps): Promise<number> {
-  const opts = deps.opts;
-  // Argument parse: finalize [--keep-intermediate] <topic>.
-  let keep = deps.keepIntermediate ?? false;
-  let rest = args;
-  if (rest[0] === "--keep-intermediate") { keep = true; rest = rest.slice(1); }
-  if (rest.length !== 1 || rest[0].startsWith("--")) {
-    log.error("usage: autoresearch finalize [--keep-intermediate] <topic>"); return 2;
-  }
-  const topic = rest[0];
-
-  // 1. art dir must exist.
-  const art = autoresearchArtDir(topic, opts);
-  if (!existsSync(art) || !statSync(art).isDirectory()) {
-    log.error(`finalize: art-dir missing: ${art}`); return 1;
-  }
-
-  // Workers list (one agent per non-blank line). Used in steps 2 + 9.
-  const workersFile = join(art, "workers.txt");
-  const agents = existsSync(workersFile) ? splitNonCommentLines(readFileSync(workersFile, "utf8")) : [];
-
-  // 2. Per-worker reconcile + phase normalization.
+/** Step 2: per-worker reconcile + phase normalization. (a) replays the PANE outbox tail past the
+ *  liveness cursor, then (b) applies the finalize phase case-map. NOTE the tail slice is hand-rolled
+ *  here and NOT reconcileFromOutboxSince — that helper additionally guards a SHRUNK outbox. finalize
+ *  runs once at wind-down; the divergence is known and deliberately left as-is. */
+function reconcileWorkerPhases(art: string, agents: string[], topic: string): void {
   for (const agent of agents) {
     const stateDir = workerStateDir(art, agent);
     const stateTxt = join(stateDir, "state.txt");
@@ -1428,6 +1168,72 @@ export async function finalizeWith(args: string[], deps: AutoresearchFinalizeDep
     const np = finalizePhase(phase);
     if (np) atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: np }));
   }
+}
+
+/** Step 9 (gather): one StatusRow per worker off its state.txt; a worker with no state file still
+ *  gets a row, all-"?" — the summary lists the roster, never a subset of it. */
+function gatherStatusRows(art: string, agents: string[]): StatusRow[] {
+  const statusRows: StatusRow[] = [];
+  for (const agent of agents) {
+    const stateTxt = join(workerStateDir(art, agent), "state.txt");
+    if (existsSync(stateTxt)) {
+      const kv = parseState(readOr(stateTxt));
+      statusRows.push({
+        agent,
+        phase: kv.phase ?? "?",
+        current: kv.current_exp_id ?? "",
+        lastTs: kv.last_event_ts ?? "?",
+        lastEvent: kv.last_event ?? "?",
+      });
+    } else {
+      statusRows.push({ agent, phase: "?", current: "", lastTs: "?", lastEvent: "?" });
+    }
+  }
+  return statusRows;
+}
+
+/** Step 9 (gather): tail-10 of EACH worker's PANE outbox, merged + sorted desc by ts, capped 10. */
+function gatherRecentEvents(agents: string[], topic: string): EventRow[] {
+  const allEvents: EventRow[] = [];
+  for (const agent of agents) {
+    const model = resolveModel(agent, topic);
+    if (!model) continue;
+    const ob = outboxPath(agent, model, topic);
+    if (!existsSync(ob)) continue;
+    const lines = readOr(ob).split("\n").filter((l) => l.trim() !== "").slice(-10);
+    for (const line of lines) {
+      const o = parseEvent(line);
+      if (o === null) continue;   // skip non-JSON
+      allEvents.push({ ts: o.ts != null ? String(o.ts) : "", agent, event: o.event != null ? String(o.event) : "" });
+    }
+  }
+  allEvents.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
+  return allEvents.slice(0, 10);
+}
+
+export async function finalizeWith(args: string[], deps: AutoresearchFinalizeDeps): Promise<number> {
+  const opts = deps.opts;
+  // Argument parse: finalize [--keep-intermediate] <topic>.
+  let keep = deps.keepIntermediate ?? false;
+  let rest = args;
+  if (rest[0] === "--keep-intermediate") { keep = true; rest = rest.slice(1); }
+  if (rest.length !== 1 || rest[0].startsWith("--")) {
+    log.error("usage: autoresearch finalize [--keep-intermediate] <topic>"); return 2;
+  }
+  const topic = rest[0];
+
+  // 1. art dir must exist.
+  const art = autoresearchArtDir(topic, opts);
+  if (!existsSync(art) || !statSync(art).isDirectory()) {
+    log.error(`finalize: art-dir missing: ${art}`); return 1;
+  }
+
+  // Workers list (one agent per non-blank line). Used in steps 2 + 9.
+  const workersFile = join(art, "workers.txt");
+  const agents = existsSync(workersFile) ? splitNonCommentLines(readFileSync(workersFile, "utf8")) : [];
+
+  // 2. Per-worker reconcile + phase normalization.
+  reconcileWorkerPhases(art, agents, topic);
 
   // 3. (OMIT active-marker removal — ap has no active-marker lifecycle.)
 
@@ -1476,22 +1282,7 @@ export async function finalizeWith(args: string[], deps: AutoresearchFinalizeDep
       ? `reimpl\t${c[1]}/${c[0]}\tnot-reproduced\t${c[3] ?? ""}` : null);
 
   // 9. render session-summary.md (FULL re-render; wholesale atomic replace).
-  const statusRows: StatusRow[] = [];
-  for (const agent of agents) {
-    const stateTxt = join(workerStateDir(art, agent), "state.txt");
-    if (existsSync(stateTxt)) {
-      const kv = parseState(readOr(stateTxt));
-      statusRows.push({
-        agent,
-        phase: kv.phase ?? "?",
-        current: kv.current_exp_id ?? "",
-        lastTs: kv.last_event_ts ?? "?",
-        lastEvent: kv.last_event ?? "?",
-      });
-    } else {
-      statusRows.push({ agent, phase: "?", current: "", lastTs: "?", lastEvent: "?" });
-    }
-  }
+  const statusRows = gatherStatusRows(art, agents);
 
   const { scoreboardMd, completion } = gatherCompletion(art);
 
@@ -1508,34 +1299,10 @@ export async function finalizeWith(args: string[], deps: AutoresearchFinalizeDep
     } catch { hardCap = null; }
   }
 
-  // Recent events: tail-10 of EACH worker's PANE outbox, merged + sorted desc by ts, capped 10.
-  const allEvents: EventRow[] = [];
-  for (const agent of agents) {
-    const model = resolveModel(agent, topic);
-    if (!model) continue;
-    const ob = outboxPath(agent, model, topic);
-    if (!existsSync(ob)) continue;
-    const lines = readOr(ob).split("\n").filter((l) => l.trim() !== "").slice(-10);
-    for (const line of lines) {
-      const o = parseEvent(line);
-      if (o === null) continue;   // skip non-JSON
-      allEvents.push({ ts: o.ts != null ? String(o.ts) : "", agent, event: o.event != null ? String(o.event) : "" });
-    }
-  }
-  allEvents.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
-  const recentEvents = allEvents.slice(0, 10);
+  const recentEvents = gatherRecentEvents(agents, topic);
 
   // Warnings -> bullet lines (faithful to render_summary's Warnings section).
-  const warnings: string[] = [];
-  for (const line of readOr(warningsPath).split("\n")) {
-    if (!line.trim()) continue;
-    const f = line.split("\t");
-    if (f[0] === "size_warn") {
-      warnings.push(`- size_warn: ${f[1]} ${f[2]} GB (${f[3]} files)`);
-    } else if (["audit_warn", "sanity", "lineage", "reimpl"].includes(f[0])) {
-      warnings.push(`- ${f[0]}: ${f[1]} ${f[2]} (${f[3]})`);
-    }
-  }
+  const warnings = renderWarningLines(readOr(warningsPath));
 
   const haltPath = join(art, "halt.flag");
   const halt = readHaltFlag(readIfExistsOrNull(haltPath));

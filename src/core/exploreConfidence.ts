@@ -1,7 +1,21 @@
 // src/core/exploreConfidence.ts — the 5-signal confidence gate (port of directive Step 5.5,
 // commands/meditate.md). Pure: draft text + findings texts → booleans. Signal defs in the spec.
+// Also the home of the `## <heading>`-scoped markdown scanners the gate is built from
+// (topApproach / matrixBadRows / sectionText); off-gate callers reuse them, never re-implement.
 
 export interface Signals { s1: boolean; s2: boolean; s3: boolean; s4: boolean; s5: boolean; allHold: boolean; }
+
+/** Body of the first matching `## <heading>` section (until the next `## `), "" when absent. */
+export function sectionText(text: string, headings: string[]): string {
+  const out: string[] = [];
+  let inSection = false;
+  for (const line of text.split("\n")) {
+    if (headings.some((h) => line.startsWith(`## ${h}`))) { inSection = true; continue; }
+    if (/^## /.test(line)) { if (inSection) break; continue; }
+    if (inSection) out.push(line);
+  }
+  return out.join("\n").trim();
+}
 
 /** Top approach = text of the first `^N. ` item under `## Approaches`, minus the `N. ` prefix,
  *  trailing space, and any ` — …` tail. "" if none. */

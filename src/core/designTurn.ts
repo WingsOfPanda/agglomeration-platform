@@ -5,6 +5,7 @@ import { appendFileSync } from "node:fs";
 import { outboxOffset, outboxPath, type OutboxEvent } from "./ipc.js";
 import { atomicWrite } from "./atomic.js";
 import { parseClaims } from "./designDiff.js";
+import type { PhaseKey } from "./phaseTable.js";
 
 /** Research findings.md health, ported from consult_findings_status (lib/consult.sh).
  *  null (file absent) -> "missing"; >=1 parseable `N. [cite] text` claim -> "ok";
@@ -155,7 +156,7 @@ export type GateStatus = "terminal" | "question" | "pending";
  *  callers pass the pre-read `.done` existence and `.txt` text so this stays IPC-free and testable. */
 export function gateState(
   workers: Array<{ agent: string; doneExists: boolean; stateText: string | null }>,
-  key: "FS" | "VS" | "AS" | "QS" | "RS" | "GS" | "SS",
+  key: PhaseKey,
 ): Array<{ agent: string; status: GateStatus }> {
   return workers.map((p) => {
     const last = lastKeyedValue(p.stateText ?? "", key);
@@ -173,7 +174,7 @@ export function gateState(
  *  same inputs as gateState; callers render the warning. */
 export function gateAnomalies(
   workers: Array<{ agent: string; doneExists: boolean; stateText: string | null }>,
-  key: "FS" | "VS" | "AS" | "QS" | "RS" | "GS" | "SS",
+  key: PhaseKey,
 ): Array<{ agent: string; value: string }> {
   const out: Array<{ agent: string; value: string }> = [];
   for (const p of workers) {

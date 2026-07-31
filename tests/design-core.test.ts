@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync as rf } from "node:fs";
 import { tmpdir } from "node:os";
 import { freshHome } from "./helpers/tmpHome.js";
-import { designArtDir, designDraftDir, parseDesignArgs, designDocPath, formatListFile, parseListFile, verifyScopeFiles, lastTag, resolveDrilldownPath, designExportDocPath, exportDocTo } from "../src/core/design.js";
+import { designArtDir, designDraftDir, parseDesignArgs, designDocPath, resolveDrilldownPath, designExportDocPath, exportDocTo } from "../src/core/design.js";
+import { formatListFile, parseListFile, verifyScopeFiles, lastTag } from "../src/core/roster.js";
 
 describe("design paths", () => {
   it("designArtDir / designDraftDir hang off the topic dir under _design", () => {
