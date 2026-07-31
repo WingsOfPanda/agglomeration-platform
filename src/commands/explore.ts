@@ -9,6 +9,7 @@ import { isoUtc, archiveTopic } from "../core/archive.js";
 import { exploreArtDir, deriveSlug, finalLandscapePath, missingListArtifacts } from "../core/explore.js";
 import { extractHandoffData } from "../core/exploreHandoff.js";
 import { runForensics, runFlag } from "../core/forensics.js";
+import { artifactBackstop } from "../core/artifact.js";
 import { killNow } from "../core/tmux.js";
 import {
   type ListRow, formatListFile, parseListFile, parsePanesFile, spawnAllBatch, lastTag, verifyScopeFiles,
@@ -191,8 +192,21 @@ export async function openqCollateRun(rest: string[]): Promise<number> {
   const rows = parseListFile(readIf(join(art, "list.txt")));
   if (rows.length === 0) { log.error(`explore openq-collate: list.txt missing or empty at ${art}`); return 1; }
 
+  // Findings pre-read: same sentinel backstop as survivors. A still-writing file refuses the whole
+  // collate (rc 1 — re-run the wait-gate and retry) rather than routing half of a worker's open
+  // questions; a dropped worker contributes none. An absent/empty findings file is the pre-existing
+  // "no questions" path and never reaches the backstop.
   const questionsByAgent = new Map<string, string[]>();
-  for (const r of rows) questionsByAgent.set(r.agent, parseOpenQuestions(readIf(join(art, `findings-${r.agent}.md`))));
+  for (const r of rows) {
+    const text = readIf(join(art, `findings-${r.agent}.md`));
+    const verdict = text.trim() ? artifactBackstop({
+      label: "explore openq-collate", command: "explore", topic, art, agent: r.agent,
+      artifact: join(art, `findings-${r.agent}.md`),
+      tag: lastTag(readIf(join(art, `research-${r.agent}.txt`)), "FS"),
+    }) : "complete";
+    if (verdict === "still-writing") return 1;
+    questionsByAgent.set(r.agent, parseOpenQuestions(verdict === "drop" ? "" : text));
+  }
 
   const assignments = assignOpenQuestions(rows, questionsByAgent);
   if (assignments.size === 0) {
@@ -248,7 +262,15 @@ export async function diffExploreRun(rest: string[]): Promise<number> {
   for (const r of rows) {
     const f = join(art, `findings-${r.agent}.md`);
     if (!existsSync(f)) { log.error(`explore diff: ${r.agent} findings missing: ${f}`); return 1; }
-    workers.push({ name: r.agent, findings: readFileSync(f, "utf8") });
+    // Sentinel backstop, design diff's shape: a still-writing findings file refuses the whole diff
+    // (the hub re-runs the wait-gate and retries); one whose research phase already failed buckets
+    // as EMPTY — bucketing half a worker's Approaches would mis-scope every later phase.
+    const verdict = artifactBackstop({
+      label: "explore diff", command: "explore", topic, art, agent: r.agent, artifact: f,
+      tag: lastTag(readIf(join(art, `research-${r.agent}.txt`)), "FS"),
+    });
+    if (verdict === "still-writing") return 1;
+    workers.push({ name: r.agent, findings: verdict === "drop" ? "" : readFileSync(f, "utf8") });
   }
   const result = diffFindings(workers, ["Approaches"]);
   for (const file of result.files) atomicWrite(join(art, file.filename), file.content);
@@ -438,6 +460,21 @@ export async function survivorsRun(rest: string[]): Promise<number> {
   // Survivor predicate IS missingListArtifacts' readIf().trim() — reused, never re-implemented (a
   // whitespace-only findings file must not survive here only to block synth-preliminary anyway).
   const missing = new Set(missingListArtifacts(art, rows, "findings"));
+  // Sentinel backstop over the findings that ARE present: a file still being written cannot enter
+  // the survivor set (refuse, the hub re-runs the wait-gate), and one whose research phase already
+  // failed is dropped as empty through the machinery below.
+  let stillWriting = false;
+  for (const r of rows) {
+    if (missing.has(`findings-${r.agent}.md`)) continue;
+    const verdict = artifactBackstop({
+      label: "explore survivors", command: "explore", topic, art, agent: r.agent,
+      artifact: join(art, `findings-${r.agent}.md`),
+      tag: lastTag(readIf(join(art, `research-${r.agent}.txt`)), "FS"),
+    });
+    if (verdict === "still-writing") stillWriting = true;
+    else if (verdict === "drop") missing.add(`findings-${r.agent}.md`);
+  }
+  if (stillWriting) return 1;
   const survivors = rows.filter((r) => !missing.has(`findings-${r.agent}.md`));
   const dropped = rows.filter((r) => missing.has(`findings-${r.agent}.md`));
 
@@ -471,6 +508,20 @@ export async function synthPreliminaryRun(rest: string[]): Promise<number> {
   }
   const rows = parseListFile(readIf(join(art, "list.txt")));
   const missing = missingListArtifacts(art, rows, "findings");
+  // Sentinel backstop, same rule as survivors: still-writing refuses (rc 1, retry after the gate),
+  // a worker whose research phase already failed joins the missing list (survivors drops it).
+  let stillWriting = false;
+  for (const r of rows) {
+    if (missing.includes(`findings-${r.agent}.md`)) continue;
+    const verdict = artifactBackstop({
+      label: "explore synth-preliminary", command: "explore", topic, art, agent: r.agent,
+      artifact: join(art, `findings-${r.agent}.md`),
+      tag: lastTag(readIf(join(art, `research-${r.agent}.txt`)), "FS"),
+    });
+    if (verdict === "still-writing") stillWriting = true;
+    else if (verdict === "drop") missing.push(`findings-${r.agent}.md`);
+  }
+  if (stillWriting) return 1;
   if (missing.length) {
     log.error("explore synth-preliminary: blocked — missing or empty findings:");
     for (const m of missing) log.error(`  - ${join(art, m)}`);
@@ -642,6 +693,12 @@ export async function verdictTallyRun(rest: string[]): Promise<number> {
     return { agent: r.agent, verdict };
   });
   for (const v of verdictRows) process.stdout.write(`VERDICT=${v.agent}:${v.verdict}\n`);
+  // Every worker's adversary round guarded away is a silent loss of the run's only challenge layer:
+  // TALLY=unavailable reads like a parse hiccup, so say it out loud. Non-blocking by design — the
+  // hub decides, the verb only refuses to let it happen quietly.
+  if (verdictRows.length > 0 && verdictRows.every((v) => v.verdict === "skipped")) {
+    log.warn("explore verdict-tally: all adversary rounds skipped — the landscape will ship without adversarial review; verify this is intended");
+  }
   const { tally } = tallyVerdicts(verdictRows);
   process.stdout.write(`TALLY=${tally}\n`);
   log.ok(`explore verdict-tally: ${tally}`);

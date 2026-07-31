@@ -31,16 +31,21 @@ describe("design offset-reset", () => {
     expect(existsSync(join(pd, "verify.md"))).toBe(true);
   });
 
-  it("--keep-findings: removes only state+question, keeps cascade+worker files", async () => {
+  it("--keep-findings: removes state+question+that agent's still-writing strikes, keeps cascade+worker files", async () => {
     const art = designArtDir("t"); mkdirSync(art, { recursive: true });
     writeFileSync(join(art, "verify-alpha.txt"), "OFFSET=2\n");
     writeFileSync(join(art, "question-alpha.txt"), "{}\n");
+    writeFileSync(join(art, "stillwriting-alpha.txt"), "alpha 12\n");
+    writeFileSync(join(art, "stillwriting-charlie.txt"), "charlie 12\n");
     writeFileSync(join(art, "adjudicated-draft.md"), "x\n");
     const pd = workerDir("alpha", "codex", "t"); mkdirSync(pd, { recursive: true });
     writeFileSync(join(pd, "verify.md"), "keep\n");
     expect(await offsetResetRun(["t", "alpha", "verify", "--keep-findings"])).toBe(0);
     expect(existsSync(join(art, "verify-alpha.txt"))).toBe(false);
     expect(existsSync(join(art, "question-alpha.txt"))).toBe(false);
+    // The reset re-arms the phase, so alpha's refusal strikes must not carry into the retry.
+    expect(existsSync(join(art, "stillwriting-alpha.txt"))).toBe(false);
+    expect(existsSync(join(art, "stillwriting-charlie.txt"))).toBe(true); // per-agent, never a sweep
     expect(existsSync(join(art, "adjudicated-draft.md"))).toBe(true);
     expect(existsSync(join(pd, "verify.md"))).toBe(true);
   });

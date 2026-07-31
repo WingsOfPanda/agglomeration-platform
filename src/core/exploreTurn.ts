@@ -4,6 +4,7 @@
 // `inboxWrite`, which appends exactly one done instruction + one END_OF_INSTRUCTION (same contract
 // as design's composeResearchPrompt/composeVerifyPrompt). Embedding a second here produced a
 // duplicate END_OF_INSTRUCTION in the inbox, which desynced codex workers' terminal `done` event.
+import { artifactContract } from "./artifact.js";
 
 /** The {{LIT_GUIDANCE}} block for the research prompt, keyed on the lit-track classification. */
 export function litGuidance(track: "ON" | "OFF"): string {
@@ -122,6 +123,10 @@ export function composeExploreResearchPrompt(topic: string, writeTo: string, lit
     "Surface the landscape; the Hub will synthesize the tradeoff matrix and a",
     "separate adversary round will challenge the synthesis before the final landscape",
     "doc is written.",
+    "",
+    // The research turn writes TWO files; the contract covers both so the self-assessment cannot be
+    // half-written either. No verb gates on the self-assessment — it is advisory by design.
+    artifactContract(writeTo, [selfassessTo]),
   ].join("\n");
 }
 
@@ -245,6 +250,8 @@ export function composeAdversaryPrompt(
     "  the draft is sound.",
     "- Be aggressive but stay grounded — every finding must be defensible from the",
     "  cited evidence, not speculative",
+    "",
+    artifactContract(outPath),
   ].join("\n");
 }
 
@@ -280,6 +287,8 @@ export function composeGapPrompt(bucketItems: string[], outPath: string): string
     "Your answers feed ONLY the final landscape doc and the design handoff — the draft",
     "is not re-synthesized and the confidence gate does not re-run. If you cannot tell",
     "from available evidence, say so explicitly — do not pad.",
+    "",
+    artifactContract(outPath),
   ].join("\n");
 }
 
@@ -326,5 +335,7 @@ export function composeSignoffPrompt(
     "Rules: no new claims, no re-litigation of peer claims or adversary critiques, no",
     "style nits — flag only concrete misrepresentation of YOUR findings. An honest",
     "'fair' is the common case; do not invent flags.",
+    "",
+    artifactContract(outPath),
   ].join("\n");
 }

@@ -34,7 +34,9 @@ import { parseListFile, lastTag } from "./roster.js";
 import { exploreArtDir } from "./explore.js";
 import { workerDir } from "./paths.js";
 import { consultTimeout, agentTimeoutMultiplier, type ConsultKind } from "./contracts.js";
-import { outboxOffset, outboxPath, TERMINAL_EVENTS, type OutboxEvent } from "./ipc.js";
+import { outboxOffset, outboxPath, statusPath, workerBusyState, TERMINAL_EVENTS, type OutboxEvent } from "./ipc.js";
+import { recordHubFlag } from "./forensics.js";
+import { END_OF_ARTIFACT, artifactGraceS, awaitArtifact, realSleep } from "./artifact.js";
 import { liveOutboxWait } from "./waitLive.js";
 import {
   parseLatestOffset, scaledTimeout, researchState, verifyState, gateState, gateAnomalies, recordWaitOutcome,
@@ -194,21 +196,28 @@ export function skipDispatch(row: PhaseRow, agent: string, stateFile: string, re
 export interface SendDeps {
   offsetFor(agent: string, model: string, topic: string): number;
   send(args: string[]): Promise<number>;
+  /** The worker's non-idle status.json state, or null when idle/absent/unreadable. Optional: the
+   *  live `workerBusyState` (the frozen regex read) is the default, injected only by tests. */
+  busyState?(agent: string, model: string, topic: string): string | null;
 }
 
 export interface WaitDeps {
   wait(agent: string, model: string, topic: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null>;
   multiplier(provider: string): string;
+  /** Poll delay inside the artifact grace loop; injected so tests do not sleep for real. */
+  sleep?(ms: number): Promise<void>;
 }
 
 export const liveSendDeps: SendDeps = {
   offsetFor: (i, m, t) => outboxOffset(outboxPath(i, m, t)),
   send: sendRun,
+  busyState: workerBusyState,
 };
 
 export const liveWaitDeps: WaitDeps = {
   wait: liveOutboxWait,
   multiplier: agentTimeoutMultiplier,
+  sleep: realSleep,
 };
 
 /** The send tail every dispatching phase ends with. The outbox offset is captured BEFORE the send
@@ -222,6 +231,15 @@ export async function dispatchPrompt(
 ): Promise<number> {
   const { topic, agent, provider, stateFile, promptFile } = ctx;
   const label = `${row.cmd} ${row.phase}-send`;
+  // Busy-gate BEFORE the state-file write: a send onto a mid-turn worker rewrites the inbox task it
+  // is working on. Refuse with NO state file written (no OFFSET, no `<KEY>=skipped`) so the phase
+  // stays runnable. rc 3 — distinct from rc 1 (state file already exists / send failed) and rc 2
+  // (usage), so the directive can branch on "busy" without parsing stderr.
+  const busy = (d.busyState ?? workerBusyState)(agent, provider, topic);
+  if (busy) {
+    log.error(`${label}: worker ${agent} busy (state=${busy}) — not sending; re-run wait-gate and retry (status: ${statusPath(agent, provider, topic)})`);
+    return 3;
+  }
   const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}\n`);
   const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
@@ -253,7 +271,31 @@ export async function phaseWait(
   log.info(`${label}: ${agent} offset=${offset} timeout=${timeout}s`);
   const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
 
-  const state = row.stateFn(ev, readIfExistsOrNull(row.artifactFor(art, agent, provider, topic)));
+  // A `done` event whose artifact lacks the sentinel is a worker that emitted done before its file
+  // was written: hold the phase open for the grace window, then classify. Two acceptances (the
+  // 2026-07-31 quiescence amendment): the sentinel lands, OR the file is non-empty and stops
+  // changing — finished work from a worker that skipped a soft-compliance line, accepted exactly
+  // like a sentinel but flagged for /ap:review. Only an empty or still-growing artifact times out.
+  // Non-done terminal events (error/question) bypass the check — those paths are unchanged.
+  const artifact = row.artifactFor(art, agent, provider, topic);
+  const graceS = artifactGraceS();
+  const checked = ev !== null && ev.event === "done" && graceS > 0;
+  const outcome = checked ? await awaitArtifact(artifact, graceS, d.sleep ?? realSleep) : "sentinel";
+  if (outcome === "quiescent") {
+    log.warn(`${label}: ${agent} ${artifact} has no ${END_OF_ARTIFACT} but stopped growing — accepting it and flagging the missing sentinel`);
+    recordHubFlag({
+      command: row.cmd, topic,
+      note: `artifact-quiescent-no-sentinel: ${agent} ${artifact}`,
+    });
+  }
+  if (outcome === "expired") {
+    log.warn(`${label}: ${agent} ${artifact} has no ${END_OF_ARTIFACT} after ${graceS}s grace — recording ${row.key}=timeout`);
+    recordHubFlag({
+      command: row.cmd, topic,
+      note: `artifact-incomplete: ${agent} ${artifact} done-event without ${END_OF_ARTIFACT} after ${graceS}s grace`,
+    });
+  }
+  const state = outcome === "expired" ? "timeout" : row.stateFn(ev, readIfExistsOrNull(artifact));
   recordWaitOutcome(agent, provider, topic, stateFile, state, row.key,
     ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
   writeFileSync(join(art, `${row.phase}-${agent}.done`), "");

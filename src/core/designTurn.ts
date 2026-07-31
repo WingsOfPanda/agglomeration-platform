@@ -5,6 +5,7 @@ import { appendFileSync } from "node:fs";
 import { outboxOffset, outboxPath, type OutboxEvent } from "./ipc.js";
 import { atomicWrite } from "./atomic.js";
 import { parseClaims } from "./designDiff.js";
+import { artifactContract } from "./artifact.js";
 import type { PhaseKey } from "./phaseTable.js";
 
 /** Research findings.md health, ported from consult_findings_status (lib/consult.sh).
@@ -131,6 +132,7 @@ export function composeResearchPrompt(topicText: string, findingsPath: string): 
     "unavailable, fall back to local-only investigation and note the gap as an [unverified] claim.",
     "",
     RESEARCH_BLOCKERS,
+    artifactContract(findingsPath),
   ].join("\n");
 }
 
@@ -216,6 +218,7 @@ export function composeVerifyPrompt(itemsText: string, verifyPath: string): stri
     "local file. If a tool is unavailable, mark the item UNCERTAIN and note the gap — never fabricate.",
     "",
     RESEARCH_BLOCKERS,
+    artifactContract(verifyPath),
   ].join("\n");
 }
 
