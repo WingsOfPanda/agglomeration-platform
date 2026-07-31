@@ -1,12 +1,13 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { freshHome } from "./helpers/tmpHome.js";
 import * as A from "../src/core/archive.js";
 import { workerDir, topicDir, globalRoot, repoHash } from "../src/core/paths.js";
 
-afterEach(() => { delete process.env.AP_HOME; delete process.env.CLAUDE_CODE_SESSION_ID; });
-function home() { const h = mkdtempSync(join(tmpdir(), "ar-")); process.env.AP_HOME = h; return h; }
+const cleanups: Array<() => void> = [];
+afterEach(() => { while (cleanups.length) cleanups.pop()!(); delete process.env.CLAUDE_CODE_SESSION_ID; });
+function home() { const h = freshHome(); cleanups.push(h.cleanup); return h.home; }
 
 describe("archive", () => {
   it("stateInit creates clean worker dir + session id", () => {
@@ -64,7 +65,7 @@ describe("archive", () => {
 
 describe("archiveTopic supports the design suite", () => {
   it("moves _design/ into the archive", () => {
-    process.env.AP_HOME = mkdtempSync(join(tmpdir(), "arch-design-"));
+    home();
     const topic = "design-demo";
     const art = join(topicDir(topic), "_design");
     mkdirSync(art, { recursive: true });
@@ -78,7 +79,7 @@ describe("archiveTopic supports the design suite", () => {
 
 describe("archiveTopic supports the autoresearch suite", () => {
   it("moves _autoresearch/ into the archive and returns the dest path", () => {
-    process.env.AP_HOME = mkdtempSync(join(tmpdir(), "arch-autoresearch-"));
+    home();
     const topic = "autoresearch-demo";
     const td = topicDir(topic);
     const art = join(td, "_autoresearch");

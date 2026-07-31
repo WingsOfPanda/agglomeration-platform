@@ -1,14 +1,16 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { freshHome } from "./helpers/tmpHome.js";
 import { run as collect } from "../src/commands/collect.js";
 import { run as send } from "../src/commands/send.js";
 import { workerDir } from "../src/core/paths.js";
 
-afterEach(() => { delete process.env.AP_HOME; });
+const cleanups: Array<() => void> = [];
+afterEach(() => { while (cleanups.length) cleanups.pop()!(); });
+function home() { const h = freshHome(); cleanups.push(h.cleanup); return h.home; }
 function seed(i: string, m: string, t: string, outbox: string) {
-  const h = mkdtempSync(join(tmpdir(), "sc-")); process.env.AP_HOME = h;
+  home();
   const d = workerDir(i, m, t); mkdirSync(d, { recursive: true });
   writeFileSync(join(d, "pane.json"), JSON.stringify({ pane_id: "%1", agent: i, model: m, spawned_at: "t" }));
   writeFileSync(join(d, "outbox.jsonl"), outbox);
@@ -42,11 +44,11 @@ describe("send error paths", () => {
     expect(await send(["bravo", "demo"])).toBe(2);
   });
   it("no state dir for the worker → exit 1", async () => {
-    process.env.AP_HOME = mkdtempSync(join(tmpdir(), "snd-"));
+    home();
     expect(await send(["ghost", "demo", "hello"])).toBe(1);
   });
   it("worker dir present but pane.json missing → exit 1", async () => {
-    const h = mkdtempSync(join(tmpdir(), "snd2-")); process.env.AP_HOME = h;
+    home();
     const d = workerDir("bravo", "codex", "demo"); mkdirSync(d, { recursive: true });
     // no pane.json written
     expect(await send(["bravo", "demo", "hello"])).toBe(1);

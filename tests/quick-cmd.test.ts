@@ -14,6 +14,7 @@ import { existsSync, readFileSync, writeFileSync, mkdtempSync, mkdirSync } from 
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { freshHome } from "./helpers/tmpHome.js";
+import { captureStdout } from "./helpers/captureStdout.js";
 import { quickArtDir, quickExecDir } from "../src/core/quick.js";
 import { outboxPath } from "../src/core/ipc.js";
 
@@ -74,14 +75,6 @@ describe("quick init", () => {
     expect(await initWith(["dup", "topic", "--provider", "codex"], okDeps)).toBe(2);
   });
 });
-
-// Minimal stdout capture helper (no extra deps).
-function captureStdout() {
-  const orig = process.stdout.write.bind(process.stdout);
-  let buf = "";
-  (process.stdout as any).write = (chunk: any, ..._rest: any[]) => { buf += String(chunk); return true; };
-  return { text: () => buf, restore: () => { (process.stdout as any).write = orig; } };
-}
 
 import { branchWith } from "../src/commands/quick.js";
 import type { Runner } from "../src/core/gitwork.js";

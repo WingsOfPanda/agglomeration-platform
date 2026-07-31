@@ -1,8 +1,9 @@
 // tests/design-core.test.ts
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { join } from "node:path";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync as rf } from "node:fs";
 import { tmpdir } from "node:os";
+import { freshHome } from "./helpers/tmpHome.js";
 import { designArtDir, designDraftDir, parseDesignArgs, designDocPath, formatListFile, parseListFile, verifyScopeFiles, lastTag, resolveDrilldownPath, designExportDocPath, exportDocTo } from "../src/core/design.js";
 
 describe("design paths", () => {
@@ -81,6 +82,9 @@ describe("drilldown paths", () => {
 });
 
 describe("design export-doc", () => {
+  const cleanups: Array<() => void> = [];
+  afterEach(() => { while (cleanups.length) cleanups.pop()!(); });
+
   it("designExportDocPath composes <root>/docs/ap/specs/<basename>", () => {
     expect(designExportDocPath("/repo", "2026-06-01-x-design.md")).toBe(
       join("/repo", "docs", "ap", "specs", "2026-06-01-x-design.md"),
@@ -88,9 +92,9 @@ describe("design export-doc", () => {
   });
 
   it("exportDocTo copies the assembled doc into the specs dir and returns the dest", () => {
-    const home = mkdtempSync(join(tmpdir(), "cs-home-"));
+    const { cleanup } = freshHome();
+    cleanups.push(cleanup);
     const root = mkdtempSync(join(tmpdir(), "cs-root-"));
-    process.env.AP_HOME = home;
     const ddir = join(designArtDir("export-topic"), "design-doc");
     mkdirSync(ddir, { recursive: true });
     writeFileSync(join(ddir, "2026-06-01-export-topic-design.md"), "# DOC\nbody\n");
@@ -102,9 +106,9 @@ describe("design export-doc", () => {
   });
 
   it("exportDocTo returns null when no assembled doc exists", () => {
-    const home = mkdtempSync(join(tmpdir(), "cs-home-"));
+    const { cleanup } = freshHome();
+    cleanups.push(cleanup);
     const root = mkdtempSync(join(tmpdir(), "cs-root-"));
-    process.env.AP_HOME = home;
     expect(exportDocTo("missing-topic", root)).toBeNull();
   });
 });

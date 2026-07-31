@@ -1,13 +1,15 @@
-import { describe, it, expect, afterEach, beforeEach } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, readFileSync as rfs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { freshHome } from "./helpers/tmpHome.js";
 import * as F from "../src/core/forensics.js";
 import { scrapeAuditLog, scrapeOutbox, scrapeStatus, scrapeSpawnResults, scrapeLogs, scrapeArtDir, renderArtForensics, captureArtDir } from "../src/core/forensics.js";
 import { workerDir } from "../src/core/paths.js";
 
-afterEach(() => { delete process.env.AP_HOME; });
-function home() { const h = mkdtempSync(join(tmpdir(), "fx-")); process.env.AP_HOME = h; return h; }
+const cleanups: Array<() => void> = [];
+afterEach(() => { while (cleanups.length) cleanups.pop()!(); });
+function home() { const h = freshHome(); cleanups.push(h.cleanup); return h.home; }
 const deps = (scroll = "") => ({
   workerDir,
   capturePane: async () => scroll,
@@ -117,28 +119,24 @@ describe("scrapeArtDir + render", () => {
 });
 
 describe("captureArtDir", () => {
-  let prev: string | undefined;
-  beforeEach(() => { prev = process.env.AP_HOME; });
-  afterEach(() => { if (prev === undefined) delete process.env.AP_HOME; else process.env.AP_HOME = prev; });
-
   it("zero findings → '' and no file", () => {
-    const home = mkdtempSync(join(tmpdir(), "fh-")); process.env.AP_HOME = home;
+    home();
     const art = join(mkdtempSync(join(tmpdir(), "fa-")), "clean", "_design"); mkdirSync(art, { recursive: true });
     expect(captureArtDir({ artDir: art, command: "design", now: new Date("2026-05-29T12:00:00Z") })).toBe("");
   });
   it("findings → writes under <home>/forensics/<date>/, returns the path", () => {
-    const home = mkdtempSync(join(tmpdir(), "fh-")); process.env.AP_HOME = home;
+    const h = home();
     const topicDir = join(mkdtempSync(join(tmpdir(), "ft-")), "mytopic"); const art = join(topicDir, "_design");
     mkdirSync(join(art, "design-doc"), { recursive: true });
     writeFileSync(join(art, "design-doc", "audit.log"), "ISSUE=no_goal_section\n");
     const p = captureArtDir({ artDir: art, command: "design", now: new Date("2026-05-29T12:34:56Z") });
-    expect(p).toContain(join(home, "forensics", "2026-05-29"));
+    expect(p).toContain(join(h, "forensics", "2026-05-29"));
     expect(p).toMatch(/12-34-56-design-mytopic\.md$/);
     expect(existsSync(p)).toBe(true);
     expect(rfs(p, "utf8")).toContain("ISSUE=no_goal_section");
   });
   it("two captures in the same UTC second do not overwrite (suffix -2)", () => {
-    const home = mkdtempSync(join(tmpdir(), "fh-")); process.env.AP_HOME = home;
+    home();
     const art = join(mkdtempSync(join(tmpdir(), "ft-")), "mytopic", "_design");
     mkdirSync(join(art, "design-doc"), { recursive: true });
     writeFileSync(join(art, "design-doc", "audit.log"), "ISSUE=no_goal_section\n");

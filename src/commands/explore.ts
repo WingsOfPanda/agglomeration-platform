@@ -1,6 +1,5 @@
 // src/commands/explore.ts — /ap:explore CLI verbs (port of meditate). Built on design's DI
 // pattern + IPC/wait/archive helpers; meditate-specific logic lives in src/core/explore*.ts.
-// NOTE: verbs are added task-by-task; the dispatcher's switch grows as each verb lands.
 import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync, rmSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
@@ -850,13 +849,16 @@ export async function annotateRun(rest: string[]): Promise<number> {
   const listPath = join(art, "list.txt");
   if (!existsSync(listPath)) { log.error(`explore annotate: list.txt missing at ${art}`); return 1; }
   const rows = parseListFile(readIf(listPath));
-  const missing = missingListArtifacts(art, rows, "findings");
+  // Each findings file is read ONCE here; the missing-list predicate IS missingListArtifacts'
+  // readIf().trim() (whitespace-only counts as missing) and buildAnnotations reuses the same texts.
+  const texts = new Map(rows.map((r) => [r.agent, readIf(join(art, `findings-${r.agent}.md`))]));
+  const missing = rows.filter((r) => !(texts.get(r.agent) ?? "").trim()).map((r) => `findings-${r.agent}.md`);
   if (missing.length) {
     log.error("explore annotate: blocked — missing or empty findings:");
     for (const m of missing) log.error(`  - ${join(art, m)}`);
     return 1;
   }
-  const findings = rows.map((r) => readIf(join(art, `findings-${r.agent}.md`)));
+  const findings = rows.map((r) => texts.get(r.agent) ?? "");
 
   const { annotatedDraft, plan } = buildAnnotations(draft, findings);
   const counts = {

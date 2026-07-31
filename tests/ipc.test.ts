@@ -1,13 +1,14 @@
 import { describe, it, expect, afterEach, beforeEach } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { freshHome } from "./helpers/tmpHome.js";
 import * as IPC from "../src/core/ipc.js";
 import { workerDir } from "../src/core/paths.js";
 
 beforeEach(() => { process.env.CLAUDE_PLUGIN_ROOT = process.cwd(); });
-afterEach(() => { delete process.env.AP_HOME; });
-function home() { const h = mkdtempSync(join(tmpdir(), "ipc-")); process.env.AP_HOME = h; return h; }
+const cleanups: Array<() => void> = [];
+afterEach(() => { while (cleanups.length) cleanups.pop()!(); });
+function home() { const h = freshHome(); cleanups.push(h.cleanup); return h.home; }
 function seedPart(i: string, m: string, t: string) { const d = workerDir(i, m, t); mkdirSync(d, { recursive: true }); writeFileSync(join(d, "outbox.jsonl"), ""); return d; }
 
 describe("ipc inbox", () => {

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, writeFileSync, existsSync as exists } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { freshHome } from "./helpers/tmpHome.js";
 import { opencodePermissionCheck, run as check } from "../src/commands/check.js";
 
 function cfg(content: string) {
@@ -21,20 +22,20 @@ describe("opencode permission check (JSON.parse, not grep)", () => {
 
 describe("check ensures global config root", () => {
   it("does NOT copy config into ~/.ap (reads shipped instead)", async () => {
-    const home = join(mkdtempSync(join(tmpdir(), "sc-")), "nested-not-yet"); // does NOT exist
-    const prev = process.env.AP_HOME; process.env.AP_HOME = home;
+    const env = freshHome();
+    const home = join(env.home, "nested-not-yet");            // does NOT exist
+    process.env.AP_HOME = home;
     process.env.CLAUDE_PLUGIN_ROOT = process.cwd();
     try {
       await check([]);                                       // must not throw
       expect(exists(join(home, "contracts.yaml"))).toBe(false); // no longer auto-copied
       expect(exists(join(home, "agents.yaml"))).toBe(false);
     } finally {
-      if (prev === undefined) delete process.env.AP_HOME; else process.env.AP_HOME = prev;
+      env.cleanup();
     }
   });
   it("migrateConfigShadow: stale ~/.ap/contracts.yaml + agents.yaml are backed up to .bak and removed", async () => {
-    const home = mkdtempSync(join(tmpdir(), "mg-"));
-    const prev = process.env.AP_HOME; process.env.AP_HOME = home;
+    const { home, cleanup } = freshHome();
     process.env.CLAUDE_PLUGIN_ROOT = process.cwd();
     writeFileSync(join(home, "contracts.yaml"), "codex:\n  ready_timeout_s: 999\n"); // stale shadow
     writeFileSync(join(home, "agents.yaml"), "agents:\n  - ghost\n");                 // stale shadow
@@ -45,7 +46,7 @@ describe("check ensures global config root", () => {
       expect(exists(join(home, "agents.yaml"))).toBe(false);       // shadow removed
       expect(exists(join(home, "agents.yaml.bak"))).toBe(true);    // backed up
     } finally {
-      if (prev === undefined) delete process.env.AP_HOME; else process.env.AP_HOME = prev;
+      cleanup();
     }
   });
 });
