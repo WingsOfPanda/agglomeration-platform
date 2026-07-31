@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
+import { sendDeps, waitDeps } from "./helpers/phaseDeps.js";
 import { designArtDir } from "../src/core/design.js";
 import { workerDir } from "../src/core/paths.js";
 import { outboxPath } from "../src/core/ipc.js";
@@ -25,10 +26,10 @@ describe("design research-send", () => {
   it("writes the prompt + OFFSET state, then calls send (rc 0)", async () => {
     const art = seedTopic("cache-policy", [{ provider: "codex", agent: "alpha" }]);
     const calls: string[][] = [];
-    const rc = await researchSendWith("cache-policy", "alpha", "codex", {
+    const rc = await researchSendWith("cache-policy", "alpha", "codex", sendDeps({
       offsetFor: () => 42,
       send: async (args) => { calls.push(args); return 0; },
-    });
+    }));
     expect(rc).toBe(0);
     expect(readFileSync(join(art, "research-alpha.txt"), "utf8")).toBe("OFFSET=42\n");
     const prompt = readFileSync(join(art, "alpha_research_prompt.md"), "utf8");
@@ -40,13 +41,13 @@ describe("design research-send", () => {
   it("refuses if the state file already exists (rc 1)", async () => {
     const art = seedTopic("cache-policy", [{ provider: "codex", agent: "alpha" }]);
     writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\n");
-    const rc = await researchSendWith("cache-policy", "alpha", "codex", { offsetFor: () => 0, send: async () => 0 });
+    const rc = await researchSendWith("cache-policy", "alpha", "codex", sendDeps());
     expect(rc).toBe(1);
   });
 
   it("send failure keeps the state file and returns rc 1", async () => {
     const art = seedTopic("cache-policy", [{ provider: "codex", agent: "alpha" }]);
-    const rc = await researchSendWith("cache-policy", "alpha", "codex", { offsetFor: () => 7, send: async () => 1 });
+    const rc = await researchSendWith("cache-policy", "alpha", "codex", sendDeps({ offsetFor: () => 7, send: async () => 1 }));
     expect(rc).toBe(1);
     expect(existsSync(join(art, "research-alpha.txt"))).toBe(true);
   });
@@ -60,7 +61,7 @@ describe("design research-wait", () => {
     mkdirSync(workerDir(agent, provider, topic), { recursive: true });
     return art;
   }
-  const dep = (ev: any, mult = "1.0") => ({ wait: async () => ev, multiplier: () => mult });
+  const dep = (ev: any, mult = "1.0") => waitDeps({ wait: async () => ev, multiplier: () => mult });
 
   it("done + cited findings → FS=ok + .done sentinel (rc 0)", async () => {
     const art = seedState("t", "alpha", "codex");
@@ -217,7 +218,7 @@ describe("design verify-send", () => {
   it("N=2: scope = other's bucket; composes + sends (rc 0)", async () => {
     const art = seedV("t", rows, { "alpha_only_items.txt": "[a:1] vc\n", "charlie_only_items.txt": "[b:2] cc\n" });
     const calls: string[][] = [];
-    const rc = await verifySendWith("t", "alpha", "codex", { offsetFor: () => 7, send: async (a) => { calls.push(a); return 0; } });
+    const rc = await verifySendWith("t", "alpha", "codex", sendDeps({ offsetFor: () => 7, send: async (a) => { calls.push(a); return 0; } }));
     expect(rc).toBe(0);
     expect(readFileSync(join(art, "verify-claims-alpha.txt"), "utf8")).toContain("[b:2] cc"); // charlie's, not alpha's
     expect(readFileSync(join(art, "verify-alpha.txt"), "utf8")).toBe("OFFSET=7\n");
@@ -227,7 +228,7 @@ describe("design verify-send", () => {
   it("empty scope → VS=skipped, no send (rc 0)", async () => {
     const art = seedV("t", rows, { "alpha_only_items.txt": "", "charlie_only_items.txt": "" });
     let sent = 0;
-    const rc = await verifySendWith("t", "charlie", "claude", { offsetFor: () => 0, send: async () => { sent++; return 0; } });
+    const rc = await verifySendWith("t", "charlie", "claude", sendDeps({ send: async () => { sent++; return 0; } }));
     expect(rc).toBe(0);
     expect(readFileSync(join(art, "verify-charlie.txt"), "utf8")).toBe("VS=skipped\n");
     expect(sent).toBe(0);
@@ -236,7 +237,7 @@ describe("design verify-send", () => {
   it("refuses if verify-<inst>.txt exists (rc 1)", async () => {
     const art = seedV("t", rows, { "alpha_only_items.txt": "x\n", "charlie_only_items.txt": "y\n" });
     writeFileSync(join(art, "verify-alpha.txt"), "OFFSET=0\n");
-    expect(await verifySendWith("t", "alpha", "codex", { offsetFor: () => 0, send: async () => 0 })).toBe(1);
+    expect(await verifySendWith("t", "alpha", "codex", sendDeps())).toBe(1);
   });
 });
 
@@ -247,12 +248,12 @@ describe("design verify-wait", () => {
     mkdirSync(workerDir(agent, provider, topic), { recursive: true });
     return art;
   }
-  const dep = (ev: any) => ({ wait: async () => ev, multiplier: () => "1.0" });
+  const dep = (ev: any) => waitDeps({ wait: async () => ev });
 
   it("VS=skipped short-circuit: writes .done, no wait (rc 0)", async () => {
     const art = seedVw("t", "alpha", "codex", "VS=skipped\n");
     let waited = 0;
-    const rc = await verifyWaitWith("t", "alpha", "codex", { wait: async () => { waited++; return null; }, multiplier: () => "1.0" });
+    const rc = await verifyWaitWith("t", "alpha", "codex", waitDeps({ wait: async () => { waited++; return null; } }));
     expect(rc).toBe(0); expect(waited).toBe(0);
     expect(existsSync(join(art, "verify-alpha.done"))).toBe(true);
   });
@@ -336,9 +337,9 @@ describe("design drilldown", () => {
     const sends: string[][] = [];
     const rc = await drilldownWith(
       ["t", "Architecture", dd, "", join(art, "doc.md"), "alpha", "codex"],
-      { offsetFor: () => 0, send: async (a) => { sends.push(a); // simulate the worker writing its drill file
-          a[a.length - 1].slice(1); /* @<promptfile> not the out path */ return 0; },
-        wait: async () => ({ event: "done" }), multiplier: () => "1.0" },
+      { ...sendDeps({ send: async (a) => { sends.push(a); // simulate the worker writing its drill file
+          a[a.length - 1].slice(1); /* @<promptfile> not the out path */ return 0; } }),
+        ...waitDeps({ wait: async () => ({ event: "done" }) }) },
       { writeProbe: (p: string) => writeFileSync(p, "notes\n") }, // test hook: create the out file the worker would write
     );
     expect(rc).toBe(0);
@@ -349,9 +350,9 @@ describe("design drilldown", () => {
     const art = designArtDir("t"); const dd = join(art, "drilldowns"); mkdirSync(join(dd, "_scratch"), { recursive: true });
     writeFileSync(join(art, "doc.md"), "# doc\n"); mkdirSync(workerDir("alpha", "codex", "t"), { recursive: true });
     const rc = await drilldownWith(["t", "Arch", dd, "", join(art, "doc.md"), "alpha", "codex"],
-      { offsetFor: () => 0, send: async () => 0, wait: async () => ({ event: "done" }), multiplier: () => "1.0" }, {});
+      { ...sendDeps(), ...waitDeps({ wait: async () => ({ event: "done" }) }) }, {});
     expect(rc).toBe(1); // no file written
-    expect(await drilldownWith(["t", "Arch"], { offsetFor: () => 0, send: async () => 0, wait: async () => null, multiplier: () => "1.0" }, {})).toBe(2);
+    expect(await drilldownWith(["t", "Arch"], { ...sendDeps(), ...waitDeps() }, {})).toBe(2);
   });
 });
 

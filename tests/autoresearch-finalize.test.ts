@@ -3,8 +3,8 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, mkdtempSync, rmSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
-import { finalizePhase, parseHardConstraints } from "../src/core/autoresearchFinalize.js";
-import { finalizeWith, type AutoresearchFinalizeDeps } from "../src/commands/autoresearch.js";
+import { finalizePhase, parseHardConstraints, type AutoresearchFinalizeDeps } from "../src/core/autoresearchFinalize.js";
+import { finalizeWith } from "../src/commands/autoresearch.js";
 import { autoresearchArtDir, workerStateDir, experimentDir } from "../src/core/autoresearch.js";
 import { workerDir, repoHash as repoHashOf } from "../src/core/paths.js";
 import { liveMemoryIo, retrieveForDispatch, type MemoryIo } from "../src/core/autoresearchMemoryStore.js";

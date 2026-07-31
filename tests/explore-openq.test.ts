@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parseOpenQuestions, assignOpenQuestions, formatOpenqClaims, parseOpenqClaims, composeOpenqPrompt } from "../src/core/exploreOpenq.js";
-import type { ListRow } from "../src/core/design.js";
+import type { ListRow } from "../src/core/roster.js";
 
 const FINDINGS = [
   "# Findings: x", "## Summary", "s",
