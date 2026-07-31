@@ -198,11 +198,12 @@ export async function openqCollateRun(rest: string[]): Promise<number> {
   // "no questions" path and never reaches the backstop.
   const questionsByAgent = new Map<string, string[]>();
   for (const r of rows) {
-    const text = readIf(join(art, `findings-${r.agent}.md`));
+    const findings = join(art, `findings-${r.agent}.md`);
+    const text = readIf(findings);
     const verdict = text.trim() ? artifactBackstop({
       label: "explore openq-collate", command: "explore", topic, art, agent: r.agent,
-      artifact: join(art, `findings-${r.agent}.md`),
-      tag: lastTag(readIf(join(art, `research-${r.agent}.txt`)), "FS"),
+      artifact: findings, text,
+      stateText: readIf(join(art, `research-${r.agent}.txt`)), key: "FS",
     }) : "complete";
     if (verdict === "still-writing") return 1;
     questionsByAgent.set(r.agent, parseOpenQuestions(verdict === "drop" ? "" : text));
@@ -263,14 +264,17 @@ export async function diffExploreRun(rest: string[]): Promise<number> {
     const f = join(art, `findings-${r.agent}.md`);
     if (!existsSync(f)) { log.error(`explore diff: ${r.agent} findings missing: ${f}`); return 1; }
     // Sentinel backstop, design diff's shape: a still-writing findings file refuses the whole diff
-    // (the hub re-runs the wait-gate and retries); one whose research phase already failed buckets
-    // as EMPTY — bucketing half a worker's Approaches would mis-scope every later phase.
+    // (the hub runs research-wait and retries); one the wait never accepted buckets as EMPTY —
+    // bucketing half a worker's Approaches would mis-scope every later phase. The bytes judged are
+    // the bytes bucketed (one read, passed in) — a `mv` landing between the two would otherwise
+    // bucket exactly the half-written file the check just cleared.
+    const text = readFileSync(f, "utf8");
     const verdict = artifactBackstop({
-      label: "explore diff", command: "explore", topic, art, agent: r.agent, artifact: f,
-      tag: lastTag(readIf(join(art, `research-${r.agent}.txt`)), "FS"),
+      label: "explore diff", command: "explore", topic, art, agent: r.agent, artifact: f, text,
+      stateText: readIf(join(art, `research-${r.agent}.txt`)), key: "FS",
     });
     if (verdict === "still-writing") return 1;
-    workers.push({ name: r.agent, findings: verdict === "drop" ? "" : readFileSync(f, "utf8") });
+    workers.push({ name: r.agent, findings: verdict === "drop" ? "" : text });
   }
   const result = diffFindings(workers, ["Approaches"]);
   for (const file of result.files) atomicWrite(join(art, file.filename), file.content);
@@ -330,10 +334,23 @@ export async function rebuttalSendWith(topic: string, agent: string, provider: s
   const buckets = new Map<string, Claim[]>();
   for (const r of rows) buckets.set(r.agent, parseBucketLines(readIf(join(art, `${r.agent}_only_items.txt`))));
 
-  const critiques: CritiqueInput[] = rows
-    .filter((r) => lastTag(readIf(join(art, `adversary-${r.agent}.txt`)), "AS") !== "skipped")
-    .map((r) => ({ agent: r.agent, text: readIf(join(art, `adversary-${r.agent}.md`)) }))
-    .filter((c) => c.text.trim().length > 0);
+  // Same backstop as the findings consumers, over the OTHER artifact this phase reads: rebuttal
+  // targets are selected FROM the critiques, so a half-written adversary-<peer>.md silently narrows
+  // what this worker is asked to defend. A critique the wait never accepted contributes nothing.
+  const critiques: CritiqueInput[] = [];
+  for (const r of rows) {
+    const stateText = readIf(join(art, `adversary-${r.agent}.txt`));
+    if (lastTag(stateText, "AS") === "skipped") continue;
+    const critique = join(art, `adversary-${r.agent}.md`);
+    const text = readIf(critique);
+    if (!text.trim()) continue;
+    const verdict = artifactBackstop({
+      label: "explore rebuttal-send", command: "explore", topic, art, agent: r.agent,
+      artifact: critique, text, stateText, key: "AS",
+    });
+    if (verdict === "still-writing") return 1;
+    if (verdict === "complete") critiques.push({ agent: r.agent, text });
+  }
 
   const mine = selectRebuttalTargets(critiques, buckets).get(agent);
   if (!mine || mine.findings.length === 0) {
@@ -461,15 +478,15 @@ export async function survivorsRun(rest: string[]): Promise<number> {
   // whitespace-only findings file must not survive here only to block synth-preliminary anyway).
   const missing = new Set(missingListArtifacts(art, rows, "findings"));
   // Sentinel backstop over the findings that ARE present: a file still being written cannot enter
-  // the survivor set (refuse, the hub re-runs the wait-gate), and one whose research phase already
-  // failed is dropped as empty through the machinery below.
+  // the survivor set (refuse, the hub runs research-wait), and one the wait held open until grace
+  // expired is dropped as empty through the machinery below.
   let stillWriting = false;
   for (const r of rows) {
     if (missing.has(`findings-${r.agent}.md`)) continue;
     const verdict = artifactBackstop({
       label: "explore survivors", command: "explore", topic, art, agent: r.agent,
       artifact: join(art, `findings-${r.agent}.md`),
-      tag: lastTag(readIf(join(art, `research-${r.agent}.txt`)), "FS"),
+      stateText: readIf(join(art, `research-${r.agent}.txt`)), key: "FS",
     });
     if (verdict === "still-writing") stillWriting = true;
     else if (verdict === "drop") missing.add(`findings-${r.agent}.md`);
@@ -508,15 +525,15 @@ export async function synthPreliminaryRun(rest: string[]): Promise<number> {
   }
   const rows = parseListFile(readIf(join(art, "list.txt")));
   const missing = missingListArtifacts(art, rows, "findings");
-  // Sentinel backstop, same rule as survivors: still-writing refuses (rc 1, retry after the gate),
-  // a worker whose research phase already failed joins the missing list (survivors drops it).
+  // Sentinel backstop, same rule as survivors: still-writing refuses (rc 1, retry after the wait),
+  // a worker whose artifact the wait never accepted joins the missing list (survivors drops it).
   let stillWriting = false;
   for (const r of rows) {
     if (missing.includes(`findings-${r.agent}.md`)) continue;
     const verdict = artifactBackstop({
       label: "explore synth-preliminary", command: "explore", topic, art, agent: r.agent,
       artifact: join(art, `findings-${r.agent}.md`),
-      tag: lastTag(readIf(join(art, `research-${r.agent}.txt`)), "FS"),
+      stateText: readIf(join(art, `research-${r.agent}.txt`)), key: "FS",
     });
     if (verdict === "still-writing") stillWriting = true;
     else if (verdict === "drop") missing.push(`findings-${r.agent}.md`);
@@ -665,6 +682,20 @@ export async function synthFinalRun(rest: string[]): Promise<number> {
     const rows = parseListFile(readIf(join(art, "list.txt")));
     const active = rows.filter((r) => lastTag(readIf(join(art, `adversary-${r.agent}.txt`)), "AS") !== "skipped");
     const missing = missingListArtifacts(art, active, "adversary");
+    // Sentinel backstop, synth-preliminary's shape, over the critiques the final doc quotes: a
+    // still-writing critique refuses (rc 1), one the wait never accepted joins the missing list.
+    let stillWriting = false;
+    for (const r of active) {
+      if (missing.includes(`adversary-${r.agent}.md`)) continue;
+      const verdict = artifactBackstop({
+        label: "explore synth-final", command: "explore", topic, art, agent: r.agent,
+        artifact: join(art, `adversary-${r.agent}.md`),
+        stateText: readIf(join(art, `adversary-${r.agent}.txt`)), key: "AS",
+      });
+      if (verdict === "still-writing") stillWriting = true;
+      else if (verdict === "drop") missing.push(`adversary-${r.agent}.md`);
+    }
+    if (stillWriting) return 1;
     if (missing.length) {
       log.error("explore synth-final: blocked — adversary ran but critiques missing:");
       for (const m of missing) log.error(`  - ${join(art, m)}`);
@@ -687,11 +718,22 @@ export async function verdictTallyRun(rest: string[]): Promise<number> {
   const listRaw = readIf(join(art, "list.txt"));
   if (!listRaw.trim()) { log.error(`explore verdict-tally: list.txt missing or empty at ${art}`); return 1; }
   const rows = parseListFile(listRaw);
-  const verdictRows = rows.map((r) => {
-    const as = lastTag(readIf(join(art, `adversary-${r.agent}.txt`)), "AS");
-    const verdict = as === "skipped" ? "skipped" : parseAdversaryVerdict(readIf(join(art, `adversary-${r.agent}.md`)));
-    return { agent: r.agent, verdict };
-  });
+  // Sentinel backstop over each critique before its `## Verdict` line is tallied: a half-written
+  // critique parses as `unavailable` and quietly shifts the run's consensus. Refuse instead (rc 1);
+  // a critique the wait never accepted tallies as if empty, which IS `unavailable`, but recorded.
+  const verdictRows: Array<{ agent: string; verdict: string }> = [];
+  for (const r of rows) {
+    const stateText = readIf(join(art, `adversary-${r.agent}.txt`));
+    if (lastTag(stateText, "AS") === "skipped") { verdictRows.push({ agent: r.agent, verdict: "skipped" }); continue; }
+    const critique = join(art, `adversary-${r.agent}.md`);
+    const text = readIf(critique);
+    const verdict = text.trim() ? artifactBackstop({
+      label: "explore verdict-tally", command: "explore", topic, art, agent: r.agent,
+      artifact: critique, text, stateText, key: "AS",
+    }) : "complete";
+    if (verdict === "still-writing") return 1;
+    verdictRows.push({ agent: r.agent, verdict: parseAdversaryVerdict(verdict === "drop" ? "" : text) });
+  }
   for (const v of verdictRows) process.stdout.write(`VERDICT=${v.agent}:${v.verdict}\n`);
   // Every worker's adversary round guarded away is a silent loss of the run's only challenge layer:
   // TALLY=unavailable reads like a parse hiccup, so say it out loud. Non-blocking by design — the

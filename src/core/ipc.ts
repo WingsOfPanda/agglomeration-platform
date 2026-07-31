@@ -12,17 +12,30 @@ export function identityPath(i: string, m: string, t: string) { return join(work
 export function statusPath(i: string, m: string, t: string) { return join(workerDir(i, m, t), "status.json"); }
 export function paneMetaPath(i: string, m: string, t: string) { return join(workerDir(i, m, t), "pane.json"); }
 
-/** The worker's status.json state when it is NOT idle (a turn/round still in flight), else null
- *  (absent/unreadable status, no state field, empty state, or idle). Uses the non-JSON-tolerant
- *  regex read — never JSON.parse — matching the send-before-dispatch idle gate.
+/** States that mean "this worker finished its turn", i.e. NOT busy. `idle` is the one the identity
+ *  template mandates after a terminal event ("set status to `idle` and wait for the next inbox"),
+ *  but the template also lets a worker write `{"state": "<state>"}` freely after EVERY event, and
+ *  real workers echo their last event there: `done`, `complete`, `error`, or `ready` (post-spawn,
+ *  before the first inbox). Treating those as busy refused sends to workers that were plainly
+ *  waiting — the whole point of the gate is the MID-TURN send, so only genuinely in-flight states
+ *  block. Anything else (`working`, `researching`, `round-1`, an unknown word) stays busy: the
+ *  conservative answer for a state we cannot interpret is "do not clobber it". */
+const TERMINAL_WORKER_STATES = new Set(["idle", "done", "complete", "error", "ready"]);
+
+/** The worker's status.json state when it is genuinely busy (a turn/round still in flight), else
+ *  null (absent/unreadable status, no state field, empty/whitespace state, or any
+ *  TERMINAL_WORKER_STATES value). Uses the non-JSON-tolerant regex read — never JSON.parse —
+ *  matching the send-before-dispatch idle gate.
  *  Whitespace-tolerant since 2026-07-31: a worker (or a `jq`/pretty-printer) that writes
  *  `{"state": "working"}` used to read as IDLE and let a mid-turn send through. Deliberately
- *  tightens `workerSendGate` (implement's existing gate) the same way — same bug, same fix. */
+ *  tightens `workerSendGate` (implement's existing gate) the same way — same bug, same fix; the
+ *  terminal-state set above loosens both the same way, for the same reason. */
 export function workerBusyState(i: string, m: string, t: string): string | null {
   const sp = statusPath(i, m, t);
   if (!existsSync(sp)) return null;
   const match = readFileSync(sp, "utf8").match(/"state"\s*:\s*"([^"]*)"/);
-  return match && match[1] && match[1] !== "idle" ? match[1] : null;
+  const state = match ? match[1].trim() : "";
+  return state && !TERMINAL_WORKER_STATES.has(state.toLowerCase()) ? state : null;
 }
 
 /** Send-side dispatch gate shared by the single-worker turn/round verbs: refuse (log to stderr,
