@@ -75,6 +75,14 @@ export function computeScore(art: string, fs: ScoreFs, now: () => string): Score
   const sanityRows: SanityRow[] = [];
   const lineageRows: LineageRow[] = [];
 
+  // One read+parse per audit.json path: a child's lineage diff wants its PARENT's audit.json,
+  // which this same walk already read for that parent's sanity flags.
+  const auditCache = new Map<string, Record<string, unknown> | null>();
+  const readAudit = (path: string): Record<string, unknown> | null => {
+    if (!auditCache.has(path)) auditCache.set(path, parseAudit(fs.read(path)));
+    return auditCache.get(path) ?? null;
+  };
+
   // Walk like the bash `workers/*/experiments/*/` glob under nullglob: listDir
   // returns [] for a non-existent dir, so no explicit dir-existence gate.
   const workers = fs.listDir(workersDir(art));
@@ -112,7 +120,7 @@ export function computeScore(art: string, fs: ScoreFs, now: () => string): Score
         }
       }
       const promptMd = fs.read(join(branchDir, "prompt.md"));
-      const auditObj = parseAudit(fs.read(join(branchDir, "audit.json")));
+      const auditObj = readAudit(join(branchDir, "audit.json"));
       const flags = sanityFlags({
         result: o,
         direction: parsed?.direction,
@@ -131,7 +139,7 @@ export function computeScore(art: string, fs: ScoreFs, now: () => string): Score
       const parentId = lineageTxt ? (parseState(lineageTxt).parent_id ?? "") : "";
       let knobs: number | null = null;
       if (parentId) {
-        const parentAudit = parseAudit(fs.read(join(experimentDir(art, agent, parentId), "audit.json")));
+        const parentAudit = readAudit(join(experimentDir(art, agent, parentId), "audit.json"));
         knobs = diffAuditKnobs(parentAudit, auditObj);
       }
       lineageRows.push({ expId, agent, parentId,

@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { freshHome } from "./helpers/tmpHome.js";
+import { captureStdout } from "./helpers/captureStdout.js";
 import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, crossverifySendWith, crossverifyWaitWith, rebuttalSendWith, rebuttalWaitWith, gapSendWith, gapWaitWith, signoffSendWith, signoffWaitWith, survivorsRun, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, verdictTallyRun, diffExploreRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, contributionRun, type ExploreInitDeps, type ExploreSpawnAllDeps, type ResearchSendDeps, type ResearchWaitDeps } from "../src/commands/explore.js";
 import { exploreArtDir } from "../src/core/explore.js";
 
@@ -359,12 +360,11 @@ describe("explore confidence", () => {
       await initWith(["x"], initDeps());
       const art = exploreArtDir("x");
       await seedFindings(art, DRAFT + "\nCONTESTED: foo"); // S3 fails
-      const chunks: string[] = [];
-      const spy = vi.spyOn(process.stdout, "write").mockImplementation(((s: unknown) => { chunks.push(String(s)); return true; }) as never);
+      const out = captureStdout();
       try {
         expect(await confidenceRun(["x"])).toBe(0);
-      } finally { spy.mockRestore(); }
-      const lines = chunks.join("").trim().split("\n");
+      } finally { out.restore(); }
+      const lines = out.text().trim().split("\n");
       expect(lines).toContain("S3=false");
       for (const n of [1, 2, 4, 5]) expect(lines.some((l) => new RegExp(`^S${n}=(true|false)$`).test(l))).toBe(true);
       expect(lines[lines.length - 1]).toBe("ALL_HOLD=false"); // directive-parse compatibility: last line
@@ -650,10 +650,9 @@ describe("selfassess gate-blindness invariant (confidence/annotate never read se
       // read this file, S5 flips true and https://a.only/1 stops being solo (S2 + [unverified]).
       writeFileSync(join(art, "selfassess-alpha.md"),
         "low: FlashAttention\n## Least sure\n- uncertain unclear not sure https://a.only/1 https://c.only/2\n");
-      const chunks: string[] = [];
-      const spy = vi.spyOn(process.stdout, "write").mockImplementation(((s: unknown) => { chunks.push(String(s)); return true; }) as never);
-      try { expect(await confidenceRun(["x"])).toBe(0); } finally { spy.mockRestore(); }
-      const lines = chunks.join("").trim().split("\n");
+      const out = captureStdout();
+      try { expect(await confidenceRun(["x"])).toBe(0); } finally { out.restore(); }
+      const lines = out.text().trim().split("\n");
       expect(lines).toContain("S5=false"); // findings alone carry no uncertainty vocab
       expect(lines).toContain("S2=false"); // https://a.only/1 stays solo — selfassess restatement invisible
       expect(await annotateRun(["x"])).toBe(0);
@@ -710,11 +709,6 @@ describe("explore synth-final", () => {
 });
 
 describe("explore verdict-tally", () => {
-  function cap(): { text: () => string; restore: () => void } {
-    const c: string[] = [];
-    const s = vi.spyOn(process.stdout, "write").mockImplementation(((x: unknown) => { c.push(String(x)); return true; }) as never);
-    return { text: () => c.join(""), restore: () => s.mockRestore() };
-  }
   it("prints one VERDICT= line per list row and a TALLY= majority (tie → most severe)", async () => {
     const { cleanup } = freshHome();
     try {
@@ -722,7 +716,7 @@ describe("explore verdict-tally", () => {
       const art = exploreArtDir("x");
       writeFileSync(join(art, "adversary-alpha.md"), "# c\n## Verdict\nneeds-attention\n## Material findings\n");
       writeFileSync(join(art, "adversary-charlie.md"), "# c\n## Verdict\naccept\n");
-      const out = cap();
+      const out = captureStdout();
       try { expect(await verdictTallyRun(["x"])).toBe(0); } finally { out.restore(); }
       const lines = out.text().trim().split("\n");
       expect(lines).toEqual(["VERDICT=alpha:needs-attention", "VERDICT=charlie:accept", "TALLY=needs-attention"]);
@@ -735,7 +729,7 @@ describe("explore verdict-tally", () => {
       const art = exploreArtDir("x");
       writeFileSync(join(art, "adversary-alpha.md"), "## Verdict\naccept\n");
       writeFileSync(join(art, "adversary-charlie.txt"), "AS=skipped\n"); // no .md
-      const out = cap();
+      const out = captureStdout();
       try { expect(await verdictTallyRun(["x"])).toBe(0); } finally { out.restore(); }
       const lines = out.text().trim().split("\n");
       expect(lines).toEqual(["VERDICT=alpha:accept", "VERDICT=charlie:skipped", "TALLY=accept"]);
@@ -748,7 +742,7 @@ describe("explore verdict-tally", () => {
       const art = exploreArtDir("x");
       writeFileSync(join(art, "adversary-alpha.md"), "no heading here\n");
       // charlie has neither .txt nor .md → malformed too
-      const out = cap();
+      const out = captureStdout();
       try { expect(await verdictTallyRun(["x"])).toBe(0); } finally { out.restore(); }
       const lines = out.text().trim().split("\n");
       expect(lines).toEqual(["VERDICT=alpha:malformed", "VERDICT=charlie:malformed", "TALLY=unavailable"]);
@@ -1112,11 +1106,6 @@ describe("explore gap-send/wait", () => {
 });
 
 describe("explore survivors", () => {
-  function cap(): { text: () => string; restore: () => void } {
-    const c: string[] = [];
-    const s = vi.spyOn(process.stdout, "write").mockImplementation(((x: unknown) => { c.push(String(x)); return true; }) as never);
-    return { text: () => c.join(""), restore: () => s.mockRestore() };
-  }
   const deps3 = () => initDeps({ activeProviders: () => ["codex", "claude", "agy"] }); // alpha, charlie, golf
 
   it("all rows non-empty → SURVIVORS=N, list.txt untouched, no list-original.txt", async () => {
@@ -1127,7 +1116,7 @@ describe("explore survivors", () => {
       writeFileSync(join(art, "findings-alpha.md"), "a");
       writeFileSync(join(art, "findings-charlie.md"), "c");
       const before = readFileSync(join(art, "list.txt"), "utf8");
-      const out = cap();
+      const out = captureStdout();
       try { expect(await survivorsRun(["x"])).toBe(0); } finally { out.restore(); }
       expect(out.text().trim()).toBe("SURVIVORS=2");
       expect(readFileSync(join(art, "list.txt"), "utf8")).toBe(before);
@@ -1144,7 +1133,7 @@ describe("explore survivors", () => {
       writeFileSync(join(art, "findings-alpha.md"), "a");
       writeFileSync(join(art, "findings-charlie.md"), "c");
       writeFileSync(join(art, "findings-golf.md"), "   \n\t\n"); // whitespace-only: same predicate as missingListArtifacts
-      const out = cap();
+      const out = captureStdout();
       try { expect(await survivorsRun(["x"])).toBe(0); } finally { out.restore(); }
       expect(out.text().trim().split("\n")).toEqual(["SURVIVORS=2", "DROPPED=golf"]);
       expect(readFileSync(join(art, "list-original.txt"), "utf8")).toBe(original);
@@ -1163,7 +1152,7 @@ describe("explore survivors", () => {
       writeFileSync(join(art, "findings-alpha.md"), "a");
       writeFileSync(join(art, "findings-charlie.md"), "c"); // golf missing
       writeFileSync(join(art, "list-original.txt"), "# SENTINEL preserved roster\ncodex\talpha\nclaude\tcharlie\nagy\tgolf\n");
-      const out = cap();
+      const out = captureStdout();
       try { expect(await survivorsRun(["x"])).toBe(0); } finally { out.restore(); }
       expect(readFileSync(join(art, "list-original.txt"), "utf8")).toContain("SENTINEL");
     } finally { cleanup(); }
@@ -1175,7 +1164,7 @@ describe("explore survivors", () => {
       await initWith(["x"], initDeps());
       const art = exploreArtDir("x");
       writeFileSync(join(art, "findings-alpha.md"), "a"); // charlie missing
-      const out = cap();
+      const out = captureStdout();
       try { expect(await survivorsRun(["x"])).toBe(0); } finally { out.restore(); }
       expect(out.text().trim().split("\n")).toEqual(["SURVIVORS=1", "DROPPED=charlie", "DEGRADED=1"]);
       expect(readFileSync(join(art, "list.txt"), "utf8")).not.toContain("charlie");
@@ -1211,7 +1200,7 @@ describe("explore survivors", () => {
       writeFileSync(join(art, "findings-charlie.md"), "FlashAttention wins. https://x.test/p .");
       // golf produced nothing — without survivors this blocks synth-preliminary with rc 1
       expect(await synthPreliminaryRun(["x"])).toBe(1);
-      const out = cap();
+      const out = captureStdout();
       try { expect(await survivorsRun(["x"])).toBe(0); } finally { out.restore(); }
       writeFileSync(join(art, "landscape-draft.md"), DRAFT);
       expect(await synthPreliminaryRun(["x"])).toBe(0);
@@ -1347,11 +1336,6 @@ describe("explore signoff-send/wait", () => {
 });
 
 describe("explore contribution", () => {
-  function cap2(): { text: () => string; restore: () => void } {
-    const c: string[] = [];
-    const s = vi.spyOn(process.stdout, "write").mockImplementation(((x: unknown) => { c.push(String(x)); return true; }) as never);
-    return { text: () => c.join(""), restore: () => s.mockRestore() };
-  }
   it("fully seeded N=2 art dir → exact TSV rows in file and stdout", async () => {
     const { cleanup } = freshHome();
     try {
@@ -1372,7 +1356,7 @@ describe("explore contribution", () => {
       writeFileSync(join(art, "rebuttal-alpha.md"), "## Responses\n1. DEFEND holds\n");
       writeFileSync(join(art, "signoff-alpha.txt"), "OFFSET=0\nSS=ok\n");
       writeFileSync(join(art, "signoff-alpha.md"), "# Sign-off\nVERDICT: fair\n");
-      const out = cap2();
+      const out = captureStdout();
       try { expect(await contributionRun(["x"])).toBe(0); } finally { out.restore(); }
       const expected = [
         "# agent\tprovider\tclaims_total\tclaims_solo\tclaims_consensus\tpeer_agree\tpeer_dispute\tpeer_uncertain\tadversary_verdict\trebuttal_defended\trebuttal_conceded\tsignoff",
@@ -1392,7 +1376,7 @@ describe("explore contribution", () => {
       writeFileSync(join(art, "list-original.txt"), readFileSync(join(art, "list.txt"), "utf8"));
       writeFileSync(join(art, "list.txt"), "# generated later by /ap:design\ncodex\talpha\n");
       writeFileSync(join(art, "findings-alpha.md"), "## Approaches\n1. [src/a.ts:1] A — solo\n");
-      const out = cap2();
+      const out = captureStdout();
       try { expect(await contributionRun(["x"])).toBe(0); } finally { out.restore(); }
       const lines = readFileSync(join(art, "contribution.tsv"), "utf8").trimEnd().split("\n");
       expect(lines.length).toBe(3); // header + BOTH roster rows

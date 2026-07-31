@@ -3,15 +3,9 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdirSync, writeFileSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
+import { captureStdout } from "./helpers/captureStdout.js";
 import { repoStateDir } from "../src/core/paths.js";
 import { run } from "../src/commands/implement.js";
-
-function captureStdout() {
-  const orig = process.stdout.write.bind(process.stdout);
-  let buf = "";
-  (process.stdout as any).write = (chunk: any, ..._rest: any[]) => { buf += String(chunk); return true; };
-  return { text: () => buf, restore: () => { (process.stdout as any).write = orig; } };
-}
 
 describe("implement find-latest-doc", () => {
   let h: { home: string; cleanup: () => void };

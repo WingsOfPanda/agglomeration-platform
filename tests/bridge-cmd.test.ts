@@ -6,14 +6,7 @@ import { run as bridgeRun, initWith } from "../src/commands/bridge.js";
 import type { InitDeps } from "../src/commands/bridge.js";
 import { bridgeArtDir, bridgeExecDir } from "../src/core/bridge.js";
 import { freshHome } from "./helpers/tmpHome.js";
-
-// Inline stdout capture (copied per file, like quick-cmd.test.ts).
-function captureStdout() {
-  const orig = process.stdout.write.bind(process.stdout);
-  let buf = "";
-  (process.stdout as unknown as { write: unknown }).write = (chunk: unknown) => { buf += String(chunk); return true; };
-  return { text: () => buf, restore: () => { (process.stdout as unknown as { write: unknown }).write = orig; } };
-}
+import { captureStdout } from "./helpers/captureStdout.js";
 
 const okDeps: InitDeps = {
   haveCmd: () => true,

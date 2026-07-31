@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
+import { captureStdout } from "./helpers/captureStdout.js";
 import { globalRoot } from "../src/core/paths.js";
 import { run as check } from "../src/commands/check.js";
 
@@ -12,12 +13,6 @@ afterEach(() => { env.cleanup(); });
 function stageAvailable(lines: string[]): void {
   writeFileSync(join(globalRoot(), "providers-available.txt"), lines.join("\n") + (lines.length ? "\n" : ""));
 }
-function captureStdout(): { text: () => string; restore: () => void } {
-  const chunks: string[] = [];
-  const spy = vi.spyOn(process.stdout, "write").mockImplementation(((s: unknown) => { chunks.push(String(s)); return true; }) as never);
-  return { text: () => chunks.join(""), restore: () => spy.mockRestore() };
-}
-
 describe("check list-plan", () => {
   it("emits validated detected + decision JSON", async () => {
     stageAvailable(["codex", "claude"]);

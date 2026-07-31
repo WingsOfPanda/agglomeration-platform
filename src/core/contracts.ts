@@ -18,10 +18,23 @@ export interface Agent {
 }
 type Doc = Record<string, any>;
 
-function load(): Doc {
-  const p = contractsPath();
+// Memoized per RESOLVED contracts path: every accessor calls load(), and re-reading + re-parsing the
+// YAML each time cost ~0.6 ms a call (spawn pays 5, check ~12). Keyed on the path rather than a single
+// slot because tests swap CLAUDE_PLUGIN_ROOT between fresh temp roots inside one process.
+const DOCS = new Map<string, Doc>();
+
+function readDoc(p: string): Doc {
   if (!existsSync(p)) return {};
   try { return (parse(readFileSync(p, "utf8")) as Doc) ?? {}; } catch { return {}; }
+}
+
+function load(): Doc {
+  const p = contractsPath();
+  const hit = DOCS.get(p);
+  if (hit) return hit;
+  const doc = readDoc(p);
+  DOCS.set(p, doc);
+  return doc;
 }
 
 export function listAgents(): string[] {

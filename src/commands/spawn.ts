@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { kvParse } from "../args.js";
 import { log } from "../core/log.js";
-import { inTmuxSession, tmuxVersionOk, haveCmd } from "../core/deps.js";
+import { inTmuxSession, tmuxVersionOk, tmuxVersionString, haveCmd } from "../core/deps.js";
 import { topicDir, workerDir, repoRoot } from "../core/paths.js";
 import { stateInit, stateArchive, isoUtc } from "../core/archive.js";
 import { readIfExists } from "../core/fsread.js";
@@ -41,8 +41,9 @@ export async function run(args: string[]): Promise<number> {
   if (cwd && (!cwd.startsWith("/") || !existsSync(cwd))) { log.error(`spawn --cwd must be an existing absolute path: ${cwd}`); return 1; }
 
   if (!inTmuxSession()) { log.error("must run inside a tmux session"); return 1; }
-  if (!haveCmd("tmux")) { log.error("tmux not on PATH"); return 1; }
-  if (!tmuxVersionOk()) { log.error("tmux >= 3.0 required"); return 1; }
+  const tmuxVer = tmuxVersionString(); // one `tmux -V` for both checks (tmuxVersionOk() would re-run it)
+  if (!tmuxVer) { log.error("tmux not on PATH"); return 1; }
+  if (!tmuxVersionOk(tmuxVer)) { log.error("tmux >= 3.0 required"); return 1; }
   if (!(await ensurePaneBorders())) log.warn("could not set pane-border globals; worker labels may not render"); // render @ap_ worker labels on pane borders (not the raw TUI title)
 
   if (agent === "random") {

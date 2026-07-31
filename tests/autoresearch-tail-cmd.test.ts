@@ -4,6 +4,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
+import { captureStdout } from "./helpers/captureStdout.js";
 import { refineWith, handoffExtractWith, forensicsRun, teardownWith, freshWorkerWith, abortWith, consensusWith, type AutoresearchRefineDeps, type AutoresearchTeardownDeps, type AutoresearchFreshWorkerDeps, type AutoresearchAbortDeps, type AutoresearchConsensusDeps } from "../src/commands/autoresearch.js";
 import { experimentDir, workerStateDir, workersDir, autoresearchArtDir } from "../src/core/autoresearch.js";
 import { parseState } from "../src/core/autoresearchState.js";
@@ -256,11 +257,11 @@ describe("forensics", () => {
     home();
     const art = autoresearchArtDir("clean");
     mkdirSync(art, { recursive: true });
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stdout = captureStdout();
     try {
       expect(await forensicsRun(["clean"])).toBe(0);
-    } finally { stdout.mockRestore(); }
-    expect(stdout).not.toHaveBeenCalled();
+    } finally { stdout.restore(); }
+    expect(stdout.text()).toBe("");
   });
 
   it("rc 0 + stdout path when scrapeable findings exist", async () => {
@@ -273,11 +274,11 @@ describe("forensics", () => {
     mkdirSync(workerDir, { recursive: true });
     writeFileSync(join(workerDir, "outbox.jsonl"), '{"event":"error","reason":"boom"}\n');
 
-    const lines: string[] = [];
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation((c: unknown): boolean => { lines.push(String(c)); return true; });
+    const stdout = captureStdout();
     try {
       expect(await forensicsRun([topic])).toBe(0);
-    } finally { stdout.mockRestore(); }
+    } finally { stdout.restore(); }
+    const lines = stdout.text().trim().split("\n");
     expect(lines.length).toBe(1);
     expect(lines[0].trim()).toMatch(/forensics\/.*-autoresearch-buggy\.md$/);
   });
@@ -522,11 +523,10 @@ describe("fresh-worker", () => {
   it("non-numeric exp_counter resets to 0", async () => {
     const h = home();
     const stateTxt = scaffoldState(h.home, TOPIC, INST, "phase=idle\nexp_counter=NaN\n");
-    const lines: string[] = [];
-    const spy = vi.spyOn(process.stdout, "write").mockImplementation((c: unknown): boolean => { lines.push(String(c)); return true; });
+    const out = captureStdout();
     try {
       expect(await freshWorkerWith([TOPIC, INST], fpDeps(h.home))).toBe(0);
-    } finally { spy.mockRestore(); }
+    } finally { out.restore(); }
     expect(parseState(readFileSync(stateTxt, "utf8")).exp_counter).toBe("0");
   });
 
@@ -770,12 +770,11 @@ describe("consensus", () => {
     // alpha: a single ok exp. metric_name matches bravo (Agreed); approach_label differs (Contested).
     writeResult(h.home, TOPIC, "alpha", "exp-002", { status: "ok", metric_name: "acc", metric_value: 0.50, approach_label: "wide" });
 
-    const lines: string[] = [];
     const sso = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const out = vi.spyOn(process.stdout, "write").mockImplementation((c: unknown): boolean => { lines.push(String(c)); return true; });
+    const out = captureStdout();
     try {
       expect(await consensusWith([TOPIC], csDeps(h.home))).toBe(0);
-    } finally { out.mockRestore(); sso.mockRestore(); }
+    } finally { out.restore(); sso.mockRestore(); }
 
     const md = readFileSync(join(art, "consensus.md"), "utf8");
     expect(md).toContain("## Agreed");
@@ -798,10 +797,10 @@ describe("consensus", () => {
     writeResult(h.home, TOPIC, "alpha", "exp-001", { status: "ok", metric_value: 0.53 });
 
     const sso = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const out = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const out = captureStdout();
     try {
       expect(await consensusWith([`--epsilon=0.05`, TOPIC], csDeps(h.home))).toBe(0);
-    } finally { out.mockRestore(); sso.mockRestore(); }
+    } finally { out.restore(); sso.mockRestore(); }
     const md = readFileSync(join(art, "consensus.md"), "utf8");
     expect(md).toContain("Epsilon for metric_value: 0.05");
     // 0.50 vs 0.53 within epsilon 0.05 -> metric_value is Agreed (single value column).

@@ -1,21 +1,21 @@
 // tests/design-assemble.test.ts
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdirSync, writeFileSync, readFileSync, existsSync, mkdtempSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { freshHome } from "./helpers/tmpHome.js";
+import { captureStdout } from "./helpers/captureStdout.js";
 import { designArtDir, designDraftDir, designDocPath } from "../src/core/design.js";
 import { run as design } from "../src/commands/design.js";
 
-let prev: string | undefined;
-beforeEach(() => { prev = process.env.AP_HOME; process.env.AP_HOME = mkdtempSync(join(tmpdir(), "sa-")); });
-afterEach(() => { if (prev === undefined) delete process.env.AP_HOME; else process.env.AP_HOME = prev; });
+let env: { home: string; cleanup: () => void };
+beforeEach(() => { env = freshHome(); });
+afterEach(() => { env.cleanup(); });
 
 function scaffold(topic: string, sections: Record<string, string>) {
   const dd = designDraftDir(topic); mkdirSync(dd, { recursive: true });
   writeFileSync(join(designArtDir(topic), "topic.txt"), "My Topic Title");
   for (const [k, v] of Object.entries(sections)) writeFileSync(join(dd, `${k}.md`), v);
 }
-function cap() { const c: string[] = []; const s = vi.spyOn(process.stdout, "write").mockImplementation(((x: unknown) => { c.push(String(x)); return true; }) as never); return { text: () => c.join(""), restore: () => s.mockRestore() }; }
 
 const FULL = {
   problem: "## Problem\n\np", goal: "## Goal\n\ng", architecture: "## Architecture\n\na",
@@ -25,7 +25,7 @@ const FULL = {
 describe("design assemble", () => {
   it("audit PASS: writes the doc + audit.log, prints the doc path, rc 0", async () => {
     scaffold("ok-topic", FULL);
-    const c = cap();
+    const c = captureStdout();
     const rc = await design(["assemble", "ok-topic"]);
     c.restore();
     expect(rc).toBe(0);

@@ -13,7 +13,7 @@ export interface Pair { agent: string; model: string; }
 export interface StopDeps {
   paneMetaRead(i: string, m: string, t: string): string | null;
   livePanes(): Promise<Set<string>>;
-  killGraceful(pane: string): Promise<void>;
+  killGraceful(pane: string, alive?: boolean): Promise<void>;
   killNow(pane: string): Promise<void>;
   stateArchive(i: string, m: string, t: string): string | null;
   sleep(ms: number): Promise<void>;
@@ -30,7 +30,7 @@ export async function teardownBatch(topic: string, pairs: Pair[], d: StopDeps): 
     const pane = d.paneMetaRead(agent, model, topic) ?? "";
     if (pane && live.has(pane)) {
       log.info(`graceful shutdown for ${agent}-${model} on ${topic} (pane ${pane})`);
-      await d.killGraceful(pane);
+      await d.killGraceful(pane, live.has(pane)); // pass the batch snapshot: no per-pane re-scan
       pending.push(pane);
     }
   }
@@ -53,7 +53,7 @@ function liveDeps(): StopDeps {
   return {
     paneMetaRead: (i, m, t) => paneMetaRead(i, m, t),
     livePanes: () => livePanes(),
-    killGraceful: (p) => killGraceful(p, pluginRoot()),
+    killGraceful: (p, alive) => killGraceful(p, pluginRoot(), alive),
     killNow: (p) => killNow(p),
     stateArchive: (i, m, t) => stateArchive(i, m, t),
     sleep,

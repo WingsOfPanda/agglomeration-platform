@@ -1,6 +1,10 @@
 // tests/design-turn.test.ts
 import { describe, it, expect } from "vitest";
-import { findingsStatus, researchState, parseLatestOffset, scaledTimeout, composeResearchPrompt, composeVerifyPrompt, verifyState, composeDrilldownPrompt, drilldownState } from "../src/core/designTurn.js";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { freshHome } from "./helpers/tmpHome.js";
+import { topicDir, workerDir } from "../src/core/paths.js";
+import { findingsStatus, researchState, parseLatestOffset, lastKeyedNumber, recordWaitOutcome, scaledTimeout, composeResearchPrompt, composeVerifyPrompt, verifyState, composeDrilldownPrompt, drilldownState } from "../src/core/designTurn.js";
 
 describe("findingsStatus", () => {
   it("null (no findings.md) → missing", () => { expect(findingsStatus(null)).toBe("missing"); });
@@ -122,5 +126,77 @@ describe("drilldownState", () => {
     expect(drilldownState({ event: "done" }, "")).toBe("missing");
     expect(drilldownState({ event: "error", reason: "x" }, null)).toBe("missing");
     expect(drilldownState(null, "notes")).toBe("timeout");
+  });
+});
+
+// recordWaitOutcome is the single WRITER of the `OFFSET=` / `<KEY>=` state-file micro-protocol
+// its readers (parseLatestOffset / lastKeyedNumber / gateState) already cover. Characterization
+// tests: they pin the bytes it appends today, including that the `.done` marker and the logging
+// stay the CALLER's job — recordWaitOutcome never writes one.
+describe("recordWaitOutcome", () => {
+  const AGENT = "alpha", MODEL = "codex", TOPIC = "demo";
+
+  /** A worker dir whose outbox has a known byte size, plus an art dir with a pre-armed state file. */
+  function seed(outbox: string) {
+    const wd = workerDir(AGENT, MODEL, TOPIC);
+    mkdirSync(wd, { recursive: true });
+    writeFileSync(join(wd, "outbox.jsonl"), outbox);
+    const art = join(topicDir(TOPIC), "_design");
+    mkdirSync(art, { recursive: true });
+    const stateFile = join(art, `research-${AGENT}.txt`);
+    writeFileSync(stateFile, "OFFSET=0\n");
+    return {
+      stateFile,
+      questionFile: join(art, `question-${AGENT}.txt`),
+      doneMarker: join(art, `research-${AGENT}.done`),
+      size: Buffer.byteLength(outbox),
+      state: () => readFileSync(stateFile, "utf8"),
+    };
+  }
+
+  it("terminal outcome appends only `<KEY>=<state>` — no question file, no .done marker", () => {
+    const { cleanup } = freshHome();
+    try {
+      const s = seed('{"event":"done","summary":"ok"}\n');
+      recordWaitOutcome(AGENT, MODEL, TOPIC, s.stateFile, "ok", "FS");
+      expect(s.state()).toBe("OFFSET=0\nFS=ok\n");
+      expect(parseLatestOffset(s.state())).toBe(0);   // OFFSET untouched on a terminal outcome
+      expect(existsSync(s.questionFile)).toBe(false);
+      expect(existsSync(s.doneMarker)).toBe(false);   // the caller writes the marker, not this
+    } finally { cleanup(); }
+  });
+
+  it("state 'question' with no payload falls through to the terminal branch", () => {
+    const { cleanup } = freshHome();
+    try {
+      const s = seed('{"event":"question","message":"?"}\n');
+      recordWaitOutcome(AGENT, MODEL, TOPIC, s.stateFile, "question", "FS");
+      expect(s.state()).toBe("OFFSET=0\nFS=question\n");
+      expect(existsSync(s.questionFile)).toBe(false);
+    } finally { cleanup(); }
+  });
+
+  it("question outcome writes the payload and re-arms OFFSET past the handled event", () => {
+    const { cleanup } = freshHome();
+    try {
+      const s = seed('{"event":"question","message":"which passage?"}\n');
+      recordWaitOutcome(AGENT, MODEL, TOPIC, s.stateFile, "question", "FS",
+        { file: s.questionFile, body: '{"event":"question","message":"which passage?"}\n' });
+      expect(readFileSync(s.questionFile, "utf8")).toBe('{"event":"question","message":"which passage?"}\n');
+      expect(s.state()).toBe(`OFFSET=0\nOFFSET=${s.size}\nFS=question\n`);
+      expect(parseLatestOffset(s.state())).toBe(s.size); // latest-line-wins: past the handled event
+      expect(existsSync(s.doneMarker)).toBe(false);
+    } finally { cleanup(); }
+  });
+
+  it("question extraLines are appended verbatim after `<KEY>=question` (implement's OBJECTIONS=)", () => {
+    const { cleanup } = freshHome();
+    try {
+      const s = seed('{"event":"question","message":"objection"}\n');
+      recordWaitOutcome(AGENT, MODEL, TOPIC, s.stateFile, "question", "TS",
+        { file: s.questionFile, body: "payload", extraLines: "OBJECTIONS=1\n" });
+      expect(s.state()).toBe(`OFFSET=0\nOFFSET=${s.size}\nTS=question\nOBJECTIONS=1\n`);
+      expect(lastKeyedNumber(s.state(), "OBJECTIONS")).toBe(1);
+    } finally { cleanup(); }
   });
 });
