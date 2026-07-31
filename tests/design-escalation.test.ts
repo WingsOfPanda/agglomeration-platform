@@ -1,5 +1,5 @@
 // tests/design-escalation.test.ts
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
@@ -8,6 +8,7 @@ import { designArtDir } from "../src/core/design.js";
 import { workerDir } from "../src/core/paths.js";
 import { outboxPath } from "../src/core/ipc.js";
 import { END_OF_ARTIFACT } from "../src/core/artifact.js";
+import { composeDrilldownPrompt } from "../src/core/designTurn.js";
 import { researchSendWith, researchWaitWith, diffRun, spawnAllWith, verifySendWith, verifyWaitWith, adjudicateRun, synthesizeRun, walkStateRun, drilldownWith, forensicsRun, archiveRun } from "../src/commands/design.js";
 
 let env: { home: string; cleanup: () => void };
@@ -295,7 +296,9 @@ describe("design adjudicate", () => {
     for (const [inst, prov] of [["alpha", "codex"], ["charlie", "claude"]]) {
       mkdirSync(workerDir(inst, prov, "t"), { recursive: true });
       writeFileSync(join(workerDir(inst, prov, "t"), "verify.md"), "## Verdicts\n1. AGREE [b:2] charlie claim\n   confirmed\n");
-      writeFileSync(join(art, `verify-${inst}.txt`), "OFFSET=0\nVS=ok\n");
+      // AC= is the wait's artifact verdict, which adjudicate's backstop reads (VS=ok does not
+      // mean "the wait accepted the file" — that conflation was the 2026-07-31 F1 bug).
+      writeFileSync(join(art, `verify-${inst}.txt`), "OFFSET=0\nAC=quiescent\nVS=ok\n");
     }
     const rc = await adjudicateRun(["t"]);
     expect(rc).toBe(0);
@@ -357,6 +360,30 @@ describe("design drilldown", () => {
     expect(sends[0]).toContain("--from"); expect(sends[0]).toContain("hub");
     expect(existsSync(join(dd, "_scratch", "drilldown-architecture-alpha.md"))).toBe(true);
   });
+  it("a BUSY worker is never dispatched to — the drill turn is the likeliest inbox clobber", async () => {
+    // drilldown is an optional extra turn fired while the workers are still live, so it gets the
+    // same busy-gate every phase send has (it used to be the one dispatch path without one).
+    const art = designArtDir("t"); const dd = join(art, "drilldowns"); mkdirSync(join(dd, "_scratch"), { recursive: true });
+    writeFileSync(join(art, "doc.md"), "# doc\n");
+    mkdirSync(workerDir("alpha", "codex", "t"), { recursive: true });
+    const send = vi.fn(async () => 0);
+    const rc = await drilldownWith(
+      ["t", "Architecture", dd, "", join(art, "doc.md"), "alpha", "codex"],
+      { ...sendDeps({ send, busyState: () => "working" }), ...waitDeps({ wait: async () => ({ event: "done" }) }) },
+      { writeProbe: (p: string) => writeFileSync(p, "notes\n") },
+    );
+    expect(rc).toBe(1);                 // nothing produced
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("the drill prompt carries the artifact-completeness contract for its out path", async () => {
+    const prompt = composeDrilldownPrompt({
+      section: "Architecture", designDocPath: "/d/doc.md", focus: "", outPath: "/dd/_scratch/drill.md",
+    });
+    expect(prompt).toContain("  1. Write your output to /dd/_scratch/drill.md.tmp");
+    expect(prompt).toContain(`  2. Make the LAST line of that file the literal sentinel: ${END_OF_ARTIFACT}`);
+  });
+
   it("all-empty round → rc 1; bad arg count → rc 2", async () => {
     const art = designArtDir("t"); const dd = join(art, "drilldowns"); mkdirSync(join(dd, "_scratch"), { recursive: true });
     writeFileSync(join(art, "doc.md"), "# doc\n"); mkdirSync(workerDir("alpha", "codex", "t"), { recursive: true });

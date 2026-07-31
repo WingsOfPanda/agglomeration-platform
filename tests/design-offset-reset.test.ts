@@ -35,8 +35,10 @@ describe("design offset-reset", () => {
     const art = designArtDir("t"); mkdirSync(art, { recursive: true });
     writeFileSync(join(art, "verify-alpha.txt"), "OFFSET=2\n");
     writeFileSync(join(art, "question-alpha.txt"), "{}\n");
-    writeFileSync(join(art, "stillwriting-alpha.txt"), "alpha 12\n");
-    writeFileSync(join(art, "stillwriting-charlie.txt"), "charlie 12\n");
+    // Strike logs are per agent+ARTIFACT since 2026-07-31; the reset sweeps the agent's whole set.
+    writeFileSync(join(art, "stillwriting-alpha-verify.md.txt"), "alpha 12\n");
+    writeFileSync(join(art, "stillwriting-alpha-findings.md.txt"), "alpha 30\n");
+    writeFileSync(join(art, "stillwriting-charlie-verify.md.txt"), "charlie 12\n");
     writeFileSync(join(art, "adjudicated-draft.md"), "x\n");
     const pd = workerDir("alpha", "codex", "t"); mkdirSync(pd, { recursive: true });
     writeFileSync(join(pd, "verify.md"), "keep\n");
@@ -44,8 +46,9 @@ describe("design offset-reset", () => {
     expect(existsSync(join(art, "verify-alpha.txt"))).toBe(false);
     expect(existsSync(join(art, "question-alpha.txt"))).toBe(false);
     // The reset re-arms the phase, so alpha's refusal strikes must not carry into the retry.
-    expect(existsSync(join(art, "stillwriting-alpha.txt"))).toBe(false);
-    expect(existsSync(join(art, "stillwriting-charlie.txt"))).toBe(true); // per-agent, never a sweep
+    expect(existsSync(join(art, "stillwriting-alpha-verify.md.txt"))).toBe(false);
+    expect(existsSync(join(art, "stillwriting-alpha-findings.md.txt"))).toBe(false);
+    expect(existsSync(join(art, "stillwriting-charlie-verify.md.txt"))).toBe(true); // per-agent, never a sweep
     expect(existsSync(join(art, "adjudicated-draft.md"))).toBe(true);
     expect(existsSync(join(pd, "verify.md"))).toBe(true);
   });
