@@ -88,3 +88,18 @@ export function buildAnnotations(draft: string, findings: string[]): { annotated
 
   return { annotatedDraft: lines.join("\n"), plan: { items } };
 }
+
+/** Solo-citation tokens from annotations.json (kind unverified | approaches-flagged), unique, in
+ *  file order. Missing/empty/malformed → [] — the Priority targets block is optional sharpening,
+ *  never an error (annotate always runs before Phase 6, but a skip must not break dispatch). */
+export function soloTokensFromAnnotations(raw: string | null): string[] {
+  if (!raw || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw) as { items?: { kind?: string; token?: string }[] };
+    const seen = new Set<string>();
+    for (const it of parsed.items ?? []) {
+      if ((it.kind === "unverified" || it.kind === "approaches-flagged") && it.token) seen.add(it.token);
+    }
+    return [...seen];
+  } catch { return []; }
+}

@@ -16,6 +16,13 @@ export function readOr(path: string, fallback = ""): string {
   try { return readFileSync(path, "utf8"); } catch { return fallback; }
 }
 
+/** Read + JSON.parse a file, returning `fallback` when it is absent or unparseable — the one
+ *  guarded parse autoresearch's result.json / audit.json / manifest reads share. */
+export function readJsonOr<T>(path: string, fallback: T | null): T | null {
+  if (!existsSync(path)) return fallback;
+  try { return JSON.parse(readFileSync(path, "utf8")) as T; } catch { return fallback; }
+}
+
 /** First line of a single-value state file, trimmed; "" if absent. */
 export function readField(path: string): string {
   return readIfExists(path).split("\n")[0].trim();

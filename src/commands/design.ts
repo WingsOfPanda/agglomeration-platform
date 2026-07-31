@@ -1,26 +1,28 @@
 // src/commands/design.ts
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
 import { isoUtc, archiveTopic } from "../core/archive.js";
 import {
-  deriveSlug, parseDesignArgs, designArtDir, designDraftDir,
-  formatListFile, designDocPath, parseListFile, spawnAllBatch,
-  verifyScopeFiles, lastTag,
-  resolveDrilldownPath, cascadeTargets, exportDocTo,
-  type ListRow, type ResetPhase,
+  deriveSlug, parseDesignArgs, designArtDir, designDraftDir, designDocPath,
+  resolveDrilldownPath, cascadeTargets, exportDocTo, type ResetPhase,
 } from "../core/design.js";
+import {
+  formatListFile, parseListFile, spawnAllBatch, verifyScopeFiles, lastTag, type ListRow,
+} from "../core/roster.js";
 import { assembleDoc, SECTIONS_SINGLE, synthesizeSeeds } from "../core/designDoc.js";
 import { auditDoc } from "../core/audit.js";
 import { readProviderList } from "../core/providers.js";
 import { activeProvidersPath, workerDir, repoRoot, topicDir } from "../core/paths.js";
 import { pickAgents } from "../core/agents.js";
-import { outboxOffset, outboxPath, TERMINAL_EVENTS, type OutboxEvent } from "../core/ipc.js";
-import { liveOutboxWait } from "../core/waitLive.js";
-import { agentConsultValidated, consultTimeout, agentTimeoutMultiplier } from "../core/contracts.js";
-import { composeResearchPrompt, researchState, parseLatestOffset, scaledTimeout, composeVerifyPrompt, verifyState, composeDrilldownPrompt, drilldownState, gateState, gateAnomalies, recordWaitOutcome } from "../core/designTurn.js";
+import { agentConsultValidated, consultTimeout } from "../core/contracts.js";
+import { composeResearchPrompt, scaledTimeout, composeVerifyPrompt, composeDrilldownPrompt, drilldownState } from "../core/designTurn.js";
+import {
+  DESIGN_PHASES, dispatchPrompt, phaseWait, waitGateVerb, skipDispatch, triad,
+  liveSendDeps, liveWaitDeps, type SendDeps, type WaitDeps,
+} from "../core/phaseTable.js";
 import { envNum } from "../core/env.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { diffFindings, type DiffPart } from "../core/designDiff.js";
@@ -28,7 +30,6 @@ import { adjudicate, type AdjudicateInput } from "../core/designAdjudicate.js";
 import { classifyTopic, skillHintAppend } from "../core/designSkill.js";
 import { readIfExists as readIf, readIfExistsOrNull } from "../core/fsread.js";
 import { walkSectionState, auditIssueToSection } from "../core/designWalk.js";
-import { run as sendRun } from "./send.js";
 import { run as spawnRun } from "./spawn.js";
 import { run as preflightRun } from "./preflight.js";
 
@@ -41,11 +42,11 @@ export async function run(args: string[]): Promise<number> {
     case "init": return initRun(applyArgsFile(rest, { valueFlags: new Set() }));
     case "assemble": return assembleRun(rest);
     case "spawn-all": return spawnAllRun(rest);
-    case "research-send": return researchSendRun(rest);
-    case "research-wait": return researchWaitRun(rest);
+    case "research-send": return triad("design research-send", researchSendWith, liveSendDeps)(rest);
+    case "research-wait": return triad("design research-wait", researchWaitWith, liveWaitDeps)(rest);
     case "diff": return diffRun(rest);
-    case "verify-send": return verifySendRun(rest);
-    case "verify-wait": return verifyWaitRun(rest);
+    case "verify-send": return triad("design verify-send", verifySendWith, liveSendDeps)(rest);
+    case "verify-wait": return triad("design verify-wait", verifyWaitWith, liveWaitDeps)(rest);
     case "adjudicate": return adjudicateRun(rest);
     case "synthesize": return synthesizeRun(rest);
     case "walk-state": return walkStateRun(rest);
@@ -173,20 +174,10 @@ export async function spawnAllWith(topic: string, d: SpawnAllDeps): Promise<numb
   return spawnAllBatch("design", topic, designArtDir(topic), d);
 }
 
-export interface SendDeps {
-  offsetFor(agent: string, model: string, topic: string): number;
-  send(args: string[]): Promise<number>;
-}
-const liveResearchSendDeps: SendDeps = {
-  offsetFor: (i, m, t) => outboxOffset(outboxPath(i, m, t)),
-  send: sendRun,
-};
-
-async function researchSendRun(rest: string[]): Promise<number> {
-  const [topic, agent, provider] = rest;
-  if (!topic || !agent || !provider) { log.error("usage: design research-send <topic> <agent> <provider>"); return 2; }
-  return researchSendWith(topic, agent, provider, liveResearchSendDeps);
-}
+// design's two worker phases, in pipeline order. The send/wait skeletons live in core/phaseTable.ts
+// (shared with explore's seven); `SendDeps`/`WaitDeps` keep their names here for callers + tests.
+const [RESEARCH, VERIFY] = DESIGN_PHASES;
+export type { SendDeps, WaitDeps };
 
 export async function researchSendWith(topic: string, agent: string, provider: string, d: SendDeps): Promise<number> {
   const art = designArtDir(topic);
@@ -199,51 +190,11 @@ export async function researchSendWith(topic: string, agent: string, provider: s
   const findingsPath = join(workerDir(agent, provider, topic), "findings.md");
   const promptFile = join(art, `${agent}_research_prompt.md`);
   atomicWrite(promptFile, skillHintAppend(join(art, "skill.txt"), composeResearchPrompt(topicText, findingsPath)));
-
-  const offset = d.offsetFor(agent, provider, topic);
-  atomicWrite(stateFile, `OFFSET=${offset}\n`);
-
-  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
-  if (rc !== 0) { log.error(`design research-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`); return 1; }
-  log.ok(`design research-send: ${agent} offset=${offset}`);
-  return 0;
-}
-
-export interface WaitDeps {
-  wait(agent: string, model: string, topic: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null>;
-  multiplier(provider: string): string;
-}
-const liveResearchWaitDeps: WaitDeps = {
-  wait: liveOutboxWait,
-  multiplier: agentTimeoutMultiplier,
-};
-
-async function researchWaitRun(rest: string[]): Promise<number> {
-  const [topic, agent, provider] = rest;
-  if (!topic || !agent || !provider) { log.error("usage: design research-wait <topic> <agent> <provider>"); return 2; }
-  return researchWaitWith(topic, agent, provider, liveResearchWaitDeps);
+  return dispatchPrompt(RESEARCH, { topic, agent, provider, stateFile, promptFile }, d);
 }
 
 export async function researchWaitWith(topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> {
-  const art = designArtDir(topic);
-  const stateFile = join(art, `research-${agent}.txt`);
-  if (!existsSync(stateFile)) { log.error(`design research-wait: ${stateFile} missing (run design research-send first)`); return 1; }
-  const offset = parseLatestOffset(readFileSync(stateFile, "utf8"));
-  if (offset === null) { log.error(`design research-wait: OFFSET not set in ${stateFile}`); return 1; }
-
-  const timeout = scaledTimeout(consultTimeout("research"), d.multiplier(provider));
-  log.info(`design research-wait: ${agent} offset=${offset} timeout=${timeout}s`);
-  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
-
-  const findingsPath = join(workerDir(agent, provider, topic), "findings.md");
-  const findingsText = readIfExistsOrNull(findingsPath);
-  const fs = researchState(ev, findingsText);
-
-  recordWaitOutcome(agent, provider, topic, stateFile, fs, "FS",
-    ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
-  writeFileSync(join(art, `research-${agent}.done`), "");
-  log.ok(`design research-wait: ${agent} FS=${fs}`);
-  return 0;
+  return phaseWait(RESEARCH, topic, agent, provider, d);
 }
 
 export async function diffRun(rest: string[]): Promise<number> {
@@ -279,12 +230,6 @@ export async function diffRun(rest: string[]): Promise<number> {
 
 // ---- Phase D: cross-verify -> adjudicate -> synthesize ----
 
-async function verifySendRun(rest: string[]): Promise<number> {
-  const [topic, agent, provider] = rest;
-  if (!topic || !agent || !provider) { log.error("usage: design verify-send <topic> <agent> <provider>"); return 2; }
-  return verifySendWith(topic, agent, provider, liveResearchSendDeps);
-}
-
 export async function verifySendWith(topic: string, agent: string, provider: string, d: SendDeps): Promise<number> {
   const art = designArtDir(topic);
   if (!existsSync(art)) { log.error(`design verify-send: ${art} not found`); return 1; }
@@ -307,53 +252,16 @@ export async function verifySendWith(topic: string, agent: string, provider: str
   const items = workers.join("\n");
   atomicWrite(join(art, `verify-claims-${agent}.txt`), items ? items + "\n" : "");
 
-  if (!items) { atomicWrite(stateFile, "VS=skipped\n"); log.ok(`design verify-send: ${agent} VS=skipped (no claims to verify)`); return 0; }
+  if (!items) return skipDispatch(VERIFY, agent, stateFile, "no claims to verify");
 
   const verifyPath = join(workerDir(agent, provider, topic), "verify.md");
   const promptFile = join(art, `${agent}_verify_prompt.md`);
   atomicWrite(promptFile, skillHintAppend(join(art, "skill.txt"), composeVerifyPrompt(items, verifyPath)));
-
-  const offset = d.offsetFor(agent, provider, topic);
-  atomicWrite(stateFile, `OFFSET=${offset}\n`);
-  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
-  if (rc !== 0) { log.error(`design verify-send: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`); return 1; }
-  log.ok(`design verify-send: ${agent} offset=${offset}`);
-  return 0;
-}
-
-async function verifyWaitRun(rest: string[]): Promise<number> {
-  const [topic, agent, provider] = rest;
-  if (!topic || !agent || !provider) { log.error("usage: design verify-wait <topic> <agent> <provider>"); return 2; }
-  return verifyWaitWith(topic, agent, provider, liveResearchWaitDeps);
+  return dispatchPrompt(VERIFY, { topic, agent, provider, stateFile, promptFile }, d);
 }
 
 export async function verifyWaitWith(topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> {
-  const art = designArtDir(topic);
-  const stateFile = join(art, `verify-${agent}.txt`);
-  if (!existsSync(stateFile)) { log.error(`design verify-wait: ${stateFile} missing (run design verify-send first)`); return 1; }
-  const text = readFileSync(stateFile, "utf8");
-
-  if (lastTag(text, "VS") === "skipped") { // empty-scope short-circuit
-    writeFileSync(join(art, `verify-${agent}.done`), "");
-    log.ok(`design verify-wait: ${agent} VS=skipped (already)`);
-    return 0;
-  }
-  const offset = parseLatestOffset(text);
-  if (offset === null) { log.error(`design verify-wait: OFFSET not set in ${stateFile}`); return 1; }
-
-  const timeout = scaledTimeout(consultTimeout("verify"), d.multiplier(provider));
-  log.info(`design verify-wait: ${agent} offset=${offset} timeout=${timeout}s`);
-  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
-
-  const verifyPath = join(workerDir(agent, provider, topic), "verify.md");
-  const verifyText = readIfExistsOrNull(verifyPath);
-  const vs = verifyState(ev, verifyText);
-
-  recordWaitOutcome(agent, provider, topic, stateFile, vs, "VS",
-    ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
-  writeFileSync(join(art, `verify-${agent}.done`), "");
-  log.ok(`design verify-wait: ${agent} VS=${vs}`);
-  return 0;
+  return phaseWait(VERIFY, topic, agent, provider, d);
 }
 
 export async function adjudicateRun(rest: string[]): Promise<number> {
@@ -417,26 +325,7 @@ export async function waitGateRun(rest: string[]): Promise<number> {
   const [topic, phase] = rest;
   if (!topic || !phase) { log.error("usage: design wait-gate <topic> <research|verify>"); return 2; }
   if (phase !== "research" && phase !== "verify") { log.error(`design wait-gate: phase must be research|verify (got ${phase})`); return 2; }
-  const art = designArtDir(topic);
-  const listPath = join(art, "list.txt");
-  if (!existsSync(listPath)) { log.error(`design wait-gate: list.txt missing at ${art}`); return 2; }
-  const rows = parseListFile(readFileSync(listPath, "utf8"));
-  if (rows.length === 0) { log.error("design wait-gate: list.txt has no workers"); return 2; }
-  const key = phase === "research" ? "FS" : "VS";
-  const workers = rows.map((r) => {
-    const stateFile = join(art, `${phase}-${r.agent}.txt`);
-    return {
-      agent: r.agent,
-      doneExists: existsSync(join(art, `${phase}-${r.agent}.done`)),
-      stateText: readIfExistsOrNull(stateFile),
-    };
-  });
-  const states = gateState(workers, key);
-  for (const s of states) process.stdout.write(`${s.agent}\t${s.status}\n`);
-  for (const a of gateAnomalies(workers, key)) {
-    log.warn(`design wait-gate: ${a.agent} is terminal via ${key}=${a.value} — its ${phase} artifact may be missing`);
-  }
-  return states.every((s) => s.status === "terminal") ? 0 : 1;
+  return waitGateVerb("design", designArtDir(topic), phase, phase === "research" ? "FS" : "VS");
 }
 
 // ---- Phase F: drilldown (optional, workers still live) ----
@@ -449,7 +338,7 @@ interface DrilldownTestHooks { writeProbe?: (outPath: string) => void; }
 const DRILLDOWN_TIMEOUT = (): number => envNum("AP_DRILLDOWN_TIMEOUT_S", consultTimeout("research"));
 
 async function drilldownRun(rest: string[]): Promise<number> {
-  return drilldownWith(rest, { ...liveResearchSendDeps, ...liveResearchWaitDeps }, {});
+  return drilldownWith(rest, { ...liveSendDeps, ...liveWaitDeps }, {});
 }
 
 export async function drilldownWith(rest: string[], d: DrilldownDeps, hooks: DrilldownTestHooks): Promise<number> {

@@ -1,6 +1,6 @@
 // tests/design-spawn.test.ts
 import { describe, it, expect } from "vitest";
-import { spawnListArg, spawnResultsTsv, spawnTally, parsePanesFile } from "../src/core/design.js";
+import { spawnListArg, spawnResultsTsv, spawnTally, parsePanesFile } from "../src/core/roster.js";
 
 describe("spawnListArg", () => {
   it("formats <agent>:<provider> pairs (model = provider), preserving order", () => {
