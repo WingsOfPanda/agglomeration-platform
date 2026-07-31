@@ -129,7 +129,7 @@ Read the (possibly rewritten) list and send a research turn to each worker:
 
 ```bash
 grep -v '^#' "$ART/list.txt" | while IFS=$'\t' read -r PROV INST; do
-  [ -n "$PROV" ] && [ -n "$INST" ] && $CS design research-send <TOPIC> "$INST" "$PROV"
+  [ -n "$PROV" ] && [ -n "$INST" ] && { $CS design research-send <TOPIC> "$INST" "$PROV" || echo "SEND_FAILED=$INST rc=$?"; }
 done
 ```
 
@@ -149,6 +149,11 @@ Each `research-send` composes the findings prompt, captures the pre-send outbox 
     for design's workers too), then re-run the same `*-send`.
   - *Abort* — `/ap:stop <TOPIC>` for the ready workers, then stop.
 - **rc 2** = usage error (a missing `<INST>`/`<PROV>` argument) — fix the call.
+
+The `while` loops swallow each verb's rc, so both of them end their send with
+`|| echo "SEND_FAILED=$INST rc=$?"`. **Read the loop's stdout**: any `SEND_FAILED=<INST> rc=<n>`
+line means that worker was NOT dispatched — handle it per the rc list above before moving to the
+stage's wait step, or that worker's wait will block on an event no one asked for.
 
 ## Stage 5 — research wait + question relay (per worker)
 
@@ -191,13 +196,22 @@ ensemble could not produce 2 sets of findings, stop). If some workers were dropp
 
 **Never read a worker's `findings.md` before this gate exits 0.** Each wait holds its worker open
 until that phase's artifact ends with the literal `END_OF_ARTIFACT` line (grace `AP_ARTIFACT_GRACE_S`,
-default 60s); an artifact that stops growing without the line is accepted anyway and flagged for
-`/ap:review`, while one still growing (or empty) at the cap records `FS=timeout` and is flagged. If
-`design diff` (or, for `verify.md`, `design adjudicate`) exits 1 printing `STILL_WRITING=<INST>` on
-stderr, the wait never classified that worker and its file is still being written: re-run the
-wait-gate, then re-run the verb. The verb self-bounds — three refusals with no growth in between
-(or six refusals however much it grew) and it treats that worker as empty. When you quote a
-worker's `findings.md`/`verify.md` into any doc, strip the trailing `END_OF_ARTIFACT` line.
+default 60s, floored at 10s; 0 disables the check entirely). It then records its own verdict as an
+`AC=` line in that phase's state file: `AC=sentinel` (the line landed), `AC=quiescent` (no line, but
+the file stopped growing — accepted anyway and flagged for `/ap:review`), or `AC=expired` (still
+empty or still changing at the cap — flagged, and the validators discard that artifact). `AC=` is
+about the FILE; the `FS=`/`VS=` value beside it stays a content classification, unchanged by expiry.
+
+If `design diff` (or, for `verify.md`, `design adjudicate`) exits 1 printing `STILL_WRITING=<INST>`
+on stderr, that phase's wait never ran for that worker (no `AC=` line) and its file is still being
+written. **The recovery is to run the missing wait** — `$CS design research-wait <TOPIC> <INST>
+<PROV>` (or `verify-wait`), which is what classifies — then re-run the verb; `wait-gate` alone
+cannot fix it, it only reads state back. Re-running a wait is always safe and re-judges the artifact
+(it resumes from the recorded `OFFSET=`, re-reads the same terminal event, and appends a fresh `AC=`
+line), so it is also how you rescue an `AC=expired` worker whose file has since finished.
+`design offset-reset <TOPIC> <INST> <phase>` re-arms the phase and clears that agent's strikes. The verb self-bounds — three refusals with no growth
+in between (or six refusals however much it grew) and it treats that worker as empty. When you quote
+a worker's `findings.md`/`verify.md` into any doc, strip the trailing `END_OF_ARTIFACT` line.
 
 ## Stage 6 — N-way diff
 
@@ -211,7 +225,7 @@ Read the diff list (`$ART/list.txt`) and dispatch each worker's verify turn:
 
 ```bash
 grep -v '^#' "$ART/list.txt" | while IFS=$'\t' read -r PROV INST; do
-  [ -n "$PROV" ] && [ -n "$INST" ] && $CS design verify-send <TOPIC> "$INST" "$PROV"
+  [ -n "$PROV" ] && [ -n "$INST" ] && { $CS design verify-send <TOPIC> "$INST" "$PROV" || echo "SEND_FAILED=$INST rc=$?"; }
 done
 ```
 

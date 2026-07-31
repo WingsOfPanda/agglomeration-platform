@@ -563,7 +563,8 @@ function workerBusyState(i2, m, t) {
   const sp = statusPath(i2, m, t);
   if (!(0, import_node_fs6.existsSync)(sp)) return null;
   const match = (0, import_node_fs6.readFileSync)(sp, "utf8").match(/"state"\s*:\s*"([^"]*)"/);
-  return match && match[1] && match[1] !== "idle" ? match[1] : null;
+  const state = match ? match[1].trim() : "";
+  return state && !TERMINAL_WORKER_STATES.has(state.toLowerCase()) ? state : null;
 }
 function workerSendGate(i2, m, t, label, unit) {
   const outbox = outboxPath(i2, m, t);
@@ -725,7 +726,7 @@ function resolveModel(agent, topic) {
   const model = d.name.slice(agent.length + 1);
   return readPaneJson(workerDir(agent, model, topic))?.model ?? model;
 }
-var import_node_fs6, import_node_path3, SENDER_RE, TERMINAL_EVENTS, sleep;
+var import_node_fs6, import_node_path3, TERMINAL_WORKER_STATES, SENDER_RE, TERMINAL_EVENTS, sleep;
 var init_ipc = __esm({
   "src/core/ipc.ts"() {
     "use strict";
@@ -736,6 +737,7 @@ var init_ipc = __esm({
     init_archive();
     init_fsread();
     init_log();
+    TERMINAL_WORKER_STATES = /* @__PURE__ */ new Set(["idle", "done", "complete", "error", "ready"]);
     SENDER_RE = /^[a-zA-Z0-9_-]+$/;
     TERMINAL_EVENTS = ["done", "error", "question"];
     sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -16915,8 +16917,8 @@ function scrapeSpawnResults(text) {
   }
   return out;
 }
-function scrapeLogs(text, basename4) {
-  return text.split("\n").filter((l) => l.includes("[error]") || l.includes("log_error")).map((l) => ({ source: "session_log", key: l.trim(), context: basename4 }));
+function scrapeLogs(text, basename5) {
+  return text.split("\n").filter((l) => l.includes("[error]") || l.includes("log_error")).map((l) => ({ source: "session_log", key: l.trim(), context: basename5 }));
 }
 function scrapeArtDir(artDir) {
   const out = [];
@@ -18440,10 +18442,14 @@ var init_designDiff = __esm({
 function artifactGraceS() {
   const raw = process.env.AP_ARTIFACT_GRACE_S;
   const n2 = raw === void 0 || raw.trim() === "" ? 60 : Number(raw);
-  return Number.isFinite(n2) ? Math.min(300, Math.max(0, n2)) : 60;
+  if (!Number.isFinite(n2)) return 60;
+  if (n2 <= 0) return 0;
+  return Math.min(300, Math.max(MIN_GRACE_S, n2));
 }
 function hasArtifactSentinel(text) {
-  return text !== null && text.trimEnd().endsWith(END_OF_ARTIFACT);
+  if (text === null) return false;
+  const lines = text.split("\n").map((l) => l.trim()).filter((l) => l !== "");
+  return lines.length > 1 && lines[lines.length - 1] === END_OF_ARTIFACT;
 }
 function artifactContract(finalPath, alsoPaths = []) {
   return [
@@ -18454,7 +18460,8 @@ function artifactContract(finalPath, alsoPaths = []) {
     ...alsoPaths.map((p) => `  3b. Same three steps for ${p}: write ${p}.tmp with ${END_OF_ARTIFACT} as its last line, then mv ${p}.tmp ${p}`),
     "  4. ONLY THEN append your terminal event to your outbox.",
     `A file whose last line is not ${END_OF_ARTIFACT} is treated as still being written: the Hub`,
-    "waits out a short grace period and then records the phase as timed out."
+    "waits out a short grace period, and if the file is still empty or still changing at the end of",
+    "it, that phase's output is discarded."
   ].join("\n");
 }
 function probe(path6) {
@@ -18476,8 +18483,14 @@ async function awaitArtifact(path6, graceS, sleep5) {
   }
   return "expired";
 }
-function recordStillWriting(art, agent, size) {
-  const path6 = (0, import_node_path20.join)(art, `stillwriting-${agent}.txt`);
+function strikePrefix(agent) {
+  return `stillwriting-${agent}-`;
+}
+function strikePath(art, agent, artifact) {
+  return (0, import_node_path20.join)(art, `${strikePrefix(agent)}${(0, import_node_path20.basename)(artifact).replace(/[^A-Za-z0-9._-]/g, "_")}.txt`);
+}
+function recordStillWriting(art, agent, artifact, size) {
+  const path6 = strikePath(art, agent, artifact);
   const prev = readIfExists(path6).split("\n").filter((l) => l.length > 0).map((l) => Number(l.split(/\s+/)[1]));
   const sizes = [...prev, size];
   atomicWrite(path6, sizes.map((s) => `${agent} ${s}`).join("\n") + "\n");
@@ -18489,17 +18502,27 @@ function recordStillWriting(art, agent, size) {
   }
   return { strikes, total: sizes.length };
 }
-function clearStillWriting(art, agent) {
-  (0, import_node_fs25.rmSync)((0, import_node_path20.join)(art, `stillwriting-${agent}.txt`), { force: true });
+function clearArtifactStrikes(art, agent, artifact) {
+  (0, import_node_fs25.rmSync)(strikePath(art, agent, artifact), { force: true });
+}
+function clearAgentStrikes(art, agent) {
+  let names;
+  try {
+    names = (0, import_node_fs25.readdirSync)(art);
+  } catch {
+    return;
+  }
+  for (const n2 of names) if (n2.startsWith(strikePrefix(agent))) (0, import_node_fs25.rmSync)((0, import_node_path20.join)(art, n2), { force: true });
 }
 function artifactBackstop(opts) {
-  const text = readIfExists(opts.artifact);
-  if (hasArtifactSentinel(text) || opts.tag === "ok") {
-    clearStillWriting(opts.art, opts.agent);
+  const text = opts.text ?? readIfExists(opts.artifact);
+  const accept = lastTag(opts.stateText, ARTIFACT_ACCEPT_KEY);
+  if (hasArtifactSentinel(text) || accept === "sentinel" || accept === "quiescent" || accept === "unchecked") {
+    clearArtifactStrikes(opts.art, opts.agent, opts.artifact);
     return "complete";
   }
-  if (opts.tag === "timeout" || opts.tag === "failed") return "drop";
-  const { strikes, total } = recordStillWriting(opts.art, opts.agent, Buffer.byteLength(text));
+  if (accept === "expired" || lastTag(opts.stateText, opts.key) === "failed") return "drop";
+  const { strikes, total } = recordStillWriting(opts.art, opts.agent, opts.artifact, Buffer.byteLength(text));
   if (strikes >= NO_GROWTH_STRIKES || total >= MAX_REFUSALS) {
     const reason = strikes >= NO_GROWTH_STRIKES ? `${strikes} refusals with no growth` : `${total} refusals (cap ${MAX_REFUSALS})`;
     log.warn(`${opts.label}: ${opts.agent} still has no ${END_OF_ARTIFACT} after ${reason} \u2014 dropping as empty`);
@@ -18512,10 +18535,10 @@ function artifactBackstop(opts) {
   }
   process.stderr.write(`STILL_WRITING=${opts.agent}
 `);
-  log.error(`${opts.label}: ${opts.agent} ${opts.artifact} has no ${END_OF_ARTIFACT} (still writing; strike ${strikes}/${NO_GROWTH_STRIKES}, refusal ${total}/${MAX_REFUSALS}) \u2014 re-run the wait-gate, then retry`);
+  log.error(`${opts.label}: ${opts.agent} ${opts.artifact} has no ${END_OF_ARTIFACT} and no ${ARTIFACT_ACCEPT_KEY}= verdict (still writing; strike ${strikes}/${NO_GROWTH_STRIKES}, refusal ${total}/${MAX_REFUSALS}) \u2014 run that phase's wait verb, then retry`);
   return "still-writing";
 }
-var import_node_fs25, import_node_path20, END_OF_ARTIFACT, ARTIFACT_POLL_S, QUIESCENT_POLLS, NO_GROWTH_STRIKES, MAX_REFUSALS, realSleep;
+var import_node_fs25, import_node_path20, END_OF_ARTIFACT, ARTIFACT_ACCEPT_KEY, ARTIFACT_POLL_S, QUIESCENT_POLLS, MIN_GRACE_S, NO_GROWTH_STRIKES, MAX_REFUSALS, realSleep;
 var init_artifact = __esm({
   "src/core/artifact.ts"() {
     "use strict";
@@ -18524,10 +18547,13 @@ var init_artifact = __esm({
     init_log();
     init_atomic();
     init_fsread();
+    init_roster();
     init_forensics();
     END_OF_ARTIFACT = "END_OF_ARTIFACT";
+    ARTIFACT_ACCEPT_KEY = "AC";
     ARTIFACT_POLL_S = 2;
-    QUIESCENT_POLLS = 2;
+    QUIESCENT_POLLS = 5;
+    MIN_GRACE_S = QUIESCENT_POLLS * ARTIFACT_POLL_S;
     NO_GROWTH_STRIKES = 3;
     MAX_REFUSALS = 6;
     realSleep = (ms) => new Promise((r) => {
@@ -18571,15 +18597,17 @@ function lastKeyedValue(text, key) {
   const matches = text.split("\n").filter((l) => l.startsWith(`${key}=`));
   return matches.length ? matches[matches.length - 1].slice(key.length + 1).trim() : null;
 }
-function recordWaitOutcome(agent, model, topic, stateFile, state, key, question) {
+function recordWaitOutcome(agent, model, topic, stateFile, state, key, question, lead) {
+  const head = lead ? `${lead}
+` : "";
   if (state === "question" && question) {
     atomicWrite(question.file, question.body);
     const bumped = outboxOffset(outboxPath(agent, model, topic));
-    (0, import_node_fs26.appendFileSync)(stateFile, `OFFSET=${bumped}
+    (0, import_node_fs26.appendFileSync)(stateFile, `${head}OFFSET=${bumped}
 ${key}=question
 ${question.extraLines ?? ""}`);
   } else {
-    (0, import_node_fs26.appendFileSync)(stateFile, `${key}=${state}
+    (0, import_node_fs26.appendFileSync)(stateFile, `${head}${key}=${state}
 `);
   }
 }
@@ -18697,7 +18725,9 @@ function composeDrilldownPrompt(opts) {
     `Focus: ${focus}`,
     "",
     "Write your expanded notes (with [citation] anchors) to:",
-    `  ${opts.outPath}`
+    `  ${opts.outPath}`,
+    "",
+    artifactContract(opts.outPath)
   ].join("\n");
 }
 var import_node_fs26, RESEARCH_BLOCKERS;
@@ -19102,18 +19132,18 @@ function resolveDrilldownPath(scratchDir, section, agent) {
   }
   return (0, import_node_path22.join)(scratchDir, `${cand}.md`);
 }
-function designExportDocPath(repoRoot2, basename4) {
-  return (0, import_node_path22.join)(repoRoot2, "docs", "ap", "specs", basename4);
+function designExportDocPath(repoRoot2, basename5) {
+  return (0, import_node_path22.join)(repoRoot2, "docs", "ap", "specs", basename5);
 }
 function exportDocTo(topic, destRoot, opts) {
   const ddir = (0, import_node_path22.join)(designArtDir(topic, opts), "design-doc");
   if (!(0, import_node_fs28.existsSync)(ddir)) return null;
   const hits = (0, import_node_fs28.readdirSync)(ddir).filter((f) => f.endsWith(`-${topic}-design.md`)).sort();
   if (hits.length === 0) return null;
-  const basename4 = hits[hits.length - 1];
-  const dest = designExportDocPath(destRoot, basename4);
+  const basename5 = hits[hits.length - 1];
+  const dest = designExportDocPath(destRoot, basename5);
   (0, import_node_fs28.mkdirSync)((0, import_node_path22.join)(destRoot, "docs", "ap", "specs"), { recursive: true });
-  atomicWrite(dest, (0, import_node_fs28.readFileSync)((0, import_node_path22.join)(ddir, basename4), "utf8"));
+  atomicWrite(dest, (0, import_node_fs28.readFileSync)((0, import_node_path22.join)(ddir, basename5), "utf8"));
   return dest;
 }
 var import_node_path22, import_node_fs28;
@@ -19298,6 +19328,7 @@ function skipDispatch(row, agent, stateFile, reason) {
 }
 async function dispatchPrompt(row, ctx, d) {
   const { topic, agent, provider, stateFile, promptFile } = ctx;
+  const art = row.artDir(topic);
   const label = `${row.cmd} ${row.phase}-send`;
   const busy = (d.busyState ?? workerBusyState)(agent, provider, topic);
   if (busy) {
@@ -19312,6 +19343,7 @@ async function dispatchPrompt(row, ctx, d) {
     log.error(`${label}: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`);
     return 1;
   }
+  clearArtifactStrikes(art, agent, row.artifactFor(art, agent, provider, topic));
   log.ok(`${label}: ${agent} offset=${offset}`);
   return 0;
 }
@@ -19339,9 +19371,9 @@ async function phaseWait(row, topic, agent, provider, d) {
   const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
   const artifact = row.artifactFor(art, agent, provider, topic);
   const graceS = artifactGraceS();
-  const checked = ev !== null && ev.event === "done" && graceS > 0;
-  const outcome = checked ? await awaitArtifact(artifact, graceS, d.sleep ?? realSleep) : "sentinel";
-  if (outcome === "quiescent") {
+  const isDone = ev !== null && ev.event === "done";
+  const accept = !isDone ? null : graceS > 0 ? await awaitArtifact(artifact, graceS, d.sleep ?? realSleep) : "unchecked";
+  if (accept === "quiescent") {
     log.warn(`${label}: ${agent} ${artifact} has no ${END_OF_ARTIFACT} but stopped growing \u2014 accepting it and flagging the missing sentinel`);
     recordHubFlag({
       command: row.cmd,
@@ -19349,15 +19381,15 @@ async function phaseWait(row, topic, agent, provider, d) {
       note: `artifact-quiescent-no-sentinel: ${agent} ${artifact}`
     });
   }
-  if (outcome === "expired") {
-    log.warn(`${label}: ${agent} ${artifact} has no ${END_OF_ARTIFACT} after ${graceS}s grace \u2014 recording ${row.key}=timeout`);
+  if (accept === "expired") {
+    log.warn(`${label}: ${agent} ${artifact} has no ${END_OF_ARTIFACT} after ${graceS}s grace \u2014 recording ${ARTIFACT_ACCEPT_KEY}=expired (the validators drop this artifact; ${row.key} keeps its own classification so later phases still dispatch)`);
     recordHubFlag({
       command: row.cmd,
       topic,
       note: `artifact-incomplete: ${agent} ${artifact} done-event without ${END_OF_ARTIFACT} after ${graceS}s grace`
     });
   }
-  const state = outcome === "expired" ? "timeout" : row.stateFn(ev, readIfExistsOrNull(artifact));
+  const state = row.stateFn(ev, readIfExistsOrNull(artifact));
   recordWaitOutcome(
     agent,
     provider,
@@ -19365,7 +19397,8 @@ async function phaseWait(row, topic, agent, provider, d) {
     stateFile,
     state,
     row.key,
-    ev ? { file: (0, import_node_path24.join)(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : void 0
+    ev ? { file: (0, import_node_path24.join)(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : void 0,
+    accept ? `${ARTIFACT_ACCEPT_KEY}=${accept}` : void 0
   );
   (0, import_node_fs30.writeFileSync)((0, import_node_path24.join)(art, `${row.phase}-${agent}.done`), "");
   log.ok(`${label}: ${agent} ${row.key}=${state}`);
@@ -19987,6 +20020,7 @@ async function diffRun(rest) {
       log.error(`design diff: ${r.agent} findings.md missing: ${f}`);
       return 1;
     }
+    const text = (0, import_node_fs33.readFileSync)(f, "utf8");
     const verdict = artifactBackstop({
       label: "design diff",
       command: "design",
@@ -19994,10 +20028,12 @@ async function diffRun(rest) {
       art,
       agent: r.agent,
       artifact: f,
-      tag: lastTag(readIfExists((0, import_node_path27.join)(art, `research-${r.agent}.txt`)), "FS")
+      text,
+      stateText: readIfExists((0, import_node_path27.join)(art, `research-${r.agent}.txt`)),
+      key: "FS"
     });
     if (verdict === "still-writing") return 1;
-    workers.push({ name: r.agent, findings: verdict === "drop" ? "" : (0, import_node_fs33.readFileSync)(f, "utf8") });
+    workers.push({ name: r.agent, findings: verdict === "drop" ? "" : text });
   }
   const result = diffFindings(workers);
   for (const file of result.files) atomicWrite((0, import_node_path27.join)(art, file.filename), file.content);
@@ -20077,16 +20113,20 @@ async function adjudicateRun(rest) {
   const verify = {};
   const vs = {};
   for (const r of rows) {
-    const text = readIfExists((0, import_node_path27.join)(workerDir(r.agent, r.provider, topic), "verify.md"));
-    const tag = lastTag(readIfExists((0, import_node_path27.join)(art, `verify-${r.agent}.txt`)), "VS");
+    const verifyPath = (0, import_node_path27.join)(workerDir(r.agent, r.provider, topic), "verify.md");
+    const text = readIfExists(verifyPath);
+    const stateText = readIfExists((0, import_node_path27.join)(art, `verify-${r.agent}.txt`));
+    const tag = lastTag(stateText, "VS");
     const verdict = text.trim() ? artifactBackstop({
       label: "design adjudicate",
       command: "design",
       topic,
       art,
       agent: r.agent,
-      artifact: (0, import_node_path27.join)(workerDir(r.agent, r.provider, topic), "verify.md"),
-      tag
+      artifact: verifyPath,
+      text,
+      stateText,
+      key: "VS"
     }) : "complete";
     if (verdict === "still-writing") return 1;
     verify[r.agent] = verdict === "drop" ? "" : text;
@@ -20181,6 +20221,11 @@ async function drilldownWith(rest, d, hooks) {
   const results = await Promise.all(jobs.map(async (j) => {
     const promptFile = (0, import_node_path27.join)(scratch, `.${j.inst}-drill-prompt.md`);
     atomicWrite(promptFile, composeDrilldownPrompt({ section, designDocPath: designDoc, focus, outPath: j.outPath }));
+    const busy = (d.busyState ?? workerBusyState)(j.inst, j.model, topic);
+    if (busy) {
+      log.error(`design drilldown: worker ${j.inst} busy (state=${busy}) \u2014 not sending; re-run the drilldown once it is idle (status: ${statusPath(j.inst, j.model, topic)})`);
+      return "missing";
+    }
     const offset = d.offsetFor(j.inst, j.model, topic);
     const rc = await d.send(["--from", "hub", j.inst, topic, `@${promptFile}`]);
     if (rc !== 0) return "missing";
@@ -20210,8 +20255,9 @@ async function offsetResetRun(rest) {
     log.error(`design offset-reset: art dir missing: ${art}`);
     return 1;
   }
-  for (const f of [`${phase}-${agent}.txt`, `${phase}-${agent}.done`, `question-${agent}.txt`, `stillwriting-${agent}.txt`])
+  for (const f of [`${phase}-${agent}.txt`, `${phase}-${agent}.done`, `question-${agent}.txt`])
     (0, import_node_fs33.rmSync)((0, import_node_path27.join)(art, f), { force: true });
+  clearAgentStrikes(art, agent);
   const c3 = cascadeTargets(phase, keepFindings);
   if (!keepFindings) {
     const td = topicDir(topic);
@@ -20262,6 +20308,7 @@ var init_design2 = __esm({
     init_contracts();
     init_designTurn();
     init_phaseTable();
+    init_ipc();
     init_env();
     init_forensics();
     init_artifact();
@@ -26966,15 +27013,18 @@ async function openqCollateRun(rest) {
   }
   const questionsByAgent = /* @__PURE__ */ new Map();
   for (const r of rows) {
-    const text = readIfExists((0, import_node_path39.join)(art, `findings-${r.agent}.md`));
+    const findings = (0, import_node_path39.join)(art, `findings-${r.agent}.md`);
+    const text = readIfExists(findings);
     const verdict = text.trim() ? artifactBackstop({
       label: "explore openq-collate",
       command: "explore",
       topic,
       art,
       agent: r.agent,
-      artifact: (0, import_node_path39.join)(art, `findings-${r.agent}.md`),
-      tag: lastTag(readIfExists((0, import_node_path39.join)(art, `research-${r.agent}.txt`)), "FS")
+      artifact: findings,
+      text,
+      stateText: readIfExists((0, import_node_path39.join)(art, `research-${r.agent}.txt`)),
+      key: "FS"
     }) : "complete";
     if (verdict === "still-writing") return 1;
     questionsByAgent.set(r.agent, parseOpenQuestions(verdict === "drop" ? "" : text));
@@ -27049,6 +27099,7 @@ async function diffExploreRun(rest) {
       log.error(`explore diff: ${r.agent} findings missing: ${f}`);
       return 1;
     }
+    const text = (0, import_node_fs42.readFileSync)(f, "utf8");
     const verdict = artifactBackstop({
       label: "explore diff",
       command: "explore",
@@ -27056,10 +27107,12 @@ async function diffExploreRun(rest) {
       art,
       agent: r.agent,
       artifact: f,
-      tag: lastTag(readIfExists((0, import_node_path39.join)(art, `research-${r.agent}.txt`)), "FS")
+      text,
+      stateText: readIfExists((0, import_node_path39.join)(art, `research-${r.agent}.txt`)),
+      key: "FS"
     });
     if (verdict === "still-writing") return 1;
-    workers.push({ name: r.agent, findings: verdict === "drop" ? "" : (0, import_node_fs42.readFileSync)(f, "utf8") });
+    workers.push({ name: r.agent, findings: verdict === "drop" ? "" : text });
   }
   const result = diffFindings(workers, ["Approaches"]);
   for (const file of result.files) atomicWrite((0, import_node_path39.join)(art, file.filename), file.content);
@@ -27121,7 +27174,27 @@ async function rebuttalSendWith(topic, agent, provider, d) {
   }
   const buckets = /* @__PURE__ */ new Map();
   for (const r of rows) buckets.set(r.agent, parseBucketLines(readIfExists((0, import_node_path39.join)(art, `${r.agent}_only_items.txt`))));
-  const critiques = rows.filter((r) => lastTag(readIfExists((0, import_node_path39.join)(art, `adversary-${r.agent}.txt`)), "AS") !== "skipped").map((r) => ({ agent: r.agent, text: readIfExists((0, import_node_path39.join)(art, `adversary-${r.agent}.md`)) })).filter((c3) => c3.text.trim().length > 0);
+  const critiques = [];
+  for (const r of rows) {
+    const stateText = readIfExists((0, import_node_path39.join)(art, `adversary-${r.agent}.txt`));
+    if (lastTag(stateText, "AS") === "skipped") continue;
+    const critique = (0, import_node_path39.join)(art, `adversary-${r.agent}.md`);
+    const text = readIfExists(critique);
+    if (!text.trim()) continue;
+    const verdict = artifactBackstop({
+      label: "explore rebuttal-send",
+      command: "explore",
+      topic,
+      art,
+      agent: r.agent,
+      artifact: critique,
+      text,
+      stateText,
+      key: "AS"
+    });
+    if (verdict === "still-writing") return 1;
+    if (verdict === "complete") critiques.push({ agent: r.agent, text });
+  }
   const mine = selectRebuttalTargets(critiques, buckets).get(agent);
   if (!mine || mine.findings.length === 0) {
     return skipDispatch(REBUTTAL, agent, stateFile, "no needs-attention findings attributed to it");
@@ -27258,7 +27331,8 @@ async function survivorsRun(rest) {
       art,
       agent: r.agent,
       artifact: (0, import_node_path39.join)(art, `findings-${r.agent}.md`),
-      tag: lastTag(readIfExists((0, import_node_path39.join)(art, `research-${r.agent}.txt`)), "FS")
+      stateText: readIfExists((0, import_node_path39.join)(art, `research-${r.agent}.txt`)),
+      key: "FS"
     });
     if (verdict === "still-writing") stillWriting = true;
     else if (verdict === "drop") missing.add(`findings-${r.agent}.md`);
@@ -27316,7 +27390,8 @@ async function synthPreliminaryRun(rest) {
       art,
       agent: r.agent,
       artifact: (0, import_node_path39.join)(art, `findings-${r.agent}.md`),
-      tag: lastTag(readIfExists((0, import_node_path39.join)(art, `research-${r.agent}.txt`)), "FS")
+      stateText: readIfExists((0, import_node_path39.join)(art, `research-${r.agent}.txt`)),
+      key: "FS"
     });
     if (verdict === "still-writing") stillWriting = true;
     else if (verdict === "drop") missing.push(`findings-${r.agent}.md`);
@@ -27506,6 +27581,23 @@ async function synthFinalRun(rest) {
     const rows = parseListFile(readIfExists((0, import_node_path39.join)(art, "list.txt")));
     const active = rows.filter((r) => lastTag(readIfExists((0, import_node_path39.join)(art, `adversary-${r.agent}.txt`)), "AS") !== "skipped");
     const missing = missingListArtifacts(art, active, "adversary");
+    let stillWriting = false;
+    for (const r of active) {
+      if (missing.includes(`adversary-${r.agent}.md`)) continue;
+      const verdict = artifactBackstop({
+        label: "explore synth-final",
+        command: "explore",
+        topic,
+        art,
+        agent: r.agent,
+        artifact: (0, import_node_path39.join)(art, `adversary-${r.agent}.md`),
+        stateText: readIfExists((0, import_node_path39.join)(art, `adversary-${r.agent}.txt`)),
+        key: "AS"
+      });
+      if (verdict === "still-writing") stillWriting = true;
+      else if (verdict === "drop") missing.push(`adversary-${r.agent}.md`);
+    }
+    if (stillWriting) return 1;
     if (missing.length) {
       log.error("explore synth-final: blocked \u2014 adversary ran but critiques missing:");
       for (const m of missing) log.error(`  - ${(0, import_node_path39.join)(art, m)}`);
@@ -27535,11 +27627,29 @@ async function verdictTallyRun(rest) {
     return 1;
   }
   const rows = parseListFile(listRaw);
-  const verdictRows = rows.map((r) => {
-    const as = lastTag(readIfExists((0, import_node_path39.join)(art, `adversary-${r.agent}.txt`)), "AS");
-    const verdict = as === "skipped" ? "skipped" : parseAdversaryVerdict(readIfExists((0, import_node_path39.join)(art, `adversary-${r.agent}.md`)));
-    return { agent: r.agent, verdict };
-  });
+  const verdictRows = [];
+  for (const r of rows) {
+    const stateText = readIfExists((0, import_node_path39.join)(art, `adversary-${r.agent}.txt`));
+    if (lastTag(stateText, "AS") === "skipped") {
+      verdictRows.push({ agent: r.agent, verdict: "skipped" });
+      continue;
+    }
+    const critique = (0, import_node_path39.join)(art, `adversary-${r.agent}.md`);
+    const text = readIfExists(critique);
+    const verdict = text.trim() ? artifactBackstop({
+      label: "explore verdict-tally",
+      command: "explore",
+      topic,
+      art,
+      agent: r.agent,
+      artifact: critique,
+      text,
+      stateText,
+      key: "AS"
+    }) : "complete";
+    if (verdict === "still-writing") return 1;
+    verdictRows.push({ agent: r.agent, verdict: parseAdversaryVerdict(verdict === "drop" ? "" : text) });
+  }
   for (const v of verdictRows) process.stdout.write(`VERDICT=${v.agent}:${v.verdict}
 `);
   if (verdictRows.length > 0 && verdictRows.every((v) => v.verdict === "skipped")) {

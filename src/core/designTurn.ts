@@ -62,18 +62,24 @@ export function lastKeyedValue(text: string, key: string): string | null {
  *  the question payload file, then re-arms the state file with the outbox offset bumped PAST the
  *  handled question event (plus any caller extra lines, e.g. implement's `OBJECTIONS=` counter) so
  *  a same-round re-arm does not re-read it. Every other outcome appends the terminal
- *  `<key>=<state>` line (latest-line-wins). Callers add their own `.done` marker / logging. */
+ *  `<key>=<state>` line (latest-line-wins). Callers add their own `.done` marker / logging.
+ *
+ *  `lead` is one extra `<KEY>=<value>` line written AHEAD of the terminal line in the same append
+ *  (phaseWait's `AC=` artifact verdict). Ahead, so the phase key stays the file's LAST line — the
+ *  directives' `grep '^FS=' | tail -1` idiom and the "last line shows FS=question" prose both hold. */
 export function recordWaitOutcome(
   agent: string, model: string, topic: string, stateFile: string,
   state: string, key: string,
   question?: { file: string; body: string; extraLines?: string },
+  lead?: string,
 ): void {
+  const head = lead ? `${lead}\n` : "";
   if (state === "question" && question) {
     atomicWrite(question.file, question.body);
     const bumped = outboxOffset(outboxPath(agent, model, topic));
-    appendFileSync(stateFile, `OFFSET=${bumped}\n${key}=question\n${question.extraLines ?? ""}`);
+    appendFileSync(stateFile, `${head}OFFSET=${bumped}\n${key}=question\n${question.extraLines ?? ""}`);
   } else {
-    appendFileSync(stateFile, `${key}=${state}\n`);
+    appendFileSync(stateFile, `${head}${key}=${state}\n`);
   }
 }
 
@@ -244,5 +250,7 @@ export function composeDrilldownPrompt(opts: { section: string; designDocPath: s
     "",
     "Write your expanded notes (with [citation] anchors) to:",
     `  ${opts.outPath}`,
+    "",
+    artifactContract(opts.outPath),
   ].join("\n");
 }

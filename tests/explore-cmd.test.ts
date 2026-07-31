@@ -150,9 +150,10 @@ const seed: Record<string, Seed> = {
   rebuttal: (art) => {
     writeFileSync(join(art, "alpha_only_items.txt"), "[src/only-a.ts:1] AlphaOnly — solo\n");
     writeFileSync(join(art, "charlie_only_items.txt"), "");
-    writeFileSync(join(art, "adversary-alpha.md"), "## Verdict\naccept\n");
-    writeFileSync(join(art, "adversary-charlie.md"), NEEDS_ATTENTION); // charlie critiques alpha
-    writeFileSync(join(art, "adversary-charlie.txt"), "OFFSET=0\nAS=ok\n"); // peer state, not alpha's
+    // Sentinel-complete: rebuttal-send backstops every critique it selects targets FROM.
+    writeFileSync(join(art, "adversary-alpha.md"), complete("## Verdict\naccept"));
+    writeFileSync(join(art, "adversary-charlie.md"), complete(NEEDS_ATTENTION)); // charlie critiques alpha
+    writeFileSync(join(art, "adversary-charlie.txt"), "OFFSET=0\nAC=sentinel\nAS=ok\n"); // peer state, not alpha's
   },
   gap: (art) => {
     writeFileSync(join(art, "adversary-skip.txt"),
@@ -778,7 +779,7 @@ describe("explore synth-final", () => {
       const art = exploreArtDir("x");
       writeFileSync(join(art, "topic.txt"), "x"); writeFileSync(join(art, "landscape-draft.md"), "d");
       writeFileSync(join(art, "adversary-skip.txt"), "user_decision: continue\n");
-      writeFileSync(join(art, "adversary-alpha.md"), "c"); writeFileSync(join(art, "adversary-charlie.md"), "c");
+      writeFileSync(join(art, "adversary-alpha.md"), complete("c")); writeFileSync(join(art, "adversary-charlie.md"), complete("c"));
       expect(await synthFinalRun(["x"])).toBe(0);
     } finally { cleanup(); }
   });
@@ -799,7 +800,7 @@ describe("explore synth-final", () => {
       const art = exploreArtDir("x");
       writeFileSync(join(art, "landscape-draft.md"), "d");
       writeFileSync(join(art, "adversary-skip.txt"), "user_decision: continue\n");
-      writeFileSync(join(art, "adversary-alpha.md"), "c"); // charlie missing
+      writeFileSync(join(art, "adversary-alpha.md"), complete("c")); // charlie missing
       expect(await synthFinalRun(["x"])).toBe(1);
     } finally { cleanup(); }
   });
@@ -810,7 +811,7 @@ describe("explore synth-final", () => {
       const art = exploreArtDir("x");
       writeFileSync(join(art, "landscape-draft.md"), "d");
       writeFileSync(join(art, "adversary-skip.txt"), "user_decision: continue\n");
-      writeFileSync(join(art, "adversary-alpha.md"), "c");           // alpha critiqued
+      writeFileSync(join(art, "adversary-alpha.md"), complete("c"));           // alpha critiqued
       writeFileSync(join(art, "adversary-charlie.txt"), "AS=skipped\n"); // charlie skipped, no .md
       expect(await synthFinalRun(["x"])).toBe(0);
     } finally { cleanup(); }
@@ -823,8 +824,8 @@ describe("explore verdict-tally", () => {
     try {
       await initWith(["x"], initDeps()); // list: alpha(codex), charlie(claude)
       const art = exploreArtDir("x");
-      writeFileSync(join(art, "adversary-alpha.md"), "# c\n## Verdict\nneeds-attention\n## Material findings\n");
-      writeFileSync(join(art, "adversary-charlie.md"), "# c\n## Verdict\naccept\n");
+      writeFileSync(join(art, "adversary-alpha.md"), complete("# c\n## Verdict\nneeds-attention\n## Material findings"));
+      writeFileSync(join(art, "adversary-charlie.md"), complete("# c\n## Verdict\naccept"));
       const out = captureStdout();
       try { expect(await verdictTallyRun(["x"])).toBe(0); } finally { out.restore(); }
       const lines = out.text().trim().split("\n");
@@ -836,7 +837,7 @@ describe("explore verdict-tally", () => {
     try {
       await initWith(["x"], initDeps());
       const art = exploreArtDir("x");
-      writeFileSync(join(art, "adversary-alpha.md"), "## Verdict\naccept\n");
+      writeFileSync(join(art, "adversary-alpha.md"), complete("## Verdict\naccept"));
       writeFileSync(join(art, "adversary-charlie.txt"), "AS=skipped\n"); // no .md
       const out = captureStdout();
       try { expect(await verdictTallyRun(["x"])).toBe(0); } finally { out.restore(); }
@@ -863,7 +864,7 @@ describe("explore verdict-tally", () => {
     try {
       await initWith(["x"], initDeps());
       const art = exploreArtDir("x");
-      writeFileSync(join(art, "adversary-alpha.md"), "## Verdict\naccept\n");
+      writeFileSync(join(art, "adversary-alpha.md"), complete("## Verdict\naccept"));
       writeFileSync(join(art, "adversary-charlie.txt"), "AS=skipped\n");
       const chunks: string[] = [];
       const spy = vi.spyOn(process.stderr, "write").mockImplementation(((s: unknown) => { chunks.push(String(s)); return true; }) as never);
@@ -877,7 +878,7 @@ describe("explore verdict-tally", () => {
     try {
       await initWith(["x"], initDeps());
       const art = exploreArtDir("x");
-      writeFileSync(join(art, "adversary-alpha.md"), "no heading here\n");
+      writeFileSync(join(art, "adversary-alpha.md"), complete("no heading here"));
       // charlie has neither .txt nor .md → malformed too
       const out = captureStdout();
       try { expect(await verdictTallyRun(["x"])).toBe(0); } finally { out.restore(); }

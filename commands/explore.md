@@ -185,12 +185,24 @@ handle it via **Intervention Pattern 1** before proceeding.
 
 **Never read a `findings-<agent>.md` before this gate exits 0.** Each wait holds its worker open
 until that phase's artifact ends with the literal `END_OF_ARTIFACT` line (grace `AP_ARTIFACT_GRACE_S`,
-default 60s); an artifact that stops growing without the line is accepted anyway and flagged for
-`/ap:review`, while one still growing (or empty) at the cap records `FS=timeout` and is flagged. If
-`survivors`, `synth-preliminary`, `diff` or `openq-collate` exits 1 printing `STILL_WRITING=<agent>`
-on stderr, the wait never classified that worker and its findings file is still being written:
-re-run the wait-gate, then re-run the verb. The verb self-bounds — three refusals with no growth
-in between (or six refusals however much it grew) and it drops that worker as empty.
+default 60s, floored at 10s; 0 disables the check entirely). It then records its own verdict as an
+`AC=` line in that phase's state file: `AC=sentinel` (the line landed), `AC=quiescent` (no line, but
+the file stopped growing — accepted anyway and flagged for `/ap:review`), or `AC=expired` (still
+empty or still changing at the cap — flagged, and the validators discard that artifact). `AC=` is
+about the FILE; the `FS=`/`VS=`/`AS=` value beside it stays a content classification and an expiry
+never rewrites it, so one slow artifact can no longer cascade-skip that worker's later phases.
+
+If `survivors`, `synth-preliminary`, `diff`, `openq-collate`, `rebuttal-send`, `verdict-tally` or
+`synth-final` exits 1 printing `STILL_WRITING=<agent>` on stderr, that phase's wait never ran for
+that worker (no `AC=` line) and its artifact is still being written. **The recovery is to run the
+missing wait** — `$CS explore <phase>-wait <TOPIC> <agent> <provider>`, which is what classifies —
+and then re-run the verb; `wait-gate` alone cannot fix it, it only reads state back. Re-running a
+wait is always safe and re-judges the artifact (it resumes from the recorded `OFFSET=`, re-reads the
+same terminal event, and appends a fresh `AC=` line), so it is also how you rescue an `AC=expired`
+worker whose file has since finished. To start the phase over instead, `rm` its state file and
+re-run that phase's `*-send` (which also clears that artifact's refusal strikes). The verb
+self-bounds — three refusals with no growth in between (or six refusals however much it grew) and
+it drops that worker as empty.
 
 Set task `4` → `completed`.
 
@@ -538,8 +550,10 @@ $CS explore verdict-tally <TOPIC>
 It prints one `VERDICT=<agent>:<needs-attention|minor-revisions|accept|skipped|malformed>` line
 per list row plus a final `TALLY=<value>` majority line (ties break to the MOST severe;
 `skipped`/`malformed` rows are excluded from the majority; zero countable rows →
-`TALLY=unavailable`). The tally shapes your PROSE OBLIGATIONS below — NEVER an automatic loop or
-re-dispatch:
+`TALLY=unavailable`). rc 1 with `STILL_WRITING=<agent>` on stderr means a critique is still being
+written — handle it as Phase 4 describes (run that worker's `adversary-wait`, then re-run), never
+by tallying the partial file. The tally shapes your PROSE OBLIGATIONS below — NEVER an automatic
+loop or re-dispatch:
 
 - `TALLY=needs-attention` → you MUST address every Material finding from each
   `adversary-<agent>.md` explicitly in `## Adversary critiques` and carry the surviving caveats
