@@ -13,12 +13,15 @@ export function statusPath(i: string, m: string, t: string) { return join(worker
 export function paneMetaPath(i: string, m: string, t: string) { return join(workerDir(i, m, t), "pane.json"); }
 
 /** The worker's status.json state when it is NOT idle (a turn/round still in flight), else null
- *  (absent/unreadable status, no state field, empty state, or idle). Uses the frozen non-JSON-
- *  tolerant regex read — never JSON.parse — matching the send-before-dispatch idle gate. */
+ *  (absent/unreadable status, no state field, empty state, or idle). Uses the non-JSON-tolerant
+ *  regex read — never JSON.parse — matching the send-before-dispatch idle gate.
+ *  Whitespace-tolerant since 2026-07-31: a worker (or a `jq`/pretty-printer) that writes
+ *  `{"state": "working"}` used to read as IDLE and let a mid-turn send through. Deliberately
+ *  tightens `workerSendGate` (implement's existing gate) the same way — same bug, same fix. */
 export function workerBusyState(i: string, m: string, t: string): string | null {
   const sp = statusPath(i, m, t);
   if (!existsSync(sp)) return null;
-  const match = readFileSync(sp, "utf8").match(/"state":"([^"]*)"/);
+  const match = readFileSync(sp, "utf8").match(/"state"\s*:\s*"([^"]*)"/);
   return match && match[1] && match[1] !== "idle" ? match[1] : null;
 }
 

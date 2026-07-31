@@ -7,11 +7,16 @@ import { sendDeps, waitDeps } from "./helpers/phaseDeps.js";
 import { designArtDir } from "../src/core/design.js";
 import { workerDir } from "../src/core/paths.js";
 import { outboxPath } from "../src/core/ipc.js";
+import { END_OF_ARTIFACT } from "../src/core/artifact.js";
 import { researchSendWith, researchWaitWith, diffRun, spawnAllWith, verifySendWith, verifyWaitWith, adjudicateRun, synthesizeRun, walkStateRun, drilldownWith, forensicsRun, archiveRun } from "../src/commands/design.js";
 
 let env: { home: string; cleanup: () => void };
 beforeEach(() => { env = freshHome(); });
 afterEach(() => { env.cleanup(); });
+
+/** A worker artifact as the completeness contract requires it: body + the sentinel as its LAST
+ *  line. A phase wait accepts a `done` event only once its artifact carries it. */
+const complete = (body: string): string => `${body}\n${END_OF_ARTIFACT}\n`;
 
 /** Seed a minimal initialised topic: _design/topic.txt + list.txt. */
 function seedTopic(topic: string, rows: Array<{ provider: string; agent: string }>): string {
@@ -65,7 +70,7 @@ describe("design research-wait", () => {
 
   it("done + cited findings → FS=ok + .done sentinel (rc 0)", async () => {
     const art = seedState("t", "alpha", "codex");
-    writeFileSync(join(workerDir("alpha", "codex", "t"), "findings.md"), "## Claims\n1. [a:1] x\n");
+    writeFileSync(join(workerDir("alpha", "codex", "t"), "findings.md"), complete("## Claims\n1. [a:1] x"));
     const rc = await researchWaitWith("t", "alpha", "codex", dep({ event: "done", summary: "ok" }));
     expect(rc).toBe(0);
     expect(readFileSync(join(art, "research-alpha.txt"), "utf8")).toContain("FS=ok");
@@ -73,8 +78,14 @@ describe("design research-wait", () => {
   });
 
   it("done with no findings.md → FS=missing", async () => {
+    // Grace disabled: with the sentinel check on, an absent artifact at `done` is a done-then-write
+    // race and classifies as FS=timeout (tests/artifact-completeness.test.ts). This pins the
+    // stateFn's own answer, which the escape hatch still reaches.
     const art = seedState("t", "alpha", "codex");
-    await researchWaitWith("t", "alpha", "codex", dep({ event: "done", summary: "ok" }));
+    process.env.AP_ARTIFACT_GRACE_S = "0";
+    try {
+      await researchWaitWith("t", "alpha", "codex", dep({ event: "done", summary: "ok" }));
+    } finally { delete process.env.AP_ARTIFACT_GRACE_S; }
     expect(readFileSync(join(art, "research-alpha.txt"), "utf8")).toContain("FS=missing");
   });
 
@@ -117,8 +128,8 @@ describe("design diff", () => {
 
   it("N=2: writes diff.md + two *_only_items.txt (rc 0)", async () => {
     const art = seedFindings("t", [
-      { provider: "codex", agent: "alpha", findings: "## Claims\n1. [a:1] shared\n2. [b:1] alpha-only\n" },
-      { provider: "claude", agent: "charlie", findings: "## Claims\n1. [a:1] shared\n3. [c:1] charlie-only\n" },
+      { provider: "codex", agent: "alpha", findings: complete("## Claims\n1. [a:1] shared\n2. [b:1] alpha-only") },
+      { provider: "claude", agent: "charlie", findings: complete("## Claims\n1. [a:1] shared\n3. [c:1] charlie-only") },
     ]);
     const rc = await diffRun(["t"]);
     expect(rc).toBe(0);
@@ -260,7 +271,7 @@ describe("design verify-wait", () => {
 
   it("done + non-empty verify.md → VS=ok", async () => {
     const art = seedVw("t", "alpha", "codex", "OFFSET=0\n");
-    writeFileSync(join(workerDir("alpha", "codex", "t"), "verify.md"), "## Verdicts\n1. AGREE [a:1] x\n");
+    writeFileSync(join(workerDir("alpha", "codex", "t"), "verify.md"), complete("## Verdicts\n1. AGREE [a:1] x"));
     await verifyWaitWith("t", "alpha", "codex", dep({ event: "done", summary: "ok" }));
     expect(readFileSync(join(art, "verify-alpha.txt"), "utf8")).toContain("VS=ok");
   });

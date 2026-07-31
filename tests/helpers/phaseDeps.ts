@@ -9,6 +9,9 @@ export function sendDeps(over: Partial<SendDeps> = {}): SendDeps {
   return {
     offsetFor: over.offsetFor ?? (() => 0),
     send: over.send ?? (async () => 0),
+    // Left undefined by default so dispatchPrompt uses the live workerBusyState: with no status.json
+    // under the test AP_HOME it reads null (idle) and the send proceeds, as before the busy-gate.
+    busyState: over.busyState,
   };
 }
 
@@ -16,5 +19,7 @@ export function waitDeps(over: Partial<WaitDeps> = {}): WaitDeps {
   return {
     wait: over.wait ?? (async () => null),
     multiplier: over.multiplier ?? (() => "1"),
+    // No-op sleep: the artifact grace loop must not add real seconds to the suite.
+    sleep: over.sleep ?? (async () => {}),
   };
 }
