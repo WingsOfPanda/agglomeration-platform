@@ -36,7 +36,10 @@ import { workerDir } from "./paths.js";
 import { consultTimeout, agentTimeoutMultiplier, type ConsultKind } from "./contracts.js";
 import { outboxOffset, outboxPath, statusPath, workerBusyState, TERMINAL_EVENTS, type OutboxEvent } from "./ipc.js";
 import { recordHubFlag } from "./forensics.js";
-import { END_OF_ARTIFACT, artifactGraceS, awaitArtifact, realSleep } from "./artifact.js";
+import {
+  ARTIFACT_ACCEPT_KEY, END_OF_ARTIFACT, artifactGraceS, awaitArtifact, clearArtifactStrikes, realSleep,
+  type WaitAccept,
+} from "./artifact.js";
 import { liveOutboxWait } from "./waitLive.js";
 import {
   parseLatestOffset, scaledTimeout, researchState, verifyState, gateState, gateAnomalies, recordWaitOutcome,
@@ -230,6 +233,7 @@ export async function dispatchPrompt(
   d: SendDeps,
 ): Promise<number> {
   const { topic, agent, provider, stateFile, promptFile } = ctx;
+  const art = row.artDir(topic);
   const label = `${row.cmd} ${row.phase}-send`;
   // Busy-gate BEFORE the state-file write: a send onto a mid-turn worker rewrites the inbox task it
   // is working on. Refuse with NO state file written (no OFFSET, no `<KEY>=skipped`) so the phase
@@ -244,6 +248,10 @@ export async function dispatchPrompt(
   atomicWrite(stateFile, `OFFSET=${offset}\n`);
   const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
   if (rc !== 0) { log.error(`${label}: send failed (rc=${rc}); ${stateFile} kept (rm to redo)`); return 1; }
+  // The documented recovery is `rm` the state file and re-send; that must reset the artifact's
+  // refusal strikes too, or a retry inherits an earlier episode's counter and the FIRST refusal of
+  // freshly-dispatched work degrades it to the drop path.
+  clearArtifactStrikes(art, agent, row.artifactFor(art, agent, provider, topic));
   log.ok(`${label}: ${agent} offset=${offset}`);
   return 0;
 }
@@ -275,29 +283,39 @@ export async function phaseWait(
   // was written: hold the phase open for the grace window, then classify. Two acceptances (the
   // 2026-07-31 quiescence amendment): the sentinel lands, OR the file is non-empty and stops
   // changing — finished work from a worker that skipped a soft-compliance line, accepted exactly
-  // like a sentinel but flagged for /ap:review. Only an empty or still-growing artifact times out.
+  // like a sentinel but flagged for /ap:review. Only an empty or still-growing artifact expires.
   // Non-done terminal events (error/question) bypass the check — those paths are unchanged.
+  //
+  // The outcome is recorded as its OWN `AC=` line, never folded into the phase key. Two reasons,
+  // both bugs the first draft shipped: (1) the validators need "did the wait accept this file?",
+  // which `<KEY>=ok` does not answer (explore's healthy findings classify `empty`); (2) forcing
+  // `<KEY>=timeout` on expiry made every later phase's dispatch guard treat that worker as unsafe
+  // and cascade-skip it, so ONE missing optional artifact silently ended a worker's run. The key
+  // now always carries the row's natural classification and `AC=` carries the acceptance.
   const artifact = row.artifactFor(art, agent, provider, topic);
   const graceS = artifactGraceS();
-  const checked = ev !== null && ev.event === "done" && graceS > 0;
-  const outcome = checked ? await awaitArtifact(artifact, graceS, d.sleep ?? realSleep) : "sentinel";
-  if (outcome === "quiescent") {
+  const isDone = ev !== null && ev.event === "done";
+  const accept: WaitAccept | null = !isDone
+    ? null // no done event: nothing was written to accept — the stateFn's answer stands alone
+    : graceS > 0 ? await awaitArtifact(artifact, graceS, d.sleep ?? realSleep) : "unchecked";
+  if (accept === "quiescent") {
     log.warn(`${label}: ${agent} ${artifact} has no ${END_OF_ARTIFACT} but stopped growing — accepting it and flagging the missing sentinel`);
     recordHubFlag({
       command: row.cmd, topic,
       note: `artifact-quiescent-no-sentinel: ${agent} ${artifact}`,
     });
   }
-  if (outcome === "expired") {
-    log.warn(`${label}: ${agent} ${artifact} has no ${END_OF_ARTIFACT} after ${graceS}s grace — recording ${row.key}=timeout`);
+  if (accept === "expired") {
+    log.warn(`${label}: ${agent} ${artifact} has no ${END_OF_ARTIFACT} after ${graceS}s grace — recording ${ARTIFACT_ACCEPT_KEY}=expired (the validators drop this artifact; ${row.key} keeps its own classification so later phases still dispatch)`);
     recordHubFlag({
       command: row.cmd, topic,
       note: `artifact-incomplete: ${agent} ${artifact} done-event without ${END_OF_ARTIFACT} after ${graceS}s grace`,
     });
   }
-  const state = outcome === "expired" ? "timeout" : row.stateFn(ev, readIfExistsOrNull(artifact));
+  const state = row.stateFn(ev, readIfExistsOrNull(artifact));
   recordWaitOutcome(agent, provider, topic, stateFile, state, row.key,
-    ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
+    ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined,
+    accept ? `${ARTIFACT_ACCEPT_KEY}=${accept}` : undefined);
   writeFileSync(join(art, `${row.phase}-${agent}.done`), "");
   log.ok(`${label}: ${agent} ${row.key}=${state}`);
   return 0;

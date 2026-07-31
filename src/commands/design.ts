@@ -23,9 +23,10 @@ import {
   DESIGN_PHASES, dispatchPrompt, phaseWait, waitGateVerb, skipDispatch, triad,
   liveSendDeps, liveWaitDeps, type SendDeps, type WaitDeps,
 } from "../core/phaseTable.js";
+import { statusPath, workerBusyState } from "../core/ipc.js";
 import { envNum } from "../core/env.js";
 import { runForensics, runFlag } from "../core/forensics.js";
-import { artifactBackstop } from "../core/artifact.js";
+import { artifactBackstop, clearAgentStrikes } from "../core/artifact.js";
 import { diffFindings, type DiffPart } from "../core/designDiff.js";
 import { adjudicate, type AdjudicateInput } from "../core/designAdjudicate.js";
 import { classifyTopic, skillHintAppend } from "../core/designSkill.js";
@@ -214,14 +215,16 @@ export async function diffRun(rest: string[]): Promise<number> {
   for (const r of rows) {
     const f = join(workerDir(r.agent, r.provider, topic), "findings.md");
     if (!existsSync(f)) { log.error(`design diff: ${r.agent} findings.md missing: ${f}`); return 1; }
-    // Sentinel backstop: a still-writing findings file refuses the whole diff (the hub re-runs the
-    // wait-gate and retries); one whose research phase already failed diffs as EMPTY.
+    // Sentinel backstop: a still-writing findings file refuses the whole diff (the hub runs
+    // research-wait and retries); one the wait never accepted diffs as EMPTY. The bytes judged are
+    // the bytes diffed — one read, passed in, so a `mv` cannot land between check and use.
+    const text = readFileSync(f, "utf8");
     const verdict = artifactBackstop({
-      label: "design diff", command: "design", topic, art, agent: r.agent, artifact: f,
-      tag: lastTag(readIf(join(art, `research-${r.agent}.txt`)), "FS"),
+      label: "design diff", command: "design", topic, art, agent: r.agent, artifact: f, text,
+      stateText: readIf(join(art, `research-${r.agent}.txt`)), key: "FS",
     });
     if (verdict === "still-writing") return 1;
-    workers.push({ name: r.agent, findings: verdict === "drop" ? "" : readFileSync(f, "utf8") });
+    workers.push({ name: r.agent, findings: verdict === "drop" ? "" : text });
   }
 
   const result = diffFindings(workers);
@@ -286,14 +289,16 @@ export async function adjudicateRun(rest: string[]): Promise<number> {
   const verify: Record<string, string> = {};
   const vs: Record<string, string> = {};
   for (const r of rows) {
-    const text = readIf(join(workerDir(r.agent, r.provider, topic), "verify.md"));
-    const tag = lastTag(readIf(join(art, `verify-${r.agent}.txt`)), "VS");
+    const verifyPath = join(workerDir(r.agent, r.provider, topic), "verify.md");
+    const text = readIf(verifyPath);
+    const stateText = readIf(join(art, `verify-${r.agent}.txt`));
+    const tag = lastTag(stateText, "VS");
     // Same backstop as diff, over the OTHER worker-authored artifact this command adjudicates: a
     // half-written verify.md would silently under-report its verdicts. An absent/empty verify.md is
     // the pre-existing VS=skipped path (nothing was ever sent) and never reaches the backstop.
     const verdict = text.trim() ? artifactBackstop({
       label: "design adjudicate", command: "design", topic, art, agent: r.agent,
-      artifact: join(workerDir(r.agent, r.provider, topic), "verify.md"), tag,
+      artifact: verifyPath, text, stateText, key: "VS",
     }) : "complete";
     if (verdict === "still-writing") return 1;
     verify[r.agent] = verdict === "drop" ? "" : text;
@@ -380,6 +385,14 @@ export async function drilldownWith(rest: string[], d: DrilldownDeps, hooks: Dri
   const results = await Promise.all(jobs.map(async (j) => {
     const promptFile = join(scratch, `.${j.inst}-drill-prompt.md`);
     atomicWrite(promptFile, composeDrilldownPrompt({ section, designDocPath: designDoc, focus, outPath: j.outPath }));
+    // The same busy-gate every phase send runs (dispatchPrompt's, via the shared workerBusyState):
+    // drilldown is an optional EXTRA turn dispatched while the workers are still live, so it is the
+    // likeliest send of all to land on a worker mid-turn and rewrite the inbox task it is working on.
+    const busy = (d.busyState ?? workerBusyState)(j.inst, j.model, topic);
+    if (busy) {
+      log.error(`design drilldown: worker ${j.inst} busy (state=${busy}) — not sending; re-run the drilldown once it is idle (status: ${statusPath(j.inst, j.model, topic)})`);
+      return "missing" as const;
+    }
     const offset = d.offsetFor(j.inst, j.model, topic);          // BEFORE send
     const rc = await d.send(["--from", "hub", j.inst, topic, `@${promptFile}`]);
     if (rc !== 0) return "missing" as const;
@@ -405,11 +418,13 @@ export async function offsetResetRun(rest: string[]): Promise<number> {
   const art = designArtDir(topic);
   if (!existsSync(art)) { log.error(`design offset-reset: art dir missing: ${art}`); return 1; }
 
-  // The refusal log goes with the state file, in BOTH modes (--keep-findings included): a reset
+  // The refusal logs go with the state file, in BOTH modes (--keep-findings included): a reset
   // re-arms the phase, so strikes from the episode it just cleared must not carry into the retry
-  // and degrade a fresh artifact as "no growth".
-  for (const f of [`${phase}-${agent}.txt`, `${phase}-${agent}.done`, `question-${agent}.txt`, `stillwriting-${agent}.txt`])
+  // and degrade a fresh artifact as "no growth". Swept by agent prefix — the logs are per ARTIFACT
+  // (`stillwriting-<agent>-<file>.txt`), and a reset re-arms all of that agent's work.
+  for (const f of [`${phase}-${agent}.txt`, `${phase}-${agent}.done`, `question-${agent}.txt`])
     rmSync(join(art, f), { force: true });
+  clearAgentStrikes(art, agent);
 
   const c = cascadeTargets(phase as ResetPhase, keepFindings);
   if (!keepFindings) {
