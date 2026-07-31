@@ -5,6 +5,7 @@
 // never from guessing. The prompt body carries NO done-event line and NO END_OF_INSTRUCTION —
 // `send` → `inboxWrite` appends exactly one of each (same contract as exploreTurn.ts).
 import { type Claim, citationOverlaps } from "./designDiff.js";
+import { artifactContract } from "./artifact.js";
 import { draftCitations } from "./exploreConfidence.js";
 import { parseAdversaryVerdict } from "./exploreVerdict.js";
 
@@ -113,5 +114,7 @@ export function composeRebuttalPrompt(claims: Claim[], critiques: string[], outP
     "  2. ...",
     "",
     "An honest concession is more useful than a weak defense — do not pad.",
+    "",
+    artifactContract(outPath),
   ].join("\n");
 }

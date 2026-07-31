@@ -95,6 +95,11 @@ opencode:
 # Per-kind worker wait budgets, before the provider's timeout_multiplier is applied.
 # Every row here equals the built-in default in src/core/contracts.ts (CONSULT_DEFAULTS);
 # they are spelled out so the full set is discoverable and editable in one place.
+#
+# NOT a key here, but it rides on the same waits: AP_ARTIFACT_GRACE_S (env, default 60, clamped
+# 0..300, 0 disables) is how long a phase wait holds after a worker's `done` event for that phase's
+# artifact to end with its END_OF_ARTIFACT sentinel — the done-before-the-file-is-written race.
+# Grace expiry records the phase as `timeout` and flags it for /ap:review.
 consult:
   research_timeout_s: 600   # 10 min
   verify_timeout_s:   300   # 5 min

@@ -138,8 +138,26 @@ $CS explore research-send <TOPIC> <agent> <provider>
 
 Each `research-send` renders that worker's research prompt — already weighted by `$ART/lit-track.txt`
 (Phase 1) — captures the pre-send outbox `OFFSET=` into `$ART/research-<agent>.txt`, and nudges
-the pane. The Hub orchestrates and synthesizes; the workers do all retrieval. (rc 1 = the state
-file already exists — `rm` it to redo.)
+the pane. The Hub orchestrates and synthesizes; the workers do all retrieval.
+
+**Non-zero rc from ANY `*-send` verb in this command** (this phase and every dispatch loop below):
+
+- **rc 1** = the state file already exists (`rm` it to redo) or the send itself failed — in the
+  latter case the state file is deliberately KEPT, so `rm` it before retrying.
+- **rc 3** = **busy**: the worker's `status.json` state is not `idle`, so the send was refused and
+  **nothing was written** — the phase stays runnable. **AskUserQuestion** ("Wait 60s and retry /
+  Force-retry / Abort"):
+  - *Wait 60s and retry* — `sleep 60`, then re-run the same `*-send` for that worker.
+  - *Force-retry* — `$CS implement reset-status <TOPIC> <agent>` (atomically resets that worker to
+    `idle`; the verb lives under `implement` but resolves the worker from the topic dir, so it works
+    for explore's workers too), then re-run the same `*-send`.
+  - *Abort* — run the Phase 9 teardown steps (stop --pairs + teardown); stop.
+- **rc 2** = usage error (a missing `<agent>`/`<provider>` argument) — fix the call.
+
+The `while` loops below swallow each verb's rc, so every one of them ends its send with
+`|| echo "SEND_FAILED=$INST rc=$?"`. **Read the loop's stdout**: any `SEND_FAILED=<agent> rc=<n>`
+line means that worker was NOT dispatched — handle it per the rc list above before moving to the
+phase's wait step, or that worker's wait will block on an event no one asked for.
 
 Set task `3` → `completed`.
 
@@ -164,6 +182,15 @@ value is informational — do **NOT** gate on `FS=ok`; a worker with `FS=empty`/
 produced its `findings-<agent>.md` and the synth validator (Phase 5) catches truly missing
 findings. If a worker emits a `question` event (its state file's last line shows `FS=question`),
 handle it via **Intervention Pattern 1** before proceeding.
+
+**Never read a `findings-<agent>.md` before this gate exits 0.** Each wait holds its worker open
+until that phase's artifact ends with the literal `END_OF_ARTIFACT` line (grace `AP_ARTIFACT_GRACE_S`,
+default 60s); an artifact that stops growing without the line is accepted anyway and flagged for
+`/ap:review`, while one still growing (or empty) at the cap records `FS=timeout` and is flagged. If
+`survivors`, `synth-preliminary`, `diff` or `openq-collate` exits 1 printing `STILL_WRITING=<agent>`
+on stderr, the wait never classified that worker and its findings file is still being written:
+re-run the wait-gate, then re-run the verb. The verb self-bounds — three refusals with no growth
+in between (or six refusals however much it grew) and it drops that worker as empty.
 
 Set task `4` → `completed`.
 
@@ -221,7 +248,7 @@ Set task `4b` → `in_progress`.
 
    ```bash
    grep -v '^#' "$ART/list.txt" | while IFS=$'\t' read -r PROV INST; do
-     [ -n "$PROV" ] && [ -n "$INST" ] && $CS explore openq-send <TOPIC> "$INST" "$PROV"
+     [ -n "$PROV" ] && [ -n "$INST" ] && { $CS explore openq-send <TOPIC> "$INST" "$PROV" || echo "SEND_FAILED=$INST rc=$?"; }
    done
    ```
 
@@ -252,7 +279,7 @@ Set task `4c` → `in_progress`.
 
    ```bash
    grep -v '^#' "$ART/list.txt" | while IFS=$'\t' read -r PROV INST; do
-     [ -n "$PROV" ] && [ -n "$INST" ] && $CS explore crossverify-send <TOPIC> "$INST" "$PROV"
+     [ -n "$PROV" ] && [ -n "$INST" ] && { $CS explore crossverify-send <TOPIC> "$INST" "$PROV" || echo "SEND_FAILED=$INST rc=$?"; }
    done
    ```
 
@@ -284,7 +311,8 @@ Run the input validator: `$CS explore synth-preliminary <TOPIC>`. It prints the 
 `findings-<agent>.md` empty) — surface the missing-file list and stop.
 
 Then **use the Write tool** to author `landscape-draft.md`, reading every `$ART/findings-<agent>.md`,
-with this EXACT section set:
+with this EXACT section set (a worker artifact's last line is the literal `END_OF_ARTIFACT`
+completeness marker — **strip it** from anything you quote or digest into the draft):
 
 ```markdown
 ## Topic
@@ -380,7 +408,7 @@ Dispatch each CURRENT list row (the Phase 4a worker-set rule — never init's PA
 
 ```bash
 grep -v '^#' "$ART/list.txt" | while IFS=$'\t' read -r PROV INST; do
-  [ -n "$PROV" ] && [ -n "$INST" ] && $CS explore adversary-send <TOPIC> "$INST" "$PROV"
+  [ -n "$PROV" ] && [ -n "$INST" ] && { $CS explore adversary-send <TOPIC> "$INST" "$PROV" || echo "SEND_FAILED=$INST rc=$?"; }
 done
 ```
 
@@ -433,7 +461,7 @@ never open-ended:
 
    ```bash
    grep -v '^#' "$ART/list.txt" | while IFS=$'\t' read -r PROV INST; do
-     [ -n "$PROV" ] && [ -n "$INST" ] && $CS explore rebuttal-send <TOPIC> "$INST" "$PROV"
+     [ -n "$PROV" ] && [ -n "$INST" ] && { $CS explore rebuttal-send <TOPIC> "$INST" "$PROV" || echo "SEND_FAILED=$INST rc=$?"; }
    done
    ```
 
@@ -468,7 +496,7 @@ it. The verbs read the recorded signals themselves; you never re-run `confidence
 
    ```bash
    grep -v '^#' "$ART/list.txt" | while IFS=$'\t' read -r PROV INST; do
-     [ -n "$PROV" ] && [ -n "$INST" ] && $CS explore gap-send <TOPIC> "$INST" "$PROV"
+     [ -n "$PROV" ] && [ -n "$INST" ] && { $CS explore gap-send <TOPIC> "$INST" "$PROV" || echo "SEND_FAILED=$INST rc=$?"; }
    done
    ```
 
@@ -532,7 +560,8 @@ confirming worker's evidence) and record REFUTED items under `## Adversary criti
 record stay untouched.
 
 Then **use the Write tool** to author the final doc, reading `$ART/landscape-draft.md` + all
-`$ART/adversary-<agent>.md` (if adversary ran), with this EXACT section set:
+`$ART/adversary-<agent>.md` (if adversary ran), with this EXACT section set (as in Phase 5, **strip
+the trailing `END_OF_ARTIFACT` line** from every worker artifact you quote into the final doc):
 
 ```markdown
 ## Topic
@@ -590,7 +619,7 @@ findings — a misquote/misattribution check, never a re-litigation, never new c
 
    ```bash
    grep -v '^#' "$ART/list.txt" | while IFS=$'\t' read -r PROV INST; do
-     [ -n "$PROV" ] && [ -n "$INST" ] && $CS explore signoff-send <TOPIC> "$INST" "$PROV"
+     [ -n "$PROV" ] && [ -n "$INST" ] && { $CS explore signoff-send <TOPIC> "$INST" "$PROV" || echo "SEND_FAILED=$INST rc=$?"; }
    done
    ```
 

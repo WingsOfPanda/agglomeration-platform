@@ -4,6 +4,7 @@
 // answer turn; answers feed the hub's preliminary synthesis. The prompt body carries NO
 // done-event line and NO END_OF_INSTRUCTION — `send` → `inboxWrite` appends exactly one of
 // each (same contract as exploreTurn.ts).
+import { artifactContract } from "./artifact.js";
 import type { ListRow } from "./roster.js";
 
 export interface OpenqAssignment { from: string; question: string }
@@ -78,5 +79,7 @@ export function composeOpenqPrompt(assignments: OpenqAssignment[], answersPath: 
     "",
     "If you cannot answer one, say so explicitly under its heading — do not pad.",
     "An honest \"cannot resolve, because <reason>\" is more useful than a weak guess.",
+    "",
+    artifactContract(answersPath),
   ].join("\n");
 }

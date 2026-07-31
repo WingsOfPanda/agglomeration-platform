@@ -134,7 +134,21 @@ done
 ```
 
 Each `research-send` composes the findings prompt, captures the pre-send outbox `OFFSET=` into
-`$ART/research-<agent>.txt`, and nudges the worker. (rc 1 = state file already exists — `rm` it to redo.)
+`$ART/research-<agent>.txt`, and nudges the worker.
+
+**Non-zero rc from ANY `*-send` verb in this command** (this stage and Stage 7's verify dispatch):
+
+- **rc 1** = the state file already exists (`rm` it to redo) or the send itself failed — in the
+  latter case the state file is deliberately KEPT, so `rm` it before retrying.
+- **rc 3** = **busy**: that worker's `status.json` state is not `idle`, so the send was refused and
+  **nothing was written** — the stage stays runnable for that worker. **AskUserQuestion** ("Wait 60s
+  and retry / Force-retry / Abort"):
+  - *Wait 60s and retry* — `sleep 60`, then re-run the same `*-send` for that worker.
+  - *Force-retry* — `$CS implement reset-status <TOPIC> <INST>` (atomically resets that worker to
+    `idle`; the verb lives under `implement` but resolves the worker from the topic dir, so it works
+    for design's workers too), then re-run the same `*-send`.
+  - *Abort* — `/ap:stop <TOPIC>` for the ready workers, then stop.
+- **rc 2** = usage error (a missing `<INST>`/`<PROV>` argument) — fix the call.
 
 ## Stage 5 — research wait + question relay (per worker)
 
@@ -174,6 +188,16 @@ list** = workers whose `findings.md` exists (`FS` ∈ {ok, empty, malformed}). I
 findings → abort (run `/ap:stop <agent> <TOPIC>` for each ready worker, tell the user the
 ensemble could not produce 2 sets of findings, stop). If some workers were dropped, **rewrite
 `$ART/list.txt`** to the diff list before Stage 6.
+
+**Never read a worker's `findings.md` before this gate exits 0.** Each wait holds its worker open
+until that phase's artifact ends with the literal `END_OF_ARTIFACT` line (grace `AP_ARTIFACT_GRACE_S`,
+default 60s); an artifact that stops growing without the line is accepted anyway and flagged for
+`/ap:review`, while one still growing (or empty) at the cap records `FS=timeout` and is flagged. If
+`design diff` (or, for `verify.md`, `design adjudicate`) exits 1 printing `STILL_WRITING=<INST>` on
+stderr, the wait never classified that worker and its file is still being written: re-run the
+wait-gate, then re-run the verb. The verb self-bounds — three refusals with no growth in between
+(or six refusals however much it grew) and it treats that worker as empty. When you quote a
+worker's `findings.md`/`verify.md` into any doc, strip the trailing `END_OF_ARTIFACT` line.
 
 ## Stage 6 — N-way diff
 

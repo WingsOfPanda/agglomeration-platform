@@ -15,8 +15,13 @@ import { sendDeps, waitDeps } from "./helpers/phaseDeps.js";
 import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, crossverifySendWith, crossverifyWaitWith, rebuttalSendWith, rebuttalWaitWith, gapSendWith, gapWaitWith, signoffSendWith, signoffWaitWith, survivorsRun, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, verdictTallyRun, diffExploreRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, contributionRun, type ExploreInitDeps, type ExploreSpawnAllDeps } from "../src/commands/explore.js";
 import { exploreArtDir } from "../src/core/explore.js";
 import { PHASES, type PhaseKey, type SendDeps, type WaitDeps } from "../src/core/phaseTable.js";
+import { END_OF_ARTIFACT } from "../src/core/artifact.js";
 import { consultTimeout } from "../src/core/contracts.js";
 import { scaledTimeout } from "../src/core/designTurn.js";
+
+/** A worker artifact as the completeness contract requires it: body + the sentinel as its LAST
+ *  line. Everything the validators (survivors / synth-preliminary) accept must carry it. */
+const complete = (body: string): string => `${body}\n${END_OF_ARTIFACT}\n`;
 
 function initDeps(over: Partial<ExploreInitDeps> = {}): ExploreInitDeps {
   return {
@@ -336,20 +341,29 @@ describe("explore phase send/wait skeleton (table-driven over PHASES)", () => {
     });
 
     describe(`${s.phase}-wait`, () => {
-      it(`done + artifact → ${KEY}=ok; empty → ${KEY}=${s.emptyState}; absent → ${KEY}=missing; no event → ${KEY}=timeout`, async () => {
+      it(`done + complete artifact → ${KEY}=ok; empty → ${KEY}=${s.emptyState}; absent → ${KEY}=missing; no event → ${KEY}=timeout`, async () => {
+        // The stateFn slot, observable only here. An empty/absent artifact is a done-then-write race
+        // under the default grace, so those two rows run with the sentinel check DISABLED
+        // (AP_ARTIFACT_GRACE_S=0) — that is the classification the stateFn has always produced.
         const done = async () => ({ event: "done" } as any);
-        const cases: Array<[string, string | null, () => Promise<any>, string]> = [
-          ["alpha", s.okArtifact, done, "ok"],
-          ["charlie", "", done, s.emptyState],
-          ["golf", null, done, "missing"],
-          ["hotel", s.okArtifact, async () => null, "timeout"],
+        const cases: Array<[string, string | null, () => Promise<any>, string, string | null]> = [
+          ["alpha", s.okArtifact + END_OF_ARTIFACT + "\n", done, "ok", null],
+          ["charlie", "", done, s.emptyState, "0"],
+          ["golf", null, done, "missing", "0"],
+          ["hotel", s.okArtifact, async () => null, "timeout", null],
         ];
-        for (const [agent, artifact, ev, expected] of cases) {
-          writeFileSync(stateFile(agent), "OFFSET=0\n");
-          if (artifact !== null) writeFileSync(row.artifactFor(art, agent, PROVIDER, TOPIC), artifact);
-          expect(await s.wait(TOPIC, agent, PROVIDER, waitDeps({ wait: ev }))).toBe(0);
-          expect(readFileSync(stateFile(agent), "utf8")).toContain(`${KEY}=${expected}`);
-          expect(existsSync(join(art, `${s.phase}-${agent}.done`))).toBe(true);
+        try {
+          for (const [agent, artifact, ev, expected, grace] of cases) {
+            if (grace === null) delete process.env.AP_ARTIFACT_GRACE_S; else process.env.AP_ARTIFACT_GRACE_S = grace;
+            writeFileSync(stateFile(agent), "OFFSET=0\n");
+            if (artifact !== null) writeFileSync(row.artifactFor(art, agent, PROVIDER, TOPIC), artifact);
+            expect(await s.wait(TOPIC, agent, PROVIDER, waitDeps({ wait: ev }))).toBe(0);
+            expect(readFileSync(stateFile(agent), "utf8")).toContain(`${KEY}=${expected}`);
+            expect(existsSync(join(art, `${s.phase}-${agent}.done`))).toBe(true);
+          }
+        } finally {
+          // A failing expect must not leak the env override into every later test in this file.
+          delete process.env.AP_ARTIFACT_GRACE_S;
         }
       });
 
@@ -445,8 +459,8 @@ describe("explore openq-collate", () => {
     try {
       await initWith(["x"], initDeps()); // alpha, charlie
       const art = exploreArtDir("x");
-      writeFileSync(join(art, "findings-alpha.md"), "## Open questions\n- qa1\n- qa2\n## Notes\nn\n");
-      writeFileSync(join(art, "findings-charlie.md"), "## Open questions\n- qc1\n## Notes\nn\n");
+      writeFileSync(join(art, "findings-alpha.md"), complete("## Open questions\n- qa1\n- qa2\n## Notes\nn"));
+      writeFileSync(join(art, "findings-charlie.md"), complete("## Open questions\n- qc1\n## Notes\nn"));
       const rc = await openqCollateRun(["x"]);
       expect(rc).toBe(0);
       expect(readFileSync(join(art, "open-questions.md"), "utf8")).toContain("qa1");
@@ -459,8 +473,8 @@ describe("explore openq-collate", () => {
     try {
       await initWith(["x"], initDeps());
       const art = exploreArtDir("x");
-      writeFileSync(join(art, "findings-alpha.md"), "## Summary\ns\n");
-      writeFileSync(join(art, "findings-charlie.md"), "## Summary\ns\n");
+      writeFileSync(join(art, "findings-alpha.md"), complete("## Summary\ns"));
+      writeFileSync(join(art, "findings-charlie.md"), complete("## Summary\ns"));
       expect(await openqCollateRun(["x"])).toBe(0);
       expect(existsSync(join(art, "open-questions.md"))).toBe(false);
       expect(existsSync(join(art, "openq-claims-alpha.txt"))).toBe(false);
@@ -508,7 +522,7 @@ describe("explore synth-preliminary", () => {
     try {
       await initWith(["x"], initDeps());
       const art = exploreArtDir("x");
-      writeFileSync(join(art, "findings-alpha.md"), "a"); writeFileSync(join(art, "findings-charlie.md"), "b");
+      writeFileSync(join(art, "findings-alpha.md"), complete("a")); writeFileSync(join(art, "findings-charlie.md"), complete("b"));
       const rc = await synthPreliminaryRun(["x"]);
       expect(rc).toBe(0);
     } finally { cleanup(); }
@@ -830,6 +844,34 @@ describe("explore verdict-tally", () => {
       expect(lines).toEqual(["VERDICT=alpha:accept", "VERDICT=charlie:skipped", "TALLY=accept"]);
     } finally { cleanup(); }
   });
+  it("EVERY row skipped → a loud stderr warning, rc unchanged", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      for (const a of ["alpha", "charlie"]) writeFileSync(join(art, `adversary-${a}.txt`), "AS=skipped\n");
+      const chunks: string[] = [];
+      const spy = vi.spyOn(process.stderr, "write").mockImplementation(((s: unknown) => { chunks.push(String(s)); return true; }) as never);
+      const out = captureStdout();
+      try { expect(await verdictTallyRun(["x"])).toBe(0); } finally { out.restore(); spy.mockRestore(); }
+      expect(out.text().trim().split("\n")).toEqual(["VERDICT=alpha:skipped", "VERDICT=charlie:skipped", "TALLY=unavailable"]);
+      expect(chunks.join("")).toContain("all adversary rounds skipped — the landscape will ship without adversarial review; verify this is intended");
+    } finally { cleanup(); }
+  });
+  it("one live adversary round → no all-skipped warning", async () => {
+    const { cleanup } = freshHome();
+    try {
+      await initWith(["x"], initDeps());
+      const art = exploreArtDir("x");
+      writeFileSync(join(art, "adversary-alpha.md"), "## Verdict\naccept\n");
+      writeFileSync(join(art, "adversary-charlie.txt"), "AS=skipped\n");
+      const chunks: string[] = [];
+      const spy = vi.spyOn(process.stderr, "write").mockImplementation(((s: unknown) => { chunks.push(String(s)); return true; }) as never);
+      const out = captureStdout();
+      try { expect(await verdictTallyRun(["x"])).toBe(0); } finally { out.restore(); spy.mockRestore(); }
+      expect(chunks.join("")).not.toContain("all adversary rounds skipped");
+    } finally { cleanup(); }
+  });
   it("missing or heading-less critique reports malformed; all-uncountable → TALLY=unavailable", async () => {
     const { cleanup } = freshHome();
     try {
@@ -916,8 +958,8 @@ describe("explore diff", () => {
     try {
       await initWith(["x"], initDeps()); // list: alpha(codex), charlie(claude)
       const art = exploreArtDir("x");
-      writeFileSync(join(art, "findings-alpha.md"), approaches("[src/a.ts:10] Shared — both", "[src/only-a.ts:1] AlphaOnly — solo"));
-      writeFileSync(join(art, "findings-charlie.md"), approaches("[src/a.ts:10] Shared — both", "[paper:arxiv:9] CharlieOnly — solo"));
+      writeFileSync(join(art, "findings-alpha.md"), complete(approaches("[src/a.ts:10] Shared — both", "[src/only-a.ts:1] AlphaOnly — solo")));
+      writeFileSync(join(art, "findings-charlie.md"), complete(approaches("[src/a.ts:10] Shared — both", "[paper:arxiv:9] CharlieOnly — solo")));
       expect(await diffExploreRun(["x"])).toBe(0);
       expect(readFileSync(join(art, "alpha_only_items.txt"), "utf8")).toBe("[src/only-a.ts:1] AlphaOnly — solo\n");
       expect(readFileSync(join(art, "charlie_only_items.txt"), "utf8")).toBe("[paper:arxiv:9] CharlieOnly — solo\n");
@@ -930,8 +972,8 @@ describe("explore diff", () => {
       await initWith(["x"], initDeps());
       const art = exploreArtDir("x");
       expect(await diffExploreRun(["x"])).toBe(1); // findings missing
-      writeFileSync(join(art, "findings-alpha.md"), approaches("[a.ts:1] A — a"));
-      writeFileSync(join(art, "findings-charlie.md"), approaches("[a.ts:1] A — a"));
+      writeFileSync(join(art, "findings-alpha.md"), complete(approaches("[a.ts:1] A — a")));
+      writeFileSync(join(art, "findings-charlie.md"), complete(approaches("[a.ts:1] A — a")));
       expect(await diffExploreRun(["x"])).toBe(0);
       expect(await diffExploreRun(["x"])).toBe(1); // diff.md exists; rm to retry
     } finally { cleanup(); }
@@ -1047,8 +1089,8 @@ describe("explore survivors", () => {
     try {
       await initWith(["x"], initDeps());
       const art = exploreArtDir("x");
-      writeFileSync(join(art, "findings-alpha.md"), "a");
-      writeFileSync(join(art, "findings-charlie.md"), "c");
+      writeFileSync(join(art, "findings-alpha.md"), complete("a"));
+      writeFileSync(join(art, "findings-charlie.md"), complete("c"));
       const before = readFileSync(join(art, "list.txt"), "utf8");
       const out = captureStdout();
       try { expect(await survivorsRun(["x"])).toBe(0); } finally { out.restore(); }
@@ -1064,8 +1106,8 @@ describe("explore survivors", () => {
       await initWith(["x"], deps3());
       const art = exploreArtDir("x");
       const original = readFileSync(join(art, "list.txt"), "utf8");
-      writeFileSync(join(art, "findings-alpha.md"), "a");
-      writeFileSync(join(art, "findings-charlie.md"), "c");
+      writeFileSync(join(art, "findings-alpha.md"), complete("a"));
+      writeFileSync(join(art, "findings-charlie.md"), complete("c"));
       writeFileSync(join(art, "findings-golf.md"), "   \n\t\n"); // whitespace-only: same predicate as missingListArtifacts
       const out = captureStdout();
       try { expect(await survivorsRun(["x"])).toBe(0); } finally { out.restore(); }
@@ -1083,8 +1125,8 @@ describe("explore survivors", () => {
     try {
       await initWith(["x"], deps3());
       const art = exploreArtDir("x");
-      writeFileSync(join(art, "findings-alpha.md"), "a");
-      writeFileSync(join(art, "findings-charlie.md"), "c"); // golf missing
+      writeFileSync(join(art, "findings-alpha.md"), complete("a"));
+      writeFileSync(join(art, "findings-charlie.md"), complete("c")); // golf missing
       writeFileSync(join(art, "list-original.txt"), "# SENTINEL preserved roster\ncodex\talpha\nclaude\tcharlie\nagy\tgolf\n");
       const out = captureStdout();
       try { expect(await survivorsRun(["x"])).toBe(0); } finally { out.restore(); }
@@ -1097,7 +1139,7 @@ describe("explore survivors", () => {
     try {
       await initWith(["x"], initDeps());
       const art = exploreArtDir("x");
-      writeFileSync(join(art, "findings-alpha.md"), "a"); // charlie missing
+      writeFileSync(join(art, "findings-alpha.md"), complete("a")); // charlie missing
       const out = captureStdout();
       try { expect(await survivorsRun(["x"])).toBe(0); } finally { out.restore(); }
       expect(out.text().trim().split("\n")).toEqual(["SURVIVORS=1", "DROPPED=charlie", "DEGRADED=1"]);
@@ -1130,8 +1172,8 @@ describe("explore survivors", () => {
     try {
       await initWith(["x"], deps3());
       const art = exploreArtDir("x");
-      writeFileSync(join(art, "findings-alpha.md"), "FlashAttention is fast. https://x.test/p . uncertain about batch.");
-      writeFileSync(join(art, "findings-charlie.md"), "FlashAttention wins. https://x.test/p .");
+      writeFileSync(join(art, "findings-alpha.md"), complete("FlashAttention is fast. https://x.test/p . uncertain about batch."));
+      writeFileSync(join(art, "findings-charlie.md"), complete("FlashAttention wins. https://x.test/p ."));
       // golf produced nothing — without survivors this blocks synth-preliminary with rc 1
       expect(await synthPreliminaryRun(["x"])).toBe(1);
       const out = captureStdout();
