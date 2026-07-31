@@ -388,10 +388,10 @@ Each `adversary-send` renders that worker's adversary prompt against `landscape-
 the pre-send `OFFSET=` into `$ART/adversary-<agent>.txt`, and nudges the pane.
 
 The verb also assigns each worker a DISTINCT primary attack lens (by list order) and lists its
-peers' raw `findings-<agent>.md` paths in the prompt. A worker whose crossverify, relay, or
-research turn ended `timeout`/`failed` (checked `VS` → `QS` → `FS`) is soft-skipped
-(`AS=skipped`, no send): dispatching to a possibly-still-churning worker would clobber its
-single-slot inbox.
+peers' raw `findings-<agent>.md` paths in the prompt. It soft-skips (`AS=skipped`, no send) any
+worker whose earlier phases ended `timeout`/`failed` — the verb decides which phases count, the
+Hub only reads the resulting tag: dispatching to a possibly-still-churning worker would clobber
+its single-slot inbox.
 
 When Phase 5b's `annotations.json` recorded solo citations (`unverified` / `approaches-flagged`
 items), each adversary prompt additionally lists those tokens under a `Priority targets` block —
@@ -442,9 +442,10 @@ never open-ended:
    each Material finding to its originating worker via diff-bucket citation overlap (a finding
    whose tokens match zero buckets or tie across two stays unattributed — you weigh it alone in
    Phase 8, as today), and soft-skips (`RS=skipped`, no send) a worker with nothing attributed
-   to it or whose latest phase (AS→VS→QS→FS walk) ended `timeout`/`failed`. A second `rebuttal-send` for the
-   same worker returns rc 1 — the one-turn cap is state-file existence; NEVER `rm` a rebuttal
-   state file to force a second round.
+   to it or whose earlier phases ended `timeout`/`failed` (the verb decides which phases count; the
+   Hub only reads the resulting tag). A second `rebuttal-send` for the same worker returns rc 1 —
+   the one-turn cap is state-file existence; NEVER `rm` a rebuttal state file to force a second
+   round.
 2. **Wait:** read the CURRENT list rows (same grep), then issue one background-await Bash call per row:
    `$CS explore rebuttal-wait <TOPIC> <agent> <provider>`. Responses land at
    `$ART/rebuttal-<agent>.md` (DEFEND / CONCEDE per critique).
@@ -472,8 +473,9 @@ it. The verbs read the recorded signals themselves; you never re-run `confidence
    ```
 
    The verb soft-skips (`GS=skipped`, no
-   send) every worker when the trigger did not fire, plus any worker whose latest phase ended
-   `timeout`/`failed` or whose peer-only buckets are empty.
+   send) every worker when the trigger did not fire, plus any worker whose earlier phases ended
+   `timeout`/`failed` (the verb decides which phases count; the Hub only reads the resulting tag)
+   or whose peer-only buckets are empty.
 2. **Wait:** read the CURRENT list rows (same grep), then issue one background-await Bash call per row:
    `$CS explore gap-wait <TOPIC> <agent> <provider>`. Answers land at `$ART/gap-<agent>.md`
    (CONFIRM / EXTEND / REFUTE per item).
@@ -593,10 +595,10 @@ findings — a misquote/misattribution check, never a re-litigation, never new c
    ```
 
    The verb carries the final doc's `## Conclusion`, the worker's own solo-bucket lines, and
-   diff.md's Agreed section; it soft-skips (`SS=skipped`, no send) a worker whose latest phase
-   (GS→RS→AS→VS→QS→FS walk) ended `timeout`/`failed`. A second signoff-send for the same worker
-   returns rc 1 — the one-turn cap is state-file existence; NEVER `rm` a signoff state file to
-   force a second round.
+   diff.md's Agreed section; it soft-skips (`SS=skipped`, no send) a worker whose earlier phases
+   ended `timeout`/`failed` (the verb decides which phases count; the Hub only reads the resulting
+   tag). A second signoff-send for the same worker returns rc 1 — the one-turn cap is state-file
+   existence; NEVER `rm` a signoff state file to force a second round.
 2. **Wait:** read the CURRENT list rows, then issue one background-await Bash call per row:
    `$CS explore signoff-wait <TOPIC> <agent> <provider>`. Sign-offs land at
    `$ART/signoff-<agent>.md` (`VERDICT: fair | misrepresented` + `### Flag:` blocks).
@@ -614,7 +616,7 @@ findings — a misquote/misattribution check, never a re-litigation, never new c
 
 Set task `8b` → `completed`.
 
-## Phase 8a — forensics
+## Phase 8a — forensics (Hub runs; no task row)
 
 `$CS explore forensics <TOPIC>` (best-effort; never blocks — prints a path only if mechanical
 signals were found, else empty). If it printed a path, use the **Write/Edit tool** to APPEND a

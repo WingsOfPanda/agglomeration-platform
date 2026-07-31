@@ -1,14 +1,14 @@
 // tests/design-init.test.ts
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, readFileSync, mkdtempSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { freshHome } from "./helpers/tmpHome.js";
 import { designArtDir, designDraftDir } from "../src/core/design.js";
 import { initWith, type DesignInitDeps } from "../src/commands/design.js";
 
-let prev: string | undefined;
-beforeEach(() => { prev = process.env.AP_HOME; process.env.AP_HOME = mkdtempSync(join(tmpdir(), "si-")); });
-afterEach(() => { if (prev === undefined) delete process.env.AP_HOME; else process.env.AP_HOME = prev; });
+let env: { home: string; cleanup: () => void };
+beforeEach(() => { env = freshHome(); });
+afterEach(() => { env.cleanup(); });
 
 function deps(providers: string[], picks: string[]): DesignInitDeps {
   return {

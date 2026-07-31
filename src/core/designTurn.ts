@@ -1,6 +1,6 @@
 // src/core/designTurn.ts — multi-worker research-phase turn helpers for design.
 // Built on the ipc primitives + the classifyTurn *semantics* from turn.ts
-// (reused, not bent). The verify-phase composer + state machine land in Phase D.
+// (reused, not bent).
 import { appendFileSync } from "node:fs";
 import { outboxOffset, outboxPath, type OutboxEvent } from "./ipc.js";
 import { atomicWrite } from "./atomic.js";
@@ -45,6 +45,14 @@ export function lastKeyedNumber(text: string, key: string): number | null {
 /** The LAST `OFFSET=<n>` line — the re-armed wait resumes from the latest. */
 export function parseLatestOffset(stateText: string): number | null {
   return lastKeyedNumber(stateText, "OFFSET");
+}
+
+/** The LAST `<key>=<value>` line in a state file's contents, trimmed (latest-line-wins); null if
+ *  absent. Unlike lastKeyedNumber this accepts any value text — the gate readers key off words
+ *  (`ok`/`question`/`timeout`/`failed`), not integers. */
+export function lastKeyedValue(text: string, key: string): string | null {
+  const matches = text.split("\n").filter((l) => l.startsWith(`${key}=`));
+  return matches.length ? matches[matches.length - 1].slice(key.length + 1).trim() : null;
 }
 
 /** Shared wait-verb tail — the single WRITER of the `OFFSET=` / `<KEY>=` state-file micro-protocol
@@ -150,8 +158,7 @@ export function gateState(
   key: "FS" | "VS" | "AS" | "QS" | "RS" | "GS" | "SS",
 ): Array<{ agent: string; status: GateStatus }> {
   return workers.map((p) => {
-    const matches = (p.stateText ?? "").split("\n").filter((l) => l.startsWith(`${key}=`));
-    const last = matches.length ? matches[matches.length - 1].slice(key.length + 1).trim() : null;
+    const last = lastKeyedValue(p.stateText ?? "", key);
     const status: GateStatus =
       last === "question" ? "question"
         : p.doneExists && last !== null ? "terminal"
@@ -171,8 +178,7 @@ export function gateAnomalies(
   const out: Array<{ agent: string; value: string }> = [];
   for (const p of workers) {
     if (!p.doneExists) continue;
-    const matches = (p.stateText ?? "").split("\n").filter((l) => l.startsWith(`${key}=`));
-    const last = matches.length ? matches[matches.length - 1].slice(key.length + 1).trim() : null;
+    const last = lastKeyedValue(p.stateText ?? "", key);
     if (last === "timeout" || last === "failed") out.push({ agent: p.agent, value: last });
   }
   return out;

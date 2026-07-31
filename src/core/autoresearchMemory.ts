@@ -382,10 +382,10 @@ export function outcomeWeight(l: Lesson): number {
  * claim/knob/operator words that also appear in the lowercased objective. A
  * cheap bag-of-words gate that keeps a retrieval focused on the current
  * objective without any model call. Empty word set -> 0 (cannot establish
- * relevance, so it falls below any positive floor).
+ * relevance, so it falls below any positive floor). `obj` is the ALREADY
+ * lowercased objective (the caller lowers it once for the whole store).
  */
-function objectiveRelevance(l: Lesson, objective: string): number {
-  const obj = objective.toLowerCase();
+function objectiveRelevance(l: Lesson, obj: string): number {
   const words = Array.from(
     new Set(
       `${l.claim} ${l.knob} ${l.operator}`
@@ -427,12 +427,13 @@ export function retrieveLessons(
   policy: MemoryPolicy,
   now: string,
 ): Lesson[] {
+  const objective = ctx.objective.toLowerCase();   // lowered once, not per lesson
   const ranked = store
     .filter((l) => l.promotion_state !== "retired")
     .filter((l) => promotable(l, policy))
     .filter((l) => !isExpired(l.created_ts, now, policy.maxAgeDays))
     .filter((l) => canReadLesson(ctx, l))
-    .filter((l) => objectiveRelevance(l, ctx.objective) >= policy.relevanceFloor)
+    .filter((l) => objectiveRelevance(l, objective) >= policy.relevanceFloor)
     .map((l) => ({
       l,
       w: decayWeight(l.score, l.created_ts, now, policy.halfLifeDays) * outcomeWeight(l),
