@@ -3,14 +3,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
+import { captureStdout } from "./helpers/captureStdout.js";
 import { surveyWith, archiveWith } from "../src/commands/review.js";
-
-function captureStdout() {
-  const orig = process.stdout.write.bind(process.stdout);
-  let buf = "";
-  (process.stdout as any).write = (c: any) => { buf += String(c); return true; };
-  return { text: () => buf, restore: () => { (process.stdout as any).write = orig; } };
-}
 
 // A captured forensics file with `n` findings of the given source/key/context.
 function forensicsDoc(command: string, topic: string, findings: Array<[string, string, string]>): string {

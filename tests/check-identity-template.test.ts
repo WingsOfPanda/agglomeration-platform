@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { freshHome } from "./helpers/tmpHome.js";
 import { run as check } from "../src/commands/check.js";
 
 // stage a CLAUDE_PLUGIN_ROOT whose config/ has contracts+agents but NOT the identity template
@@ -15,15 +16,14 @@ function stageRoot(): string {
 
 describe("check identity-template check (M1)", () => {
   it("FAILs (rc 1) when the plugin-side identity template is missing", async () => {
-    const home = mkdtempSync(join(tmpdir(), "sc-home-"));
+    const { cleanup } = freshHome();
     const root = stageRoot();
-    const prevHome = process.env.AP_HOME, prevRoot = process.env.CLAUDE_PLUGIN_ROOT;
-    process.env.AP_HOME = home; process.env.CLAUDE_PLUGIN_ROOT = root;
+    const prevRoot = process.env.CLAUDE_PLUGIN_ROOT;
+    process.env.CLAUDE_PLUGIN_ROOT = root;
     try { expect(await check([])).toBe(1); }
     finally {
-      if (prevHome === undefined) delete process.env.AP_HOME; else process.env.AP_HOME = prevHome;
       if (prevRoot === undefined) delete process.env.CLAUDE_PLUGIN_ROOT; else process.env.CLAUDE_PLUGIN_ROOT = prevRoot;
-      rmSync(home, { recursive: true, force: true }); rmSync(root, { recursive: true, force: true });
+      cleanup(); rmSync(root, { recursive: true, force: true });
     }
   });
 });

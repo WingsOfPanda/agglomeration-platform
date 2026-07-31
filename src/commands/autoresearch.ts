@@ -1,4 +1,4 @@
-// /ap:autoresearch CLI verbs (Phase B front half). Ports deep-research-init.sh
+// /ap:autoresearch CLI verbs. Ports deep-research-init.sh
 // (slug/codex-gate/flags/scaffolding) + the deep-research.md Phase 0-3 surface.
 // Phase C: experiment-send (dispatch ONE experiment to a persistent codex worker).
 import { accessSync, appendFileSync, closeSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
@@ -43,7 +43,7 @@ import { buildCorpusDigest, leaderMetricOf, type CorpusEntry } from "../core/aut
 import { agentBinary, consultTimeout } from "../core/contracts.js";
 import { inboxWrite, inboxPath, outboxPath, outboxOffset, paneMetaRead, resolveModel, parseEvent } from "../core/ipc.js";
 import { ledgerPath, controllerGenPath, appendEvent, replayLedger, readGen, renderGen, type LedgerEventKind } from "../core/autoresearchLedger.js";
-import { paneSend, killNow, paneAlive } from "../core/tmux.js";
+import { paneSend, killNow, paneAlive, livePanes } from "../core/tmux.js";
 import { haveCmd } from "../core/deps.js";
 import { spawnListArg, parsePanesFile, spawnResultsTsv, spawnTally, type SpawnResult } from "../core/design.js";
 import { pickAgents } from "../core/agents.js";
@@ -58,14 +58,36 @@ type PathOpts = { home?: string; cwd?: string };
 /** Default line-writer used wherever a deps.stdout override is absent. */
 const stdoutLine = (l: string): void => { process.stdout.write(l + "\n"); };
 
+/** Read + JSON.parse a file, returning `fallback` when it is absent or unparseable — the one
+ *  guarded parse this file's result.json / audit.json / manifest reads share. */
+function readJsonOr<T>(path: string, fallback: T | null): T | null {
+  if (!existsSync(path)) return fallback;
+  try { return JSON.parse(readFileSync(path, "utf8")) as T; } catch { return fallback; }
+}
+
+type LedgerEventArgs = { gen: number; ts: string; kind: LedgerEventKind; agent?: string; exp_id?: string; data?: Record<string, unknown> };
+
+/** An appender that reads the campaign ledger ONCE and threads the accumulated text through
+ *  successive appends, so a verb emitting many events does not re-read + re-parse the whole
+ *  (growing) ledger per event. Seq numbers and the bytes on disk are identical to repeated
+ *  ledgerAppend calls. Always false (no-op) when the ledger file is absent. */
+function ledgerAppender(art: string): (ev: LedgerEventArgs) => boolean {
+  const path = ledgerPath(art);
+  if (!existsSync(path)) return () => false;
+  let text = readFileSync(path, "utf8");
+  return (ev) => {
+    const line = appendEvent(text, ev);
+    appendFileSync(path, line);
+    text += line;
+    return true;
+  };
+}
+
 /** Append ONE event to the campaign ledger (single-line appendFileSync; append-only
  *  JSONL). No-op returning false when the ledger file is absent — old campaigns
  *  never grow one. Throws on a stale gen (appendEvent's fencing). */
-function ledgerAppend(art: string, ev: { gen: number; ts: string; kind: LedgerEventKind; agent?: string; exp_id?: string; data?: Record<string, unknown> }): boolean {
-  const path = ledgerPath(art);
-  if (!existsSync(path)) return false;
-  appendFileSync(path, appendEvent(readFileSync(path, "utf8"), ev));
-  return true;
+function ledgerAppend(art: string, ev: LedgerEventArgs): boolean {
+  return ledgerAppender(art)(ev);
 }
 
 /** Current controller generation: controller.gen, falling back to the ledger's
@@ -581,71 +603,71 @@ function gatherPeers(art: string, self: string): PeerRow[] {
 export async function experimentSendWith(args: string[], deps: ExperimentSendDeps): Promise<number> {
   const out = deps.stdout ?? stdoutLine;
   const opts = deps.opts;
+  const fail = (m: string, rc = 2): number => { log.error(`autoresearch experiment-send: ${m}`); return rc; };
   const p = parseExperimentSendArgs(args);
-  if (p.badArgs) { log.error("autoresearch experiment-send: usage: [--inputs csv] [--context-file path] [--smoke-test script] [--timeout N] [--parent exp-id] <topic> <agent> <exp-id> <approach-label> <approach-brief>"); return 2; }
+  if (p.badArgs) return fail("usage: [--inputs csv] [--context-file path] [--smoke-test script] [--timeout N] [--parent exp-id] <topic> <agent> <exp-id> <approach-label> <approach-brief>");
   const { topic, agent, expId, approachLabel, approachBrief } = p;
 
-  if (!EXP_ID_RE.test(expId)) { log.error(`autoresearch experiment-send: exp-id must match exp-[0-9]+; got '${expId}'`); return 2; }
-  if (!AGENT_RE.test(agent)) { log.error(`autoresearch experiment-send: agent must match [a-z][a-z0-9-]*; got '${agent}'`); return 2; }
+  if (!EXP_ID_RE.test(expId)) return fail(`exp-id must match exp-[0-9]+; got '${expId}'`);
+  if (!AGENT_RE.test(agent)) return fail(`agent must match [a-z][a-z0-9-]*; got '${agent}'`);
 
   // --inputs: each csv path must be readable.
   if (p.inputs) {
     for (const path of p.inputs.split(",")) {
       if (!path) continue;
       try { accessSync(path, fsConstants.R_OK); }
-      catch { log.error(`autoresearch experiment-send: cannot read input path '${path}'`); return 2; }
+      catch { return fail(`cannot read input path '${path}'`); }
     }
   }
   // --timeout: positive integer seconds.
   if (p.timeout !== undefined && !/^[1-9][0-9]*$/.test(p.timeout)) {
-    log.error(`autoresearch experiment-send: --timeout must be a positive integer (seconds); got '${p.timeout}'`); return 2;
+    return fail(`--timeout must be a positive integer (seconds); got '${p.timeout}'`);
   }
   // --gen: positive integer (the caller's claimed controller generation).
   if (p.gen !== undefined && !/^[1-9][0-9]*$/.test(p.gen)) {
-    log.error(`autoresearch experiment-send: --gen must be a positive integer; got '${p.gen}'`); return 2;
+    return fail(`--gen must be a positive integer; got '${p.gen}'`);
   }
   // --operator: the dispatch-flag subset of the operator enum.
   if (p.operator !== undefined && !(DISPATCH_OPERATORS as readonly string[]).includes(p.operator)) {
-    log.error(`autoresearch experiment-send: --operator must be one of ${DISPATCH_OPERATORS.join("|")}; got '${p.operator}'`); return 2;
+    return fail(`--operator must be one of ${DISPATCH_OPERATORS.join("|")}; got '${p.operator}'`);
   }
   // --smoke-test: file must exist + be executable.
   if (p.smokeTest) {
     try { accessSync(p.smokeTest, fsConstants.X_OK); }
-    catch { log.error(`autoresearch experiment-send: smoke-test script not executable: ${p.smokeTest}`); return 2; }
+    catch { return fail(`smoke-test script not executable: ${p.smokeTest}`); }
   }
   // --context-file: readable; read into taskContext.
   let taskContext = "";
   if (p.contextFile) {
     try { taskContext = readFileSync(p.contextFile, "utf8"); }
-    catch { log.error(`autoresearch experiment-send: cannot read --context-file: ${p.contextFile}`); return 2; }
+    catch { return fail(`cannot read --context-file: ${p.contextFile}`); }
   }
 
   const art = autoresearchArtDir(topic, opts);
-  if (!existsSync(art)) { log.error(`autoresearch experiment-send: topic state dir missing: ${art} (was autoresearch init run?)`); return 1; }
+  if (!existsSync(art)) return fail(`topic state dir missing: ${art} (was autoresearch init run?)`, 1);
   const metricMd = join(art, "metric.md");
-  if (!existsSync(metricMd)) { log.error(`autoresearch experiment-send: metric.md missing at ${metricMd}`); return 1; }
+  if (!existsSync(metricMd)) return fail(`metric.md missing at ${metricMd}`, 1);
   const stateDir = workerStateDir(art, agent);
   const stateTxt = join(stateDir, "state.txt");
-  if (!existsSync(stateTxt)) { log.error(`autoresearch experiment-send: worker state.txt missing: ${stateTxt}`); return 1; }
+  if (!existsSync(stateTxt)) return fail(`worker state.txt missing: ${stateTxt}`, 1);
 
   // Fenced dispatch: a writer holding a stale controller generation refuses LOUDLY
   // (rc 3) before any effect. Old campaigns (no ledger) skip the fence entirely.
   const hasLedger = existsSync(ledgerPath(art));
   const effGen = hasLedger ? controllerGen(art) : 1;
   if (hasLedger && p.gen !== undefined && Number(p.gen) !== effGen) {
-    log.error(`autoresearch experiment-send: stale controller generation (--gen ${p.gen}, current ${effGen}); re-enter via 'autoresearch resume ${topic}'`);
-    return 3;
+    return fail(`stale controller generation (--gen ${p.gen}, current ${effGen}); re-enter via 'autoresearch resume ${topic}'`, 3);
   }
 
   // 3-outcome phase gate: abandoned (2, distinct) / not-idle (1) / idle (proceed).
   const phase = parseState(readFileSync(stateTxt, "utf8")).phase ?? "";
-  if (phase === "abandoned") { log.error(`autoresearch experiment-send: worker ${agent} lane is abandoned; not dispatching`); return 2; }
-  if (phase !== "idle") { log.error(`autoresearch experiment-send: worker ${agent} not idle (phase=${phase}); wait or finalize first`); return 1; }
+  if (phase === "abandoned") return fail(`worker ${agent} lane is abandoned; not dispatching`);
+  if (phase !== "idle") return fail(`worker ${agent} not idle (phase=${phase}); wait or finalize first`, 1);
 
   // --parent (B2): same-lane parent exp must exist (lineage is recorded for the advisory diff).
   if (p.parentId !== undefined) {
-    if (!EXP_ID_RE.test(p.parentId)) { log.error(`autoresearch experiment-send: --parent must match exp-[0-9]+; got '${p.parentId}'`); return 2; }
-    if (!existsSync(experimentDir(art, agent, p.parentId))) { log.error(`autoresearch experiment-send: --parent ${p.parentId} has no experiment dir under ${agent}`); return 1; }
+    if (!EXP_ID_RE.test(p.parentId)) return fail(`--parent must match exp-[0-9]+; got '${p.parentId}'`);
+    if (!existsSync(experimentDir(art, agent, p.parentId))) return fail(`--parent ${p.parentId} has no experiment dir under ${agent}`, 1);
   }
 
   // Branch dir + smoke-test BEFORE any state mutation.
@@ -655,20 +677,19 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
     const r = deps.runSmokeTest!(p.smokeTest, join(branchDir, "code"), deps.smokeTimeoutSec ?? 60);
     if (!r.ok) {
       atomicWrite(join(branchDir, "smoke-test.err"), r.stderr);
-      log.error(`autoresearch experiment-send: smoke-test failed for ${agent}/${expId}; stderr -> ${join(branchDir, "smoke-test.err")}`);
-      return 2;
+      return fail(`smoke-test failed for ${agent}/${expId}; stderr -> ${join(branchDir, "smoke-test.err")}`);
     }
   }
 
   const model = resolveModel(agent, topic);
-  if (!model) { log.error(`autoresearch experiment-send: no worker '${agent}' on topic '${topic}' (resolveModel null)`); return 1; }
+  if (!model) return fail(`no worker '${agent}' on topic '${topic}' (resolveModel null)`, 1);
   const outbox = outboxPath(agent, model, topic);
-  if (!existsSync(outbox)) { log.error(`autoresearch experiment-send: worker outbox missing: ${outbox} (was spawn run for ${agent}?)`); return 1; }
+  if (!existsSync(outbox)) return fail(`worker outbox missing: ${outbox} (was spawn run for ${agent}?)`, 1);
 
   // Gather template fields.
   const metricBlock = readFileSync(metricMd, "utf8");
   const metricName = parseMetricMd(metricBlock).primaryMetric;
-  if (!metricName) { log.error(`autoresearch experiment-send: could not parse Primary metric from ${metricMd}`); return 1; }
+  if (!metricName) return fail(`could not parse Primary metric from ${metricMd}`, 1);
 
   const probe = deps.probeHardware();
   const baselinePath = join(art, "hardware.txt");
@@ -684,7 +705,7 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
 
   // Read + render the template.
   const templatePath = join(pluginRoot(), "config", "prompt-templates", "autoresearch", "experiment.md");
-  if (!existsSync(templatePath)) { log.error(`autoresearch experiment-send: template missing: ${templatePath}`); return 1; }
+  if (!existsSync(templatePath)) return fail(`template missing: ${templatePath}`, 1);
   const template = readFileSync(templatePath, "utf8");
 
   let prompt: string;
@@ -694,8 +715,8 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
       approachLabel, approachBrief, branchDir, metricName, timeBudgetS,
       taskContext, sotaBlock, peersBlock, artDir: art,
     });
-  } catch (e) { log.error(`autoresearch experiment-send: ${(e as Error).message}`); return 1; }
-  if (prompt.trim() === "") { log.error(`autoresearch experiment-send: prompt rendered empty (template substitution failed)`); return 1; }
+  } catch (e) { return fail((e as Error).message, 1); }
+  if (prompt.trim() === "") return fail(`prompt rendered empty (template substitution failed)`, 1);
 
   // Replay-safe dispatch: record the intent BEFORE any worker-visible effect and the
   // delivery AFTER, carrying the outbox offset captured before the inbox write so
@@ -806,12 +827,17 @@ export async function scoreWith(args: string[], deps: AutoresearchScoreDeps): Pr
     if (deps.fs.exists(lp)) {
       const append = deps.appendFile ?? appendFileSync;
       const gen = readGen(deps.fs.read(controllerGenPath(art))).gen || 1;
-      const seen = new Set(replayLedger(deps.fs.read(lp) ?? "").completionOrder);
+      // ONE ledger read for the whole tail: successive appends thread the accumulated text
+      // (identical seq numbers + bytes) instead of re-reading the ledger per event.
+      let text = deps.fs.read(lp) ?? "";
+      const seen = new Set(replayLedger(text).completionOrder);
       for (const line of c.resultsTsv.split("\n")) {
         if (!line || line.startsWith("exp_id\t")) continue;
         const [expId, agent] = line.split("\t");
         if (!expId || !agent || seen.has(`${agent}/${expId}`)) continue;
-        append(lp, appendEvent(deps.fs.read(lp) ?? "", { gen, ts: deps.now(), kind: "result-recorded", agent, exp_id: expId }));
+        const ev = appendEvent(text, { gen, ts: deps.now(), kind: "result-recorded", agent, exp_id: expId });
+        append(lp, ev);
+        text += ev;
         seen.add(`${agent}/${expId}`);
       }
     }
@@ -880,9 +906,16 @@ export async function monitorRun(args: string[], opts?: { home?: string; cwd?: s
     rescanEveryS: Number(process.env.AP_RESCAN_EVERY_S ?? 30),
   };
 
+  // Persist ONLY on change: every 2s tick would otherwise re-write two byte-identical files.
+  // The cursor only advances and the rescan set only grows, so offset + set size is a sound
+  // change test (the -1 seeds make the initial persist unconditional).
+  let persistedOffset = -1, persistedRescan = -1;
   const persist = (state: MonitorScanState): void => {
+    if (state.offset === persistedOffset && state.rescanEmitted.size === persistedRescan) return;
     atomicWrite(cursorFile, String(state.offset));            // NO trailing newline; atomic so a torn
     atomicWrite(rescanFile, [...state.rescanEmitted].join("\n")); // write can't rewind the resume cursor
+    persistedOffset = state.offset;
+    persistedRescan = state.rescanEmitted.size;
   };
 
   // Initial cursor restore + pre-seed from the whole outbox (size = BYTES).
@@ -1158,9 +1191,8 @@ function normalizeResults(art: string, agents: string[]): void {
     const expsRoot = experimentsDir(art, agent);
     for (const expId of listExpDirs(expsRoot)) {
       const resultPath = join(expsRoot, expId, "result.json");
-      if (!existsSync(resultPath)) continue;
-      let parsed: ResultJson;
-      try { parsed = JSON.parse(readFileSync(resultPath, "utf8")) as ResultJson; } catch { continue; }
+      const parsed = readJsonOr<ResultJson>(resultPath, null);
+      if (parsed === null) continue;
       const norm = normalizeResult(parsed);
       if (norm.status !== parsed.status || norm.metric_value !== parsed.metric_value) {
         atomicWrite(resultPath, JSON.stringify(norm));
@@ -1176,13 +1208,9 @@ function pruneIntermediate(art: string, agents: string[]): void {
     const expsRoot = experimentsDir(art, agent);
     for (const expId of listExpDirs(expsRoot)) {
       const expDir = join(expsRoot, expId);
-      const resultPath = join(expDir, "result.json");
-      if (!existsSync(resultPath)) continue;
-      let keptRel: string;
-      try {
-        const r = JSON.parse(readFileSync(resultPath, "utf8")) as { checkpoint_path?: unknown };
-        keptRel = r.checkpoint_path != null ? String(r.checkpoint_path) : "";
-      } catch { continue; }
+      const r = readJsonOr<{ checkpoint_path?: unknown }>(join(expDir, "result.json"), null);
+      if (r === null) continue;
+      const keptRel = r.checkpoint_path != null ? String(r.checkpoint_path) : "";
       if (!keptRel || keptRel === "null") continue;
       // Resolve relative to the exp dir; reject paths that escape it.
       const keptAbs = resolve(expDir, keptRel);
@@ -1252,9 +1280,9 @@ function computeAuditWarnings(art: string, agents: string[], warningsPath: strin
       const expDir = join(expsRoot, expId);
       const promptMd = join(expDir, "prompt.md");
       const auditJson = join(expDir, "audit.json");
-      if (!existsSync(promptMd) || !existsSync(auditJson)) continue;
-      let audit: Record<string, unknown>;
-      try { audit = JSON.parse(readFileSync(auditJson, "utf8")) as Record<string, unknown>; } catch { continue; }
+      if (!existsSync(promptMd)) continue;
+      const audit = readJsonOr<Record<string, unknown>>(auditJson, null);
+      if (audit === null) continue;
       for (const { key, value } of parseHardConstraints(readFileSync(promptMd, "utf8"))) {
         const actual = audit[key];
         if (actual == null || String(actual) === "null") continue;
@@ -1298,10 +1326,8 @@ function writeFinalizeLessons(art: string, agents: string[], deps: AutoresearchF
       const expsRoot = experimentsDir(art, agent);
       for (const expId of listExpDirs(expsRoot)) {
         const expDir = join(expsRoot, expId);
-        const resultPath = join(expDir, "result.json");
-        if (!existsSync(resultPath)) continue;
-        let r: ResultJson;
-        try { r = JSON.parse(readFileSync(resultPath, "utf8")) as ResultJson; } catch { continue; }
+        const r = readJsonOr<ResultJson>(join(expDir, "result.json"), null);
+        if (r === null) continue;
         if (r.status !== "ok" || r.metric_value == null) continue;
 
         const key = `${agent}/${expId}`;
@@ -1312,10 +1338,8 @@ function writeFinalizeLessons(art: string, agents: string[], deps: AutoresearchF
         let parentMetric: number | null = null;
         const parentId = (parseState(readOr(join(expDir, "lineage.txt"))).parent_id ?? "").trim();
         if (parentId) {
-          try {
-            const pr = JSON.parse(readFileSync(join(expsRoot, parentId, "result.json"), "utf8")) as ResultJson;
-            if (pr.metric_value != null) parentMetric = pr.metric_value;
-          } catch { /* no parent result -> rootless draft */ }
+          const pr = readJsonOr<ResultJson>(join(expsRoot, parentId, "result.json"), null);   // absent/garbled -> rootless draft
+          if (pr && pr.metric_value != null) parentMetric = pr.metric_value;
         }
 
         // Operator recorded at dispatch (phase-A wiring); absent file keeps the
@@ -1493,10 +1517,9 @@ export async function finalizeWith(args: string[], deps: AutoresearchFinalizeDep
     if (!existsSync(ob)) continue;
     const lines = readOr(ob).split("\n").filter((l) => l.trim() !== "").slice(-10);
     for (const line of lines) {
-      try {
-        const o = JSON.parse(line) as { ts?: unknown; event?: unknown };
-        allEvents.push({ ts: o.ts != null ? String(o.ts) : "", agent, event: o.event != null ? String(o.event) : "" });
-      } catch { /* skip non-JSON */ }
+      const o = parseEvent(line);
+      if (o === null) continue;   // skip non-JSON
+      allEvents.push({ ts: o.ts != null ? String(o.ts) : "", agent, event: o.event != null ? String(o.event) : "" });
     }
   }
   allEvents.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
@@ -1509,14 +1532,8 @@ export async function finalizeWith(args: string[], deps: AutoresearchFinalizeDep
     const f = line.split("\t");
     if (f[0] === "size_warn") {
       warnings.push(`- size_warn: ${f[1]} ${f[2]} GB (${f[3]} files)`);
-    } else if (f[0] === "audit_warn") {
-      warnings.push(`- audit_warn: ${f[1]} ${f[2]} (${f[3]})`);
-    } else if (f[0] === "sanity") {
-      warnings.push(`- sanity: ${f[1]} ${f[2]} (${f[3]})`);
-    } else if (f[0] === "lineage") {
-      warnings.push(`- lineage: ${f[1]} ${f[2]} (${f[3]})`);
-    } else if (f[0] === "reimpl") {
-      warnings.push(`- reimpl: ${f[1]} ${f[2]} (${f[3]})`);
+    } else if (["audit_warn", "sanity", "lineage", "reimpl"].includes(f[0])) {
+      warnings.push(`- ${f[0]}: ${f[1]} ${f[2]} (${f[3]})`);
     }
   }
 
@@ -1619,8 +1636,7 @@ export interface AutoresearchHandoffDeps {
 
 /** Read result.json under art and parse it; {} on any failure. */
 function readResultJson(path: string): Record<string, unknown> {
-  if (!existsSync(path)) return {};
-  try { return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>; } catch { return {}; }
+  return readJsonOr<Record<string, unknown>>(path, null) ?? {};
 }
 
 /** A result.json field coerced to string ("" when absent/null). */
@@ -1860,6 +1876,9 @@ const liveFreshWorkerDeps: AutoresearchFreshWorkerDeps = {
 export interface AutoresearchResumeDeps {
   now(): string;
   paneAlive(pane: string): Promise<boolean>;
+  /** ONE server-wide pane snapshot for the whole liveness pass (the live wiring); callers that
+   *  only inject paneAlive keep the per-pane probe. */
+  livePanes?(): Promise<Set<string>>;
   freshWorker(topic: string, agent: string): Promise<number>;
   stdout?: (line: string) => void;
   opts?: PathOpts;
@@ -1879,22 +1898,32 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
   const lp = ledgerPath(art);
   if (!existsSync(lp)) { log.error(`autoresearch resume: no campaign ledger under ${art}; pre-ledger campaigns cannot be resumed (init remains the creation path)`); return 1; }
 
+  // ONE ledger read for every append this verb makes (the passes below emit one event per
+  // worker/intent/lane); the re-reads that follow a pass still see them on disk.
+  const ledgerAdd = ledgerAppender(art);
+
   // 1. Fenced lease: bump the controller generation, then record the resume event under it.
   const prior = replayLedger(readFileSync(lp, "utf8"));
   const gen = Math.max(readGen(readIfExistsOrNull(controllerGenPath(art))).gen, prior.gen) + 1;
   atomicWrite(controllerGenPath(art), renderGen(gen, deps.now(), "resume"));
-  ledgerAppend(art, { gen, ts: deps.now(), kind: "resume" });
+  ledgerAdd({ gen, ts: deps.now(), kind: "resume" });
 
   const workersFile = join(art, "workers.txt");
   const agents = existsSync(workersFile) ? splitNonCommentLines(readFileSync(workersFile, "utf8")) : [];
   const redispatch = new Set<string>();
 
-  const readOutbox = (agent: string): { model: string | null; text: string } => {
+  // ONE read per agent's outbox: Pass 1 reads every worker's, Pass 2 re-reads one per unresolved
+  // intent. Cached as BUFFERS — the ledger's recorded offsets are BYTE offsets.
+  const outboxCache = new Map<string, Buffer>();
+  const readOutbox = (agent: string): Buffer => {
+    const hit = outboxCache.get(agent);
+    if (hit) return hit;
     const model = resolveModel(agent, topic);
     const ob = model ? outboxPath(agent, model, topic) : "";
-    let text = "";
-    if (ob && existsSync(ob)) { try { text = readFileSync(ob, "utf8"); } catch { text = ""; } }
-    return { model, text };
+    let buf = Buffer.alloc(0);
+    if (ob && existsSync(ob)) { try { buf = readFileSync(ob); } catch { buf = Buffer.alloc(0); } }
+    outboxCache.set(agent, buf);
+    return buf;
   };
 
   // 2. Pass 1 — per-worker reconcile from the recorded delivery offset + result backfill.
@@ -1902,7 +1931,7 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
   for (const agent of agents) {
     const stateTxt = join(workerStateDir(art, agent), "state.txt");
     if (!existsSync(stateTxt)) continue;
-    const { text: obText } = readOutbox(agent);
+    const obText = readOutbox(agent).toString("utf8");
     const offset = replay.lastDeliveredOffset.get(agent) ?? 0;
     const curExp = parseState(readOr(stateTxt)).current_exp_id ?? "";
     const doneResultExists = !!curExp && existsSync(join(experimentDir(art, agent, curExp), "result.json"));
@@ -1912,7 +1941,7 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
     const seen = new Set(replay.completionOrder);
     for (const expId of listExpDirs(experimentsDir(art, agent))) {
       if (!existsSync(join(experimentDir(art, agent, expId), "result.json"))) continue;
-      if (!seen.has(`${agent}/${expId}`)) ledgerAppend(art, { gen, ts: deps.now(), kind: "result-recorded", agent, exp_id: expId });
+      if (!seen.has(`${agent}/${expId}`)) ledgerAdd({ gen, ts: deps.now(), kind: "result-recorded", agent, exp_id: expId });
     }
   }
 
@@ -1921,9 +1950,9 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
   for (const intent of replay.intents.values()) {
     if (intent.delivered) continue;
     const { agent, expId } = intent;
-    const { text: obText } = readOutbox(agent);
+    const obBuf = readOutbox(agent);
     const reconstructed = replay.lastDeliveredOffset.get(agent) ?? 0;
-    const tail = Buffer.from(obText, "utf8").subarray(reconstructed).toString("utf8");
+    const tail = obBuf.subarray(reconstructed).toString("utf8");
     let accepted = false;
     for (const line of tail.split("\n")) {
       const o = parseEvent(line.trim());
@@ -1934,7 +1963,7 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
       // Hazard-1 window (inbox written, state bump lost): treat as delivered with the
       // reconstructed offset, repair the state to the dispatch-equivalent, then re-run
       // the offset-scoped reconcile so a finished-while-dead experiment settles too.
-      ledgerAppend(art, { gen, ts: deps.now(), kind: "dispatch-delivered", agent, exp_id: expId, data: { outboxOffset: reconstructed, reconstructed: true } });
+      ledgerAdd({ gen, ts: deps.now(), kind: "dispatch-delivered", agent, exp_id: expId, data: { outboxOffset: reconstructed, reconstructed: true } });
       if (existsSync(stateTxt)) {
         const st = parseState(readOr(stateTxt));
         const stateN = /^[0-9]+$/.test((st.exp_counter ?? "").trim()) ? parseInt(st.exp_counter, 10) : 0;
@@ -1944,7 +1973,7 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
           last_event: "dispatched", last_event_ts: deps.now(),
         }));
         const resultExists = existsSync(join(experimentDir(art, agent, expId), "result.json"));
-        const recon = reconcileFromOutboxSince(obText, reconstructed, resultExists);
+        const recon = reconcileFromOutboxSince(obBuf.toString("utf8"), reconstructed, resultExists);
         if (recon === "failed" || recon === "idle") atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: recon }));
       }
     } else {
@@ -1954,6 +1983,9 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
   }
 
   // 4. Pass 3 — pane liveness: interrupt dead working lanes, respawn dead idle ones, report.
+  // ONE server-wide pane snapshot for every lane (a per-pane probe re-runs the identical
+  // full-server scan N times); a tmux-less server yields an empty set = every pane dead.
+  const live = deps.livePanes ? await deps.livePanes().catch(() => new Set<string>()) : null;
   const rows: string[] = [];
   const monitors: string[] = [];
   for (const agent of agents) {
@@ -1962,13 +1994,18 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
     const model = resolveModel(agent, topic);
     const pane = model ? paneMetaRead(agent, model, topic) : null;
     let alive = false;
-    if (pane) { try { alive = await deps.paneAlive(pane); } catch { alive = false; } }
+    if (pane) {
+      if (live) alive = live.has(pane);
+      else { try { alive = await deps.paneAlive(pane); } catch { alive = false; } }
+    }
 
-    let phase = parseState(readOr(stateTxt)).phase ?? "";
+    const raw = readOr(stateTxt);
+    const st = parseState(raw);
+    let phase = st.phase ?? "";
     if (!alive && phase === "working") {
-      const workingExp = parseState(readOr(stateTxt)).current_exp_id ?? "";
-      ledgerAppend(art, { gen, ts: deps.now(), kind: "interrupted", agent, ...(workingExp ? { exp_id: workingExp } : {}) });
-      atomicWrite(stateTxt, mergeState(readOr(stateTxt), {
+      const workingExp = st.current_exp_id ?? "";
+      ledgerAdd({ gen, ts: deps.now(), kind: "interrupted", agent, ...(workingExp ? { exp_id: workingExp } : {}) });
+      atomicWrite(stateTxt, mergeState(raw, {
         phase: "idle", current_exp_id: "", last_event: "interrupted", last_event_ts: deps.now(),
       }));
       if (workingExp) redispatch.add(`${agent}:${workingExp}`);
@@ -1976,7 +2013,7 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
     }
     if (!alive && phase !== "working") {
       const rc = await deps.freshWorker(topic, agent);
-      if (rc === 0) { ledgerAppend(art, { gen, ts: deps.now(), kind: "fresh-worker-respawn", agent }); alive = true; }
+      if (rc === 0) { ledgerAdd({ gen, ts: deps.now(), kind: "fresh-worker-respawn", agent }); alive = true; }
       else log.warn(`autoresearch resume: fresh-worker failed for ${agent} (rc ${rc}); lane left as-is`);
     }
 
@@ -1997,6 +2034,7 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
 const liveResumeDeps: AutoresearchResumeDeps = {
   now: () => isoUtc(),
   paneAlive,
+  livePanes: () => livePanes(),
   freshWorker: (t, i) => freshWorkerWith([t, i], liveFreshWorkerDeps),
 };
 
@@ -2106,10 +2144,8 @@ export async function consensusWith(args: string[], deps: AutoresearchConsensusD
     try { names = readdirSync(expsRoot).filter((n) => EXP_ID_RE.test(n)).sort(); } catch { continue; }
     let newest = "";
     for (const exp of names) {
-      const resultPath = join(experimentDir(art, agent, exp), "result.json");
-      if (!existsSync(resultPath)) continue;
-      let parsed: Record<string, unknown>;
-      try { parsed = JSON.parse(readFileSync(resultPath, "utf8")) as Record<string, unknown>; } catch { continue; }
+      const parsed = readJsonOr<Record<string, unknown>>(join(experimentDir(art, agent, exp), "result.json"), null);
+      if (parsed === null) continue;
       if (parsed.status !== "ok") continue;
       if (exp > newest) { newest = exp; latestOk[agent] = parsed; }
     }
@@ -2261,8 +2297,8 @@ function appendVerificationRow(art: string, agent: string, expId: string, row: V
     `${row.verdict} reason=${row.reason} recomputed=${row.recomputed} at ${row.ts}\n`);
 }
 const liveVerifyPlanDeps: VerifyPlanDeps = {
-  readResult: (art, i, e) => { const p = join(experimentDir(art, i, e), "result.json"); if (!existsSync(p)) return null; try { return JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>; } catch { return null; } },
-  readManifest: (art, i, e) => { const p = join(experimentDir(art, i, e), "verify-manifest.json"); if (!existsSync(p)) return null; try { return JSON.parse(readFileSync(p, "utf8")) as VerifyManifest; } catch { return null; } },
+  readResult: (art, i, e) => readJsonOr<Record<string, unknown>>(join(experimentDir(art, i, e), "result.json"), null),
+  readManifest: (art, i, e) => readJsonOr<VerifyManifest>(join(experimentDir(art, i, e), "verify-manifest.json"), null),
   readInput: (art, i, e, rel) => { const p = join(experimentDir(art, i, e), rel); return readIfExistsOrNull(p); },
   writeRow: appendVerificationRow,
   now: () => isoUtc(),

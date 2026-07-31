@@ -8441,14 +8441,21 @@ var init_agents = __esm({
 function contractsPath() {
   return (0, import_node_path7.join)(pluginRoot(), "config", "contracts.yaml");
 }
-function load() {
-  const p = contractsPath();
+function readDoc(p) {
   if (!(0, import_node_fs10.existsSync)(p)) return {};
   try {
     return (0, import_yaml2.parse)((0, import_node_fs10.readFileSync)(p, "utf8")) ?? {};
   } catch {
     return {};
   }
+}
+function load() {
+  const p = contractsPath();
+  const hit = DOCS.get(p);
+  if (hit) return hit;
+  const doc = readDoc(p);
+  DOCS.set(p, doc);
+  return doc;
 }
 function listAgents() {
   return Object.keys(load()).filter((k) => k !== "consult");
@@ -8494,7 +8501,7 @@ function consultTimeout(kind) {
 function contractsExist() {
   return (0, import_node_fs10.existsSync)(contractsPath());
 }
-var import_node_fs10, import_node_path7, import_yaml2, CONSULT_DEFAULTS;
+var import_node_fs10, import_node_path7, import_yaml2, DOCS, CONSULT_DEFAULTS;
 var init_contracts = __esm({
   "src/core/contracts.ts"() {
     "use strict";
@@ -8502,6 +8509,7 @@ var init_contracts = __esm({
     import_node_path7 = require("node:path");
     import_yaml2 = __toESM(require_dist(), 1);
     init_paths();
+    DOCS = /* @__PURE__ */ new Map();
     CONSULT_DEFAULTS = { research: 600, verify: 300, adversary: 600, experiment: 1800, openq: 300, rebuttal: 300, gap: 600, signoff: 300 };
   }
 });
@@ -16798,15 +16806,15 @@ async function tmux(args) {
   return stdout.trim();
 }
 async function ensurePaneBorders() {
-  let ok = true;
-  for (const a2 of paneBorderArgs()) {
+  const rs = await Promise.all(paneBorderArgs().map(async (a2) => {
     try {
       await tmux(a2);
+      return true;
     } catch {
-      ok = false;
+      return false;
     }
-  }
-  return ok;
+  }));
+  return rs.every((r) => r);
 }
 async function ensureWindowBorderStatus(target) {
   try {
@@ -16858,7 +16866,7 @@ function paneLabelSetArgs(pane, agent, model, topic) {
   ];
 }
 async function paneLabelSet(pane, agent, model, topic) {
-  for (const args of paneLabelSetArgs(pane, agent, model, topic)) await execa("tmux", args);
+  await Promise.all(paneLabelSetArgs(pane, agent, model, topic).map((args) => execa("tmux", args)));
 }
 function gracefulRespawnCommand(snap, pluginRoot2, label, color) {
   return `cat '${snap}'; node '${pluginRoot2}/dist/ap.cjs' _banner '${label}' '${color}'; rm -f '${snap}'`;
@@ -16870,8 +16878,8 @@ async function paneOption(pane, opt) {
     return "";
   }
 }
-async function killGraceful(pane, pluginRoot2) {
-  if (!await paneAlive(pane)) return;
+async function killGraceful(pane, pluginRoot2, alive) {
+  if (!(alive ?? await paneAlive(pane))) return;
   const label = await paneOption(pane, "#{@ap_label}") || "worker";
   const color = await paneOption(pane, "#{@ap_color}");
   const snap = (0, import_node_path13.join)((0, import_node_fs16.mkdtempSync)((0, import_node_path13.join)((0, import_node_os5.tmpdir)(), "cs-snap-")), "snap.txt");
@@ -17325,11 +17333,12 @@ async function run2(args) {
     log.error("must run inside a tmux session");
     return 1;
   }
-  if (!haveCmd("tmux")) {
+  const tmuxVer = tmuxVersionString();
+  if (!tmuxVer) {
     log.error("tmux not on PATH");
     return 1;
   }
-  if (!tmuxVersionOk()) {
+  if (!tmuxVersionOk(tmuxVer)) {
     log.error("tmux >= 3.0 required");
     return 1;
   }
@@ -17629,7 +17638,7 @@ async function teardownBatch(topic, pairs, d) {
     const pane = d.paneMetaRead(agent, model, topic) ?? "";
     if (pane && live.has(pane)) {
       log.info(`graceful shutdown for ${agent}-${model} on ${topic} (pane ${pane})`);
-      await d.killGraceful(pane);
+      await d.killGraceful(pane, live.has(pane));
       pending.push(pane);
     }
   }
@@ -17649,7 +17658,7 @@ function liveDeps() {
   return {
     paneMetaRead: (i2, m, t) => paneMetaRead(i2, m, t),
     livePanes: () => livePanes(),
-    killGraceful: (p) => killGraceful(p, pluginRoot()),
+    killGraceful: (p, alive) => killGraceful(p, pluginRoot(), alive),
     killNow: (p) => killNow(p),
     stateArchive: (i2, m, t) => stateArchive(i2, m, t),
     sleep: sleep3,
@@ -18505,6 +18514,10 @@ function lastKeyedNumber(text, key) {
 function parseLatestOffset(stateText) {
   return lastKeyedNumber(stateText, "OFFSET");
 }
+function lastKeyedValue(text, key) {
+  const matches = text.split("\n").filter((l) => l.startsWith(`${key}=`));
+  return matches.length ? matches[matches.length - 1].slice(key.length + 1).trim() : null;
+}
 function recordWaitOutcome(agent, model, topic, stateFile, state, key, question) {
   if (state === "question" && question) {
     atomicWrite(question.file, question.body);
@@ -18569,8 +18582,7 @@ function verifyState(ev, verifyText) {
 }
 function gateState(workers, key) {
   return workers.map((p) => {
-    const matches = (p.stateText ?? "").split("\n").filter((l) => l.startsWith(`${key}=`));
-    const last = matches.length ? matches[matches.length - 1].slice(key.length + 1).trim() : null;
+    const last = lastKeyedValue(p.stateText ?? "", key);
     const status = last === "question" ? "question" : p.doneExists && last !== null ? "terminal" : "pending";
     return { agent: p.agent, status };
   });
@@ -18579,8 +18591,7 @@ function gateAnomalies(workers, key) {
   const out = [];
   for (const p of workers) {
     if (!p.doneExists) continue;
-    const matches = (p.stateText ?? "").split("\n").filter((l) => l.startsWith(`${key}=`));
-    const last = matches.length ? matches[matches.length - 1].slice(key.length + 1).trim() : null;
+    const last = lastKeyedValue(p.stateText ?? "", key);
     if (last === "timeout" || last === "failed") out.push({ agent: p.agent, value: last });
   }
   return out;
@@ -22160,6 +22171,11 @@ function computeScore(art, fs, now) {
   const manifests = [];
   const sanityRows = [];
   const lineageRows = [];
+  const auditCache = /* @__PURE__ */ new Map();
+  const readAudit = (path6) => {
+    if (!auditCache.has(path6)) auditCache.set(path6, parseAudit(fs.read(path6)));
+    return auditCache.get(path6) ?? null;
+  };
   const workers = fs.listDir(workersDir(art));
   for (const agent of workers) {
     const exps = fs.listDir(experimentsDir(art, agent));
@@ -22214,7 +22230,7 @@ function computeScore(art, fs, now) {
         }
       }
       const promptMd = fs.read((0, import_node_path29.join)(branchDir, "prompt.md"));
-      const auditObj = parseAudit(fs.read((0, import_node_path29.join)(branchDir, "audit.json")));
+      const auditObj = readAudit((0, import_node_path29.join)(branchDir, "audit.json"));
       const flags = sanityFlags({
         result: o2,
         direction: parsed?.direction,
@@ -22231,7 +22247,7 @@ function computeScore(art, fs, now) {
       const parentId = lineageTxt ? parseState(lineageTxt).parent_id ?? "" : "";
       let knobs = null;
       if (parentId) {
-        const parentAudit = parseAudit(fs.read((0, import_node_path29.join)(experimentDir(art, agent, parentId), "audit.json")));
+        const parentAudit = readAudit((0, import_node_path29.join)(experimentDir(art, agent, parentId), "audit.json"));
         knobs = diffAuditKnobs(parentAudit, auditObj);
       }
       lineageRows.push({
@@ -22576,13 +22592,6 @@ var init_autoresearchBrief = __esm({
 });
 
 // src/core/autoresearchMonitor.ts
-function eventOf(line) {
-  try {
-    return JSON.parse(line);
-  } catch {
-    return {};
-  }
-}
 function initScanState(size, fullText, persistedCursor, persistedRescan) {
   const c3 = persistedCursor?.replace(/\s+/g, "") ?? "";
   const offset = /^[0-9]+$/.test(c3) && Number(c3) <= size ? Number(c3) : size;
@@ -22594,7 +22603,7 @@ function initScanState(size, fullText, persistedCursor, persistedRescan) {
       if (bytesSeen >= offset) break;
       lineNum++;
       bytesSeen += Buffer.byteLength(line) + 1;
-      const ev = eventOf(line).event;
+      const ev = parseEvent(line)?.event;
       if (ev && RESCAN_EVENTS.has(ev)) rescanEmitted.add(`${lineNum}	${ev}`);
     }
   }
@@ -22609,8 +22618,8 @@ function monitorScan(_outboxPath, worker, prev, d) {
   if (d.outboxSize > state.offset && d.outboxText) {
     for (const line of d.outboxText.split("\n")) {
       if (!line) continue;
-      const { event, summary } = eventOf(line);
-      if (event && TAIL_EVENTS.has(event)) emit(event, summary ?? "");
+      const o2 = parseEvent(line);
+      if (o2?.event && TAIL_EVENTS.has(o2.event)) emit(o2.event, o2.summary ?? "");
     }
     state.offset = d.outboxSize;
   }
@@ -22632,11 +22641,11 @@ function monitorScan(_outboxPath, worker, prev, d) {
         continue;
       }
       lineNum++;
-      const { event, summary } = eventOf(line);
-      if (event && RESCAN_EVENTS.has(event)) {
-        const key = `${lineNum}	${event}`;
+      const o2 = parseEvent(line);
+      if (o2?.event && RESCAN_EVENTS.has(o2.event)) {
+        const key = `${lineNum}	${o2.event}`;
         if (!state.rescanEmitted.has(key)) {
-          emit(event, `${summary ?? ""} (rescan)`);
+          emit(o2.event, `${o2.summary ?? ""} (rescan)`);
           state.rescanEmitted.add(key);
         }
       }
@@ -22649,6 +22658,7 @@ var TAIL_EVENTS, RESCAN_EVENTS;
 var init_autoresearchMonitor = __esm({
   "src/core/autoresearchMonitor.ts"() {
     "use strict";
+    init_ipc();
     TAIL_EVENTS = /* @__PURE__ */ new Set(["done", "error", "question", "heartbeat"]);
     RESCAN_EVENTS = /* @__PURE__ */ new Set(["done", "error", "question"]);
   }
@@ -22930,8 +22940,7 @@ function promotable(l, policy) {
 function outcomeWeight(l) {
   return (l.hits + 1) / (l.hits + l.misses + 2);
 }
-function objectiveRelevance(l, objective) {
-  const obj = objective.toLowerCase();
+function objectiveRelevance(l, obj) {
   const words = Array.from(
     new Set(
       `${l.claim} ${l.knob} ${l.operator}`.toLowerCase().split(/\W+/).filter(Boolean)
@@ -22942,7 +22951,8 @@ function objectiveRelevance(l, objective) {
   return hit / words.length;
 }
 function retrieveLessons(store, ctx, policy, now) {
-  const ranked = store.filter((l) => l.promotion_state !== "retired").filter((l) => promotable(l, policy)).filter((l) => !isExpired(l.created_ts, now, policy.maxAgeDays)).filter((l) => canReadLesson(ctx, l)).filter((l) => objectiveRelevance(l, ctx.objective) >= policy.relevanceFloor).map((l) => ({
+  const objective = ctx.objective.toLowerCase();
+  const ranked = store.filter((l) => l.promotion_state !== "retired").filter((l) => promotable(l, policy)).filter((l) => !isExpired(l.created_ts, now, policy.maxAgeDays)).filter((l) => canReadLesson(ctx, l)).filter((l) => objectiveRelevance(l, objective) >= policy.relevanceFloor).map((l) => ({
     l,
     w: decayWeight(l.score, l.created_ts, now, policy.halfLifeDays) * outcomeWeight(l)
   })).sort((a2, b) => b.w - a2.w).map((x) => x.l);
@@ -23327,11 +23337,27 @@ __export(autoresearch_exports, {
   verifyCheckWith: () => verifyCheckWith,
   verifyPlanWith: () => verifyPlanWith
 });
-function ledgerAppend(art, ev) {
+function readJsonOr(path6, fallback) {
+  if (!(0, import_node_fs35.existsSync)(path6)) return fallback;
+  try {
+    return JSON.parse((0, import_node_fs35.readFileSync)(path6, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+function ledgerAppender(art) {
   const path6 = ledgerPath(art);
-  if (!(0, import_node_fs35.existsSync)(path6)) return false;
-  (0, import_node_fs35.appendFileSync)(path6, appendEvent((0, import_node_fs35.readFileSync)(path6, "utf8"), ev));
-  return true;
+  if (!(0, import_node_fs35.existsSync)(path6)) return () => false;
+  let text = (0, import_node_fs35.readFileSync)(path6, "utf8");
+  return (ev) => {
+    const line = appendEvent(text, ev);
+    (0, import_node_fs35.appendFileSync)(path6, line);
+    text += line;
+    return true;
+  };
+}
+function ledgerAppend(art, ev) {
+  return ledgerAppender(art)(ev);
 }
 function controllerGen(art) {
   const fromFile = readGen(readIfExistsOrNull(controllerGenPath(art))).gen;
@@ -23825,49 +23851,39 @@ function gatherPeers(art, self) {
 async function experimentSendWith(args, deps) {
   const out = deps.stdout ?? stdoutLine;
   const opts = deps.opts;
+  const fail = (m, rc = 2) => {
+    log.error(`autoresearch experiment-send: ${m}`);
+    return rc;
+  };
   const p = parseExperimentSendArgs(args);
-  if (p.badArgs) {
-    log.error("autoresearch experiment-send: usage: [--inputs csv] [--context-file path] [--smoke-test script] [--timeout N] [--parent exp-id] <topic> <agent> <exp-id> <approach-label> <approach-brief>");
-    return 2;
-  }
+  if (p.badArgs) return fail("usage: [--inputs csv] [--context-file path] [--smoke-test script] [--timeout N] [--parent exp-id] <topic> <agent> <exp-id> <approach-label> <approach-brief>");
   const { topic, agent, expId, approachLabel, approachBrief } = p;
-  if (!EXP_ID_RE.test(expId)) {
-    log.error(`autoresearch experiment-send: exp-id must match exp-[0-9]+; got '${expId}'`);
-    return 2;
-  }
-  if (!AGENT_RE.test(agent)) {
-    log.error(`autoresearch experiment-send: agent must match [a-z][a-z0-9-]*; got '${agent}'`);
-    return 2;
-  }
+  if (!EXP_ID_RE.test(expId)) return fail(`exp-id must match exp-[0-9]+; got '${expId}'`);
+  if (!AGENT_RE.test(agent)) return fail(`agent must match [a-z][a-z0-9-]*; got '${agent}'`);
   if (p.inputs) {
     for (const path6 of p.inputs.split(",")) {
       if (!path6) continue;
       try {
         (0, import_node_fs35.accessSync)(path6, import_node_fs35.constants.R_OK);
       } catch {
-        log.error(`autoresearch experiment-send: cannot read input path '${path6}'`);
-        return 2;
+        return fail(`cannot read input path '${path6}'`);
       }
     }
   }
   if (p.timeout !== void 0 && !/^[1-9][0-9]*$/.test(p.timeout)) {
-    log.error(`autoresearch experiment-send: --timeout must be a positive integer (seconds); got '${p.timeout}'`);
-    return 2;
+    return fail(`--timeout must be a positive integer (seconds); got '${p.timeout}'`);
   }
   if (p.gen !== void 0 && !/^[1-9][0-9]*$/.test(p.gen)) {
-    log.error(`autoresearch experiment-send: --gen must be a positive integer; got '${p.gen}'`);
-    return 2;
+    return fail(`--gen must be a positive integer; got '${p.gen}'`);
   }
   if (p.operator !== void 0 && !DISPATCH_OPERATORS.includes(p.operator)) {
-    log.error(`autoresearch experiment-send: --operator must be one of ${DISPATCH_OPERATORS.join("|")}; got '${p.operator}'`);
-    return 2;
+    return fail(`--operator must be one of ${DISPATCH_OPERATORS.join("|")}; got '${p.operator}'`);
   }
   if (p.smokeTest) {
     try {
       (0, import_node_fs35.accessSync)(p.smokeTest, import_node_fs35.constants.X_OK);
     } catch {
-      log.error(`autoresearch experiment-send: smoke-test script not executable: ${p.smokeTest}`);
-      return 2;
+      return fail(`smoke-test script not executable: ${p.smokeTest}`);
     }
   }
   let taskContext = "";
@@ -23875,50 +23891,27 @@ async function experimentSendWith(args, deps) {
     try {
       taskContext = (0, import_node_fs35.readFileSync)(p.contextFile, "utf8");
     } catch {
-      log.error(`autoresearch experiment-send: cannot read --context-file: ${p.contextFile}`);
-      return 2;
+      return fail(`cannot read --context-file: ${p.contextFile}`);
     }
   }
   const art = autoresearchArtDir(topic, opts);
-  if (!(0, import_node_fs35.existsSync)(art)) {
-    log.error(`autoresearch experiment-send: topic state dir missing: ${art} (was autoresearch init run?)`);
-    return 1;
-  }
+  if (!(0, import_node_fs35.existsSync)(art)) return fail(`topic state dir missing: ${art} (was autoresearch init run?)`, 1);
   const metricMd = (0, import_node_path32.join)(art, "metric.md");
-  if (!(0, import_node_fs35.existsSync)(metricMd)) {
-    log.error(`autoresearch experiment-send: metric.md missing at ${metricMd}`);
-    return 1;
-  }
+  if (!(0, import_node_fs35.existsSync)(metricMd)) return fail(`metric.md missing at ${metricMd}`, 1);
   const stateDir = workerStateDir(art, agent);
   const stateTxt = (0, import_node_path32.join)(stateDir, "state.txt");
-  if (!(0, import_node_fs35.existsSync)(stateTxt)) {
-    log.error(`autoresearch experiment-send: worker state.txt missing: ${stateTxt}`);
-    return 1;
-  }
+  if (!(0, import_node_fs35.existsSync)(stateTxt)) return fail(`worker state.txt missing: ${stateTxt}`, 1);
   const hasLedger = (0, import_node_fs35.existsSync)(ledgerPath(art));
   const effGen = hasLedger ? controllerGen(art) : 1;
   if (hasLedger && p.gen !== void 0 && Number(p.gen) !== effGen) {
-    log.error(`autoresearch experiment-send: stale controller generation (--gen ${p.gen}, current ${effGen}); re-enter via 'autoresearch resume ${topic}'`);
-    return 3;
+    return fail(`stale controller generation (--gen ${p.gen}, current ${effGen}); re-enter via 'autoresearch resume ${topic}'`, 3);
   }
   const phase = parseState((0, import_node_fs35.readFileSync)(stateTxt, "utf8")).phase ?? "";
-  if (phase === "abandoned") {
-    log.error(`autoresearch experiment-send: worker ${agent} lane is abandoned; not dispatching`);
-    return 2;
-  }
-  if (phase !== "idle") {
-    log.error(`autoresearch experiment-send: worker ${agent} not idle (phase=${phase}); wait or finalize first`);
-    return 1;
-  }
+  if (phase === "abandoned") return fail(`worker ${agent} lane is abandoned; not dispatching`);
+  if (phase !== "idle") return fail(`worker ${agent} not idle (phase=${phase}); wait or finalize first`, 1);
   if (p.parentId !== void 0) {
-    if (!EXP_ID_RE.test(p.parentId)) {
-      log.error(`autoresearch experiment-send: --parent must match exp-[0-9]+; got '${p.parentId}'`);
-      return 2;
-    }
-    if (!(0, import_node_fs35.existsSync)(experimentDir(art, agent, p.parentId))) {
-      log.error(`autoresearch experiment-send: --parent ${p.parentId} has no experiment dir under ${agent}`);
-      return 1;
-    }
+    if (!EXP_ID_RE.test(p.parentId)) return fail(`--parent must match exp-[0-9]+; got '${p.parentId}'`);
+    if (!(0, import_node_fs35.existsSync)(experimentDir(art, agent, p.parentId))) return fail(`--parent ${p.parentId} has no experiment dir under ${agent}`, 1);
   }
   const branchDir = experimentDir(art, agent, expId);
   (0, import_node_fs35.mkdirSync)((0, import_node_path32.join)(branchDir, "code"), { recursive: true });
@@ -23926,26 +23919,16 @@ async function experimentSendWith(args, deps) {
     const r = deps.runSmokeTest(p.smokeTest, (0, import_node_path32.join)(branchDir, "code"), deps.smokeTimeoutSec ?? 60);
     if (!r.ok) {
       atomicWrite((0, import_node_path32.join)(branchDir, "smoke-test.err"), r.stderr);
-      log.error(`autoresearch experiment-send: smoke-test failed for ${agent}/${expId}; stderr -> ${(0, import_node_path32.join)(branchDir, "smoke-test.err")}`);
-      return 2;
+      return fail(`smoke-test failed for ${agent}/${expId}; stderr -> ${(0, import_node_path32.join)(branchDir, "smoke-test.err")}`);
     }
   }
   const model = resolveModel(agent, topic);
-  if (!model) {
-    log.error(`autoresearch experiment-send: no worker '${agent}' on topic '${topic}' (resolveModel null)`);
-    return 1;
-  }
+  if (!model) return fail(`no worker '${agent}' on topic '${topic}' (resolveModel null)`, 1);
   const outbox = outboxPath(agent, model, topic);
-  if (!(0, import_node_fs35.existsSync)(outbox)) {
-    log.error(`autoresearch experiment-send: worker outbox missing: ${outbox} (was spawn run for ${agent}?)`);
-    return 1;
-  }
+  if (!(0, import_node_fs35.existsSync)(outbox)) return fail(`worker outbox missing: ${outbox} (was spawn run for ${agent}?)`, 1);
   const metricBlock = (0, import_node_fs35.readFileSync)(metricMd, "utf8");
   const metricName = parseMetricMd(metricBlock).primaryMetric;
-  if (!metricName) {
-    log.error(`autoresearch experiment-send: could not parse Primary metric from ${metricMd}`);
-    return 1;
-  }
+  if (!metricName) return fail(`could not parse Primary metric from ${metricMd}`, 1);
   const probe = deps.probeHardware();
   const baselinePath = (0, import_node_path32.join)(art, "hardware.txt");
   const baseline = readIfExistsOrNull(baselinePath);
@@ -23957,10 +23940,7 @@ async function experimentSendWith(args, deps) {
   const peersBlock = formatPeersBlock(gatherPeers(art, agent));
   const timeBudgetS = String(p.timeout ?? deps.consultTimeout());
   const templatePath = (0, import_node_path32.join)(pluginRoot(), "config", "prompt-templates", "autoresearch", "experiment.md");
-  if (!(0, import_node_fs35.existsSync)(templatePath)) {
-    log.error(`autoresearch experiment-send: template missing: ${templatePath}`);
-    return 1;
-  }
+  if (!(0, import_node_fs35.existsSync)(templatePath)) return fail(`template missing: ${templatePath}`, 1);
   const template = (0, import_node_fs35.readFileSync)(templatePath, "utf8");
   let prompt;
   try {
@@ -23981,13 +23961,9 @@ async function experimentSendWith(args, deps) {
       artDir: art
     });
   } catch (e) {
-    log.error(`autoresearch experiment-send: ${e.message}`);
-    return 1;
+    return fail(e.message, 1);
   }
-  if (prompt.trim() === "") {
-    log.error(`autoresearch experiment-send: prompt rendered empty (template substitution failed)`);
-    return 1;
-  }
+  if (prompt.trim() === "") return fail(`prompt rendered empty (template substitution failed)`, 1);
   const preOffset = outboxOffset(outbox);
   if (hasLedger) ledgerAppend(art, { gen: effGen, ts: deps.now(), kind: "dispatch-intent", agent, exp_id: expId, ...p.operator !== void 0 ? { data: { operator: p.operator } } : {} });
   atomicWrite((0, import_node_path32.join)(branchDir, "prompt.md"), prompt);
@@ -24061,12 +24037,15 @@ async function scoreWith(args, deps) {
     if (deps.fs.exists(lp)) {
       const append = deps.appendFile ?? import_node_fs35.appendFileSync;
       const gen = readGen(deps.fs.read(controllerGenPath(art))).gen || 1;
-      const seen = new Set(replayLedger(deps.fs.read(lp) ?? "").completionOrder);
+      let text = deps.fs.read(lp) ?? "";
+      const seen = new Set(replayLedger(text).completionOrder);
       for (const line of c3.resultsTsv.split("\n")) {
         if (!line || line.startsWith("exp_id	")) continue;
         const [expId, agent] = line.split("	");
         if (!expId || !agent || seen.has(`${agent}/${expId}`)) continue;
-        append(lp, appendEvent(deps.fs.read(lp) ?? "", { gen, ts: deps.now(), kind: "result-recorded", agent, exp_id: expId }));
+        const ev = appendEvent(text, { gen, ts: deps.now(), kind: "result-recorded", agent, exp_id: expId });
+        append(lp, ev);
+        text += ev;
         seen.add(`${agent}/${expId}`);
       }
     }
@@ -24119,9 +24098,13 @@ async function monitorRun(args, opts) {
     stuckS: Number(process.env.AP_STUCK_S ?? 1800),
     rescanEveryS: Number(process.env.AP_RESCAN_EVERY_S ?? 30)
   };
+  let persistedOffset = -1, persistedRescan = -1;
   const persist = (state2) => {
+    if (state2.offset === persistedOffset && state2.rescanEmitted.size === persistedRescan) return;
     atomicWrite(cursorFile, String(state2.offset));
     atomicWrite(rescanFile, [...state2.rescanEmitted].join("\n"));
+    persistedOffset = state2.offset;
+    persistedRescan = state2.rescanEmitted.size;
   };
   const initBuf = (0, import_node_fs35.existsSync)(outbox) ? (0, import_node_fs35.readFileSync)(outbox) : Buffer.alloc(0);
   let state = initScanState(
@@ -24335,13 +24318,8 @@ function normalizeResults(art, agents) {
     const expsRoot = experimentsDir(art, agent);
     for (const expId of listExpDirs(expsRoot)) {
       const resultPath = (0, import_node_path32.join)(expsRoot, expId, "result.json");
-      if (!(0, import_node_fs35.existsSync)(resultPath)) continue;
-      let parsed;
-      try {
-        parsed = JSON.parse((0, import_node_fs35.readFileSync)(resultPath, "utf8"));
-      } catch {
-        continue;
-      }
+      const parsed = readJsonOr(resultPath, null);
+      if (parsed === null) continue;
       const norm = normalizeResult(parsed);
       if (norm.status !== parsed.status || norm.metric_value !== parsed.metric_value) {
         atomicWrite(resultPath, JSON.stringify(norm));
@@ -24355,15 +24333,9 @@ function pruneIntermediate(art, agents) {
     const expsRoot = experimentsDir(art, agent);
     for (const expId of listExpDirs(expsRoot)) {
       const expDir = (0, import_node_path32.join)(expsRoot, expId);
-      const resultPath = (0, import_node_path32.join)(expDir, "result.json");
-      if (!(0, import_node_fs35.existsSync)(resultPath)) continue;
-      let keptRel;
-      try {
-        const r = JSON.parse((0, import_node_fs35.readFileSync)(resultPath, "utf8"));
-        keptRel = r.checkpoint_path != null ? String(r.checkpoint_path) : "";
-      } catch {
-        continue;
-      }
+      const r = readJsonOr((0, import_node_path32.join)(expDir, "result.json"), null);
+      if (r === null) continue;
+      const keptRel = r.checkpoint_path != null ? String(r.checkpoint_path) : "";
       if (!keptRel || keptRel === "null") continue;
       const keptAbs = (0, import_node_path32.resolve)(expDir, keptRel);
       if (keptAbs !== expDir && !keptAbs.startsWith(expDir + "/")) {
@@ -24440,13 +24412,9 @@ function computeAuditWarnings(art, agents, warningsPath) {
       const expDir = (0, import_node_path32.join)(expsRoot, expId);
       const promptMd = (0, import_node_path32.join)(expDir, "prompt.md");
       const auditJson = (0, import_node_path32.join)(expDir, "audit.json");
-      if (!(0, import_node_fs35.existsSync)(promptMd) || !(0, import_node_fs35.existsSync)(auditJson)) continue;
-      let audit;
-      try {
-        audit = JSON.parse((0, import_node_fs35.readFileSync)(auditJson, "utf8"));
-      } catch {
-        continue;
-      }
+      if (!(0, import_node_fs35.existsSync)(promptMd)) continue;
+      const audit = readJsonOr(auditJson, null);
+      if (audit === null) continue;
       for (const { key, value } of parseHardConstraints((0, import_node_fs35.readFileSync)(promptMd, "utf8"))) {
         const actual = audit[key];
         if (actual == null || String(actual) === "null") continue;
@@ -24476,14 +24444,8 @@ function writeFinalizeLessons(art, agents, deps) {
       const expsRoot = experimentsDir(art, agent);
       for (const expId of listExpDirs(expsRoot)) {
         const expDir = (0, import_node_path32.join)(expsRoot, expId);
-        const resultPath = (0, import_node_path32.join)(expDir, "result.json");
-        if (!(0, import_node_fs35.existsSync)(resultPath)) continue;
-        let r;
-        try {
-          r = JSON.parse((0, import_node_fs35.readFileSync)(resultPath, "utf8"));
-        } catch {
-          continue;
-        }
+        const r = readJsonOr((0, import_node_path32.join)(expDir, "result.json"), null);
+        if (r === null) continue;
         if (r.status !== "ok" || r.metric_value == null) continue;
         const key = `${agent}/${expId}`;
         const verdict = lessonVerdictOf(a1[key], c1[key]);
@@ -24491,11 +24453,8 @@ function writeFinalizeLessons(art, agents, deps) {
         let parentMetric = null;
         const parentId = (parseState(readOr((0, import_node_path32.join)(expDir, "lineage.txt"))).parent_id ?? "").trim();
         if (parentId) {
-          try {
-            const pr = JSON.parse((0, import_node_fs35.readFileSync)((0, import_node_path32.join)(expsRoot, parentId, "result.json"), "utf8"));
-            if (pr.metric_value != null) parentMetric = pr.metric_value;
-          } catch {
-          }
+          const pr = readJsonOr((0, import_node_path32.join)(expsRoot, parentId, "result.json"), null);
+          if (pr && pr.metric_value != null) parentMetric = pr.metric_value;
         }
         const operator = (parseState(readOr((0, import_node_path32.join)(expDir, "operator.txt"))).operator ?? "").trim() || void 0;
         drafts.push(buildLessonDraft({
@@ -24641,11 +24600,9 @@ async function finalizeWith(args, deps) {
     if (!(0, import_node_fs35.existsSync)(ob)) continue;
     const lines = readOr(ob).split("\n").filter((l) => l.trim() !== "").slice(-10);
     for (const line of lines) {
-      try {
-        const o2 = JSON.parse(line);
-        allEvents.push({ ts: o2.ts != null ? String(o2.ts) : "", agent, event: o2.event != null ? String(o2.event) : "" });
-      } catch {
-      }
+      const o2 = parseEvent(line);
+      if (o2 === null) continue;
+      allEvents.push({ ts: o2.ts != null ? String(o2.ts) : "", agent, event: o2.event != null ? String(o2.event) : "" });
     }
   }
   allEvents.sort((a2, b) => a2.ts < b.ts ? 1 : a2.ts > b.ts ? -1 : 0);
@@ -24656,14 +24613,8 @@ async function finalizeWith(args, deps) {
     const f = line.split("	");
     if (f[0] === "size_warn") {
       warnings.push(`- size_warn: ${f[1]} ${f[2]} GB (${f[3]} files)`);
-    } else if (f[0] === "audit_warn") {
-      warnings.push(`- audit_warn: ${f[1]} ${f[2]} (${f[3]})`);
-    } else if (f[0] === "sanity") {
-      warnings.push(`- sanity: ${f[1]} ${f[2]} (${f[3]})`);
-    } else if (f[0] === "lineage") {
-      warnings.push(`- lineage: ${f[1]} ${f[2]} (${f[3]})`);
-    } else if (f[0] === "reimpl") {
-      warnings.push(`- reimpl: ${f[1]} ${f[2]} (${f[3]})`);
+    } else if (["audit_warn", "sanity", "lineage", "reimpl"].includes(f[0])) {
+      warnings.push(`- ${f[0]}: ${f[1]} ${f[2]} (${f[3]})`);
     }
   }
   const haltPath = (0, import_node_path32.join)(art, "halt.flag");
@@ -24732,12 +24683,7 @@ async function refineWith(args, deps) {
   return 0;
 }
 function readResultJson(path6) {
-  if (!(0, import_node_fs35.existsSync)(path6)) return {};
-  try {
-    return JSON.parse((0, import_node_fs35.readFileSync)(path6, "utf8"));
-  } catch {
-    return {};
-  }
+  return readJsonOr(path6, null) ?? {};
 }
 function resultStr(r, k) {
   return r[k] != null ? String(r[k]) : "";
@@ -24955,31 +24901,36 @@ async function resumeWith(args, deps) {
     log.error(`autoresearch resume: no campaign ledger under ${art}; pre-ledger campaigns cannot be resumed (init remains the creation path)`);
     return 1;
   }
+  const ledgerAdd = ledgerAppender(art);
   const prior = replayLedger((0, import_node_fs35.readFileSync)(lp, "utf8"));
   const gen = Math.max(readGen(readIfExistsOrNull(controllerGenPath(art))).gen, prior.gen) + 1;
   atomicWrite(controllerGenPath(art), renderGen(gen, deps.now(), "resume"));
-  ledgerAppend(art, { gen, ts: deps.now(), kind: "resume" });
+  ledgerAdd({ gen, ts: deps.now(), kind: "resume" });
   const workersFile = (0, import_node_path32.join)(art, "workers.txt");
   const agents = (0, import_node_fs35.existsSync)(workersFile) ? splitNonCommentLines((0, import_node_fs35.readFileSync)(workersFile, "utf8")) : [];
   const redispatch = /* @__PURE__ */ new Set();
+  const outboxCache = /* @__PURE__ */ new Map();
   const readOutbox = (agent) => {
+    const hit = outboxCache.get(agent);
+    if (hit) return hit;
     const model = resolveModel(agent, topic);
     const ob = model ? outboxPath(agent, model, topic) : "";
-    let text = "";
+    let buf = Buffer.alloc(0);
     if (ob && (0, import_node_fs35.existsSync)(ob)) {
       try {
-        text = (0, import_node_fs35.readFileSync)(ob, "utf8");
+        buf = (0, import_node_fs35.readFileSync)(ob);
       } catch {
-        text = "";
+        buf = Buffer.alloc(0);
       }
     }
-    return { model, text };
+    outboxCache.set(agent, buf);
+    return buf;
   };
   let replay = replayLedger((0, import_node_fs35.readFileSync)(lp, "utf8"));
   for (const agent of agents) {
     const stateTxt = (0, import_node_path32.join)(workerStateDir(art, agent), "state.txt");
     if (!(0, import_node_fs35.existsSync)(stateTxt)) continue;
-    const { text: obText } = readOutbox(agent);
+    const obText = readOutbox(agent).toString("utf8");
     const offset = replay.lastDeliveredOffset.get(agent) ?? 0;
     const curExp = parseState(readOr(stateTxt)).current_exp_id ?? "";
     const doneResultExists = !!curExp && (0, import_node_fs35.existsSync)((0, import_node_path32.join)(experimentDir(art, agent, curExp), "result.json"));
@@ -24988,16 +24939,16 @@ async function resumeWith(args, deps) {
     const seen = new Set(replay.completionOrder);
     for (const expId of listExpDirs(experimentsDir(art, agent))) {
       if (!(0, import_node_fs35.existsSync)((0, import_node_path32.join)(experimentDir(art, agent, expId), "result.json"))) continue;
-      if (!seen.has(`${agent}/${expId}`)) ledgerAppend(art, { gen, ts: deps.now(), kind: "result-recorded", agent, exp_id: expId });
+      if (!seen.has(`${agent}/${expId}`)) ledgerAdd({ gen, ts: deps.now(), kind: "result-recorded", agent, exp_id: expId });
     }
   }
   replay = replayLedger((0, import_node_fs35.readFileSync)(lp, "utf8"));
   for (const intent of replay.intents.values()) {
     if (intent.delivered) continue;
     const { agent, expId } = intent;
-    const { text: obText } = readOutbox(agent);
+    const obBuf = readOutbox(agent);
     const reconstructed = replay.lastDeliveredOffset.get(agent) ?? 0;
-    const tail = Buffer.from(obText, "utf8").subarray(reconstructed).toString("utf8");
+    const tail = obBuf.subarray(reconstructed).toString("utf8");
     let accepted = false;
     for (const line of tail.split("\n")) {
       const o2 = parseEvent(line.trim());
@@ -25008,7 +24959,7 @@ async function resumeWith(args, deps) {
     }
     const stateTxt = (0, import_node_path32.join)(workerStateDir(art, agent), "state.txt");
     if (accepted) {
-      ledgerAppend(art, { gen, ts: deps.now(), kind: "dispatch-delivered", agent, exp_id: expId, data: { outboxOffset: reconstructed, reconstructed: true } });
+      ledgerAdd({ gen, ts: deps.now(), kind: "dispatch-delivered", agent, exp_id: expId, data: { outboxOffset: reconstructed, reconstructed: true } });
       if ((0, import_node_fs35.existsSync)(stateTxt)) {
         const st = parseState(readOr(stateTxt));
         const stateN = /^[0-9]+$/.test((st.exp_counter ?? "").trim()) ? parseInt(st.exp_counter, 10) : 0;
@@ -25021,7 +24972,7 @@ async function resumeWith(args, deps) {
           last_event_ts: deps.now()
         }));
         const resultExists = (0, import_node_fs35.existsSync)((0, import_node_path32.join)(experimentDir(art, agent, expId), "result.json"));
-        const recon = reconcileFromOutboxSince(obText, reconstructed, resultExists);
+        const recon = reconcileFromOutboxSince(obBuf.toString("utf8"), reconstructed, resultExists);
         if (recon === "failed" || recon === "idle") atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: recon }));
       }
     } else {
@@ -25029,6 +24980,7 @@ async function resumeWith(args, deps) {
       if (phase !== "working") redispatch.add(`${agent}:${expId}`);
     }
   }
+  const live = deps.livePanes ? await deps.livePanes().catch(() => /* @__PURE__ */ new Set()) : null;
   const rows = [];
   const monitors = [];
   for (const agent of agents) {
@@ -25041,17 +24993,22 @@ async function resumeWith(args, deps) {
     const pane = model ? paneMetaRead(agent, model, topic) : null;
     let alive = false;
     if (pane) {
-      try {
-        alive = await deps.paneAlive(pane);
-      } catch {
-        alive = false;
+      if (live) alive = live.has(pane);
+      else {
+        try {
+          alive = await deps.paneAlive(pane);
+        } catch {
+          alive = false;
+        }
       }
     }
-    let phase = parseState(readOr(stateTxt)).phase ?? "";
+    const raw = readOr(stateTxt);
+    const st = parseState(raw);
+    let phase = st.phase ?? "";
     if (!alive && phase === "working") {
-      const workingExp = parseState(readOr(stateTxt)).current_exp_id ?? "";
-      ledgerAppend(art, { gen, ts: deps.now(), kind: "interrupted", agent, ...workingExp ? { exp_id: workingExp } : {} });
-      atomicWrite(stateTxt, mergeState(readOr(stateTxt), {
+      const workingExp = st.current_exp_id ?? "";
+      ledgerAdd({ gen, ts: deps.now(), kind: "interrupted", agent, ...workingExp ? { exp_id: workingExp } : {} });
+      atomicWrite(stateTxt, mergeState(raw, {
         phase: "idle",
         current_exp_id: "",
         last_event: "interrupted",
@@ -25063,7 +25020,7 @@ async function resumeWith(args, deps) {
     if (!alive && phase !== "working") {
       const rc = await deps.freshWorker(topic, agent);
       if (rc === 0) {
-        ledgerAppend(art, { gen, ts: deps.now(), kind: "fresh-worker-respawn", agent });
+        ledgerAdd({ gen, ts: deps.now(), kind: "fresh-worker-respawn", agent });
         alive = true;
       } else log.warn(`autoresearch resume: fresh-worker failed for ${agent} (rc ${rc}); lane left as-is`);
     }
@@ -25166,14 +25123,8 @@ async function consensusWith(args, deps) {
     }
     let newest = "";
     for (const exp of names) {
-      const resultPath = (0, import_node_path32.join)(experimentDir(art, agent, exp), "result.json");
-      if (!(0, import_node_fs35.existsSync)(resultPath)) continue;
-      let parsed;
-      try {
-        parsed = JSON.parse((0, import_node_fs35.readFileSync)(resultPath, "utf8"));
-      } catch {
-        continue;
-      }
+      const parsed = readJsonOr((0, import_node_path32.join)(experimentDir(art, agent, exp), "result.json"), null);
+      if (parsed === null) continue;
       if (parsed.status !== "ok") continue;
       if (exp > newest) {
         newest = exp;
@@ -25489,6 +25440,7 @@ var init_autoresearch2 = __esm({
     liveResumeDeps = {
       now: () => isoUtc(),
       paneAlive,
+      livePanes: () => livePanes(),
       freshWorker: (t, i2) => freshWorkerWith([t, i2], liveFreshWorkerDeps)
     };
     liveAbortDeps = {
@@ -25500,24 +25452,8 @@ var init_autoresearch2 = __esm({
     liveMemoryRetrieveDeps = { now: () => isoUtc() };
     liveCorpusDigestDeps = { now: () => isoUtc() };
     liveVerifyPlanDeps = {
-      readResult: (art, i2, e) => {
-        const p = (0, import_node_path32.join)(experimentDir(art, i2, e), "result.json");
-        if (!(0, import_node_fs35.existsSync)(p)) return null;
-        try {
-          return JSON.parse((0, import_node_fs35.readFileSync)(p, "utf8"));
-        } catch {
-          return null;
-        }
-      },
-      readManifest: (art, i2, e) => {
-        const p = (0, import_node_path32.join)(experimentDir(art, i2, e), "verify-manifest.json");
-        if (!(0, import_node_fs35.existsSync)(p)) return null;
-        try {
-          return JSON.parse((0, import_node_fs35.readFileSync)(p, "utf8"));
-        } catch {
-          return null;
-        }
-      },
+      readResult: (art, i2, e) => readJsonOr((0, import_node_path32.join)(experimentDir(art, i2, e), "result.json"), null),
+      readManifest: (art, i2, e) => readJsonOr((0, import_node_path32.join)(experimentDir(art, i2, e), "verify-manifest.json"), null),
       readInput: (art, i2, e, rel) => {
         const p = (0, import_node_path32.join)(experimentDir(art, i2, e), rel);
         return readIfExistsOrNull(p);
@@ -27487,13 +27423,14 @@ async function annotateRun(rest) {
     return 1;
   }
   const rows = parseListFile(readIfExists(listPath));
-  const missing = missingListArtifacts(art, rows, "findings");
+  const texts = new Map(rows.map((r) => [r.agent, readIfExists((0, import_node_path35.join)(art, `findings-${r.agent}.md`))]));
+  const missing = rows.filter((r) => !(texts.get(r.agent) ?? "").trim()).map((r) => `findings-${r.agent}.md`);
   if (missing.length) {
     log.error("explore annotate: blocked \u2014 missing or empty findings:");
     for (const m of missing) log.error(`  - ${(0, import_node_path35.join)(art, m)}`);
     return 1;
   }
-  const findings = rows.map((r) => readIfExists((0, import_node_path35.join)(art, `findings-${r.agent}.md`)));
+  const findings = rows.map((r) => texts.get(r.agent) ?? "");
   const { annotatedDraft, plan } = buildAnnotations(draft, findings);
   const counts = {
     n_unverified: plan.items.filter((i2) => i2.kind === "unverified").length,
@@ -28448,42 +28385,23 @@ async function dispatch(fn, args) {
 }
 
 // src/ap.ts
-async function loadHandlers() {
-  const [spawn2, send, collect, list, stop, check, preflight, hook, quick, design, implement, review, autoresearch, explore, bridge] = await Promise.all([
-    Promise.resolve().then(() => (init_spawn(), spawn_exports)),
-    Promise.resolve().then(() => (init_send2(), send_exports)),
-    Promise.resolve().then(() => (init_collect(), collect_exports)),
-    Promise.resolve().then(() => (init_list(), list_exports)),
-    Promise.resolve().then(() => (init_stop(), stop_exports)),
-    Promise.resolve().then(() => (init_check(), check_exports)),
-    Promise.resolve().then(() => (init_preflight(), preflight_exports)),
-    Promise.resolve().then(() => (init_hook(), hook_exports)),
-    Promise.resolve().then(() => (init_quick2(), quick_exports)),
-    Promise.resolve().then(() => (init_design2(), design_exports)),
-    Promise.resolve().then(() => (init_implement2(), implement_exports)),
-    Promise.resolve().then(() => (init_review2(), review_exports)),
-    Promise.resolve().then(() => (init_autoresearch2(), autoresearch_exports)),
-    Promise.resolve().then(() => (init_explore2(), explore_exports)),
-    Promise.resolve().then(() => (init_bridge2(), bridge_exports))
-  ]);
-  return {
-    spawn: spawn2.run,
-    send: send.run,
-    collect: collect.run,
-    list: list.run,
-    stop: stop.run,
-    check: check.run,
-    preflight: preflight.run,
-    hook: hook.run,
-    quick: quick.run,
-    design: design.run,
-    implement: implement.run,
-    review: review.run,
-    autoresearch: autoresearch.run,
-    explore: explore.run,
-    bridge: bridge.run
-  };
-}
+var LOADERS = {
+  spawn: () => Promise.resolve().then(() => (init_spawn(), spawn_exports)),
+  send: () => Promise.resolve().then(() => (init_send2(), send_exports)),
+  collect: () => Promise.resolve().then(() => (init_collect(), collect_exports)),
+  list: () => Promise.resolve().then(() => (init_list(), list_exports)),
+  stop: () => Promise.resolve().then(() => (init_stop(), stop_exports)),
+  check: () => Promise.resolve().then(() => (init_check(), check_exports)),
+  preflight: () => Promise.resolve().then(() => (init_preflight(), preflight_exports)),
+  hook: () => Promise.resolve().then(() => (init_hook(), hook_exports)),
+  quick: () => Promise.resolve().then(() => (init_quick2(), quick_exports)),
+  design: () => Promise.resolve().then(() => (init_design2(), design_exports)),
+  implement: () => Promise.resolve().then(() => (init_implement2(), implement_exports)),
+  review: () => Promise.resolve().then(() => (init_review2(), review_exports)),
+  autoresearch: () => Promise.resolve().then(() => (init_autoresearch2(), autoresearch_exports)),
+  explore: () => Promise.resolve().then(() => (init_explore2(), explore_exports)),
+  bridge: () => Promise.resolve().then(() => (init_bridge2(), bridge_exports))
+};
 async function banner(label, color) {
   process.stdout.write(renderBannerHead(label, color) + "\n");
   const c3 = ansiFromColor(color);
@@ -28518,14 +28436,13 @@ async function main() {
 `);
     return e.code ?? 2;
   }
-  const handlers = await loadHandlers();
-  const fn = handlers[sub];
-  if (!fn) {
+  const loader = LOADERS[sub];
+  if (!loader) {
     process.stderr.write(`ap: unknown subcommand '${sub}'
 `);
     return 2;
   }
-  return dispatch(fn, resolved);
+  return dispatch((await loader()).run, resolved);
 }
 main().then((code) => process.exit(code)).catch((e) => {
   process.stderr.write(`${e?.stack ?? e}

@@ -3,9 +3,12 @@ import { createHash } from "node:crypto";
 import { realpathSync, existsSync, readFileSync, writeFileSync, mkdtempSync, mkdirSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { freshHome } from "./helpers/tmpHome.js";
 import * as P from "../src/core/paths.js";
 
-afterEach(() => { delete process.env.AP_HOME; });
+const cleanups: Array<() => void> = [];
+afterEach(() => { while (cleanups.length) cleanups.pop()!(); delete process.env.AP_HOME; });
+function home() { const h = freshHome(); cleanups.push(h.cleanup); return h.home; }
 
 describe("paths", () => {
   it("stateRoot: default vs env-verbatim", () => {
@@ -32,14 +35,14 @@ describe("paths", () => {
     expect(P.isArtifactDir("/a/b/bravo-codex")).toBe(false);
   });
   it("runDir: unique, .gitignore, .last, sweep", () => {
-    process.env.AP_HOME = mkdtempSync(join(tmpdir(), "rd-"));
+    const h = home();
     const a = P.runDir("design");
     const b = P.runDir("design");
     expect(a).not.toBe(b);
-    expect(readFileSync(join(process.env.AP_HOME, "_run", ".gitignore"), "utf8")).toBe("*\n");
+    expect(readFileSync(join(h, "_run", ".gitignore"), "utf8")).toBe("*\n");
     expect(P.runDirLast()).toBe(b); // no trailing newline
     // stale sweep
-    const stale = join(process.env.AP_HOME, "_run", "design.STALE");
+    const stale = join(h, "_run", "design.STALE");
     mkdirSync(stale);
     const old = (Date.now() - 100000_000) / 1000;
     utimesSync(stale, old, old);
@@ -47,23 +50,22 @@ describe("paths", () => {
     expect(existsSync(stale)).toBe(false);
   });
   it("runArgsFile records path with no newline", () => {
-    process.env.AP_HOME = mkdtempSync(join(tmpdir(), "ra-"));
+    home();
     const f = P.runArgsFile("design");
     expect(f).toContain("/_args/");
     const recorded = readFileSync(join(P.runDirLast(), "args-path.txt"), "utf8");
     expect(recorded).toBe(f); // exact, no newline
   });
   it("runDirLast throws when absent", () => {
-    process.env.AP_HOME = mkdtempSync(join(tmpdir(), "rl-"));
+    home();
     expect(() => P.runDirLast()).toThrow();
   });
   it("activeProvidersPath: prefers active when present, else available", () => {
-    const home = mkdtempSync(join(tmpdir(), "ap-"));
-    process.env.AP_HOME = home;
+    const h = home();
     // no curated active file yet → resolver returns the medic-detected available path
-    expect(P.activeProvidersPath()).toBe(join(home, "providers-available.txt"));
+    expect(P.activeProvidersPath()).toBe(join(h, "providers-available.txt"));
     // once the user-curated active file exists → resolver prefers it
-    writeFileSync(join(home, "providers-active.txt"), "codex\n");
-    expect(P.activeProvidersPath()).toBe(join(home, "providers-active.txt"));
+    writeFileSync(join(h, "providers-active.txt"), "codex\n");
+    expect(P.activeProvidersPath()).toBe(join(h, "providers-active.txt"));
   });
 });

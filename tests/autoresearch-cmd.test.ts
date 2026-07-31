@@ -2,6 +2,7 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { freshHome } from "./helpers/tmpHome.js";
+import { captureStdout } from "./helpers/captureStdout.js";
 import { initWith, type AutoresearchInitDeps } from "../src/commands/autoresearch.js";
 import { metricWith, sotaWith } from "../src/commands/autoresearch.js";
 import { spawnAllWith, type SpawnAllDeps } from "../src/commands/autoresearch.js";
@@ -828,16 +829,12 @@ describe("autoresearch monitor", () => {
 
   /** Capture process.stdout.write lines for the duration of fn. */
   async function capture(fn: () => Promise<number>): Promise<{ rc: number; lines: string[] }> {
-    const lines: string[] = [];
-    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
-      lines.push(String(chunk));
-      return true;
-    });
+    const out = captureStdout();
     try {
       const rc = await fn();
-      return { rc, lines: lines.join("").split("\n").filter(Boolean) };
+      return { rc, lines: out.text().split("\n").filter(Boolean) };
     } finally {
-      spy.mockRestore();
+      out.restore();
     }
   }
 

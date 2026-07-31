@@ -3,6 +3,8 @@
 // periodic whole-outbox rescan dedup (C). Pure single-scan; the verb (C7) owns the
 // loop + persistence. Byte offsets are BYTES (Buffer.byteLength), never char counts.
 
+import { parseEvent } from "./ipc.js";
+
 export interface MonitorScanState {
   offset: number;                 // byte cursor into the outbox
   rescanEmitted: Set<string>;     // "<lineNum>\t<event>" dedup keys (1-based line num)
@@ -29,14 +31,6 @@ export interface MonitorDeps {
 const TAIL_EVENTS = new Set(["done", "error", "question", "heartbeat"]);
 const RESCAN_EVENTS = new Set(["done", "error", "question"]);
 
-function eventOf(line: string): { event?: string; summary?: string } {
-  try {
-    return JSON.parse(line) as { event?: string; summary?: string };
-  } catch {
-    return {};
-  }
-}
-
 /** Cursor-restore + pre-seed (bash L42-88). Honors a valid persisted cursor (<= size), else EOF.
  *  Pre-seeds the rescan dedup set with every terminal event already below the restored cursor. */
 export function initScanState(
@@ -52,7 +46,7 @@ export function initScanState(
       if (bytesSeen >= offset) break;
       lineNum++;
       bytesSeen += Buffer.byteLength(line) + 1;            // +1 for the stripped newline
-      const ev = eventOf(line).event;
+      const ev = parseEvent(line)?.event;
       if (ev && RESCAN_EVENTS.has(ev)) rescanEmitted.add(`${lineNum}\t${ev}`);
     }
   }
@@ -73,8 +67,8 @@ export function monitorScan(
   if (d.outboxSize > state.offset && d.outboxText) {
     for (const line of d.outboxText.split("\n")) {
       if (!line) continue;
-      const { event, summary } = eventOf(line);
-      if (event && TAIL_EVENTS.has(event)) emit(event, summary ?? "");
+      const o = parseEvent(line);
+      if (o?.event && TAIL_EVENTS.has(o.event)) emit(o.event, (o.summary as string | undefined) ?? "");
     }
     state.offset = d.outboxSize;
   }
@@ -100,11 +94,11 @@ export function monitorScan(
         continue;
       }
       lineNum++;
-      const { event, summary } = eventOf(line);
-      if (event && RESCAN_EVENTS.has(event)) {
-        const key = `${lineNum}\t${event}`;
+      const o = parseEvent(line);
+      if (o?.event && RESCAN_EVENTS.has(o.event)) {
+        const key = `${lineNum}\t${o.event}`;
         if (!state.rescanEmitted.has(key)) {
-          emit(event, `${summary ?? ""} (rescan)`);
+          emit(o.event, `${(o.summary as string | undefined) ?? ""} (rescan)`);
           state.rescanEmitted.add(key);
         }
       }

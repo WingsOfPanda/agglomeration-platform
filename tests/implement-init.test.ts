@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
+import { captureStdout } from "./helpers/captureStdout.js";
 import { implementArtDir } from "../src/core/implement.js";
 import { initWith, run as implementRun, type ImplementInitDeps } from "../src/commands/implement.js";
 
@@ -21,12 +22,6 @@ const NO_GOAL_DOC =
   "## Testing\nUnit + integration.\n\n" +
   "## Success Criteria\nLogin works.\n";
 
-function captureStdout() {
-  const orig = process.stdout.write.bind(process.stdout);
-  let buf = "";
-  (process.stdout as any).write = (chunk: any, ..._rest: any[]) => { buf += String(chunk); return true; };
-  return { text: () => buf, restore: () => { (process.stdout as any).write = orig; } };
-}
 function captureStderr() {
   const orig = process.stderr.write.bind(process.stderr);
   let buf = "";

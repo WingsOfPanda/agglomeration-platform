@@ -83,9 +83,9 @@ export const respawn = async (pane: string, launch: string, cwd?: string): Promi
  *  border instead of the raw TUI title. Called from spawn; tolerant of tmux errors. Returns
  *  false if any set-option failed (caller may warn). */
 export async function ensurePaneBorders(): Promise<boolean> {
-  let ok = true;
-  for (const a of paneBorderArgs()) { try { await tmux(a); } catch { ok = false; } }
-  return ok;
+  // The three set-option/set-hook calls are independent globals — issue them together.
+  const rs = await Promise.all(paneBorderArgs().map(async (a) => { try { await tmux(a); return true; } catch { return false; } }));
+  return rs.every((r) => r);
 }
 
 /** Set pane-border-status top on `target`'s window; false on tmux error (never throws). */
@@ -141,7 +141,8 @@ export function paneLabelSetArgs(pane: string, agent: string, model: string, top
   ];
 }
 export async function paneLabelSet(pane: string, agent: string, model: string, topic: string): Promise<void> {
-  for (const args of paneLabelSetArgs(pane, agent, model, topic)) await execa("tmux", args);
+  // The three @ap_* set-options are independent — issue them together.
+  await Promise.all(paneLabelSetArgs(pane, agent, model, topic).map((args) => execa("tmux", args)));
 }
 
 // --- graceful kill with DONE banner ---
@@ -153,8 +154,10 @@ async function paneOption(pane: string, opt: string): Promise<string> {
   try { return (await execa("tmux", ["display-message", "-p", "-t", pane, opt])).stdout; } catch { return ""; }
 }
 
-export async function killGraceful(pane: string, pluginRoot: string): Promise<void> {
-  if (!(await paneAlive(pane))) return;
+/** `alive` lets a caller that already holds a livePanes() snapshot skip the per-pane full-server
+ *  scan; omitted → probe with paneAlive as before. */
+export async function killGraceful(pane: string, pluginRoot: string, alive?: boolean): Promise<void> {
+  if (!(alive ?? (await paneAlive(pane)))) return;
   const label = (await paneOption(pane, "#{@ap_label}")) || "worker";
   const color = await paneOption(pane, "#{@ap_color}");
   const snap = join(mkdtempSync(join(tmpdir(), "cs-snap-")), "snap.txt");

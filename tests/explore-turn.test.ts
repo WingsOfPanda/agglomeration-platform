@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { freshHome } from "./helpers/tmpHome.js";
 import { composeExploreResearchPrompt, composeAdversaryPrompt, litGuidance, ADVERSARY_LENSES, researchLens, composeGapPrompt, composeSignoffPrompt } from "../src/core/exploreTurn.js";
 import { inboxWrite, inboxPath } from "../src/core/ipc.js";
 import { workerDir } from "../src/core/paths.js";
@@ -145,11 +145,12 @@ describe("composeAdversaryPrompt", () => {
 // each, so the inbox carried two of each — the malformed-inbox condition the forensics tied to
 // codex workers missing their terminal `done` event. The inbox must carry exactly one of each.
 describe("explore inbox carries a single done contract (no duplicate END_OF_INSTRUCTION)", () => {
+  const cleanups: Array<() => void> = [];
   beforeEach(() => { process.env.CLAUDE_PLUGIN_ROOT = process.cwd(); });
-  afterEach(() => { delete process.env.AP_HOME; });
+  afterEach(() => { while (cleanups.length) cleanups.pop()!(); });
   const count = (s: string, sub: string): number => s.split(sub).length - 1;
   function seedPart(i: string, m: string, t: string): void {
-    process.env.AP_HOME = mkdtempSync(join(tmpdir(), "pt-"));
+    cleanups.push(freshHome().cleanup);
     const d = workerDir(i, m, t); mkdirSync(d, { recursive: true }); writeFileSync(join(d, "outbox.jsonl"), "");
   }
 

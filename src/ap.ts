@@ -4,21 +4,15 @@ import { runArgsFile } from "./core/paths.js";
 import { renderBannerHead, ansiFromColor } from "./core/colors.js";
 import { dispatch, type Handler } from "./core/dispatch.js";
 
-async function loadHandlers(): Promise<Record<string, Handler>> {
-  const [spawn, send, collect, list, stop, check, preflight, hook, quick, design, implement, review, autoresearch, explore, bridge] = await Promise.all([
-    import("./commands/spawn.js"), import("./commands/send.js"), import("./commands/collect.js"),
-    import("./commands/list.js"), import("./commands/stop.js"), import("./commands/check.js"),
-    import("./commands/preflight.js"), import("./commands/hook.js"), import("./commands/quick.js"),
-    import("./commands/design.js"), import("./commands/implement.js"), import("./commands/review.js"),
-    import("./commands/autoresearch.js"), import("./commands/explore.js"), import("./commands/bridge.js"),
-  ]);
-  return {
-    spawn: spawn.run, send: send.run, collect: collect.run, list: list.run,
-    stop: stop.run, check: check.run, preflight: preflight.run, hook: hook.run,
-    quick: quick.run, design: design.run, implement: implement.run, review: review.run,
-    autoresearch: autoresearch.run, explore: explore.run, bridge: bridge.run,
-  };
-}
+// One dynamic-import thunk per verb: only the dispatched subcommand's module is loaded. Eagerly
+// importing all 15 initialized 14 unused ones on every invocation (~21 ms on the always-on `ap hook`).
+const LOADERS: Record<string, () => Promise<{ run: Handler }>> = {
+  spawn: () => import("./commands/spawn.js"), send: () => import("./commands/send.js"), collect: () => import("./commands/collect.js"),
+  list: () => import("./commands/list.js"), stop: () => import("./commands/stop.js"), check: () => import("./commands/check.js"),
+  preflight: () => import("./commands/preflight.js"), hook: () => import("./commands/hook.js"), quick: () => import("./commands/quick.js"),
+  design: () => import("./commands/design.js"), implement: () => import("./commands/implement.js"), review: () => import("./commands/review.js"),
+  autoresearch: () => import("./commands/autoresearch.js"), explore: () => import("./commands/explore.js"), bridge: () => import("./commands/bridge.js"),
+};
 
 async function banner(label: string, color: string): Promise<number> {
   process.stdout.write(renderBannerHead(label, color) + "\n");
@@ -48,10 +42,9 @@ async function main(): Promise<number> {
   try { resolved = applyArgsFile(rest); }
   catch (e: any) { process.stderr.write(`${e.message ?? e}\n`); return e.code ?? 2; }
 
-  const handlers = await loadHandlers();
-  const fn = handlers[sub];
-  if (!fn) { process.stderr.write(`ap: unknown subcommand '${sub}'\n`); return 2; }
-  return dispatch(fn, resolved);
+  const loader = LOADERS[sub];
+  if (!loader) { process.stderr.write(`ap: unknown subcommand '${sub}'\n`); return 2; }
+  return dispatch((await loader()).run, resolved);
 }
 
 main().then((code) => process.exit(code)).catch((e) => { process.stderr.write(`${e?.stack ?? e}\n`); process.exit(1); });

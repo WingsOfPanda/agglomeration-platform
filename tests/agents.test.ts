@@ -2,13 +2,15 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { freshHome } from "./helpers/tmpHome.js";
 import * as I from "../src/core/agents.js";
 import { workerDir } from "../src/core/paths.js";
 
-afterEach(() => { delete process.env.AP_HOME; delete process.env.CLAUDE_PLUGIN_ROOT; delete process.env.CLAUDE_CODE_SESSION_ID; });
+const cleanups: Array<() => void> = [];
+afterEach(() => { while (cleanups.length) cleanups.pop()!(); delete process.env.CLAUDE_PLUGIN_ROOT; delete process.env.CLAUDE_CODE_SESSION_ID; });
 function home() {
-  const h = mkdtempSync(join(tmpdir(), "in-"));
-  process.env.AP_HOME = h;
+  const { home: h, cleanup } = freshHome();
+  cleanups.push(cleanup);
   const pr = mkdtempSync(join(tmpdir(), "pr-"));
   mkdirSync(join(pr, "config"), { recursive: true });
   process.env.CLAUDE_PLUGIN_ROOT = pr;
