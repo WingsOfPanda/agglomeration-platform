@@ -25,6 +25,7 @@ import {
 } from "../core/phaseTable.js";
 import { envNum } from "../core/env.js";
 import { runForensics, runFlag } from "../core/forensics.js";
+import { artifactBackstop } from "../core/artifact.js";
 import { diffFindings, type DiffPart } from "../core/designDiff.js";
 import { adjudicate, type AdjudicateInput } from "../core/designAdjudicate.js";
 import { classifyTopic, skillHintAppend } from "../core/designSkill.js";
@@ -213,7 +214,14 @@ export async function diffRun(rest: string[]): Promise<number> {
   for (const r of rows) {
     const f = join(workerDir(r.agent, r.provider, topic), "findings.md");
     if (!existsSync(f)) { log.error(`design diff: ${r.agent} findings.md missing: ${f}`); return 1; }
-    workers.push({ name: r.agent, findings: readFileSync(f, "utf8") });
+    // Sentinel backstop: a still-writing findings file refuses the whole diff (the hub re-runs the
+    // wait-gate and retries); one whose research phase already failed diffs as EMPTY.
+    const verdict = artifactBackstop({
+      label: "design diff", command: "design", topic, art, agent: r.agent, artifact: f,
+      tag: lastTag(readIf(join(art, `research-${r.agent}.txt`)), "FS"),
+    });
+    if (verdict === "still-writing") return 1;
+    workers.push({ name: r.agent, findings: verdict === "drop" ? "" : readFileSync(f, "utf8") });
   }
 
   const result = diffFindings(workers);
@@ -278,8 +286,18 @@ export async function adjudicateRun(rest: string[]): Promise<number> {
   const verify: Record<string, string> = {};
   const vs: Record<string, string> = {};
   for (const r of rows) {
-    verify[r.agent] = readIf(join(workerDir(r.agent, r.provider, topic), "verify.md"));
-    vs[r.agent] = lastTag(readIf(join(art, `verify-${r.agent}.txt`)), "VS") ?? "skipped";
+    const text = readIf(join(workerDir(r.agent, r.provider, topic), "verify.md"));
+    const tag = lastTag(readIf(join(art, `verify-${r.agent}.txt`)), "VS");
+    // Same backstop as diff, over the OTHER worker-authored artifact this command adjudicates: a
+    // half-written verify.md would silently under-report its verdicts. An absent/empty verify.md is
+    // the pre-existing VS=skipped path (nothing was ever sent) and never reaches the backstop.
+    const verdict = text.trim() ? artifactBackstop({
+      label: "design adjudicate", command: "design", topic, art, agent: r.agent,
+      artifact: join(workerDir(r.agent, r.provider, topic), "verify.md"), tag,
+    }) : "complete";
+    if (verdict === "still-writing") return 1;
+    verify[r.agent] = verdict === "drop" ? "" : text;
+    vs[r.agent] = tag ?? "skipped";
   }
   const buckets: Record<string, string> = {};
   const addBucket = (f: string): void => { buckets[f] = readIf(join(art, f)); };
@@ -387,7 +405,10 @@ export async function offsetResetRun(rest: string[]): Promise<number> {
   const art = designArtDir(topic);
   if (!existsSync(art)) { log.error(`design offset-reset: art dir missing: ${art}`); return 1; }
 
-  for (const f of [`${phase}-${agent}.txt`, `${phase}-${agent}.done`, `question-${agent}.txt`])
+  // The refusal log goes with the state file, in BOTH modes (--keep-findings included): a reset
+  // re-arms the phase, so strikes from the episode it just cleared must not carry into the retry
+  // and degrade a fresh artifact as "no growth".
+  for (const f of [`${phase}-${agent}.txt`, `${phase}-${agent}.done`, `question-${agent}.txt`, `stillwriting-${agent}.txt`])
     rmSync(join(art, f), { force: true });
 
   const c = cascadeTargets(phase as ResetPhase, keepFindings);
