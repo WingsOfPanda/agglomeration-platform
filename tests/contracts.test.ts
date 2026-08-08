@@ -100,6 +100,56 @@ describe("contracts", () => {
     withContracts(SAMPLE + "  signoff_timeout_s: 120\n"); // SAMPLE ends inside consult:
     expect(K.consultTimeout("signoff")).toBe(120);
   });
+  // AP_CONSULT_TIMEOUT_<KIND> is the per-box tier (2026-08-08): contracts.yaml ships with the
+  // plugin and the resolver prefers the shipped copy, so a hand-edited budget dies on every update.
+  describe("AP_CONSULT_TIMEOUT_<KIND> env override", () => {
+    const KINDS = ["research", "verify", "adversary", "experiment", "openq", "rebuttal", "gap", "signoff"] as const;
+    const envKeys = KINDS.map((k) => `AP_CONSULT_TIMEOUT_${k.toUpperCase()}`);
+    afterEach(() => { for (const k of envKeys) delete process.env[k]; });
+
+    it("every ConsultKind has a working env name — one var per kind, no gaps", () => {
+      withContracts(SAMPLE);
+      KINDS.forEach((kind, i) => {
+        const name = `AP_CONSULT_TIMEOUT_${kind.toUpperCase()}`;
+        process.env[name] = String(100 + i);
+        expect(K.consultTimeout(kind)).toBe(100 + i);
+        delete process.env[name];
+        expect(K.consultTimeout(kind)).not.toBe(100 + i); // and it goes away when unset
+      });
+    });
+
+    it("a valid env value outranks both contracts.yaml and the default", () => {
+      withContracts(SAMPLE);                              // research_timeout_s: 600
+      process.env.AP_CONSULT_TIMEOUT_RESEARCH = "5400";
+      expect(K.consultTimeout("research")).toBe(5400);
+      process.env.AP_CONSULT_TIMEOUT_OPENQ = "900";       // no openq_timeout_s in SAMPLE
+      expect(K.consultTimeout("openq")).toBe(900);
+    });
+
+    it("the env name is the uppercased kind, and only that kind moves", () => {
+      withContracts(SAMPLE);
+      process.env.AP_CONSULT_TIMEOUT_VERIFY = "1200";
+      expect(K.consultTimeout("verify")).toBe(1200);
+      expect(K.consultTimeout("research")).toBe(600);     // untouched by another kind's var
+    });
+
+    it("garbage / 0 / negative / float falls through to yaml, then to the default", () => {
+      withContracts(SAMPLE);
+      for (const bad of ["abc", "0", "-30", "30.5", "", " 300"]) {
+        process.env.AP_CONSULT_TIMEOUT_RESEARCH = bad;
+        process.env.AP_CONSULT_TIMEOUT_OPENQ = bad;
+        expect(K.consultTimeout("research")).toBe(600);   // yaml tier
+        expect(K.consultTimeout("openq")).toBe(300);      // built-in default
+      }
+    });
+
+    it("unset → the pre-existing yaml/default precedence, unchanged", () => {
+      withContracts(SAMPLE);
+      expect(K.consultTimeout("research")).toBe(600);
+      expect(K.consultTimeout("adversary")).toBe(600);
+    });
+  });
+
   it("ignores a ~/.ap/contracts.yaml shadow; always reads shipped", () => {
     withContracts(SAMPLE);                                  // shipped: codex ready_timeout_s 90
     const shadow = home();

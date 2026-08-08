@@ -177,9 +177,11 @@ export function gateState(
 }
 
 /** Terminal-but-anomalous workers for the wait gate's stderr warning: `.done` exists and the
- *  LAST `<key>=` line is `timeout` or `failed` — a state the run treats as terminal even though
- *  the phase artifact is likely missing (the 2026-07-26 review's silent-degrade class). Pure,
- *  same inputs as gateState; callers render the warning. */
+ *  LAST `<key>=` line is `timeout`, `failed` or `missing` — a state the run treats as terminal even
+ *  though the phase artifact is likely missing (the 2026-07-26 review's silent-degrade class).
+ *  `missing` is verifyState's answer for a worker that ANSWERED but wrote no artifact; it is the
+ *  quietest member of the class (nothing failed, nothing timed out) and was the one that cascaded
+ *  unnoticed, so it warns like the other two. Pure, same inputs as gateState; callers render it. */
 export function gateAnomalies(
   workers: Array<{ agent: string; doneExists: boolean; stateText: string | null }>,
   key: PhaseKey,
@@ -188,7 +190,7 @@ export function gateAnomalies(
   for (const p of workers) {
     if (!p.doneExists) continue;
     const last = lastKeyedValue(p.stateText ?? "", key);
-    if (last === "timeout" || last === "failed") out.push({ agent: p.agent, value: last });
+    if (last === "timeout" || last === "failed" || last === "missing") out.push({ agent: p.agent, value: last });
   }
   return out;
 }
