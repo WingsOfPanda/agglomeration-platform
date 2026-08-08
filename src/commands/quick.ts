@@ -1,5 +1,5 @@
 // src/commands/quick.ts
-import { mkdirSync, existsSync, readFileSync } from "node:fs";
+import { mkdirSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile } from "../args.js";
@@ -11,7 +11,7 @@ import { runForensics, runFlag } from "../core/forensics.js";
 import { agentBinary } from "../core/contracts.js";
 import { haveCmd } from "../core/deps.js";
 import { pickRandomAgent } from "../core/agents.js";
-import { runnerAt, preSnapshot, createOrResumeBranch, finishBranch } from "../core/gitwork.js";
+import { runnerAt, preSnapshot, createOrResumeBranch, finishBranch, classifyDirty, stashPush, stashPopByMessage } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
 import { outboxOffset, outboxPath, workerSendGate, TERMINAL_EVENTS, type OutboxEvent } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
@@ -60,7 +60,7 @@ async function initRun(tokens: string[]): Promise<number> {
 }
 
 export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
-  const { topicText, provider: provArg, finish } = parseQuickArgs(tokens);
+  const { topicText, provider: provArg, finish, stashWip } = parseQuickArgs(tokens);
   if (!topicText) { log.error("quick init: topic text is empty"); return 1; }
   const slug = deriveSlug(topicText);
   if (!slug) { log.error("quick init: topic produced an empty slug; provide alphanumerics"); return 1; }
@@ -85,26 +85,77 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
   atomicWrite(join(art, "timing.txt"), `started=${isoUtc()}\n`);
   atomicWrite(join(exec, "provider.txt"), provider + "\n");
   atomicWrite(join(exec, "finish.txt"), (finish ? "yes" : "no") + "\n");
+  // Persisted + echoed so the branch step passes the flag mechanically, instead of the directive
+  // re-reading $ARGUMENTS by eye (where it was dropped whenever the topic text was long).
+  atomicWrite(join(exec, "stash-wip-requested.txt"), (stashWip ? "yes" : "no") + "\n");
 
   const target = repoRoot();
-  log.ok(`quick init: topic=${slug} agent=${agent} provider=${provider} finish=${finish ? "yes" : "no"}`);
-  process.stdout.write(`SLUG=${slug}\nAGENT=${agent}\nPROVIDER=${provider}\nFINISH=${finish ? "yes" : "no"}\nTARGET=${target}\n`);
+  log.ok(`quick init: topic=${slug} agent=${agent} provider=${provider} finish=${finish ? "yes" : "no"} stash-wip=${stashWip ? "yes" : "no"}`);
+  process.stdout.write(`SLUG=${slug}\nAGENT=${agent}\nPROVIDER=${provider}\nFINISH=${finish ? "yes" : "no"}\nTARGET=${target}\nSTASH_WIP=${stashWip ? "yes" : "no"}\n`);
   return 0;
 }
-async function branchRun(rest: string[]): Promise<number> {
-  const topic = rest[0];
-  if (!topic) { log.error("usage: quick branch <topic>"); return 2; }
-  const target = repoRoot();
-  return branchWith(topic, target, runnerAt(target));
+export interface BranchArgs { topic: string; stashWip: boolean; }
+
+/** `quick branch [--stash-wip] <topic> [--stash-wip]` — the topic is the first non-flag token, so
+ *  the flag parses on either side of it. "" topic when only flags were given (usage rc 2). */
+export function parseBranchArgs(rest: string[]): BranchArgs {
+  return { topic: rest.find((t) => !t.startsWith("--")) ?? "", stashWip: rest.includes("--stash-wip") };
 }
 
+async function branchRun(rest: string[]): Promise<number> {
+  const { topic, stashWip } = parseBranchArgs(rest);
+  if (!topic) { log.error("usage: quick branch <topic> [--stash-wip]"); return 2; }
+  const target = repoRoot();
+  return branchWith(topic, target, runnerAt(target), { stashWip });
+}
+
+/** The stash name a --stash-wip park carries — also the identity finish restores by. */
+function stashWipMessage(topic: string): string { return `ap-quick-${topic}-wip`; }
+
+export interface BranchOpts { stashWip?: boolean; }
+
 /** Testable core: snapshot + branch the target repo, recording execute/ facts. */
-export async function branchWith(topic: string, target: string, r: Runner): Promise<number> {
+export async function branchWith(topic: string, target: string, r: Runner, opts: BranchOpts = {}): Promise<number> {
+  const exec = quickExecDir(topic);
+  mkdirSync(exec, { recursive: true }); // atomicWrite does not create parents, and `quick branch`
+                                        // can run without an init (a bare re-run) — an EEXIST throw
+                                        // here would land AFTER the tree was already emptied.
+  // --stash-wip: park pre-existing WIP BEFORE preSnapshot, so the branch forks from clean HEAD and
+  // the PR base carries no unrelated snapshot commit. An unstashable tree must not block the run.
+  // The dirty gate reads --untracked-files=all: a repo with `status.showUntrackedFiles no` makes a
+  // bare --porcelain report a clean tree that git will still refuse to leave behind.
+  if (opts.stashWip && classifyDirty(r.run("git", ["status", "--porcelain", "--untracked-files=all"]).stdout)) {
+    const message = stashWipMessage(topic);
+    const marker = join(exec, "stash-wip.txt");
+    const st = stashPush(r, message);
+    // Each outcome LOGS before it writes the marker: the log line is the user's only pointer if the
+    // marker write fails, and a stash nobody knows about is the failure this whole path guards.
+    switch (st.outcome) {
+      case "parked":
+        log.ok(`quick branch: stashed pre-existing WIP as '${message}' (restored at finish)`);
+        atomicWrite(marker, `${st.sha}\t${message}\n`);
+        break;
+      case "partial":
+        log.warn(`quick branch: --stash-wip parked '${message}' but the tree is STILL dirty — some paths could not be stashed (e.g. a nested repo or submodule content)`);
+        log.warn(`  those residual paths stay in the tree for the snapshot path below, exactly as they would without the flag`);
+        atomicWrite(marker, `${st.sha}\t${message}\n`);
+        break;
+      case "failed-with-entry":
+        log.warn(`quick branch: --stash-wip reported failure but LEFT a stash entry '${message}' — finish will restore it`);
+        log.warn(`  the tree may still hold the same changes; if it does, the WIP snapshot commit below commits them too`);
+        atomicWrite(marker, `${st.sha}\t${message}\n`);
+        break;
+      case "none":
+        break; // git stashed nothing (e.g. only submodule content changed) — no park to record
+      case "failed":
+        log.warn(`quick branch: --stash-wip could not stash the tree; falling back to a WIP snapshot commit`);
+        break;
+    }
+  }
   const snap = preSnapshot(r, "quick", topic);
   if (snap.state === "not-git") { log.error(`quick branch: ${target} is not a git repository`); return 1; }
   const branch = `feat/quick-${topic}`;
   const onBranch = createOrResumeBranch(r, branch);
-  const exec = quickExecDir(topic);
   atomicWrite(join(exec, "target_cwd.txt"), target + "\n");
   atomicWrite(join(exec, "start-branch.txt"), snap.branch + "\n");
   atomicWrite(join(exec, "branch-base.sha"), snap.baseSha + "\n");
@@ -206,6 +257,58 @@ async function finishRun(rest: string[]): Promise<number> {
   return finishWith(topic, runnerAt(target), haveCmd("gh"));
 }
 
+/** Restore a --stash-wip park onto the (just-restored) start branch. Never drops the stash: a wrong
+ *  HEAD, an identity mismatch, an unreadable stash list or a pop conflict all KEEP both the entry
+ *  and the marker, report `stash-wip-kept` for finish-result.txt, and record a hub flag so the WIP
+ *  surfaces in /ap:review long after this run's state is archived.
+ *  The one case that removes the marker WITHOUT popping is a verified absence — the list read fine
+ *  and holds no entry with our message (the user popped it by hand). Nothing is left to keep, and a
+ *  marker pointing at nothing would only make every later finish warn about a stash that is gone. */
+function restoreStashWip(topic: string, exec: string, r: Runner, startBranch: string): string {
+  const marker = join(exec, "stash-wip.txt");
+  if (!existsSync(marker)) return "";
+  const [sha, name] = readField(marker).split("\t");
+  const message = name || stashWipMessage(topic);
+  const kept = (): string => {
+    const target = readField(join(exec, "target_cwd.txt")) || "<target>";
+    runFlag("quick", topic, `stash-wip-kept: WIP still stashed as '${message}' in ${target}; restore: git checkout ${startBranch} then git stash pop`);
+    return "stash-wip-kept";
+  };
+  // A pop lands on whatever HEAD is, and the start-branch checkout above can fail SILENTLY (a
+  // worker that left the tree dirty blocks it). Popping the park onto feat/quick-<topic> consumes
+  // the stash on the wrong branch — the one outcome nothing can undo. So HEAD is verified, never
+  // assumed; a detached HEAD fails symbolic-ref and is likewise not the start branch.
+  const head = r.run("git", ["symbolic-ref", "--short", "HEAD"]);
+  const on = head.code === 0 ? head.stdout.trim() : "";
+  if (on !== startBranch) {
+    log.warn(`quick finish: HEAD is on '${on || "(detached)"}', not the start branch '${startBranch}' — NOT popping`);
+    log.warn(`  the WIP stays stashed as '${message}': git checkout ${startBranch}  then  git stash pop <ref>`);
+    return kept();
+  }
+  switch (stashPopByMessage(r, message, sha ?? "")) {
+    case "popped":
+      rmSync(marker, { force: true });
+      log.ok(`quick finish: restored stashed WIP '${message}'`);
+      return "";
+    case "not-found":
+      rmSync(marker, { force: true });
+      log.warn(`quick finish: no stash entry named '${message}' (popped already?); nothing to restore`);
+      return "";
+    case "list-failed":
+      log.warn(`quick finish: could not read the stash list — assuming '${message}' is still parked, NOT popping`);
+      return kept();
+    case "identity-mismatch":
+      log.warn(`quick finish: stash identity mismatch — not popping; the entry named '${message}' is not the one this run parked (expected sha ${sha || "(unrecorded)"})`);
+      return kept();
+    default: // conflict-kept
+      log.warn(`quick finish: stashed WIP '${message}' did NOT restore — it is KEPT in the stash`);
+      log.warn(`  recover it by hand in the target repo: git stash list  then  git stash pop <ref>`);
+      log.warn(`  the park included untracked files, so a conflicted pop may ALREADY have extracted some of them:`);
+      log.warn(`  if the pop says "<file> already exists", remove those extracted files first (or git checkout <ref> -- .), then pop again`);
+      return kept();
+  }
+}
+
 export async function finishWith(topic: string, r: Runner, hasGh: boolean): Promise<number> {
   const exec = quickExecDir(topic);
   const branch = readField(join(exec, "branch.txt"));
@@ -214,7 +317,8 @@ export async function finishWith(topic: string, r: Runner, hasGh: boolean): Prom
 
   if (!doFinish) {
     r.run("git", ["checkout", "-q", startBranch]);
-    atomicWrite(join(exec, "finish-result.txt"), `none\tbranch-only (kept ${branch})\n`);
+    const kept = restoreStashWip(topic, exec, r, startBranch);
+    atomicWrite(join(exec, "finish-result.txt"), `none\tbranch-only (kept ${branch})\n${kept ? kept + "\n" : ""}`);
     log.ok(`quick finish: branch-only — kept ${branch}, restored ${startBranch}`);
     return 0;
   }
@@ -225,7 +329,8 @@ export async function finishWith(topic: string, r: Runner, hasGh: boolean): Prom
     title: `quick: ${branch}`,
     body: `${brief}\n\nVerify: ${verify}\n\n(Automated quick branch — review and merge into ${startBranch}.)`,
   });
-  atomicWrite(join(exec, "finish-result.txt"), `${res.action}\t${res.outcome}\n`);
+  const kept = restoreStashWip(topic, exec, r, startBranch);
+  atomicWrite(join(exec, "finish-result.txt"), `${res.action}\t${res.outcome}\n${kept ? kept + "\n" : ""}`);
   log.ok(`quick finish: ${res.action} → ${res.outcome}`);
   return 0;
 }
@@ -267,8 +372,16 @@ async function summaryRun(rest: string[]): Promise<number> {
 
   atomicWrite(join(art, "SUMMARY.md"), renderSummary(facts));
   if (aborted) {
+    // An abort leaves a --stash-wip park unrestored (finish never ran), and HEAD may still be on
+    // the quick branch — so RESUME points at the stash AND at the checkout that must precede a pop.
+    const marker = join(exec, "stash-wip.txt");
+    const stashName = existsSync(marker) ? readField(marker).split("\t")[1] || stashWipMessage(topic) : "";
+    const startBranch = readField(join(exec, "start-branch.txt")) || "<start-branch>";
     atomicWrite(join(art, "RESUME.md"), renderResume({
       topic, branch: facts.branch, artDir: art, phase: facts.abortedPhase ?? "unknown", gate: facts.abortedGate ?? "unknown",
+      stashNote: stashName
+        ? `Pre-existing WIP is parked in stash '${stashName}' — restore with: git -C ${facts.targetCwd} checkout ${startBranch}  then  git stash pop <ref>`
+        : undefined,
     }));
   }
   log.ok(`quick summary: wrote ${join(art, "SUMMARY.md")}`);

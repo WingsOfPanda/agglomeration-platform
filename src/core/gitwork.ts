@@ -43,6 +43,78 @@ export function preSnapshot(r: Runner, command: string, topic: string): Snapshot
   return { branch, baseSha: r.run("git", ["rev-parse", "HEAD"]).stdout.trim(), state: "wip-committed" };
 }
 
+export type StashPushOutcome = "parked" | "partial" | "none" | "failed-with-entry" | "failed";
+export interface StashPushResult { outcome: StashPushOutcome; sha: string; }
+
+/** Park the whole tree (tracked + untracked) in a stash named `message`, then PROVE the park — an
+ *  rc-0 `git stash push` is not evidence the work is parked. git exits 0 having stashed NOTHING
+ *  ("No local changes to save", e.g. only submodule content changed); it exits 0 having stashed
+ *  only PART of the tree (paths it reports as `Ignoring path ...`, e.g. a nested repo); and it
+ *  exits non-zero AFTER creating the entry (cleanup failing on a write-protected directory). So
+ *  the outcome comes from the entry list plus a re-probe of the tree, never from the exit code:
+ *    parked             new entry, tree now clean      — the whole tree is in the stash
+ *    partial            new entry, tree still dirty    — residual paths stayed in the tree
+ *    none               rc 0, no entry THIS push made  — nothing was stashed
+ *    failed-with-entry  rc != 0 but a new entry exists (or its sha is unreadable) — work IS parked
+ *    failed             rc != 0, no entry this push made — nothing was stashed
+ *  Entry existence is the message scan, not `rev-parse refs/stash`: refs/stash resolves to whatever
+ *  is on top, which may be someone else's stash. And the scan alone is not enough either — an
+ *  aborted earlier run leaves an entry under the SAME name, so the entry's sha is compared against
+ *  the pre-push sha of that name: only a sha that changed was created by this push. Caller must
+ *  have established the tree is dirty. */
+export function stashPush(r: Runner, message: string): StashPushResult {
+  const before = stashShaFor(r, message);
+  const rc = r.run("git", ["stash", "push", "--include-untracked", "-m", message]).code;
+  const ref = findStashRef(r.run("git", ["stash", "list", "--format=%gd%x09%gs"]).stdout, message);
+  if (!ref) return { outcome: rc === 0 ? "none" : "failed", sha: "" };
+  const sha = r.run("git", ["rev-parse", ref]).stdout.trim();
+  // The match is the entry we already had: this push created nothing (git stashes nothing with rc 0
+  // when only submodule content changed). Adopting it would hand finish a stash from another run.
+  if (sha && sha === before) return { outcome: rc === 0 ? "none" : "failed", sha: "" };
+  if (rc !== 0 || !sha) return { outcome: "failed-with-entry", sha };
+  const stillDirty = classifyDirty(r.run("git", ["status", "--porcelain", "--untracked-files=all"]).stdout);
+  return { outcome: stillDirty ? "partial" : "parked", sha };
+}
+
+/** The stash ref whose reflog subject carries `message`; "" when no entry matches. Lines are
+ *  `<ref>\t<subject>` (`--format=%gd%x09%gs`); `git stash push -m X` records the subject as
+ *  "On <branch>: X", so the tail is what matches, not the whole subject. */
+export function findStashRef(list: string, message: string): string {
+  for (const line of list.split("\n")) {
+    const tab = line.indexOf("\t");
+    if (tab < 0) continue;
+    const subject = line.slice(tab + 1).trim();
+    if (subject === message || subject.endsWith(`: ${message}`)) return line.slice(0, tab).trim();
+  }
+  return "";
+}
+
+/** The commit sha of the stash entry named `message` right now; "" when there is none (or it will
+ *  not resolve). `stashPush` takes this before pushing so a leftover entry from an aborted run —
+ *  same name, someone else's work — can never be mistaken for the one it just created. */
+function stashShaFor(r: Runner, message: string): string {
+  const ref = findStashRef(r.run("git", ["stash", "list", "--format=%gd%x09%gs"]).stdout, message);
+  return ref ? r.run("git", ["rev-parse", ref]).stdout.trim() : "";
+}
+
+export type StashPopOutcome = "popped" | "conflict-kept" | "not-found" | "list-failed" | "identity-mismatch";
+
+/** Pop the stash entry named `message`, but only when it is provably the one we pushed. The entry
+ *  is located by scanning the list (an index shift from another stash cannot pop the wrong entry)
+ *  and its commit sha must equal `expectSha`, the sha recorded at push time — a same-named entry
+ *  from another run, or an unrecorded/empty `expectSha`, is `identity-mismatch` and is left alone.
+ *  A failing `git stash list` is `list-failed`, NOT an absence: the entry may well exist, and
+ *  treating an unreadable list as "gone" is how a caller drops a marker over a live stash. A failed
+ *  pop leaves the entry in place. */
+export function stashPopByMessage(r: Runner, message: string, expectSha: string): StashPopOutcome {
+  const list = r.run("git", ["stash", "list", "--format=%gd%x09%gs"]);
+  if (list.code !== 0) return "list-failed";
+  const ref = findStashRef(list.stdout, message);
+  if (!ref) return "not-found";
+  if (!expectSha || r.run("git", ["rev-parse", ref]).stdout.trim() !== expectSha) return "identity-mismatch";
+  return r.run("git", ["stash", "pop", ref]).code === 0 ? "popped" : "conflict-kept";
+}
+
 /** Create feat/quick-<topic> from current HEAD, or resume it if it already exists. */
 export function createOrResumeBranch(r: Runner, name: string): boolean {
   if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${name}`]).code === 0) {
