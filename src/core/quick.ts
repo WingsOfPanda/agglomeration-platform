@@ -17,16 +17,18 @@ export function deriveSlug(text: string): string {
   return s;
 }
 
-export interface QuickArgs { topicText: string; provider?: string; finish: boolean; }
+export interface QuickArgs { topicText: string; provider?: string; finish: boolean; stashWip: boolean; }
 
 export function parseQuickArgs(tokens: string[]): QuickArgs {
   let provider: string | undefined;
   let finish = true;
+  let stashWip = false;
   const text: string[] = [];
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
     if (t === "--finish") { finish = true; continue; }      // legacy: now the default
     if (t === "--no-finish") { finish = false; continue; }
+    if (t === "--stash-wip") { stashWip = true; continue; } // acted on by `quick branch`, never topic text
     if (t === "--provider") {
       const v = tokens[i + 1];
       if (v && !v.startsWith("--")) { provider = v; i++; }
@@ -35,7 +37,7 @@ export function parseQuickArgs(tokens: string[]): QuickArgs {
     if (t.startsWith("--provider=")) { provider = t.slice("--provider=".length); continue; }
     text.push(t);
   }
-  return { topicText: text.join(" ").trim(), provider, finish };
+  return { topicText: text.join(" ").trim(), provider, finish, stashWip };
 }
 
 /** Repo test command by file presence (never executes). Precedence:
@@ -120,7 +122,7 @@ export function renderSummary(f: SummaryFacts): string {
   ].join("\n");
 }
 
-export interface ResumeFacts { topic: string; branch: string; artDir: string; phase: string; gate: string; }
+export interface ResumeFacts { topic: string; branch: string; artDir: string; phase: string; gate: string; stashNote?: string; }
 
 export function renderResume(f: ResumeFacts): string {
   return [
@@ -131,6 +133,7 @@ export function renderResume(f: ResumeFacts): string {
     `- Topic: ${f.topic}`,
     `- Branch: ${f.branch}`,
     "",
+    ...(f.stashNote ? ["## Parked WIP", `- ${f.stashNote}`, ""] : []),
     "## Manual resume",
     `- Inspect ${f.artDir}/execute/ for the worker's partial work, then re-run /ap:quick.`,
     "",
