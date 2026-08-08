@@ -240,25 +240,25 @@ describe("guard predicates", () => {
   describe("guardSkipped (the write+warn tail)", () => {
     const row = (phase: string) => PHASES.find((p) => p.phase === phase)!;
 
-    it("unsafe chain → writes <KEY>=skipped and returns true", () => {
+    it("unsafe chain → writes <KEY>=skipped and returns true", async () => {
       tag("FS", "timeout");
       const stateFile = join(h.home, "openq-alpha.txt");
-      expect(guardSkipped(row("openq"), h.home, "alpha", stateFile)).toBe(true);
+      expect(await guardSkipped(row("openq"), h.home, "alpha", stateFile)).toBe(true);
       expect(readFileSync(stateFile, "utf8")).toBe("QS=skipped\n");
     });
 
-    it("safe chain → returns false and writes nothing", () => {
+    it("safe chain → returns false and writes nothing", async () => {
       tag("FS", "ok");
       const stateFile = join(h.home, "openq-alpha.txt");
-      expect(guardSkipped(row("openq"), h.home, "alpha", stateFile)).toBe(false);
+      expect(await guardSkipped(row("openq"), h.home, "alpha", stateFile)).toBe(false);
       expect(existsSync(stateFile)).toBe(false);
     });
 
-    it("a row without a guard is always safe", () => {
+    it("a row without a guard is always safe", async () => {
       tag("FS", "timeout");
       const stateFile = join(h.home, "research-alpha-guard.txt");
-      expect(guardSkipped(row("research"), h.home, "alpha", stateFile)).toBe(false);
-      expect(guardSkipped(DESIGN_PHASES[1], h.home, "alpha", stateFile)).toBe(false);
+      expect(await guardSkipped(row("research"), h.home, "alpha", stateFile)).toBe(false);
+      expect(await guardSkipped(DESIGN_PHASES[1], h.home, "alpha", stateFile)).toBe(false);
       expect(existsSync(stateFile)).toBe(false);
     });
   });

@@ -72,10 +72,24 @@ export function agentConsultValidated(name: string): boolean {
 
 export type ConsultKind = "research" | "verify" | "adversary" | "experiment" | "openq" | "rebuttal" | "gap" | "signoff";
 const CONSULT_DEFAULTS: Record<ConsultKind, number> = { research: 600, verify: 300, adversary: 600, experiment: 1800, openq: 300, rebuttal: 300, gap: 600, signoff: 300 };
+const POSITIVE_INT = /^[1-9][0-9]*$/;
+/** Seconds a consult phase may run. Precedence: env `AP_CONSULT_TIMEOUT_<KIND>` (kind uppercased —
+ *  AP_CONSULT_TIMEOUT_RESEARCH, AP_CONSULT_TIMEOUT_VERIFY, ...) -> contracts.yaml
+ *  `consult.<kind>_timeout_s` -> the built-in default. The env tier exists because contracts.yaml
+ *  ships with the plugin and the resolvers prefer the shipped copy, so a per-box budget edit dies on
+ *  the next update. Both tiers take the SAME positive-int test: a typo, 0, or a negative falls
+ *  through to the next tier rather than yielding NaN. Provider `timeout_multiplier` still scales
+ *  whatever this returns.
+ *
+ *  ALIASING, easy to get wrong from the outside: explore's peer cross-verification phase has no kind
+ *  of its own — it reuses design's `verify` budget (see PHASES' timeoutKind slot). So the knob that
+ *  lengthens `crossverify` is AP_CONSULT_TIMEOUT_VERIFY, and there is no AP_CONSULT_TIMEOUT_CROSSVERIFY. */
 export function consultTimeout(kind: ConsultKind): number {
   if (!(kind in CONSULT_DEFAULTS)) throw new Error(`consultTimeout: kind must be 'research', 'verify', 'adversary', 'experiment', 'openq', 'rebuttal', 'gap', or 'signoff'; got '${kind}'`);
+  const env = process.env[`AP_CONSULT_TIMEOUT_${kind.toUpperCase()}`];
+  if (POSITIVE_INT.test(String(env))) return Number(env);
   const v = (load().consult ?? {})[`${kind}_timeout_s`];
-  return /^[1-9][0-9]*$/.test(String(v)) ? Number(v) : CONSULT_DEFAULTS[kind];
+  return POSITIVE_INT.test(String(v)) ? Number(v) : CONSULT_DEFAULTS[kind];
 }
 
 export function contractsExist(): boolean { return existsSync(contractsPath()); }

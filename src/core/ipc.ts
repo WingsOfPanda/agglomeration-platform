@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { workerDir, topicDir, pluginRoot } from "./paths.js";
 import { atomicWrite } from "./atomic.js";
 import { isoUtc } from "./archive.js";
-import { readIfExists } from "./fsread.js";
+import { readIfExists, readIfExistsOrNull } from "./fsread.js";
 import { log } from "./log.js";
 
 export function inboxPath(i: string, m: string, t: string) { return join(workerDir(i, m, t), "inbox.md"); }
@@ -36,6 +36,18 @@ export function workerBusyState(i: string, m: string, t: string): string | null 
   const match = readFileSync(sp, "utf8").match(/"state"\s*:\s*"([^"]*)"/);
   const state = match ? match[1].trim() : "";
   return state && !TERMINAL_WORKER_STATES.has(state.toLowerCase()) ? state : null;
+}
+
+/** What status.json is: `absent` (no file), `seed` (the platform-written file from
+ *  `seedWorkerStatus` — `last_event: "spawn"`, i.e. the worker has NOT reported yet), or `reported`
+ *  (the worker itself wrote it). Deliberately NOT folded into workerBusyState: a gate that only has
+ *  to avoid clobbering may read an absent/seeded file as idle, but a gate that OVERRIDES a refusal
+ *  needs positive evidence, and "the worker never said anything" is not evidence of idleness. */
+export type StatusReport = "absent" | "seed" | "reported";
+export function workerStatusReport(i: string, m: string, t: string): StatusReport {
+  const text = readIfExistsOrNull(statusPath(i, m, t));
+  if (text === null) return "absent";
+  return /"last_event"\s*:\s*"spawn"/.test(text) ? "seed" : "reported";
 }
 
 /** Send-side dispatch gate shared by the single-worker turn/round verbs: refuse (log to stderr,
@@ -152,6 +164,14 @@ function lastMatch(text: string, events: string[]): OutboxEvent | null {
     }
   }
   return null;
+}
+
+/** Did a terminal event land in the worker's outbox at or after `offset`? The synchronous, one-shot
+ *  form of the wait's own read — same readFrom/lastMatch machinery, so "the turn that started at
+ *  this offset has ENDED" is answered by exactly the code that would have waited for it. Used by the
+ *  dispatch guard, which must not treat an expired wait as proof the worker stopped working. */
+export function outboxTerminalSince(i: string, m: string, t: string, offset: number): boolean {
+  return lastMatch(readFrom(outboxPath(i, m, t), offset), TERMINAL_EVENTS) !== null;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

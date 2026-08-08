@@ -77,17 +77,23 @@ describe("outboxWaitSince liveness extension", () => {
 describe("gateAnomalies", () => {
   const w = (agent: string, doneExists: boolean, stateText: string | null) => ({ agent, doneExists, stateText });
 
-  it("reports terminal timeout and failed workers", () => {
+  it("reports terminal timeout, failed and missing workers", () => {
+    // `missing` joined the warned set on 2026-08-08: a worker that ANSWERED but wrote no artifact is
+    // the quietest member of the silent-degrade class, and it cascaded unnoticed through the gate.
     const out = gateAnomalies([
       w("alpha", true, "OFFSET=0\nFS=timeout\n"),
       w("charlie", true, "OFFSET=0\nFS=failed\n"),
+      w("delta", true, "OFFSET=0\nFS=missing\n"),
     ], "FS");
-    expect(out).toEqual([{ agent: "alpha", value: "timeout" }, { agent: "charlie", value: "failed" }]);
+    expect(out).toEqual([
+      { agent: "alpha", value: "timeout" }, { agent: "charlie", value: "failed" },
+      { agent: "delta", value: "missing" },
+    ]);
   });
 
-  it("does not report ok, missing, skipped, or question states", () => {
+  it("does not report ok, skipped, or question states", () => {
     const out = gateAnomalies([
-      w("a", true, "FS=ok\n"), w("b", true, "FS=missing\n"),
+      w("a", true, "FS=ok\n"),
       w("c", true, "FS=skipped\n"), w("d", true, "OFFSET=3\nFS=question\n"),
     ], "FS");
     expect(out).toEqual([]);

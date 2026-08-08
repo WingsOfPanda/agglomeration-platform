@@ -204,6 +204,25 @@ re-run that phase's `*-send` (which also clears that artifact's refusal strikes)
 self-bounds — three refusals with no growth in between (or six refusals however much it grew) and
 it drops that worker as empty.
 
+**Send-guards self-heal on EVIDENCE.** Every later `*-send` still consults the earlier phases' tags,
+and a `timeout`/`failed` still skips by default — but the skip is overridden when the worker is
+*verifiably* free, all four of: it wrote its own `status.json` (the platform spawn seed does not
+count) and it is idle, a terminal event landed in its outbox past the failing phase's `OFFSET=`, that
+phase's artifact is settled (`END_OF_ARTIFACT`, an `AC=` verdict, empty, or absent), and its pane is
+alive. Then the phase dispatches (`guard override — ... verifiably free` on stderr, one
+`guard-override-idle` flag for `/ap:review`), so a single expired wait no longer ends that worker's
+run. Miss any leg — silent worker, turn still running, half-written artifact, dead pane — and you get
+today's `<KEY>=skipped` with the reason named. rc semantics are unchanged.
+
+**Budgets are per-box tunable.** `AP_CONSULT_TIMEOUT_<KIND>` (seconds, positive integer) outranks
+`config/contracts.yaml`'s `consult.<kind>_timeout_s`, so it survives plugin updates — the yaml ships
+with the plugin and the shipped copy always wins. Kinds: `RESEARCH`, `VERIFY`, `ADVERSARY`,
+`EXPERIMENT`, `OPENQ`, `REBUTTAL`, `GAP`, `SIGNOFF`. **Cross-verify is spelled `VERIFY`** — that
+phase reuses design's verify budget and there is no `AP_CONSULT_TIMEOUT_CROSSVERIFY`. A garbage, zero
+or negative value falls through to the yaml/default instead of erroring, and the provider's
+`timeout_multiplier` still scales the result (as does the `AP_WAIT_EXTEND_MULT` extension while the
+pane lives).
+
 Set task `4` → `completed`.
 
 ## Phase 4a — survivors (N-1 continuation)
@@ -749,6 +768,25 @@ verbatim WITHOUT prepending $ART.
 **Degraded-run stamp:** when Phase 4a printed `DEGRADED=1`, `## Constraints (carry-forward)` MUST
 additionally open with: "DEGRADED RUN: single-worker survey — no independent corroboration, no
 peer verification; treat every claim as single-source."
+
+**Cross-verification stamp:** `handoff-data.kv` reports what the run's two verification legs
+actually did — `cross_verification=<ok|gate-skipped|partial|none>` plus
+`cross_verification_detail=crossverify=<covered|benign|lost>,adversary=<covered|benign|lost>`. A leg
+is `covered` only when a wait ACCEPTED an artifact for it (`AC=sentinel`/`AC=quiescent`), `benign`
+when the run deliberately closed it with nothing to do, `lost` otherwise. Stamp
+`## Constraints (carry-forward)` accordingly:
+
+- `none` (both legs lost) → "zero cross-verification — treat as an unverified single-pass survey."
+- `gate-skipped` (the confidence gate closed the adversary; cross-verify held) → use the EXISTING
+  milder adversary caveat above ("No adversarial review implemented — the design plan should preserve
+  room for that uncertainty"), never the harsh line.
+- `partial` → say which leg held and which was lost, citing the detail line.
+- `ok` → no caveat.
+
+Both keys are ABSENT on a degraded (single-worker) run — the DEGRADED stamp already carries the
+honest caveat there, and a solo worker's adversary pass is self-review, not cross-verification — and
+absent when the run has no `list.txt` to judge against. Absent keys are not a pass: say nothing about
+cross-verification rather than implying it happened.
 
 **No-convergence branch** (`mode=explore-no-convergence` in `handoff-data.kv`):
 - `## Recommendation` reads: "Survey did not converge on a single best approach. See Evidence for

@@ -566,6 +566,11 @@ function workerBusyState(i2, m, t) {
   const state = match ? match[1].trim() : "";
   return state && !TERMINAL_WORKER_STATES.has(state.toLowerCase()) ? state : null;
 }
+function workerStatusReport(i2, m, t) {
+  const text = readIfExistsOrNull(statusPath(i2, m, t));
+  if (text === null) return "absent";
+  return /"last_event"\s*:\s*"spawn"/.test(text) ? "seed" : "reported";
+}
 function workerSendGate(i2, m, t, label, unit) {
   const outbox = outboxPath(i2, m, t);
   if (!(0, import_node_fs6.existsSync)(outbox)) {
@@ -668,6 +673,9 @@ function lastMatch(text, events) {
     }
   }
   return null;
+}
+function outboxTerminalSince(i2, m, t, offset) {
+  return lastMatch(readFrom(outboxPath(i2, m, t), offset), TERMINAL_EVENTS) !== null;
 }
 async function outboxWaitSince(i2, m, t, offset, events, timeoutSec, live) {
   const path6 = outboxPath(i2, m, t);
@@ -8325,13 +8333,15 @@ function agentConsultValidated(name) {
 }
 function consultTimeout(kind) {
   if (!(kind in CONSULT_DEFAULTS)) throw new Error(`consultTimeout: kind must be 'research', 'verify', 'adversary', 'experiment', 'openq', 'rebuttal', 'gap', or 'signoff'; got '${kind}'`);
+  const env = process.env[`AP_CONSULT_TIMEOUT_${kind.toUpperCase()}`];
+  if (POSITIVE_INT.test(String(env))) return Number(env);
   const v = (load().consult ?? {})[`${kind}_timeout_s`];
-  return /^[1-9][0-9]*$/.test(String(v)) ? Number(v) : CONSULT_DEFAULTS[kind];
+  return POSITIVE_INT.test(String(v)) ? Number(v) : CONSULT_DEFAULTS[kind];
 }
 function contractsExist() {
   return (0, import_node_fs9.existsSync)(contractsPath());
 }
-var import_node_fs9, import_node_path6, import_yaml2, DOCS, CONSULT_DEFAULTS;
+var import_node_fs9, import_node_path6, import_yaml2, DOCS, CONSULT_DEFAULTS, POSITIVE_INT;
 var init_contracts = __esm({
   "src/core/contracts.ts"() {
     "use strict";
@@ -8341,6 +8351,7 @@ var init_contracts = __esm({
     init_paths();
     DOCS = /* @__PURE__ */ new Map();
     CONSULT_DEFAULTS = { research: 600, verify: 300, adversary: 600, experiment: 1800, openq: 300, rebuttal: 300, gap: 600, signoff: 300 };
+    POSITIVE_INT = /^[1-9][0-9]*$/;
   }
 });
 
@@ -18721,7 +18732,7 @@ function gateAnomalies(workers, key) {
   for (const p of workers) {
     if (!p.doneExists) continue;
     const last = lastKeyedValue(p.stateText ?? "", key);
-    if (last === "timeout" || last === "failed") out.push({ agent: p.agent, value: last });
+    if (last === "timeout" || last === "failed" || last === "missing") out.push({ agent: p.agent, value: last });
   }
   return out;
 }
@@ -19443,14 +19454,56 @@ function latestNonSkippedUnsafe(art, agent, chain) {
   if (latest && (latest[1] === "timeout" || latest[1] === "failed")) return `${latest[0]}=${latest[1]}`;
   return null;
 }
-function guardSkipped(row, art, agent, stateFile) {
+async function overrideEvidence(row, art, agent, unsafe, live) {
+  const { topic, provider } = live;
+  const report = workerStatusReport(agent, provider, topic);
+  if (report !== "reported") {
+    return report === "seed" ? "status.json is still the spawn seed (worker never reported)" : "no status.json from the worker";
+  }
+  const busy = (live.busyState ?? workerBusyState)(agent, provider, topic);
+  if (busy) return `live state=${busy}`;
+  const failKey = unsafe.split("=")[0];
+  const failPhase = EXPLORE_PHASE_BY_KEY[failKey];
+  const failState = readIfExists((0, import_node_path24.join)(art, `${failPhase}-${agent}.txt`));
+  const offset = parseLatestOffset(failState);
+  if (offset === null) return `no OFFSET recorded for ${failPhase} (cannot tell whether that turn ended)`;
+  if (!outboxTerminalSince(agent, provider, topic, offset)) {
+    return `no terminal outbox event since ${failPhase} OFFSET=${offset} (turn may still be running)`;
+  }
+  const failRow = PHASES.find((p) => p.key === failKey);
+  if (failRow) {
+    const artifact = failRow.artifactFor(art, agent, provider, topic);
+    const text = readIfExistsOrNull(artifact);
+    const accept = lastTag(failState, ARTIFACT_ACCEPT_KEY);
+    const settled = text === null || text.trim() === "" || hasArtifactSentinel(text) || accept === "sentinel" || accept === "quiescent";
+    if (!settled) return `${artifact} has no ${END_OF_ARTIFACT} and no ${ARTIFACT_ACCEPT_KEY}= verdict (still being written)`;
+  }
+  const pane = paneMetaRead(agent, provider, topic);
+  if (!pane) return "no pane.json (cannot confirm the pane is alive)";
+  let alive = false;
+  try {
+    alive = await (live.paneAlive ?? paneAlive)(pane);
+  } catch {
+    alive = false;
+  }
+  if (!alive) return `pane ${pane} is gone`;
+  return null;
+}
+async function guardSkipped(row, art, agent, stateFile, live) {
   const g = row.guard;
   if (!g) return false;
   const unsafe = g.kind === "any" ? anyPriorUnsafe(art, agent, g.chain) : latestNonSkippedUnsafe(art, agent, g.chain);
   if (!unsafe) return false;
+  const label = `${row.cmd} ${row.phase}-send`;
+  const why = live ? await overrideEvidence(row, art, agent, unsafe, live) : "no live probe";
+  if (live && why === null) {
+    log.warn(`${label}: ${agent} guard override \u2014 ${g.noun} ended ${unsafe} but the worker is verifiably free (reported idle, turn ended, artifact settled, pane alive); dispatching`);
+    recordHubFlag({ command: row.cmd, topic: live.topic, note: `guard-override-idle: ${agent} ${row.phase} chain=${unsafe}` });
+    return false;
+  }
   atomicWrite(stateFile, `${row.key}=skipped
 `);
-  log.warn(`${row.cmd} ${row.phase}-send: ${agent} skipped \u2014 ${g.noun} ended ${unsafe} (worker may still be busy; sending would clobber its inbox)`);
+  log.warn(`${label}: ${agent} skipped \u2014 ${g.noun} ended ${unsafe} (worker may still be busy; sending would clobber its inbox${live ? `; ${why}` : ""})`);
   return true;
 }
 function skipDispatch(row, agent, stateFile, reason) {
@@ -19586,6 +19639,7 @@ var init_phaseTable = __esm({
     init_paths();
     init_contracts();
     init_ipc();
+    init_tmux();
     init_forensics();
     init_artifact();
     init_waitLive();
@@ -19695,7 +19749,8 @@ var init_phaseTable = __esm({
     liveSendDeps = {
       offsetFor: (i2, m, t) => outboxOffset(outboxPath(i2, m, t)),
       send: run,
-      busyState: workerBusyState
+      busyState: workerBusyState,
+      paneAlive
     };
     liveWaitDeps = {
       wait: liveOutboxWait,
@@ -26090,10 +26145,35 @@ function buildHandoffKv2(i2) {
   if (i2.confidenceSignals) L.push(`confidence_signals=${i2.confidenceSignals}`);
   if (i2.adversaryFindingsPaths.length) L.push(`adversary_findings_paths=${i2.adversaryFindingsPaths.join(",")}`);
   L.push(`tradeoff_matrix_present=${i2.tradeoffMatrixPresent}`);
+  if (i2.coverage) {
+    L.push(`cross_verification=${i2.coverage.value}`);
+    L.push(`cross_verification_detail=crossverify=${i2.coverage.crossverify},adversary=${i2.coverage.adversary}`);
+  }
   L.push("session_path=.");
   L.push("topic_txt_path=topic.txt");
   L.push(`generated_ts=${i2.generatedTs}`);
   return L.join("\n") + "\n";
+}
+function legStatus(artDir, agents, phase, benign) {
+  if (agents.some((a2) => ACCEPTED.has(lastTag(readIfExistsOrNull((0, import_node_path38.join)(artDir, `${phase}-${a2}.txt`)) ?? "", "AC") ?? ""))) {
+    return "covered";
+  }
+  return agents.every(benign) ? "benign" : "lost";
+}
+function crossVerificationCoverage(artDir) {
+  const list = readIfExistsOrNull((0, import_node_path38.join)(artDir, "list.txt"));
+  if (list === null) return { kind: "no-roster" };
+  const agents = parseListFile(list).map((r) => r.agent);
+  if (agents.length < 2) return { kind: "degraded" };
+  const claimsEmpty = (a2) => {
+    const claims = readIfExistsOrNull((0, import_node_path38.join)(artDir, `crossverify-claims-${a2}.txt`));
+    return claims !== null && claims.trim() === "";
+  };
+  const gateSkipped = /^user_decision: skip$/m.test(readIfExistsOrNull((0, import_node_path38.join)(artDir, "adversary-skip.txt")) ?? "");
+  const crossverify = legStatus(artDir, agents, "crossverify", claimsEmpty);
+  const adversary = legStatus(artDir, agents, "adversary", () => gateSkipped);
+  const value = crossverify === "covered" && adversary === "covered" ? "ok" : adversary === "benign" && crossverify !== "lost" ? "gate-skipped" : crossverify === "lost" && adversary === "lost" ? "none" : "partial";
+  return { kind: "stamp", stamp: { value, crossverify, adversary } };
 }
 function extractHandoffData(artDir, now) {
   if (!(0, import_node_fs41.existsSync)(artDir) || !(0, import_node_fs41.statSync)(artDir).isDirectory()) return null;
@@ -26117,6 +26197,13 @@ function extractHandoffData(artDir, now) {
     const m = skip.split("\n").find((l) => l.startsWith("signals_passed:"));
     if (m) confidenceSignals = m.replace(/^signals_passed:\s*/, "").trim().replace(/\s+/g, ",");
   }
+  const cov = crossVerificationCoverage(artDir);
+  if (cov.kind === "no-roster") {
+    log.warn(`explore handoff: no list.txt at ${artDir} \u2014 cross-verification coverage not stamped (nothing to judge it against)`);
+  }
+  if (cov.kind === "stamp" && cov.stamp.value === "none") {
+    log.warn("explore handoff: cross_verification=none \u2014 zero cross-verification; the landscape is an unverified single-pass survey");
+  }
   const body = buildHandoffKv2({
     topic,
     landscapeDoc,
@@ -26125,13 +26212,14 @@ function extractHandoffData(artDir, now) {
     confidenceSignals,
     adversaryFindingsPaths,
     tradeoffMatrixPresent: tradeoff,
+    coverage: cov.kind === "stamp" ? cov.stamp : void 0,
     generatedTs: isoUtc(now)
   });
   const dest = (0, import_node_path38.join)(artDir, "handoff-data.kv");
   atomicWrite(dest, body);
   return dest;
 }
-var import_node_fs41, import_node_path38;
+var import_node_fs41, import_node_path38, ACCEPTED;
 var init_exploreHandoff = __esm({
   "src/core/exploreHandoff.ts"() {
     "use strict";
@@ -26139,8 +26227,11 @@ var init_exploreHandoff = __esm({
     import_node_path38 = require("node:path");
     init_atomic();
     init_archive();
+    init_log();
     init_exploreConfidence();
     init_fsread();
+    init_roster();
+    ACCEPTED = /* @__PURE__ */ new Set(["sentinel", "quiescent"]);
   }
 });
 
@@ -27189,7 +27280,7 @@ async function openqSendWith(topic, agent, provider, d) {
     log.error(`explore openq-send: ${stateFile} exists; rm to retry`);
     return 1;
   }
-  if (guardSkipped(OPENQ, art, agent, stateFile)) return 0;
+  if (await guardSkipped(OPENQ, art, agent, stateFile, { topic, provider, busyState: d.busyState, paneAlive: d.paneAlive })) return 0;
   const claims = parseOpenqClaims(readIfExists((0, import_node_path39.join)(art, `openq-claims-${agent}.txt`)));
   if (claims.length === 0) return skipDispatch(OPENQ, agent, stateFile, "no questions routed to it");
   const answersPath = (0, import_node_path39.join)(art, `openq-${agent}.md`);
@@ -27261,7 +27352,7 @@ async function crossverifySendWith(topic, agent, provider, d) {
     log.error(`explore crossverify-send: ${stateFile} exists; rm to retry`);
     return 1;
   }
-  if (guardSkipped(CROSSVERIFY, art, agent, stateFile)) return 0;
+  if (await guardSkipped(CROSSVERIFY, art, agent, stateFile, { topic, provider, busyState: d.busyState, paneAlive: d.paneAlive })) return 0;
   const agents = parseListFile(readIfExists((0, import_node_path39.join)(art, "list.txt"))).map((r) => r.agent);
   if (agents.length < 2) {
     log.error(`explore crossverify-send: need >=2 workers in list.txt, got ${agents.length}`);
@@ -27299,7 +27390,7 @@ async function rebuttalSendWith(topic, agent, provider, d) {
     log.error(`explore rebuttal-send: ${stateFile} exists \u2014 one rebuttal round per worker (the one-turn cap)`);
     return 1;
   }
-  if (guardSkipped(REBUTTAL, art, agent, stateFile)) return 0;
+  if (await guardSkipped(REBUTTAL, art, agent, stateFile, { topic, provider, busyState: d.busyState, paneAlive: d.paneAlive })) return 0;
   const rows = parseListFile(readIfExists((0, import_node_path39.join)(art, "list.txt")));
   if (!rows.some((r) => r.agent === agent)) {
     log.error(`explore rebuttal-send: ${agent} not in list.txt at ${art}`);
@@ -27351,7 +27442,7 @@ async function gapSendWith(topic, agent, provider, d) {
   if (!/\bS1=false\b/.test(signalsLine) && !/\bS2=false\b/.test(signalsLine)) {
     return skipDispatch(GAP, agent, stateFile, "no recorded S1/S2 failure \u2014 trigger not fired");
   }
-  if (guardSkipped(GAP, art, agent, stateFile)) return 0;
+  if (await guardSkipped(GAP, art, agent, stateFile, { topic, provider, busyState: d.busyState, paneAlive: d.paneAlive })) return 0;
   const agents = parseListFile(readIfExists((0, import_node_path39.join)(art, "list.txt"))).map((r) => r.agent);
   if (!agents.includes(agent)) {
     log.error(`explore gap-send: ${agent} not in list.txt at ${art}`);
@@ -27377,7 +27468,7 @@ async function signoffSendWith(topic, agent, provider, d) {
     log.error(`explore signoff-send: ${stateFile} exists \u2014 one sign-off turn per worker (the one-turn cap)`);
     return 1;
   }
-  if (guardSkipped(SIGNOFF, art, agent, stateFile)) return 0;
+  if (await guardSkipped(SIGNOFF, art, agent, stateFile, { topic, provider, busyState: d.busyState, paneAlive: d.paneAlive })) return 0;
   const rows = parseListFile(readIfExists((0, import_node_path39.join)(art, "list.txt")));
   if (!rows.some((r) => r.agent === agent)) {
     log.error(`explore signoff-send: ${agent} not in list.txt at ${art}`);
@@ -27644,7 +27735,7 @@ async function adversarySendWith(topic, agent, provider, d) {
     log.error(`explore adversary-send: ${stateFile} exists; rm to retry`);
     return 1;
   }
-  if (guardSkipped(ADVERSARY, art, agent, stateFile)) return 0;
+  if (await guardSkipped(ADVERSARY, art, agent, stateFile, { topic, provider, busyState: d.busyState, paneAlive: d.paneAlive })) return 0;
   const rows = parseListFile(readIfExists((0, import_node_path39.join)(art, "list.txt")));
   const index = rows.findIndex((r) => r.agent === agent);
   if (index < 0) {
