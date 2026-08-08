@@ -12,6 +12,9 @@ export function sendDeps(over: Partial<SendDeps> = {}): SendDeps {
     // Left undefined by default so dispatchPrompt uses the live workerBusyState: with no status.json
     // under the test AP_HOME it reads null (idle) and the send proceeds, as before the busy-gate.
     busyState: over.busyState,
+    // Same seam the send verbs hand to guardSkipped. Inject it in any test that seeds a pane.json,
+    // or the guard's fourth evidence leg would shell out to the real tmux.
+    paneAlive: over.paneAlive,
   };
 }
 

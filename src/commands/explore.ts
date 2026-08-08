@@ -233,7 +233,7 @@ export async function openqSendWith(topic: string, agent: string, provider: stri
   const stateFile = join(art, `openq-${agent}.txt`);
   if (existsSync(stateFile)) { log.error(`explore openq-send: ${stateFile} exists; rm to retry`); return 1; }
 
-  if (guardSkipped(OPENQ, art, agent, stateFile)) return 0; // timeout-dispatch guard first
+  if (await guardSkipped(OPENQ, art, agent, stateFile, { topic, provider, busyState: d.busyState, paneAlive: d.paneAlive })) return 0; // timeout-dispatch guard first
   const claims = parseOpenqClaims(readIf(join(art, `openq-claims-${agent}.txt`)));
   if (claims.length === 0) return skipDispatch(OPENQ, agent, stateFile, "no questions routed to it");
 
@@ -293,7 +293,7 @@ export async function crossverifySendWith(topic: string, agent: string, provider
   const stateFile = join(art, `crossverify-${agent}.txt`);
   if (existsSync(stateFile)) { log.error(`explore crossverify-send: ${stateFile} exists; rm to retry`); return 1; }
 
-  if (guardSkipped(CROSSVERIFY, art, agent, stateFile)) return 0; // timeout-dispatch guard first
+  if (await guardSkipped(CROSSVERIFY, art, agent, stateFile, { topic, provider, busyState: d.busyState, paneAlive: d.paneAlive })) return 0; // timeout-dispatch guard first
 
   const agents = parseListFile(readIf(join(art, "list.txt"))).map((r) => r.agent);
   if (agents.length < 2) { log.error(`explore crossverify-send: need >=2 workers in list.txt, got ${agents.length}`); return 1; }
@@ -326,7 +326,7 @@ export async function rebuttalSendWith(topic: string, agent: string, provider: s
   const stateFile = join(art, `rebuttal-${agent}.txt`);
   if (existsSync(stateFile)) { log.error(`explore rebuttal-send: ${stateFile} exists — one rebuttal round per worker (the one-turn cap)`); return 1; }
 
-  if (guardSkipped(REBUTTAL, art, agent, stateFile)) return 0; // latest-phase guard (AS -> VS -> QS -> FS)
+  if (await guardSkipped(REBUTTAL, art, agent, stateFile, { topic, provider, busyState: d.busyState, paneAlive: d.paneAlive })) return 0; // latest-phase guard (AS -> VS -> QS -> FS)
 
   const rows = parseListFile(readIf(join(art, "list.txt")));
   if (!rows.some((r) => r.agent === agent)) { log.error(`explore rebuttal-send: ${agent} not in list.txt at ${art}`); return 1; }
@@ -380,7 +380,7 @@ export async function gapSendWith(topic: string, agent: string, provider: string
     return skipDispatch(GAP, agent, stateFile, "no recorded S1/S2 failure — trigger not fired");
   }
 
-  if (guardSkipped(GAP, art, agent, stateFile)) return 0; // latest-phase guard (RS -> AS -> VS -> QS -> FS)
+  if (await guardSkipped(GAP, art, agent, stateFile, { topic, provider, busyState: d.busyState, paneAlive: d.paneAlive })) return 0; // latest-phase guard (RS -> AS -> VS -> QS -> FS)
 
   const agents = parseListFile(readIf(join(art, "list.txt"))).map((r) => r.agent);
   if (!agents.includes(agent)) { log.error(`explore gap-send: ${agent} not in list.txt at ${art}`); return 1; }
@@ -407,7 +407,7 @@ export async function signoffSendWith(topic: string, agent: string, provider: st
   const stateFile = join(art, `signoff-${agent}.txt`);
   if (existsSync(stateFile)) { log.error(`explore signoff-send: ${stateFile} exists — one sign-off turn per worker (the one-turn cap)`); return 1; }
 
-  if (guardSkipped(SIGNOFF, art, agent, stateFile)) return 0; // latest-phase guard (GS -> RS -> AS -> VS -> QS -> FS)
+  if (await guardSkipped(SIGNOFF, art, agent, stateFile, { topic, provider, busyState: d.busyState, paneAlive: d.paneAlive })) return 0; // latest-phase guard (GS -> RS -> AS -> VS -> QS -> FS)
 
   const rows = parseListFile(readIf(join(art, "list.txt")));
   if (!rows.some((r) => r.agent === agent)) { log.error(`explore signoff-send: ${agent} not in list.txt at ${art}`); return 1; }
@@ -631,7 +631,7 @@ export async function adversarySendWith(topic: string, agent: string, provider: 
   const stateFile = join(art, `adversary-${agent}.txt`);
   if (existsSync(stateFile)) { log.error(`explore adversary-send: ${stateFile} exists; rm to retry`); return 1; }
 
-  if (guardSkipped(ADVERSARY, art, agent, stateFile)) return 0; // latest phase first (VS -> QS -> FS)
+  if (await guardSkipped(ADVERSARY, art, agent, stateFile, { topic, provider, busyState: d.busyState, paneAlive: d.paneAlive })) return 0; // latest phase first (VS -> QS -> FS)
 
   const rows = parseListFile(readIf(join(art, "list.txt")));
   const index = rows.findIndex((r) => r.agent === agent);

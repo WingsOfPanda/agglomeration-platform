@@ -6,18 +6,97 @@
 // Everything below the skeleton suite is what is genuinely per-phase: prompt composition, phase
 // preconditions, artifact contents, and the dated guard-chain regression suites at the end.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { existsSync, readFileSync, writeFileSync, rmSync, mkdtempSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync, rmSync, mkdirSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { globalRoot, workerDir } from "../src/core/paths.js";
+import { outboxPath, paneMetaPath, statusPath } from "../src/core/ipc.js";
 import { freshHome } from "./helpers/tmpHome.js";
 import { captureStdout } from "./helpers/captureStdout.js";
 import { sendDeps, waitDeps } from "./helpers/phaseDeps.js";
 import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, crossverifySendWith, crossverifyWaitWith, rebuttalSendWith, rebuttalWaitWith, gapSendWith, gapWaitWith, signoffSendWith, signoffWaitWith, survivorsRun, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, verdictTallyRun, diffExploreRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, contributionRun, type ExploreInitDeps, type ExploreSpawnAllDeps } from "../src/commands/explore.js";
 import { exploreArtDir } from "../src/core/explore.js";
-import { PHASES, type PhaseKey, type SendDeps, type WaitDeps } from "../src/core/phaseTable.js";
+import { PHASES, type PhaseKey, type PhaseRow, type SendDeps, type WaitDeps } from "../src/core/phaseTable.js";
 import { END_OF_ARTIFACT } from "../src/core/artifact.js";
 import { consultTimeout } from "../src/core/contracts.js";
 import { scaledTimeout } from "../src/core/designTurn.js";
+
+/** Put a worker mid-turn. Since the 2026-08-08 liveness spec an unsafe guard chain skips unless the
+ *  worker is verifiably free — every skip case below pins the chain semantics, so it seeds a busy
+ *  worker; the override's own evidence rules are pinned in tests/liveness-guards.test.ts. */
+function markBusy(agent: string, provider: string, topic: string): void {
+  mkdirSync(workerDir(agent, provider, topic), { recursive: true });
+  writeFileSync(statusPath(agent, provider, topic), '{"state":"working"}\n');
+}
+
+/** The evidence that lets a guard override its chain verdict, all four legs present: the worker
+ *  REPORTED an idle status itself (not the spawn seed), a terminal event landed past the failing
+ *  phase's offset, that phase's artifact is settled, and pane.json names a pane (its liveness is
+ *  injected). Remove any one leg and the skip must stand. */
+function seedOverrideEvidence(agent: string, provider: string, topic: string): void {
+  mkdirSync(workerDir(agent, provider, topic), { recursive: true });
+  writeFileSync(statusPath(agent, provider, topic), JSON.stringify({ state: "idle", last_event: "done" }) + "\n");
+  writeFileSync(outboxPath(agent, provider, topic), '{"event":"done","summary":"landed late"}\n');
+  writeFileSync(paneMetaPath(agent, provider, topic), JSON.stringify({ pane_id: "%9", agent, model: provider }) + "\n");
+}
+
+/** The hub flags recorded under AP_HOME/forensics/<date>/ — /ap:review's feed. */
+function hubFlags(): string {
+  const root = join(globalRoot(), "forensics");
+  if (!existsSync(root)) return "";
+  return readdirSync(root)
+    .flatMap((d) => readdirSync(join(root, d)).map((f) => readFileSync(join(root, d, f), "utf8")))
+    .join("\n");
+}
+
+function captureStderr(): { text: () => string; restore: () => void } {
+  const chunks: string[] = [];
+  const se = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((s: string | Uint8Array) => { chunks.push(String(s)); return true; }) as typeof process.stderr.write;
+  return { text: () => chunks.join(""), restore: () => { process.stderr.write = se; } };
+}
+
+/** One broken evidence leg each: the mutation that must turn an override back into a skip. `break`
+ *  edits the seeded state and/or returns the dep overrides that carry the failure. */
+const BROKEN_LEGS: Array<{
+  name: string;
+  break(agent: string, provider: string, topic: string, art: string, failRow: PhaseRow): Partial<SendDeps>;
+  why: string;
+}> = [
+  {
+    name: "no status.json at all",
+    break: (i, m, t) => { rmSync(statusPath(i, m, t), { force: true }); return {}; },
+    why: "no status.json from the worker",
+  },
+  {
+    name: "status.json is still the platform spawn seed",
+    break: (i, m, t) => {
+      writeFileSync(statusPath(i, m, t), JSON.stringify({ state: "idle", last_event: "spawn" }) + "\n");
+      return {};
+    },
+    why: "still the spawn seed",
+  },
+  { name: "the worker is busy", break: () => ({ busyState: () => "working" }), why: "live state=working" },
+  {
+    name: "no terminal outbox event past the offset",
+    break: (i, m, t) => { writeFileSync(outboxPath(i, m, t), '{"event":"progress","note":"still going"}\n'); return {}; },
+    why: "no terminal outbox event since",
+  },
+  {
+    name: "the failing phase's artifact is still being written",
+    break: (i, m, t, art, failRow) => {
+      writeFileSync(failRow.artifactFor(art, i, m, t), "half a document, no sentinel");
+      return {};
+    },
+    why: "still being written",
+  },
+  {
+    name: "no pane.json",
+    break: (i, m, t) => { rmSync(paneMetaPath(i, m, t), { force: true }); return {}; },
+    why: "no pane.json",
+  },
+  { name: "the pane is gone", break: () => ({ paneAlive: async () => false }), why: "is gone" },
+];
 
 /** A worker artifact as the completeness contract requires it: body + the sentinel as its LAST
  *  line. Everything the validators (survivors / synth-preliminary) accept must carry it. */
@@ -303,6 +382,7 @@ describe("explore phase send/wait skeleton (table-driven over PHASES)", () => {
             // Chain entries ahead of k are seeded skipped so k is the one that decides under BOTH
             // encodings; entries behind it are ok, proving they cannot mask it.
             s.seed(art, AGENT);
+            markBusy(AGENT, PROVIDER, TOPIC);
             const idx = chain.indexOf(k);
             setChain(Object.fromEntries(chain.map((c, i) => [c, i < idx ? "skipped" : i === idx ? "timeout" : "ok"])));
             await expectDispatch(false);
@@ -317,6 +397,7 @@ describe("explore phase send/wait skeleton (table-driven over PHASES)", () => {
 
         it(`guard: ${chain[chain.length - 1]}=failed → ${KEY}=skipped, no send`, async () => {
           s.seed(art, AGENT);
+          markBusy(AGENT, PROVIDER, TOPIC);
           setChain(Object.fromEntries(chain.map((c, i) => [c, i === chain.length - 1 ? "failed" : "skipped"])));
           await expectDispatch(false);
         });
@@ -329,13 +410,66 @@ describe("explore phase send/wait skeleton (table-driven over PHASES)", () => {
 
         if (chain.length > 1) {
           const kind = row.guard.kind;
-          it(`guard encoding (${kind}): chain head ${chain[0]}=ok + chain tail ${chain[chain.length - 1]}=timeout → ${kind === "any" ? `${KEY}=skipped` : "dispatches"}`, async () => {
+          it(`guard encoding (${kind}): chain head ${chain[0]}=ok + chain tail ${chain[chain.length - 1]}=timeout → ${kind === "any" ? `the guard refuses (${KEY}=skipped)` : "the guard clears it (only the busy-gate refuses, rc 3)"}`, async () => {
             // The input the two encodings answer differently. The walk sites (rebuttal/gap/signoff)
             // consult ONLY the head of their chain — the latest phase — so a clean head clears an
             // older failure; the ternary sites scan the whole chain and a tail failure still blocks.
+            // BOTH sides run against a busy worker, so the two encodings produce visibly different
+            // refusals (guard rc 0 + state write vs busy-gate rc 3 + no state file) instead of the
+            // same "no send" — swapping one encoding for the other used to leave this test green.
             s.seed(art, AGENT);
+            markBusy(AGENT, PROVIDER, TOPIC);
             setChain({ [chain[0]]: "ok", [chain[chain.length - 1]]: "timeout" });
-            await expectDispatch(kind !== "any");
+            const send = vi.fn(async () => 0);
+            const err = captureStderr();
+            let rc: number;
+            try { rc = await s.send(TOPIC, AGENT, PROVIDER, sendDeps({ offsetFor: () => 4, send })); }
+            finally { err.restore(); }
+            expect(send).not.toHaveBeenCalled();
+            if (kind === "any") {
+              expect(rc).toBe(0);
+              expect(readFileSync(stateFile(), "utf8")).toBe(`${KEY}=skipped\n`);
+            } else {
+              expect(rc).toBe(3);
+              expect(existsSync(stateFile())).toBe(false);
+            }
+          });
+        }
+
+        // The 2026-08-08 override, parametrized over EVERY guarded verb: a mutation audit removed
+        // five of the six call-site wirings and the suite stayed green, so each verb pins its own.
+        const failRow = PHASES.find((p) => p.key === chain[0])!;
+        it(`guard override: ${chain[0]}=timeout + all four evidence legs → dispatches, flagged`, async () => {
+          s.seed(art, AGENT);
+          setChain({ [chain[0]]: "timeout" });
+          seedOverrideEvidence(AGENT, PROVIDER, TOPIC);
+          const send = vi.fn(async () => 0);
+          const err = captureStderr();
+          try {
+            expect(await s.send(TOPIC, AGENT, PROVIDER, sendDeps({ offsetFor: () => 4, send, paneAlive: async () => true }))).toBe(0);
+          } finally { err.restore(); }
+          expect(send).toHaveBeenCalled();
+          expect(readFileSync(stateFile(), "utf8")).toBe("OFFSET=4\n");
+          expect(existsSync(join(art, `${AGENT}_${s.phase}_prompt.md`))).toBe(true);
+          expect(err.text()).toContain(`guard override — ${row.guard!.noun} ended ${chain[0]}=timeout`);
+          expect(hubFlags()).toContain(`guard-override-idle: ${AGENT} ${s.phase} chain=${chain[0]}=timeout`);
+        });
+
+        for (const leg of BROKEN_LEGS) {
+          it(`guard override refused (${leg.name}) → ${KEY}=skipped, no send, no flag`, async () => {
+            s.seed(art, AGENT);
+            setChain({ [chain[0]]: "timeout" });
+            seedOverrideEvidence(AGENT, PROVIDER, TOPIC);
+            const over = leg.break(AGENT, PROVIDER, TOPIC, art, failRow);
+            const send = vi.fn(async () => 0);
+            const err = captureStderr();
+            try {
+              expect(await s.send(TOPIC, AGENT, PROVIDER, sendDeps({ send, paneAlive: async () => true, ...over }))).toBe(0);
+            } finally { err.restore(); }
+            expect(send).not.toHaveBeenCalled();
+            expect(readFileSync(stateFile(), "utf8")).toBe(`${KEY}=skipped\n`);
+            expect(err.text()).toContain(leg.why);
+            expect(hubFlags()).toBe("");
           });
         }
       }
@@ -1312,6 +1446,7 @@ describe("wait-liveness guard-chain (VS gap, 2026-07-26 spec)", () => {
       writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
       writeFileSync(join(art, "openq-alpha.txt"), "OFFSET=0\nQS=ok\n");
       writeFileSync(join(art, "crossverify-alpha.txt"), "OFFSET=0\nVS=timeout\n");
+      markBusy("alpha", "codex", "x"); // an unsafe chain skips only while the worker is mid-turn
       const send = vi.fn(async () => 0);
       const rc = await adversarySendWith("x", "alpha", "codex", sendDeps({ send }));
       expect(rc).toBe(0);
@@ -1342,6 +1477,7 @@ describe("wait-liveness guard-chain (VS gap, 2026-07-26 spec)", () => {
       writeFileSync(join(art, "adversary-skip.txt"), "signals_passed: S1=false S2=true S3=true S4=true S5=true\n");
       writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
       writeFileSync(join(art, "crossverify-alpha.txt"), "OFFSET=0\nVS=timeout\n");
+      markBusy("alpha", "codex", "x");
       const send = vi.fn(async () => 0);
       const rc = await gapSendWith("x", "alpha", "codex", sendDeps({ send }));
       expect(rc).toBe(0);
@@ -1356,6 +1492,7 @@ describe("wait-liveness guard-chain (VS gap, 2026-07-26 spec)", () => {
       const art = exploreArtDir("x");
       writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
       writeFileSync(join(art, "crossverify-alpha.txt"), "OFFSET=0\nVS=timeout\n");
+      markBusy("alpha", "codex", "x");
       const send = vi.fn(async () => 0);
       const rc = await signoffSendWith("x", "alpha", "codex", sendDeps({ send }));
       expect(rc).toBe(0);
@@ -1374,6 +1511,7 @@ describe("rebuttal-send latest-phase walk (AS=skipped falls through to VS)", () 
       writeFileSync(join(art, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
       writeFileSync(join(art, "crossverify-alpha.txt"), "OFFSET=0\nVS=timeout\n");
       writeFileSync(join(art, "adversary-alpha.txt"), "AS=skipped\n");
+      markBusy("alpha", "codex", "x");
       const send = vi.fn(async () => 0);
       const rc = await rebuttalSendWith("x", "alpha", "codex", sendDeps({ offsetFor: () => 7, send }));
       expect(rc).toBe(0);
@@ -1387,6 +1525,7 @@ describe("rebuttal-send latest-phase walk (AS=skipped falls through to VS)", () 
       await initWith(["x"], initDeps());
       const art = exploreArtDir("x");
       writeFileSync(join(art, "adversary-alpha.txt"), "OFFSET=0\nAS=timeout\n");
+      markBusy("alpha", "codex", "x");
       const send = vi.fn(async () => 0);
       const rc = await rebuttalSendWith("x", "alpha", "codex", sendDeps({ send }));
       expect(rc).toBe(0);
