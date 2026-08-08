@@ -8,7 +8,7 @@ import { stateInit, stateArchive, isoUtc } from "../core/archive.js";
 import { readIfExists } from "../core/fsread.js";
 import { atomicWrite } from "../core/atomic.js";
 import { validateSlug } from "../core/slug.js";
-import { identityWrite, identityPath, inboxWrite, inboxPath, paneMetaWrite, outboxWait, outboxDump } from "../core/ipc.js";
+import { identityWrite, identityPath, seedWorkerStatus, statusPath, inboxWrite, inboxPath, paneMetaWrite, outboxWait, outboxDump } from "../core/ipc.js";
 import { paneListedFor } from "../core/roster.js";
 import { pickRandomAgent, agentInUse, formatCollisionError } from "../core/agents.js";
 import { agentBinary, agentDefaultMode, agentModeArgs, agentReadyTimeout, agentBootstrapSleep } from "../core/contracts.js";
@@ -21,6 +21,14 @@ export { validateSlug };
 export function resolveMode(explicit: string | undefined, dflt: string | undefined): string { return explicit || dflt || "full"; }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** The three pre-tmux state writes every spawn path crosses: a fresh state dir, the identity file,
+ *  and a seeded status.json. Extracted so this wiring is unit-testable without spawning a pane. */
+export function prepareWorkerState(agent: string, model: string, topic: string): void {
+  stateInit(agent, model, topic);
+  identityWrite(agent, model, topic);
+  seedWorkerStatus(agent, model, topic);
+}
 
 export async function run(args: string[]): Promise<number> {
   if (args.length < 3) { log.error("usage: spawn <agent|random> <model> <topic> [--mode m] [--cwd abs] [--target-pane id] [initial-prompt]"); return 2; }
@@ -63,8 +71,7 @@ export async function run(args: string[]): Promise<number> {
 
   log.info(`preparing state for ${agent}-${model} on ${topic}`);
   try {
-    stateInit(agent, model, topic);
-    identityWrite(agent, model, topic);
+    prepareWorkerState(agent, model, topic);
 
     const launch = wrapLaunch([binary, ...modeArgs].join(" "));
     const startDir = cwd || repoRoot();
@@ -120,6 +127,8 @@ export async function run(args: string[]): Promise<number> {
       );
       captureSpawnFailure({ agent, model, topic, ...bootstrapFailureArgs(ev ?? null, fr.ok ? fr.path : undefined) });
       await killNow(pane);
+      // stamp the truth over the seed: a FAILED archive must not claim a dispatchable state for a worker that never reported (`error` is terminal, so no gate changes)
+      atomicWrite(statusPath(agent, model, topic), JSON.stringify({ state: "error", updated: isoUtc(), last_event: "bootstrap-failed" }) + "\n");
       const arch = stateArchive(agent, model, topic, "FAILED");
       log.error(`${agent} failed bootstrap (${reason}); state archived to: ${arch}`);
       return 1;
