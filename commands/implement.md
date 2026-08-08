@@ -165,8 +165,12 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
          (no detail given)") and **AskUserQuestion** ("Revise the plan / Override (proceed as
          planned) / Abort"):
          - *Revise* — **Edit** `$ART/design.md` and/or `$ART/plan.md` to address the objection, then
-           write a reply to a temp file (`From: hub`, then "Plan updated — re-read the plan and
-           continue.") and deliver it: `$CS send --from hub lead "$TOPIC" @<reply-file>`.
+           write a reply to a temp file (`From: hub`, then "Design amended — re-read
+           `<ART>/design.md` and continue.") and deliver it:
+           `$CS send --from hub lead "$TOPIC" @<reply-file>`. In the reply you write the ABSOLUTE
+           art-dir path — the `ART=` value you captured in Stage 0 — in place of `<ART>`, never the
+           literal `$ART` (the worker cannot expand your shell variables); and if you also edited
+           `$ART/plan.md`, name its absolute path in the reply too.
          - *Override* — write a reply (`From: hub`, then "Proceeding as planned: <your reason>.
            Resume implementation.") and deliver it the same way.
          - *Abort* — `$CS stop <TOPIC>` then `$CS implement archive <TOPIC>`; stop.

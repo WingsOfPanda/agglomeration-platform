@@ -625,6 +625,9 @@ Then stop and wait. I will send another instruction asking you to read your inbo
 `;
   atomicWrite(identityPath(i2, m, t), body);
 }
+function seedWorkerStatus(i2, m, t, now) {
+  atomicWrite(statusPath(i2, m, t), JSON.stringify({ state: "idle", updated: isoUtc(now), last_event: "spawn" }) + "\n");
+}
 function parseEvent(line) {
   try {
     return JSON.parse(line);
@@ -17106,12 +17109,18 @@ var init_forensics = __esm({
 // src/commands/spawn.ts
 var spawn_exports = {};
 __export(spawn_exports, {
+  prepareWorkerState: () => prepareWorkerState,
   resolveMode: () => resolveMode,
   run: () => run2,
   validateSlug: () => validateSlug
 });
 function resolveMode(explicit, dflt) {
   return explicit || dflt || "full";
+}
+function prepareWorkerState(agent, model, topic) {
+  stateInit(agent, model, topic);
+  identityWrite(agent, model, topic);
+  seedWorkerStatus(agent, model, topic);
 }
 async function run2(args) {
   if (args.length < 3) {
@@ -17204,8 +17213,7 @@ async function run2(args) {
   const readyTimeout = agentReadyTimeout(model);
   log.info(`preparing state for ${agent}-${model} on ${topic}`);
   try {
-    stateInit(agent, model, topic);
-    identityWrite(agent, model, topic);
+    prepareWorkerState(agent, model, topic);
     const launch = wrapLaunch([binary, ...modeArgs].join(" "));
     const startDir = cwd || repoRoot();
     let pane;
@@ -17261,6 +17269,7 @@ ${ob}
       );
       captureSpawnFailure({ agent, model, topic, ...bootstrapFailureArgs(ev ?? null, fr.ok ? fr.path : void 0) });
       await killNow(pane);
+      atomicWrite(statusPath(agent, model, topic), JSON.stringify({ state: "error", updated: isoUtc(), last_event: "bootstrap-failed" }) + "\n");
       const arch = stateArchive(agent, model, topic, "FAILED");
       log.error(`${agent} failed bootstrap (${reason}); state archived to: ${arch}`);
       return 1;
