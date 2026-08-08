@@ -92,6 +92,22 @@ export function identityWrite(i: string, m: string, t: string): void {
   atomicWrite(identityPath(i, m, t), body);
 }
 
+/** Seed a freshly spawned worker's status.json so no worker has to invent the file — the identity
+ *  template only tells it to *update* status.json, and a worker that took that literally hard-blocked
+ *  on the missing file. The state is `idle`, the waiting state the identity template mandates (and
+ *  what implement's reset-status writes), NOT `ready`: `ready` doubles as the frozen outbox event
+ *  name spawn hard-waits on, so a literal worker could read a pre-existing `state: ready` as "the
+ *  handshake is already recorded" and skip emitting it. `last_event: "spawn"` is deliberately not an
+ *  event name — it marks the file as platform-written, worker has not reported yet. `idle` is in
+ *  TERMINAL_WORKER_STATES exactly as `ready` is, so the seed reads identical to the absent file it
+ *  replaces for every busy/send gate reader — not for every reader: `finalizeArchived` now stamps
+ *  `archived` over a seeded worker's status too, which is intended. The overwrite is unconditional
+ *  as defence-in-depth only: on the real spawn path `stateInit` rmSyncs status.json one line before
+ *  the seed, so there is no stale file left to clear. */
+export function seedWorkerStatus(i: string, m: string, t: string, now?: Date): void {
+  atomicWrite(statusPath(i, m, t), JSON.stringify({ state: "idle", updated: isoUtc(now), last_event: "spawn" }) + "\n");
+}
+
 export interface OutboxEvent { event: string; ts?: string; [k: string]: unknown; }
 
 /** The terminal outbox events every relay-capable turn/round wait listens for (frozen names).
