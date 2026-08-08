@@ -13,6 +13,16 @@
 // shared stays in commands/*.ts: each phase's prompt composer (it sits with its parser by design),
 // its own preconditions, and each verb's arg-validation wording.
 //
+// A guard's chain verdict is a PRESUMPTION: it says "the worker may still be busy", inferred from
+// history alone, and one expired wait used to end a worker's entire run that way. It is overridable
+// — but ONLY by positive evidence that the worker is free (the 2026-08-08 lockout spec): the worker
+// reported an idle status ITSELF (the spawn seed does not count), a terminal event landed past the
+// failing phase's offset, that phase's artifact is settled, and its pane is alive. Silence is never
+// evidence, and the rc-3 busy-gate downstream is NOT the backstop for this — it re-reads the same
+// file through the same seam. Every layer records its own verdict and consumes other layers'
+// recorded verdicts; none infers another's. The probe wraps the two encodings' shared consumer;
+// neither encoding changes, and they stay unmerged.
+//
 // TWO guard encodings, deliberately not unified. `anyPriorUnsafe` (the ternary at openq /
 // crossverify / adversary) reports the first unsafe tag anywhere in its chain; `latestNonSkipped-
 // Unsafe` (the walk at rebuttal / gap / signoff) consults ONLY the latest non-skipped tag, so a
@@ -34,11 +44,15 @@ import { parseListFile, lastTag } from "./roster.js";
 import { exploreArtDir } from "./explore.js";
 import { workerDir } from "./paths.js";
 import { consultTimeout, agentTimeoutMultiplier, type ConsultKind } from "./contracts.js";
-import { outboxOffset, outboxPath, statusPath, workerBusyState, TERMINAL_EVENTS, type OutboxEvent } from "./ipc.js";
+import {
+  outboxOffset, outboxPath, outboxTerminalSince, paneMetaRead, statusPath, workerBusyState,
+  workerStatusReport, TERMINAL_EVENTS, type OutboxEvent,
+} from "./ipc.js";
+import { paneAlive } from "./tmux.js";
 import { recordHubFlag } from "./forensics.js";
 import {
-  ARTIFACT_ACCEPT_KEY, END_OF_ARTIFACT, artifactGraceS, awaitArtifact, clearArtifactStrikes, realSleep,
-  type WaitAccept,
+  ARTIFACT_ACCEPT_KEY, END_OF_ARTIFACT, artifactGraceS, awaitArtifact, clearArtifactStrikes,
+  hasArtifactSentinel, realSleep, type WaitAccept,
 } from "./artifact.js";
 import { liveOutboxWait } from "./waitLive.js";
 import {
@@ -173,18 +187,98 @@ export function latestNonSkippedUnsafe(art: string, agent: string, chain: PhaseK
   return null;
 }
 
+/** The seams the guard's evidence probes read through: the two ids they need (the agent is already
+ *  a guard arg), plus the probes themselves — the frozen `workerBusyState` and the real tmux
+ *  `paneAlive` by default. The send verbs pass their own `SendDeps` probes through, so the guard and
+ *  dispatchPrompt's busy-gate answer from ONE seam. Omit the whole object for the history-only
+ *  guard. */
+export interface GuardLive {
+  topic: string;
+  provider: string;
+  busyState?(agent: string, model: string, topic: string): string | null;
+  paneAlive?(pane: string): Promise<boolean>;
+}
+
+/** The evidence quadruple, in the order it is probed. All four must hold to override a skip; the
+ *  first that fails becomes the reason the warning names. Every leg answers a question the chain
+ *  tag CANNOT: the tag only says a wait expired. */
+async function overrideEvidence(
+  row: PhaseRow, art: string, agent: string, unsafe: string, live: GuardLive,
+): Promise<string | null> {
+  const { topic, provider } = live;
+  // (a) The worker SAID it is idle. An absent status, or the spawn seed (`last_event: "spawn"`,
+  // written by the platform before the worker ever reported), is silence — never evidence.
+  const report = workerStatusReport(agent, provider, topic);
+  if (report !== "reported") {
+    return report === "seed" ? "status.json is still the spawn seed (worker never reported)" : "no status.json from the worker";
+  }
+  const busy = (live.busyState ?? workerBusyState)(agent, provider, topic);
+  if (busy) return `live state=${busy}`;
+
+  // (b) The turn that produced the unsafe tag actually ENDED. A wait expiry proves only that the
+  // HUB stopped listening; the worker's own outbox is what says the turn is over.
+  const failKey = unsafe.split("=")[0] as PhaseKey;
+  const failPhase = EXPLORE_PHASE_BY_KEY[failKey];
+  const failState = readIf(join(art, `${failPhase}-${agent}.txt`));
+  const offset = parseLatestOffset(failState);
+  if (offset === null) return `no OFFSET recorded for ${failPhase} (cannot tell whether that turn ended)`;
+  if (!outboxTerminalSince(agent, provider, topic, offset)) {
+    return `no terminal outbox event since ${failPhase} OFFSET=${offset} (turn may still be running)`;
+  }
+
+  // (c) The failing phase's artifact is SETTLED — absent, empty, sentinel-terminated, or already
+  // given an AC= verdict by its wait. A present-but-growing file is the 0.5.8 late-done race: the
+  // worker is still writing, and a send would land mid-write.
+  const failRow = PHASES.find((p) => p.key === failKey);
+  if (failRow) {
+    const artifact = failRow.artifactFor(art, agent, provider, topic);
+    const text = readIfExistsOrNull(artifact);
+    const accept = lastTag(failState, ARTIFACT_ACCEPT_KEY);
+    const settled = text === null || text.trim() === "" || hasArtifactSentinel(text)
+      || accept === "sentinel" || accept === "quiescent";
+    if (!settled) return `${artifact} has no ${END_OF_ARTIFACT} and no ${ARTIFACT_ACCEPT_KEY}= verdict (still being written)`;
+  }
+
+  // (d) The pane is ALIVE. A dead worker is idle in the most literal sense and would pass every
+  // check above, but dispatching to it turns a clean `<KEY>=skipped` rc-0 walk into a send failure
+  // per remaining phase ("state file kept"), which is strictly worse for the operator.
+  const pane = paneMetaRead(agent, provider, topic);
+  if (!pane) return "no pane.json (cannot confirm the pane is alive)";
+  let alive = false;
+  try { alive = await (live.paneAlive ?? paneAlive)(pane); } catch { alive = false; }
+  if (!alive) return `pane ${pane} is gone`;
+  return null;
+}
+
 /** The guard's write+warn tail. On an unsafe chain the phase records `<key>=skipped` (so the paired
  *  wait short-circuits instead of hanging) and warns; the caller then returns 0 WITHOUT sending.
- *  Rows without a guard always return false. */
-export function guardSkipped(row: PhaseRow, art: string, agent: string, stateFile: string): boolean {
+ *  Rows without a guard always return false.
+ *
+ *  With `live`, the chain verdict is only a presumption, and POSITIVE EVIDENCE that the worker is
+ *  free overrides it: the worker reported an idle status itself, a terminal event landed past the
+ *  failing phase's offset, that phase's artifact is settled, and the pane is alive. All four, or the
+ *  skip stands — the override must never be inferred from silence (an absent or seeded status.json,
+ *  an expired wait, a file that merely looks finished). When it does fire, dispatch proceeds and a
+ *  `guard-override-idle` hub flag records it for /ap:review.
+ *
+ *  dispatchPrompt's rc-3 busy-gate re-runs afterwards, but it is NOT what makes this safe: it reads
+ *  the same file through the same seam a moment later. The safety is the evidence quadruple. */
+export async function guardSkipped(row: PhaseRow, art: string, agent: string, stateFile: string, live?: GuardLive): Promise<boolean> {
   const g = row.guard;
   if (!g) return false;
   const unsafe = g.kind === "any"
     ? anyPriorUnsafe(art, agent, g.chain)
     : latestNonSkippedUnsafe(art, agent, g.chain);
   if (!unsafe) return false;
+  const label = `${row.cmd} ${row.phase}-send`;
+  const why = live ? await overrideEvidence(row, art, agent, unsafe, live) : "no live probe";
+  if (live && why === null) {
+    log.warn(`${label}: ${agent} guard override — ${g.noun} ended ${unsafe} but the worker is verifiably free (reported idle, turn ended, artifact settled, pane alive); dispatching`);
+    recordHubFlag({ command: row.cmd, topic: live.topic, note: `guard-override-idle: ${agent} ${row.phase} chain=${unsafe}` });
+    return false;
+  }
   atomicWrite(stateFile, `${row.key}=skipped\n`);
-  log.warn(`${row.cmd} ${row.phase}-send: ${agent} skipped — ${g.noun} ended ${unsafe} (worker may still be busy; sending would clobber its inbox)`);
+  log.warn(`${label}: ${agent} skipped — ${g.noun} ended ${unsafe} (worker may still be busy; sending would clobber its inbox${live ? `; ${why}` : ""})`);
   return true;
 }
 
@@ -200,8 +294,13 @@ export interface SendDeps {
   offsetFor(agent: string, model: string, topic: string): number;
   send(args: string[]): Promise<number>;
   /** The worker's non-idle status.json state, or null when idle/absent/unreadable. Optional: the
-   *  live `workerBusyState` (the frozen regex read) is the default, injected only by tests. */
+   *  live `workerBusyState` (the frozen regex read) is the default, injected only by tests. Shared
+   *  seam: the send verbs hand it to `guardSkipped` too, so the guard's evidence probe and this
+   *  module's rc-3 busy-gate can never answer differently. */
   busyState?(agent: string, model: string, topic: string): string | null;
+  /** tmux pane-liveness probe for the guard's fourth evidence leg (dispatchPrompt itself never
+   *  probes panes). Defaults to the real `paneAlive`; injected only by tests. */
+  paneAlive?(pane: string): Promise<boolean>;
 }
 
 export interface WaitDeps {
@@ -215,6 +314,7 @@ export const liveSendDeps: SendDeps = {
   offsetFor: (i, m, t) => outboxOffset(outboxPath(i, m, t)),
   send: sendRun,
   busyState: workerBusyState,
+  paneAlive,
 };
 
 export const liveWaitDeps: WaitDeps = {
