@@ -17974,6 +17974,7 @@ function deriveSlug(text) {
 function parseQuickArgs(tokens) {
   let provider;
   let finish = true;
+  let stashWip = false;
   const text = [];
   for (let i2 = 0; i2 < tokens.length; i2++) {
     const t = tokens[i2];
@@ -17983,6 +17984,10 @@ function parseQuickArgs(tokens) {
     }
     if (t === "--no-finish") {
       finish = false;
+      continue;
+    }
+    if (t === "--stash-wip") {
+      stashWip = true;
       continue;
     }
     if (t === "--provider") {
@@ -17999,7 +18004,7 @@ function parseQuickArgs(tokens) {
     }
     text.push(t);
   }
-  return { topicText: text.join(" ").trim(), provider, finish };
+  return { topicText: text.join(" ").trim(), provider, finish, stashWip };
 }
 function detectTestCommand(root) {
   if ((0, import_node_fs24.existsSync)((0, import_node_path19.join)(root, "tests", "run.sh"))) return "bash tests/run.sh";
@@ -18073,6 +18078,7 @@ function renderResume(f) {
     `- Topic: ${f.topic}`,
     `- Branch: ${f.branch}`,
     "",
+    ...f.stashNote ? ["## Parked WIP", `- ${f.stashNote}`, ""] : [],
     "## Manual resume",
     `- Inspect ${f.artDir}/execute/ for the worker's partial work, then re-run /ap:quick.`,
     ""
@@ -18120,6 +18126,38 @@ function preSnapshot(r, command, topic) {
     return { branch, baseSha: preSha, state: "hook-blocked" };
   }
   return { branch, baseSha: r.run("git", ["rev-parse", "HEAD"]).stdout.trim(), state: "wip-committed" };
+}
+function stashPush(r, message) {
+  const before = stashShaFor(r, message);
+  const rc = r.run("git", ["stash", "push", "--include-untracked", "-m", message]).code;
+  const ref = findStashRef(r.run("git", ["stash", "list", "--format=%gd%x09%gs"]).stdout, message);
+  if (!ref) return { outcome: rc === 0 ? "none" : "failed", sha: "" };
+  const sha = r.run("git", ["rev-parse", ref]).stdout.trim();
+  if (sha && sha === before) return { outcome: rc === 0 ? "none" : "failed", sha: "" };
+  if (rc !== 0 || !sha) return { outcome: "failed-with-entry", sha };
+  const stillDirty = classifyDirty(r.run("git", ["status", "--porcelain", "--untracked-files=all"]).stdout);
+  return { outcome: stillDirty ? "partial" : "parked", sha };
+}
+function findStashRef(list, message) {
+  for (const line of list.split("\n")) {
+    const tab = line.indexOf("	");
+    if (tab < 0) continue;
+    const subject = line.slice(tab + 1).trim();
+    if (subject === message || subject.endsWith(`: ${message}`)) return line.slice(0, tab).trim();
+  }
+  return "";
+}
+function stashShaFor(r, message) {
+  const ref = findStashRef(r.run("git", ["stash", "list", "--format=%gd%x09%gs"]).stdout, message);
+  return ref ? r.run("git", ["rev-parse", ref]).stdout.trim() : "";
+}
+function stashPopByMessage(r, message, expectSha) {
+  const list = r.run("git", ["stash", "list", "--format=%gd%x09%gs"]);
+  if (list.code !== 0) return "list-failed";
+  const ref = findStashRef(list.stdout, message);
+  if (!ref) return "not-found";
+  if (!expectSha || r.run("git", ["rev-parse", ref]).stdout.trim() !== expectSha) return "identity-mismatch";
+  return r.run("git", ["stash", "pop", ref]).code === 0 ? "popped" : "conflict-kept";
 }
 function createOrResumeBranch(r, name) {
   if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${name}`]).code === 0) {
@@ -18759,6 +18797,7 @@ __export(quick_exports, {
   finishWith: () => finishWith,
   forensicsRun: () => forensicsRun,
   initWith: () => initWith,
+  parseBranchArgs: () => parseBranchArgs,
   run: () => run9,
   turnSendWith: () => turnSendWith,
   turnWaitWith: () => turnWaitWith
@@ -18800,7 +18839,7 @@ async function initRun(tokens) {
   return initWith(tokens, liveInitDeps);
 }
 async function initWith(tokens, d) {
-  const { topicText, provider: provArg, finish } = parseQuickArgs(tokens);
+  const { topicText, provider: provArg, finish, stashWip } = parseQuickArgs(tokens);
   if (!topicText) {
     log.error("quick init: topic text is empty");
     return 1;
@@ -18841,26 +18880,66 @@ async function initWith(tokens, d) {
 `);
   atomicWrite((0, import_node_path21.join)(exec, "provider.txt"), provider + "\n");
   atomicWrite((0, import_node_path21.join)(exec, "finish.txt"), (finish ? "yes" : "no") + "\n");
+  atomicWrite((0, import_node_path21.join)(exec, "stash-wip-requested.txt"), (stashWip ? "yes" : "no") + "\n");
   const target = repoRoot();
-  log.ok(`quick init: topic=${slug} agent=${agent} provider=${provider} finish=${finish ? "yes" : "no"}`);
+  log.ok(`quick init: topic=${slug} agent=${agent} provider=${provider} finish=${finish ? "yes" : "no"} stash-wip=${stashWip ? "yes" : "no"}`);
   process.stdout.write(`SLUG=${slug}
 AGENT=${agent}
 PROVIDER=${provider}
 FINISH=${finish ? "yes" : "no"}
 TARGET=${target}
+STASH_WIP=${stashWip ? "yes" : "no"}
 `);
   return 0;
 }
+function parseBranchArgs(rest) {
+  return { topic: rest.find((t) => !t.startsWith("--")) ?? "", stashWip: rest.includes("--stash-wip") };
+}
 async function branchRun(rest) {
-  const topic = rest[0];
+  const { topic, stashWip } = parseBranchArgs(rest);
   if (!topic) {
-    log.error("usage: quick branch <topic>");
+    log.error("usage: quick branch <topic> [--stash-wip]");
     return 2;
   }
   const target = repoRoot();
-  return branchWith(topic, target, runnerAt(target));
+  return branchWith(topic, target, runnerAt(target), { stashWip });
 }
-async function branchWith(topic, target, r) {
+function stashWipMessage(topic) {
+  return `ap-quick-${topic}-wip`;
+}
+async function branchWith(topic, target, r, opts = {}) {
+  const exec = quickExecDir(topic);
+  (0, import_node_fs27.mkdirSync)(exec, { recursive: true });
+  if (opts.stashWip && classifyDirty(r.run("git", ["status", "--porcelain", "--untracked-files=all"]).stdout)) {
+    const message = stashWipMessage(topic);
+    const marker = (0, import_node_path21.join)(exec, "stash-wip.txt");
+    const st = stashPush(r, message);
+    switch (st.outcome) {
+      case "parked":
+        log.ok(`quick branch: stashed pre-existing WIP as '${message}' (restored at finish)`);
+        atomicWrite(marker, `${st.sha}	${message}
+`);
+        break;
+      case "partial":
+        log.warn(`quick branch: --stash-wip parked '${message}' but the tree is STILL dirty \u2014 some paths could not be stashed (e.g. a nested repo or submodule content)`);
+        log.warn(`  those residual paths stay in the tree for the snapshot path below, exactly as they would without the flag`);
+        atomicWrite(marker, `${st.sha}	${message}
+`);
+        break;
+      case "failed-with-entry":
+        log.warn(`quick branch: --stash-wip reported failure but LEFT a stash entry '${message}' \u2014 finish will restore it`);
+        log.warn(`  the tree may still hold the same changes; if it does, the WIP snapshot commit below commits them too`);
+        atomicWrite(marker, `${st.sha}	${message}
+`);
+        break;
+      case "none":
+        break;
+      // git stashed nothing (e.g. only submodule content changed) — no park to record
+      case "failed":
+        log.warn(`quick branch: --stash-wip could not stash the tree; falling back to a WIP snapshot commit`);
+        break;
+    }
+  }
   const snap = preSnapshot(r, "quick", topic);
   if (snap.state === "not-git") {
     log.error(`quick branch: ${target} is not a git repository`);
@@ -18868,7 +18947,6 @@ async function branchWith(topic, target, r) {
   }
   const branch = `feat/quick-${topic}`;
   const onBranch = createOrResumeBranch(r, branch);
-  const exec = quickExecDir(topic);
   atomicWrite((0, import_node_path21.join)(exec, "target_cwd.txt"), target + "\n");
   atomicWrite((0, import_node_path21.join)(exec, "start-branch.txt"), snap.branch + "\n");
   atomicWrite((0, import_node_path21.join)(exec, "branch-base.sha"), snap.baseSha + "\n");
@@ -18989,6 +19067,46 @@ async function finishRun(rest) {
   const target = readField((0, import_node_path21.join)(quickExecDir(topic), "target_cwd.txt")) || repoRoot();
   return finishWith(topic, runnerAt(target), haveCmd("gh"));
 }
+function restoreStashWip(topic, exec, r, startBranch) {
+  const marker = (0, import_node_path21.join)(exec, "stash-wip.txt");
+  if (!(0, import_node_fs27.existsSync)(marker)) return "";
+  const [sha, name] = readField(marker).split("	");
+  const message = name || stashWipMessage(topic);
+  const kept = () => {
+    const target = readField((0, import_node_path21.join)(exec, "target_cwd.txt")) || "<target>";
+    runFlag("quick", topic, `stash-wip-kept: WIP still stashed as '${message}' in ${target}; restore: git checkout ${startBranch} then git stash pop`);
+    return "stash-wip-kept";
+  };
+  const head = r.run("git", ["symbolic-ref", "--short", "HEAD"]);
+  const on6 = head.code === 0 ? head.stdout.trim() : "";
+  if (on6 !== startBranch) {
+    log.warn(`quick finish: HEAD is on '${on6 || "(detached)"}', not the start branch '${startBranch}' \u2014 NOT popping`);
+    log.warn(`  the WIP stays stashed as '${message}': git checkout ${startBranch}  then  git stash pop <ref>`);
+    return kept();
+  }
+  switch (stashPopByMessage(r, message, sha ?? "")) {
+    case "popped":
+      (0, import_node_fs27.rmSync)(marker, { force: true });
+      log.ok(`quick finish: restored stashed WIP '${message}'`);
+      return "";
+    case "not-found":
+      (0, import_node_fs27.rmSync)(marker, { force: true });
+      log.warn(`quick finish: no stash entry named '${message}' (popped already?); nothing to restore`);
+      return "";
+    case "list-failed":
+      log.warn(`quick finish: could not read the stash list \u2014 assuming '${message}' is still parked, NOT popping`);
+      return kept();
+    case "identity-mismatch":
+      log.warn(`quick finish: stash identity mismatch \u2014 not popping; the entry named '${message}' is not the one this run parked (expected sha ${sha || "(unrecorded)"})`);
+      return kept();
+    default:
+      log.warn(`quick finish: stashed WIP '${message}' did NOT restore \u2014 it is KEPT in the stash`);
+      log.warn(`  recover it by hand in the target repo: git stash list  then  git stash pop <ref>`);
+      log.warn(`  the park included untracked files, so a conflicted pop may ALREADY have extracted some of them:`);
+      log.warn(`  if the pop says "<file> already exists", remove those extracted files first (or git checkout <ref> -- .), then pop again`);
+      return kept();
+  }
+}
 async function finishWith(topic, r, hasGh) {
   const exec = quickExecDir(topic);
   const branch = readField((0, import_node_path21.join)(exec, "branch.txt"));
@@ -18996,8 +19114,9 @@ async function finishWith(topic, r, hasGh) {
   const doFinish = readField((0, import_node_path21.join)(exec, "finish.txt")) === "yes";
   if (!doFinish) {
     r.run("git", ["checkout", "-q", startBranch]);
+    const kept2 = restoreStashWip(topic, exec, r, startBranch);
     atomicWrite((0, import_node_path21.join)(exec, "finish-result.txt"), `none	branch-only (kept ${branch})
-`);
+${kept2 ? kept2 + "\n" : ""}`);
     log.ok(`quick finish: branch-only \u2014 kept ${branch}, restored ${startBranch}`);
     return 0;
   }
@@ -19014,8 +19133,9 @@ Verify: ${verify}
 
 (Automated quick branch \u2014 review and merge into ${startBranch}.)`
   });
+  const kept = restoreStashWip(topic, exec, r, startBranch);
   atomicWrite((0, import_node_path21.join)(exec, "finish-result.txt"), `${res.action}	${res.outcome}
-`);
+${kept ? kept + "\n" : ""}`);
   log.ok(`quick finish: ${res.action} \u2192 ${res.outcome}`);
   return 0;
 }
@@ -19061,12 +19181,16 @@ duration=${duration}
   };
   atomicWrite((0, import_node_path21.join)(art, "SUMMARY.md"), renderSummary(facts));
   if (aborted2) {
+    const marker = (0, import_node_path21.join)(exec, "stash-wip.txt");
+    const stashName = (0, import_node_fs27.existsSync)(marker) ? readField(marker).split("	")[1] || stashWipMessage(topic) : "";
+    const startBranch = readField((0, import_node_path21.join)(exec, "start-branch.txt")) || "<start-branch>";
     atomicWrite((0, import_node_path21.join)(art, "RESUME.md"), renderResume({
       topic,
       branch: facts.branch,
       artDir: art,
       phase: facts.abortedPhase ?? "unknown",
-      gate: facts.abortedGate ?? "unknown"
+      gate: facts.abortedGate ?? "unknown",
+      stashNote: stashName ? `Pre-existing WIP is parked in stash '${stashName}' \u2014 restore with: git -C ${facts.targetCwd} checkout ${startBranch}  then  git stash pop <ref>` : void 0
     }));
   }
   log.ok(`quick summary: wrote ${(0, import_node_path21.join)(art, "SUMMARY.md")}`);

@@ -1,6 +1,6 @@
 ---
 description: Light pipeline — one worker implements a clear single-repo change unattended on its own branch; the conductor briefs, verifies, and finishes by default. No research, no design doc, no gates.
-argument-hint: <topic-text> [--provider codex|claude|agy|opencode] [--no-finish]
+argument-hint: <topic-text> [--provider codex|claude|agy|opencode] [--no-finish] [--stash-wip]
 allowed-tools: Bash, Write, Read, Edit
 ---
 
@@ -42,6 +42,7 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
    PROVIDER=<provider>
    FINISH=<yes|no>
    TARGET=<abs-repo-root>
+   STASH_WIP=<yes|no>
    ```
    Non-zero exit aborts: rc 1 = bad/empty topic, rc 2 = topic already in flight, rc 3 = provider
    not installed. No SUMMARY is written (state dir was never created).
@@ -65,7 +66,13 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
 ## Stage 1 — Build
 
 1. Branch the target: `$CS quick branch <SLUG>` (snapshots HEAD, commits any WIP on the current
-   branch, creates/resumes `feat/quick-<SLUG>`). On **rc 1** (target is not a git repo) → abort:
+   branch, creates/resumes `feat/quick-<SLUG>`). **When `STASH_WIP=yes`** (from init — do not
+   re-read `$ARGUMENTS`), run `$CS quick branch <SLUG> --stash-wip` instead: a dirty tree is then
+   parked in a git stash named `ap-quick-<SLUG>-wip` *before* the snapshot, so the branch forks from
+   clean HEAD and the PR base carries none of your unrelated edits; `quick finish` pops the stash
+   back after restoring the start branch. A tree git will not fully stash only warns and falls back
+   to today's WIP snapshot commit — the run is never blocked, and nothing is dropped.
+   On **rc 1** (target is not a git repo) → abort:
    `$CS quick summary <SLUG> --aborted build not-a-git-repo "target is not a git repository"`,
    print the SUMMARY, and stop. No worker was spawned, so do **not** run `stop`.
 2. Spawn the worker: `$CS spawn <AGENT> <PROVIDER> <SLUG> --cwd <TARGET>`. On **rc 1**
@@ -98,6 +105,12 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
      `$CS quick summary <SLUG> --aborted build worker-turn-failed "worker turn failed twice (TS=<ts>)"`,
      then `$CS stop <AGENT> <SLUG>`, print the SUMMARY, and stop.
 
+**Any abort from this stage on, with `STASH_WIP=yes`:** `finish` never ran, so say so explicitly in
+your closing report — the pre-existing WIP is still parked in the stash `ap-quick-<SLUG>-wip`, and
+HEAD is probably still on `feat/quick-<SLUG>`, not the start branch. Give the branch-aware recovery:
+`git -C <TARGET> checkout <start-branch>` (the branch is in `execute/start-branch.txt`), **then**
+`git stash pop <ref>`. Popping without that checkout restores the WIP onto the quick branch.
+
 ## Stage 2 — Verify + finish
 
 1. Detect the test command: `TEST_CMD=$($CS quick detect-test <TARGET>)`.
@@ -115,7 +128,17 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
    printf '%s\n' "$VERIFY" > <SLUG state>/_quick/execute/verify-result.txt
    ```
 5. Finish (always restores the start-branch checkout; pushes/opens a PR only when `FINISH=yes`):
-   `$CS quick finish <SLUG>`.
+   `$CS quick finish <SLUG>`. With `--stash-wip` it also pops the parked stash back — but only after
+   proving it is safe to: HEAD must actually be the start branch, and the entry's sha must match the
+   one recorded at park time. If `execute/finish-result.txt` holds a second line
+   **`stash-wip-kept`**, the pop did NOT happen and the WIP is still in the stash (nothing was lost).
+   The stderr warning names which case it was — HEAD left on another branch, a sha/identity
+   mismatch, an unreadable stash list, or a pop conflict. Say so in your closing report and pass on
+   the branch-aware recovery: `git -C <TARGET> checkout <start-branch>` (from
+   `execute/start-branch.txt`), then `git stash list` and `git stash pop <ref>`. On a conflicted pop,
+   add: the park included untracked files, so some may already be extracted — if the pop says
+   `<file> already exists`, remove those files first (or `git checkout <ref> -- .`), then pop again.
+   The same note is recorded as a hub flag, so `/ap:review` surfaces it after teardown.
 
 ## Stage 3 — Teardown + SUMMARY
 
@@ -147,5 +170,10 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
   start branch restored. Use `--no-finish` to opt out. (This parity is intentional — do not
   re-flag it.)
 - On abort, `SUMMARY.md` + `RESUME.md` point at the partial state under `_quick/`; re-run
-  `/ap:quick` with revised framing to retry.
+  `/ap:quick` with revised framing to retry. A stash outlives any abort or crash by construction, so
+  if the run died after a `--stash-wip` branch, the WIP is still there: `git stash list` shows it
+  under `ap-quick-<SLUG>-wip`. Recover it **branch-first** —
+  `git -C <TARGET> checkout <start-branch>` (from `execute/start-branch.txt`), **then**
+  `git stash pop <ref>` — because a crashed run leaves HEAD on `feat/quick-<SLUG>`, and a pop there
+  restores the WIP onto the wrong branch. `RESUME.md` carries this as its `## Parked WIP` line.
 - For research, a reviewable design doc, or multiple workers → `/ap:design` + `/ap:implement`.

@@ -2,7 +2,7 @@
 import { describe, it, expect } from "vitest";
 import { classifyDirty, finishAutoAction } from "../src/core/gitwork.js";
 import { preSnapshot, createOrResumeBranch, shortstat } from "../src/core/gitwork.js";
-import { finishBranch } from "../src/core/gitwork.js";
+import { finishBranch, stashPush, stashPopByMessage, findStashRef } from "../src/core/gitwork.js";
 import type { Runner, RunResult } from "../src/core/gitwork.js";
 
 /** Fake runner: `replies` maps a "cmd arg arg" key to a scripted RunResult; default {code:0,stdout:""}. */
@@ -77,6 +77,131 @@ describe("preSnapshot", () => {
   it("not-git: rev-parse fails", () => {
     const { r } = fakeRunner({ "git rev-parse --git-dir": { code: 128, stdout: "" } });
     expect(preSnapshot(r, "quick", "auth")).toEqual({ branch: "", baseSha: "", state: "not-git" });
+  });
+});
+
+describe("stashPush / findStashRef / stashPopByMessage", () => {
+  const LIST = "git stash list --format=%gd%x09%gs";
+  const ENTRY = "stash@{0}\tOn main: ap-quick-auth-wip\n";
+  const STATUS = "git status --porcelain --untracked-files=all";
+
+  /** The stash as seen at one point in time: what `stash list` prints, and what each ref rev-parses
+   *  to (absent → rc 128). `fakeStash` flips from `pre` to `post` when `git stash push` runs, which
+   *  is what makes a push that CREATED nothing distinguishable from one that created an entry. */
+  type StashState = { list: string; shas: Record<string, string> };
+  const EMPTY: StashState = { list: "", shas: {} };
+  const ours = (sha: string): StashState => ({ list: ENTRY, shas: { "stash@{0}": sha } });
+
+  function fakeStash(o: { pre: StashState; post: StashState; pushRc?: number; dirtyAfter?: string }) {
+    const calls: string[][] = [];
+    let pushed = false;
+    const now = (): StashState => (pushed ? o.post : o.pre);
+    const r: Runner = { run(cmd, args) {
+      calls.push([cmd, ...args]);
+      const k = [cmd, ...args].join(" ");
+      if (k === LIST) return { code: 0, stdout: now().list };
+      if (args[0] === "stash" && args[1] === "push") { pushed = true; return { code: o.pushRc ?? 0, stdout: "" }; }
+      if (args[0] === "rev-parse") {
+        const s = now().shas[args[1]];
+        return s ? { code: 0, stdout: s + "\n" } : { code: 128, stdout: "" };
+      }
+      if (k === STATUS) return { code: 0, stdout: o.dirtyAfter ?? "" };
+      return { code: 0, stdout: "" };
+    } };
+    return { r, calls };
+  }
+
+  it("stashPush parked: a NEW entry exists and the tree came back clean", () => {
+    const { r, calls } = fakeStash({ pre: EMPTY, post: ours("d00a77d") });
+    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "parked", sha: "d00a77d" });
+    expect(calls[0]).toEqual(["git", "stash", "list", "--format=%gd%x09%gs"]);   // pre-push identity
+    expect(calls[1]).toEqual(["git", "stash", "push", "--include-untracked", "-m", "ap-quick-auth-wip"]);
+    // Identity comes from the located entry, never from refs/stash (which is just whatever is on top).
+    expect(calls.some((c) => c.join(" ") === "git rev-parse refs/stash")).toBe(false);
+  });
+  it("stashPush partial: rc 0 + a new entry, but the tree is STILL dirty (git could not stash some paths)", () => {
+    const { r } = fakeStash({ pre: EMPTY, post: ours("d00a77d"), dirtyAfter: "?? nested-repo/\n" });
+    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "partial", sha: "d00a77d" });
+  });
+  it("stashPush none: rc 0 but nothing was stashed ('No local changes to save')", () => {
+    const { r, calls } = fakeStash({ pre: EMPTY, post: { list: "stash@{0}\tOn main: someone else\n", shas: {} } });
+    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "none", sha: "" });
+    expect(calls.some((c) => c[1] === "rev-parse")).toBe(false);
+  });
+  it("stashPush none: a LEFTOVER same-named entry from an aborted run is never adopted as ours", () => {
+    // The side door: an abandoned ap-quick-<topic>-wip entry plus a push that creates nothing (only
+    // submodule content dirty). The scan finds the old entry; the unchanged sha is what exposes it.
+    const { r } = fakeStash({ pre: ours("olderrun"), post: ours("olderrun"), dirtyAfter: " M sub\n" });
+    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "none", sha: "" });
+    const failed = fakeStash({ pre: ours("olderrun"), post: ours("olderrun"), pushRc: 1 });
+    expect(stashPush(failed.r, "ap-quick-auth-wip")).toEqual({ outcome: "failed", sha: "" });
+  });
+  it("stashPush parked: a new entry created ALONGSIDE a same-named leftover records the NEW sha", () => {
+    const { r } = fakeStash({
+      pre: ours("olderrun"),
+      post: { list: ENTRY + "stash@{1}\tOn main: ap-quick-auth-wip\n", shas: { "stash@{0}": "newone", "stash@{1}": "olderrun" } },
+    });
+    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "parked", sha: "newone" });
+  });
+  it("stashPush failed-with-entry: rc != 0 but git had already created the entry", () => {
+    const { r } = fakeStash({ pre: EMPTY, post: ours("d00a77d"), pushRc: 1 });
+    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "failed-with-entry", sha: "d00a77d" });
+  });
+  it("stashPush failed-with-entry: rc 0 + entry whose sha will not resolve → empty sha, never 'parked'", () => {
+    const { r } = fakeStash({ pre: EMPTY, post: { list: ENTRY, shas: {} } });
+    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "failed-with-entry", sha: "" });
+  });
+  it("stashPush failed: rc != 0 and no entry — nothing was stashed", () => {
+    const { r, calls } = fakeStash({ pre: EMPTY, post: EMPTY, pushRc: 1 });
+    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "failed", sha: "" });
+    expect(calls.some((c) => c[1] === "rev-parse")).toBe(false);
+  });
+  it("findStashRef: matches the 'On <branch>: <msg>' subject git actually records, at any index", () => {
+    const list = "stash@{0}\tOn feat/x: someone elses stash\nstash@{2}\tOn main: ap-quick-auth-wip\n";
+    expect(findStashRef(list, "ap-quick-auth-wip")).toBe("stash@{2}");
+    expect(findStashRef("stash@{0}\tap-quick-auth-wip\n", "ap-quick-auth-wip")).toBe("stash@{0}"); // bare subject
+    expect(findStashRef(list, "ap-quick-other-wip")).toBe("");
+    expect(findStashRef("", "ap-quick-auth-wip")).toBe("");
+  });
+  it("stashPopByMessage: pops the located ref when its sha matches → popped", () => {
+    const { r, calls } = fakeRunner({
+      [LIST]: { code: 0, stdout: "stash@{1}\tOn main: ap-quick-auth-wip\n" },
+      "git rev-parse stash@{1}": { code: 0, stdout: "d00a77d\n" },
+    });
+    expect(stashPopByMessage(r, "ap-quick-auth-wip", "d00a77d")).toBe("popped");
+    expect(calls).toContainEqual(["git", "stash", "pop", "stash@{1}"]);
+  });
+  it("stashPopByMessage: a failing pop → conflict-kept (the entry stays)", () => {
+    const { r, calls } = fakeRunner({
+      [LIST]: { code: 0, stdout: ENTRY },
+      "git rev-parse stash@{0}": { code: 0, stdout: "d00a77d\n" },
+      "git stash pop stash@{0}": { code: 1, stdout: "" },
+    });
+    expect(stashPopByMessage(r, "ap-quick-auth-wip", "d00a77d")).toBe("conflict-kept");
+    expect(calls.some((c) => c[1] === "stash" && c[2] === "drop")).toBe(false);
+  });
+  it("stashPopByMessage: no matching entry → not-found, no pop attempted", () => {
+    const { r, calls } = fakeRunner({ [LIST]: { code: 0, stdout: "stash@{0}\tOn main: unrelated\n" } });
+    expect(stashPopByMessage(r, "ap-quick-auth-wip", "d00a77d")).toBe("not-found");
+    expect(calls.some((c) => c[2] === "pop")).toBe(false);
+  });
+  it("stashPopByMessage: a same-named FOREIGN entry (sha differs) → identity-mismatch, no pop", () => {
+    const { r, calls } = fakeRunner({
+      [LIST]: { code: 0, stdout: ENTRY },
+      "git rev-parse stash@{0}": { code: 0, stdout: "somebodyelse\n" },
+    });
+    expect(stashPopByMessage(r, "ap-quick-auth-wip", "d00a77d")).toBe("identity-mismatch");
+    expect(calls.some((c) => c[2] === "pop")).toBe(false);
+  });
+  it("stashPopByMessage: an unrecorded (empty) expected sha → identity-mismatch, no pop", () => {
+    const { r, calls } = fakeRunner({ [LIST]: { code: 0, stdout: ENTRY } });
+    expect(stashPopByMessage(r, "ap-quick-auth-wip", "")).toBe("identity-mismatch");
+    expect(calls.some((c) => c[2] === "pop")).toBe(false);
+  });
+  it("stashPopByMessage: a FAILING stash list is list-failed, never a verified absence", () => {
+    const { r, calls } = fakeRunner({ [LIST]: { code: 128, stdout: "" } });
+    expect(stashPopByMessage(r, "ap-quick-auth-wip", "d00a77d")).toBe("list-failed");
+    expect(calls.some((c) => c[2] === "pop")).toBe(false);
   });
 });
 

@@ -28,20 +28,27 @@ describe("deriveSlug", () => {
 describe("parseQuickArgs", () => {
   it("pulls --provider (space + = forms) out of the topic text", () => {
     expect(parseQuickArgs(["--provider=opencode", "tidy", "imports"]))
-      .toEqual({ topicText: "tidy imports", provider: "opencode", finish: true });
+      .toEqual({ topicText: "tidy imports", provider: "opencode", finish: true, stashWip: false });
     expect(parseQuickArgs(["fix", "--provider", "--no-finish", "bug"]))
-      .toEqual({ topicText: "fix bug", provider: undefined, finish: false });
+      .toEqual({ topicText: "fix bug", provider: undefined, finish: false, stashWip: false });
   });
 
   it("finish defaults to true; --no-finish opts out; legacy --finish still parses", () => {
     expect(parseQuickArgs(["add", "oauth", "login"]))
-      .toEqual({ topicText: "add oauth login", provider: undefined, finish: true });
+      .toEqual({ topicText: "add oauth login", provider: undefined, finish: true, stashWip: false });
     expect(parseQuickArgs(["fix", "bug", "--no-finish"]))
-      .toEqual({ topicText: "fix bug", provider: undefined, finish: false });
+      .toEqual({ topicText: "fix bug", provider: undefined, finish: false, stashWip: false });
     expect(parseQuickArgs(["tidy", "imports", "--finish"]))
-      .toEqual({ topicText: "tidy imports", provider: undefined, finish: true });
+      .toEqual({ topicText: "tidy imports", provider: undefined, finish: true, stashWip: false });
     expect(parseQuickArgs(["fix", "bug", "--provider", "agy"]))
-      .toEqual({ topicText: "fix bug", provider: "agy", finish: true });
+      .toEqual({ topicText: "fix bug", provider: "agy", finish: true, stashWip: false });
+  });
+
+  it("--stash-wip is reported as a flag, never part of the topic text", () => {
+    expect(parseQuickArgs(["fix", "bug", "--stash-wip"]))
+      .toEqual({ topicText: "fix bug", provider: undefined, finish: true, stashWip: true });
+    expect(parseQuickArgs(["--stash-wip", "fix", "bug", "--no-finish"]))
+      .toEqual({ topicText: "fix bug", provider: undefined, finish: false, stashWip: true });
   });
 });
 
@@ -119,5 +126,13 @@ describe("renderResume", () => {
     expect(md).toContain("# RESUME — auth");
     expect(md).toContain("State dir: /s/_quick");
     expect(md).toContain("re-run /ap:quick");
+    expect(md).not.toContain("Parked WIP");
+  });
+  it("a --stash-wip park adds a Parked WIP pointer (an abort never restores it)", () => {
+    const md = renderResume({ topic: "auth", branch: "feat/quick-auth", artDir: "/s/_quick", phase: "build", gate: "worker-turn-failed",
+      stashNote: "Pre-existing WIP is parked in stash 'ap-quick-auth-wip' — restore with: git -C /proj checkout main  then  git stash pop <ref>" });
+    expect(md).toContain("## Parked WIP");
+    expect(md).toContain("stash 'ap-quick-auth-wip'");
+    expect(md).toContain("checkout main");
   });
 });
