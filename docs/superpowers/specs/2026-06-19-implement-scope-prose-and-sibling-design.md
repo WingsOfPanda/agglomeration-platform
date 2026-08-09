@@ -16,7 +16,7 @@ CLAUDE.md phase guard. Direct follow-on to
 extracts the in-scope path set from the design doc's `## Components` section via
 `extractComponentsPaths`, then flags any changed file not matching it via
 `matchDiffAgainstComponents`. The 2026-06-10 extension taught the extractor to read **table rows and
-bullet rows**. Three real-world `design→implement` runs (aeris-code, 2026-06-16…19) still hit
+bullet rows**. Three real-world `design→implement` runs (example-repo, 2026-06-16…19) still hit
 **100% false-OOS** — the Hub flagged it each time as "every design→implement will trip this":
 
 - `2026-06-17/08-39-52-implement` — **12** legitimate, design-named files flagged OOS; the Components
@@ -46,8 +46,7 @@ These decompose into three independent matching gaps, none covered by the bullet
    the intended work area.
 
 In every case the changes were correct and design-named; the guard produced a wall of noise the Hub
-had to hand-dismiss, eroding the signal it exists to provide. See memory
-`implement-scope-check-false-oos-prose-components`.
+had to hand-dismiss, eroding the signal it exists to provide. See project memory (private).
 
 ## Goals
 

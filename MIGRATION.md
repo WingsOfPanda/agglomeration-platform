@@ -13,7 +13,7 @@
 > Claude session) should be able to drive the entire rewrite from this document.
 
 > **Source of truth.** The reference implementation lives at
-> `/home/liupan/CC/clone-wars`. When this guide says "see X", grep that tree by
+> `<workspace>/clone-wars`. When this guide says "see X", grep that tree by
 > symbol (line numbers drift). The Bash code is the behavioral spec; preserve
 > *behavior*, not *implementation*.
 
@@ -33,7 +33,7 @@
 - **What stays the same:** the thesis ("the trimmed primitive, smaller than OMC"),
   the non-goals (closed provider set, no worktrees, no MCP, no role routing), and
   the IPC contract.
-- **License:** MIT (already in `/home/liupan/CC/consort/LICENSE`). Open source.
+- **License:** MIT (already in `<workspace>/consort/LICENSE`). Open source.
 - **Distribution:** committed `dist/` bundle so it installs with zero build step;
   `commands/*.md` dispatch to `node ${CLAUDE_PLUGIN_ROOT}/dist/consort.cjs <sub>`.
 
@@ -92,7 +92,7 @@ Conductor (Claude Code session — runs /consort:* commands)
 `{ready}` → write inbox + nudge → tail outbox for `{done}`/`{error}` → teardown
 (kill pane, archive state).
 
-Read `/home/liupan/CC/clone-wars/docs/DESIGN.md` in full once — it is the
+Read `<workspace>/clone-wars/docs/DESIGN.md` in full once — it is the
 architecture bible and the source for the failure-mode table.
 
 ---
@@ -668,7 +668,7 @@ master-yoda`, update the identity template's references in the same commit.
 ## 15. First commands to run (Phase 0 kickoff)
 
 ```bash
-cd /home/liupan/CC/consort
+cd <workspace>/consort
 npm init -y
 npm i -D typescript esbuild vitest @types/node
 npm i execa yaml
@@ -676,9 +676,9 @@ npx tsc --init   # then set: target ES2022, module NodeNext, strict true, outDir
 mkdir -p src/core src/commands commands config/prompt-templates hooks tests dist .claude-plugin
 
 # seed config from the reference tree (then rename tokens inside):
-cp /home/liupan/CC/clone-wars/config/contracts.yaml          config/
-cp /home/liupan/CC/clone-wars/config/commanders.yaml         config/
-cp /home/liupan/CC/clone-wars/config/prompt-templates/identity.md config/prompt-templates/
+cp <workspace>/clone-wars/config/contracts.yaml          config/
+cp <workspace>/clone-wars/config/commanders.yaml         config/
+cp <workspace>/clone-wars/config/prompt-templates/identity.md config/prompt-templates/
 
 # build script in package.json:
 #   "build": "esbuild src/consort.ts --bundle --platform=node --target=node18 --outfile=dist/consort.cjs"
@@ -691,6 +691,6 @@ Then implement Phase 1 (`src/core/*`) with the patterns in §9, and Phase 2's
 
 ---
 
-*Reference implementation: `/home/liupan/CC/clone-wars` (grep by symbol; line
+*Reference implementation: `<workspace>/clone-wars` (grep by symbol; line
 numbers drift). Architecture bible: `clone-wars/docs/DESIGN.md`. This guide is the
 contract; the Bash code is the behavioral spec.*

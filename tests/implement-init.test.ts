@@ -115,7 +115,7 @@ describe("implement init", () => {
 
   it("over-length --topic → rc 2 and scaffolds nothing", async () => {
     const p = docFile("2026-05-30-add-oauth-design.md", PASSING_DOC);
-    const badTopic = "iris-code-simplify-sweep-2-tiers-bce"; // 36 chars
+    const badTopic = "demo-repo-simplify-sweep-2-tiers-bce"; // 36 chars
     const rc = await initWith(["--topic", badTopic, p], deps);
     expect(rc).toBe(2);
     expect(existsSync(implementArtDir(badTopic))).toBe(false);

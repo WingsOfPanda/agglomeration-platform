@@ -1,8 +1,7 @@
 # CLAUDE.md — agglomeration-platform
 
 Guidance for Claude Code working in this repository. These instructions override default
-behavior. The machine-wide `~/.claude/CLAUDE.md` and the workspace `/home/liupan/CC/CLAUDE.md`
-also apply and are not restated here.
+behavior. Any machine- or workspace-level `CLAUDE.md` also applies and is not restated here.
 
 > **Naming lineage (all cosmetic; the wire protocol is frozen throughout).** This plugin was a Bash
 > tool, rewritten to TypeScript as `consort`, then renamed + de-musicalized to **`agglomeration-platform`**

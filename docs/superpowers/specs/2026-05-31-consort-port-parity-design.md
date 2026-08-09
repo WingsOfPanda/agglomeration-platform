@@ -5,7 +5,7 @@
 > parity** across `score`, `rehearsal`, `perform`, and `solo` (plus one shared helper), in a
 > single combined spec → single TDD plan, using consort's Hybrid convention.
 >
-> **Source of truth.** The behavioral reference is `/home/liupan/CC/clone-wars` (grep by
+> **Source of truth.** The behavioral reference is `<workspace>/clone-wars` (grep by
 > symbol; line numbers drift). Where this design and `MIGRATION.md` differ, this design wins.
 > Every fix here is a *faithful-port parity restoration*, not net-new behavior — so a single
 > combined spec satisfies the phase guard in `CLAUDE.md`.
@@ -220,5 +220,5 @@ Each entry: **Source** (clone-wars) · **Restore** (behavior) · **Placement** (
 
 ---
 
-*Reference: `/home/liupan/CC/clone-wars` (grep by symbol). Audit basis: the 2026-05-31 five-family
+*Reference: `<workspace>/clone-wars` (grep by symbol). Audit basis: the 2026-05-31 five-family
 behavior diff. This design is the contract; the Bash code is the behavioral spec.*

@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript (ES2022/NodeNext/strict), vitest, eslint (`no-unused-vars: error`). ESM `.js` imports.
 
-**Behavioral source (byte-faithful — `/home/liupan/CC/clone-wars/lib/consult.sh`):** `cw_consult_parse_claims` (39-57), `cw_consult_citation_overlaps` (89-119), `cw_consult_diff` (149-336), `cw_consult_parse_verdicts` (347-376), `_cw_consult_write_adjudicated_n2` (517-564), `_cw_consult_write_adjudicated_nge3` (569-761, incl. the `_classify` truth table). Read these before implementing; the fixture tests below are the precise contract. The em-dash `—` is **U+2014** (literal in several output formats) — copy it exactly.
+**Behavioral source (byte-faithful — `<workspace>/clone-wars/lib/consult.sh`):** `cw_consult_parse_claims` (39-57), `cw_consult_citation_overlaps` (89-119), `cw_consult_diff` (149-336), `cw_consult_parse_verdicts` (347-376), `_cw_consult_write_adjudicated_n2` (517-564), `_cw_consult_write_adjudicated_nge3` (569-761, incl. the `_classify` truth table). Read these before implementing; the fixture tests below are the precise contract. The em-dash `—` is **U+2014** (literal in several output formats) — copy it exactly.
 
 **Rebrand note:** the Bash adjudicated.md comments say "Master Yoda" — consort uses **"Maestro"**. The output section headings and the `synthesize refuses while PENDING` wording carry over; the stale-token gate (`clone-wars`/`cw_`/`master-yoda`/`MISSION ACCOMPLISHED`/`@cw_`) must stay green, so the ported comment strings must say Maestro and avoid `cw_`.
 

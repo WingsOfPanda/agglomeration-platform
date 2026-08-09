@@ -896,7 +896,7 @@ Tally block (`PASS`/`FAIL`/`RESULT`) is unchanged — it already counts D1-D8.
 - Modify: `dist/consort.cjs` (rebuilt)
 - Modify: memory (`rehearsal-build-state.md`, `MEMORY.md`)
 
-- [ ] **Step 1: Phase-guard flip** in `/home/liupan/CC/consort/CLAUDE.md` "Current phase guard": move `rehearsal`
+- [ ] **Step 1: Phase-guard flip** in `<workspace>/consort/CLAUDE.md` "Current phase guard": move `rehearsal`
   (and its verbs) into **Shipped**; leave **`prelude` (meditate) as the ONLY remaining out-of-scope command**
   (drop `rehearsal` from the OUT OF SCOPE line). Keep the wording style of the existing guard.
 - [ ] **Step 2: `npm run typecheck && npm run lint && npm run test`** — all green (stale-tokens included).

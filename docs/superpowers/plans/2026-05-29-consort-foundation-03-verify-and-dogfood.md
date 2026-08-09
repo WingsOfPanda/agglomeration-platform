@@ -68,8 +68,8 @@ const results = await pipeline(
   SURFACES,
   (s) => agent(
     `Adversarially verify ONE behavior surface of the consort TS port against the clone-wars Bash source. Your DEFAULT verdict is "discrepancy" — only return ok:true if you positively confirm equivalence by reading BOTH sides.\n\n` +
-    `TS file(s): /home/liupan/CC/consort/${s.ts}\n` +
-    `Bash source: /home/liupan/CC/clone-wars/${s.bash}\n` +
+    `TS file(s): <workspace>/consort/${s.ts}\n` +
+    `Bash source: <workspace>/clone-wars/${s.bash}\n` +
     `Claim to verify: ${s.claim}\n\n` +
     `Read both. Account for the intended rebrand (commander→instrument, maestro, FINE banner, @cs_*, section-not-rank, JSON.parse-not-regex) — those are NOT discrepancies. Report only genuine behavior drift (wrong format byte, wrong ordering, wrong default, lost edge case, broken atomicity/rollback).`,
     { label: `verify:${s.key}`, phase: "Verify", schema: {
@@ -104,37 +104,37 @@ Run inside tmux (confirmed: `tmux 3.4`, `codex` on PATH). Use a throwaway topic 
 
 - [ ] **Step 1: Soundcheck** — Run:
 ```bash
-cd /home/liupan/CC/consort && CLAUDE_PLUGIN_ROOT=$PWD node dist/consort.cjs soundcheck
+cd <workspace>/consort && CLAUDE_PLUGIN_ROOT=$PWD node dist/consort.cjs soundcheck
 ```
 Expected: `Verdict: OK — ready to spawn (N/M providers available; ...)`; `providers-available.txt` written under `~/.consort` (or `$CONSORT_HOME`). Confirm `codex` is listed.
 
 - [ ] **Step 2: Spawn a real codex part** — Run:
 ```bash
-cd /home/liupan/CC/consort && CLAUDE_PLUGIN_ROOT=$PWD node dist/consort.cjs spawn violin codex dogfood-foundation
+cd <workspace>/consort && CLAUDE_PLUGIN_ROOT=$PWD node dist/consort.cjs spawn violin codex dogfood-foundation
 ```
 Expected: a new tmux pane splits **right** of the conductor running the `codex` TUI; its border label reads `strings-violin:codex:dogfood-foundation` in the violin Morandi color (`colour110`); within `ready_timeout_s` the command logs `violin is ready` and prints the summary block (`part / pane / state / ready: yes`), exit 0. If it times out, read `<partDir>/failure-reason.txt` — it must exist and contain the scrollback + `fail_reason: timeout`.
 
 - [ ] **Step 3: Send a task** — Run:
 ```bash
-cd /home/liupan/CC/consort && CLAUDE_PLUGIN_ROOT=$PWD node dist/consort.cjs send violin dogfood-foundation "Reply with the current working directory, then emit your done event."
+cd <workspace>/consort && CLAUDE_PLUGIN_ROOT=$PWD node dist/consort.cjs send violin dogfood-foundation "Reply with the current working directory, then emit your done event."
 ```
 Expected: status block with `inbox:` path and `From: maestro` written; the codex pane receives the nudge and starts working.
 
 - [ ] **Step 4: Collect the done event** — Run:
 ```bash
-cd /home/liupan/CC/consort && CLAUDE_PLUGIN_ROOT=$PWD node dist/consort.cjs collect violin dogfood-foundation --timeout 180
+cd <workspace>/consort && CLAUDE_PLUGIN_ROOT=$PWD node dist/consort.cjs collect violin dogfood-foundation --timeout 180
 ```
 Expected: blocks until the part appends `{"event":"done",...}`, then logs `{done} received`, prints the JSON line, exit 0.
 
 - [ ] **Step 5: Roster** — Run:
 ```bash
-cd /home/liupan/CC/consort && CLAUDE_PLUGIN_ROOT=$PWD node dist/consort.cjs roster
+cd <workspace>/consort && CLAUDE_PLUGIN_ROOT=$PWD node dist/consort.cjs roster
 ```
 Expected: a table with header `PART MODEL TOPIC PANE STATE` and a row `violin codex dogfood-foundation %<id> idle (done)`.
 
 - [ ] **Step 6: Coda (teardown with FINE banner)** — Run:
 ```bash
-cd /home/liupan/CC/consort && CLAUDE_PLUGIN_ROOT=$PWD node dist/consort.cjs coda violin dogfood-foundation
+cd <workspace>/consort && CLAUDE_PLUGIN_ROOT=$PWD node dist/consort.cjs coda violin dogfood-foundation
 ```
 Expected: the violin pane shows the colored `FINE — pane closing` banner + an 8s countdown, then closes; the command logs `archived violin-codex: <path>`. Confirm the archive dir exists under `~/.consort/archive/<repo-hash>/dogfood-foundation/violin-codex-<ts>/` and the topic dir is gone.
 

@@ -48,7 +48,7 @@ In `tests/tmux.test.ts`, replace the existing `splitRightArgs` and `splitDownArg
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cd /home/liupan/CC/consort && npx vitest run tests/tmux.test.ts -t "splitRightArgs|splitDownArgs"`
+Run: `cd <workspace>/consort && npx vitest run tests/tmux.test.ts -t "splitRightArgs|splitDownArgs"`
 Expected: FAIL — actual arrays lack `-d` (e.g. `expected [ ... "-h", "-t" ... ] to deeply equal [ ... "-h", "-d", "-t" ... ]`).
 
 - [ ] **Step 3: Add `-d` to the two builders**
@@ -73,13 +73,13 @@ export function splitDownArgs(launch: string, target: string, cwd?: string): str
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `cd /home/liupan/CC/consort && npx vitest run tests/tmux.test.ts`
+Run: `cd <workspace>/consort && npx vitest run tests/tmux.test.ts`
 Expected: PASS (all tests in the file green).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/liupan/CC/consort
+cd <workspace>/consort
 git add src/core/tmux.ts tests/tmux.test.ts
 git commit -m "feat(spawn): detach single-pane splits so focus stays on the Maestro"
 ```
@@ -107,7 +107,7 @@ In `tests/tmux.test.ts`, add this `it(...)` block inside the `describe("tmux arg
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `cd /home/liupan/CC/consort && npx vitest run tests/tmux.test.ts -t "preflightSplitArgs"`
+Run: `cd <workspace>/consort && npx vitest run tests/tmux.test.ts -t "preflightSplitArgs"`
 Expected: FAIL — `T.preflightSplitArgs is not a function` (builder does not exist yet).
 
 - [ ] **Step 3: Add the `preflightSplitArgs` builder**
@@ -124,7 +124,7 @@ export function preflightSplitArgs(flag: "-h" | "-v", prev: string, cwd?: string
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `cd /home/liupan/CC/consort && npx vitest run tests/tmux.test.ts -t "preflightSplitArgs"`
+Run: `cd <workspace>/consort && npx vitest run tests/tmux.test.ts -t "preflightSplitArgs"`
 Expected: PASS.
 
 - [ ] **Step 5: Wire the builder into `preflightLayout`**
@@ -151,13 +151,13 @@ This preserves the exact arg order (`... flag -d -t prev [-c cwd] sentinel`) and
 
 - [ ] **Step 6: Run typecheck + the full tmux test file to verify nothing broke**
 
-Run: `cd /home/liupan/CC/consort && npm run typecheck && npx vitest run tests/tmux.test.ts`
+Run: `cd <workspace>/consort && npm run typecheck && npx vitest run tests/tmux.test.ts`
 Expected: typecheck clean (no output); all tmux tests PASS.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/liupan/CC/consort
+cd <workspace>/consort
 git add src/core/tmux.ts tests/tmux.test.ts
 git commit -m "feat(spawn): detach preflight layout splits via preflightSplitArgs"
 ```
@@ -181,28 +181,28 @@ Set the version string from `0.1.6` to `0.1.7` in each:
 
 - [ ] **Step 2: Confirm all three read 0.1.7**
 
-Run: `cd /home/liupan/CC/consort && grep -h '"version"' package.json .claude-plugin/plugin.json .claude-plugin/marketplace.json`
+Run: `cd <workspace>/consort && grep -h '"version"' package.json .claude-plugin/plugin.json .claude-plugin/marketplace.json`
 Expected: three lines, each showing `"version": "0.1.7",`.
 
 - [ ] **Step 3: Run the full gate**
 
-Run: `cd /home/liupan/CC/consort && npm run typecheck && npm run test && npm run lint`
+Run: `cd <workspace>/consort && npm run typecheck && npm run test && npm run lint`
 Expected: typecheck clean; `Test Files NN passed (NN)` / `Tests NNNN passed (NNNN)` with the stale-token gate green (a `Verdict: FAIL` line printed by a negative-path soundcheck test is expected stderr, not a failure — confirm the final `Tests ... passed` summary shows zero failures); lint clean.
 
 - [ ] **Step 4: Rebuild the committed bundle**
 
-Run: `cd /home/liupan/CC/consort && npm run build`
+Run: `cd <workspace>/consort && npm run build`
 Expected: `esbuild → dist/consort.cjs` succeeds (prints `dist/consort.cjs <size>` and `Done`).
 
 - [ ] **Step 5: Sanity-check the new flag reached the bundle**
 
-Run: `cd /home/liupan/CC/consort && grep -c '"-d"' dist/consort.cjs`
+Run: `cd <workspace>/consort && grep -c '"-d"' dist/consort.cjs`
 Expected: a non-zero count (the `-d` token is present in the bundled builders).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/liupan/CC/consort
+cd <workspace>/consort
 git add package.json .claude-plugin/plugin.json .claude-plugin/marketplace.json dist/consort.cjs
 git commit -m "chore(release): 0.1.7 — spawn focus retention (detached part panes)"
 ```

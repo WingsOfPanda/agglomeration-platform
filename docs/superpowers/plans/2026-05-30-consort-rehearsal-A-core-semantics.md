@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript (ES2022 / NodeNext / strict), vitest, esbuild. No new dependencies.
 
-**Grounding:** Spec `docs/superpowers/specs/2026-05-30-consort-rehearsal-design.md` §7 (semantic core formats). Behavioral source: `/home/liupan/CC/clone-wars/lib/deep-research.sh` (grep by symbol; cite as `deep-research.sh` in JSDoc — never the literal banned tokens; the stale-token gate scans comments too).
+**Grounding:** Spec `docs/superpowers/specs/2026-05-30-consort-rehearsal-design.md` §7 (semantic core formats). Behavioral source: `<workspace>/clone-wars/lib/deep-research.sh` (grep by symbol; cite as `deep-research.sh` in JSDoc — never the literal banned tokens; the stale-token gate scans comments too).
 
 **Conventions:**
 - Test file: a single `tests/rehearsal-core.test.ts`; each task appends a `describe(...)` block (mirrors `tests/playback-core.test.ts`). Pure tests need no `freshHome()`.
