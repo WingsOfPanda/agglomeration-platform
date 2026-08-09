@@ -117,7 +117,16 @@ export function identityWrite(i: string, m: string, t: string): void {
  *  as defence-in-depth only: on the real spawn path `stateInit` rmSyncs status.json one line before
  *  the seed, so there is no stale file left to clear. */
 export function seedWorkerStatus(i: string, m: string, t: string, now?: Date): void {
-  atomicWrite(statusPath(i, m, t), JSON.stringify({ state: "idle", updated: isoUtc(now), last_event: "spawn" }) + "\n");
+  writeWorkerStatus(i, m, t, "idle", "spawn", now);
+}
+
+/** Write a worker's status.json ON THE WORKER'S BEHALF — the platform-authored form of the file the
+ *  worker otherwise owns. `last_event` is deliberately NOT an outbox event name at either call site
+ *  (`spawn`, `bootstrap-failed`): it marks the file as platform-written, i.e. the worker has not
+ *  reported. The JSON shape (key order included) is the one every status reader was written against;
+ *  the readers are regex/`JSON.parse` over these three keys. */
+export function writeWorkerStatus(i: string, m: string, t: string, state: string, lastEvent: string, now?: Date): void {
+  atomicWrite(statusPath(i, m, t), JSON.stringify({ state, updated: isoUtc(now), last_event: lastEvent }) + "\n");
 }
 
 export interface OutboxEvent { event: string; ts?: string; [k: string]: unknown; }

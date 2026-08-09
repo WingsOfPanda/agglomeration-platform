@@ -28,10 +28,18 @@ export interface SnapshotResult {
   state: "clean" | "wip-committed" | "hook-blocked" | "not-git";
 }
 
+/** The checked-out branch, "" when there is none to name — a detached HEAD (symbolic-ref exits
+ *  non-zero) reads the same as an unreadable repo. Each caller supplies its own wording for "",
+ *  which is why this returns the empty string rather than picking one. */
+export function currentBranch(r: Runner): string {
+  const head = r.run("git", ["symbolic-ref", "--short", "HEAD"]);
+  return head.code === 0 ? head.stdout.trim() : "";
+}
+
 /** Capture branch + base SHA; if the tree is dirty, commit a WIP snapshot on the current branch. */
 export function preSnapshot(r: Runner, command: string, topic: string): SnapshotResult {
   if (r.run("git", ["rev-parse", "--git-dir"]).code !== 0) return { branch: "", baseSha: "", state: "not-git" };
-  const branch = r.run("git", ["symbolic-ref", "--short", "HEAD"]).stdout.trim() || "(detached)";
+  const branch = currentBranch(r) || "(detached)";
   const preSha = r.run("git", ["rev-parse", "HEAD"]).stdout.trim();
   if (!classifyDirty(r.run("git", ["status", "--porcelain"]).stdout)) {
     return { branch, baseSha: preSha, state: "clean" };
@@ -65,9 +73,9 @@ export interface StashPushResult { outcome: StashPushOutcome; sha: string; }
 export function stashPush(r: Runner, message: string): StashPushResult {
   const before = stashShaFor(r, message);
   const rc = r.run("git", ["stash", "push", "--include-untracked", "-m", message]).code;
-  const ref = findStashRef(r.run("git", ["stash", "list", "--format=%gd%x09%gs"]).stdout, message);
-  if (!ref) return { outcome: rc === 0 ? "none" : "failed", sha: "" };
-  const sha = r.run("git", ["rev-parse", ref]).stdout.trim();
+  const entry = stashEntry(r, message);
+  if (!entry) return { outcome: rc === 0 ? "none" : "failed", sha: "" };
+  const sha = entry.sha;
   // The match is the entry we already had: this push created nothing (git stashes nothing with rc 0
   // when only submodule content changed). Adopting it would hand finish a stash from another run.
   if (sha && sha === before) return { outcome: rc === 0 ? "none" : "failed", sha: "" };
@@ -89,12 +97,27 @@ export function findStashRef(list: string, message: string): string {
   return "";
 }
 
+/** The stash list, in the `<ref>\t<subject>` form `findStashRef` parses — the one place that
+ *  format string is spelled. Callers that need the exit code read `.code` (an unreadable list is
+ *  never an absence). */
+function stashList(r: Runner): RunResult {
+  return r.run("git", ["stash", "list", "--format=%gd%x09%gs"]);
+}
+
+/** The stash entry named `message` right now: its ref and its commit sha, or null when no entry
+ *  matches. A ref whose rev-parse fails carries sha "" — that entry EXISTS, it just would not
+ *  resolve, and `stashPush` reports it as `failed-with-entry` rather than pretending nothing was
+ *  parked. */
+function stashEntry(r: Runner, message: string): { ref: string; sha: string } | null {
+  const ref = findStashRef(stashList(r).stdout, message);
+  return ref ? { ref, sha: r.run("git", ["rev-parse", ref]).stdout.trim() } : null;
+}
+
 /** The commit sha of the stash entry named `message` right now; "" when there is none (or it will
  *  not resolve). `stashPush` takes this before pushing so a leftover entry from an aborted run —
  *  same name, someone else's work — can never be mistaken for the one it just created. */
 function stashShaFor(r: Runner, message: string): string {
-  const ref = findStashRef(r.run("git", ["stash", "list", "--format=%gd%x09%gs"]).stdout, message);
-  return ref ? r.run("git", ["rev-parse", ref]).stdout.trim() : "";
+  return stashEntry(r, message)?.sha ?? "";
 }
 
 export type StashPopOutcome = "popped" | "conflict-kept" | "not-found" | "list-failed" | "identity-mismatch";
@@ -107,7 +130,7 @@ export type StashPopOutcome = "popped" | "conflict-kept" | "not-found" | "list-f
  *  treating an unreadable list as "gone" is how a caller drops a marker over a live stash. A failed
  *  pop leaves the entry in place. */
 export function stashPopByMessage(r: Runner, message: string, expectSha: string): StashPopOutcome {
-  const list = r.run("git", ["stash", "list", "--format=%gd%x09%gs"]);
+  const list = stashList(r);
   if (list.code !== 0) return "list-failed";
   const ref = findStashRef(list.stdout, message);
   if (!ref) return "not-found";

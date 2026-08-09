@@ -8,7 +8,7 @@ import { stateInit, stateArchive, isoUtc } from "../core/archive.js";
 import { readIfExists } from "../core/fsread.js";
 import { atomicWrite } from "../core/atomic.js";
 import { validateSlug } from "../core/slug.js";
-import { identityWrite, identityPath, seedWorkerStatus, statusPath, inboxWrite, inboxPath, paneMetaWrite, outboxWait, outboxDump } from "../core/ipc.js";
+import { identityWrite, identityPath, seedWorkerStatus, writeWorkerStatus, inboxWrite, inboxPath, paneMetaWrite, outboxWait, outboxDump } from "../core/ipc.js";
 import { paneListedFor } from "../core/roster.js";
 import { pickRandomAgent, agentInUse, formatCollisionError } from "../core/agents.js";
 import { agentBinary, agentDefaultMode, agentModeArgs, agentReadyTimeout, agentBootstrapSleep } from "../core/contracts.js";
@@ -128,7 +128,7 @@ export async function run(args: string[]): Promise<number> {
       captureSpawnFailure({ agent, model, topic, ...bootstrapFailureArgs(ev ?? null, fr.ok ? fr.path : undefined) });
       await killNow(pane);
       // stamp the truth over the seed: a FAILED archive must not claim a dispatchable state for a worker that never reported (`error` is terminal, so no gate changes)
-      atomicWrite(statusPath(agent, model, topic), JSON.stringify({ state: "error", updated: isoUtc(), last_event: "bootstrap-failed" }) + "\n");
+      writeWorkerStatus(agent, model, topic, "error", "bootstrap-failed");
       const arch = stateArchive(agent, model, topic, "FAILED");
       log.error(`${agent} failed bootstrap (${reason}); state archived to: ${arch}`);
       return 1;

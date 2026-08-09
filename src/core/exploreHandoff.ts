@@ -7,7 +7,8 @@ import { join } from "node:path";
 import { atomicWrite } from "./atomic.js";
 import { isoUtc } from "./archive.js";
 import { log } from "./log.js";
-import { topApproach as firstApproach } from "./exploreConfidence.js"; // reuse the same first-approach scan
+import { topApproach as firstApproach, skipRecordSaysUserSkip } from "./exploreConfidence.js"; // reuse the same first-approach scan
+import { ARTIFACT_ACCEPT_KEY, WAIT_ACCEPTED } from "./artifact.js";
 import { readIfExistsOrNull as readIf } from "./fsread.js";
 import { parseListFile, lastTag } from "./roster.js";
 
@@ -71,16 +72,14 @@ export type CoverageResult =
   | { kind: "degraded" }
   | { kind: "no-roster" };
 
-/** The wait's OWN acceptance verdicts. A leg counts as covered when a wait accepted an artifact for
- *  it — never when `<KEY>=ok` appears: explore.md forbids gating on that value, `VS=ok` can sit
- *  beside `AC=expired`, and verifyState answers `missing` for a worker that replied but wrote
- *  nothing. Each layer publishes its verdict; this one reads that verdict, it does not re-derive it. */
-const ACCEPTED = new Set(["sentinel", "quiescent"]);
-
-/** One leg's status. `covered` when any worker's state file carries an accepted `AC=`; else `benign`
- *  when every worker's skip was the run's own deliberate no-op; else `lost`. */
+/** One leg's status, read through the wait's OWN acceptance verdicts (`WAIT_ACCEPTED`) — never
+ *  `<KEY>=ok`: explore.md forbids gating on that value, `VS=ok` can sit beside `AC=expired`, and
+ *  verifyState answers `missing` for a worker that replied but wrote nothing. Each layer publishes
+ *  its verdict; this one reads that verdict, it does not re-derive it. `covered` when any worker's
+ *  state file carries an accepted `AC=`; else `benign` when every worker's skip was the run's own
+ *  deliberate no-op; else `lost`. */
 function legStatus(artDir: string, agents: string[], phase: string, benign: (agent: string) => boolean): LegStatus {
-  if (agents.some((a) => ACCEPTED.has(lastTag(readIf(join(artDir, `${phase}-${a}.txt`)) ?? "", "AC") ?? ""))) {
+  if (agents.some((a) => WAIT_ACCEPTED.has(lastTag(readIf(join(artDir, `${phase}-${a}.txt`)) ?? "", ARTIFACT_ACCEPT_KEY) ?? ""))) {
     return "covered";
   }
   return agents.every(benign) ? "benign" : "lost";
@@ -105,7 +104,7 @@ export function crossVerificationCoverage(artDir: string): CoverageResult {
     const claims = readIf(join(artDir, `crossverify-claims-${a}.txt`));
     return claims !== null && claims.trim() === "";
   };
-  const gateSkipped = /^user_decision: skip$/m.test(readIf(join(artDir, "adversary-skip.txt")) ?? "");
+  const gateSkipped = skipRecordSaysUserSkip(artDir);
 
   const crossverify = legStatus(artDir, agents, "crossverify", claimsEmpty);
   const adversary = legStatus(artDir, agents, "adversary", () => gateSkipped);

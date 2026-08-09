@@ -1,7 +1,11 @@
 // src/core/exploreConfidence.ts — the 5-signal confidence gate (port of directive Step 5.5,
-// commands/meditate.md). Pure: draft text + findings texts → booleans. Signal defs in the spec.
+// commands/meditate.md). The gate is pure: draft text + findings texts → booleans (signal defs in
+// the spec); only the skip record's writer/reader pair below touches a file.
 // Also the home of the `## <heading>`-scoped markdown scanners the gate is built from
 // (topApproach / matrixBadRows / sectionText); off-gate callers reuse them, never re-implement.
+
+import { join } from "node:path";
+import { readIfExists } from "./fsread.js";
 
 export interface Signals { s1: boolean; s2: boolean; s3: boolean; s4: boolean; s5: boolean; allHold: boolean; }
 
@@ -90,4 +94,12 @@ export function renderSkipRecord(input: { signals: Signals; decision: Decision; 
     `signals_passed: S1=${s.s1} S2=${s.s2} S3=${s.s3} S4=${s.s4} S5=${s.s5}\n` +
     `user_decision: ${input.decision}\n`
   );
+}
+
+/** Did the confidence gate record a deliberate adversary skip? The reader half of
+ *  `renderSkipRecord`, so the `user_decision: skip` line is matched in one place — synth-final's
+ *  precondition and the handoff's adversary-leg verdict must never disagree about what a skip is.
+ *  An absent (or record-less) adversary-skip.txt reads as "no skip", exactly as both sites read it. */
+export function skipRecordSaysUserSkip(artDir: string): boolean {
+  return /^user_decision: skip$/m.test(readIfExists(join(artDir, "adversary-skip.txt")));
 }
