@@ -21,8 +21,8 @@ Full outbox sequence (the wire protocol, end-to-end):
 ```jsonl
 {"event":"ready","ts":"2026-05-29T06:35:48Z","instrument":"violin","model":"codex"}
 {"event":"ack","task_summary":"Report current working directory, then emit done event.","ts":"…"}
-{"event":"progress","note":"/home/liupan/CC/consort","ts":"…"}
-{"event":"done","summary":"Current working directory reported: /home/liupan/CC/consort","ts":"…"}
+{"event":"progress","note":"<workspace>/consort","ts":"…"}
+{"event":"done","summary":"Current working directory reported: <workspace>/consort","ts":"…"}
 ```
 
 Post-teardown: part dir archived, topic dir `rmdir`'d, pane killed. The `instrument`
@@ -37,7 +37,7 @@ key (Tier-2 rename) is live in the emitted events.
   defect): codex gates first-run per repo with a trust picker that `--dangerously-bypass-
   approvals-and-sandbox` does not cover. The spawn mechanics (pane split, launch, nudge,
   ready-poll, and on the first attempt the timeout → `failure-reason.txt` → `…-FAILED`
-  archive → exit 1) all worked correctly; `{ready}` arrived once `/home/liupan/CC/consort`
+  archive → exit 1) all worked correctly; `{ready}` arrived once `<workspace>/consort`
   was added to codex's trusted projects.
 
 ## Verification context
@@ -55,7 +55,7 @@ key (Tier-2 rename) is live in the emitted events.
 The first high-level command (`solo`, porting clone-wars `strike`): a live
 `init → brief → branch → spawn → single turn → verify → finish → coda → summary` against a
 real `codex` part in tmux, under an isolated `CONSORT_HOME=/tmp/consort-solo-dogfood` and a
-throwaway target repo `/home/liupan/CC/solo-dogfood-tmp` (run with `--finish`).
+throwaway target repo `<workspace>/solo-dogfood-tmp` (run with `--finish`).
 
 ## Run
 
@@ -309,19 +309,19 @@ two live model parts → an audit-passing deploy-schema design doc)
 # Consort `score` — Phase E (multi-repo detect → 8-section walk → Execution DAG → multi-assemble) Dogfood Result
 
 **Date:** 2026-05-29 · **Branch:** `feat/score` · **Result:** PASS (focused new-surface dogfood —
-exercises every Phase E addition end-to-end against the real `/home/liupan/CC` hub; the ensemble half
+exercises every Phase E addition end-to-end against the real `<workspace>` hub; the ensemble half
 research→verify→adjudicate is unchanged from the Phase D dogfood, so it was not re-run)
 
 ## Run
 
 Isolated `CONSORT_HOME=/tmp/consort-dogfood-phaseE` (seeded codex+claude), conductor cwd =
-`/home/liupan/CC` (the workspace hub; siblings `clone-wars`/`consort`/`hermes-agent`/`iris-code`/`opencode`
+`<workspace>` (the workspace hub; siblings `clone-wars`/`consort`/`other-repo`/`example-repo`/`opencode`
 carry a marker).
 
 - **`init --targets` validation** — `init --targets clone-wars,consort` → rc 0, `multi-repo.txt=multi`,
-  and a **TSV** `targets.txt` (`clone-wars\t/home/liupan/CC/clone-wars/CLAUDE.md` + `consort\t…`, realpath
+  and a **TSV** `targets.txt` (`clone-wars\t<workspace>/clone-wars/CLAUDE.md` + `consort\t…`, realpath
   markers). `init --targets ghost` → **rc 1** ("target 'ghost' is not a sibling dir with
-  CLAUDE.md/AGENTS.md under /home/liupan/CC"). (slug truncated to `cross-repo-spawn-gat`.)
+  CLAUDE.md/AGENTS.md under <workspace>"). (slug truncated to `cross-repo-spawn-gat`.)
 - **`detect-multi-repo` (auto)** — against a seeded `adjudicated.md` mentioning both slugs → exactly
   **2 hits** (`clone-wars`, `consort`); the other 4 siblings' slugs aren't substrings of the corpus, so
   they're correctly excluded (the loose-substring escape hatch wasn't needed).
@@ -345,7 +345,7 @@ carry a marker).
 - **Conductor must run from the hub:** `init --targets` validates against `repoRoot()` and
   `detect-multi-repo` defaults to `process.cwd()`, so the multi-repo conductor runs from the workspace
   hub (where the sub-project dirs are first-level siblings) — exercised here by running every command
-  with cwd `/home/liupan/CC`. (`detect-multi-repo --cwd <hub>` also lets a non-hub conductor point at it.)
+  with cwd `<workspace>`. (`detect-multi-repo --cwd <hub>` also lets a non-hub conductor point at it.)
 
 ## Verification context
 

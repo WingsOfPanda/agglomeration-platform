@@ -50,7 +50,7 @@ In `tests/score-gate.test.ts`, add this `it(...)` inside the existing `describe(
 
 - [ ] **Step 2: Run typecheck to verify it fails**
 
-Run: `cd /home/liupan/CC/consort && npm run typecheck`
+Run: `cd <workspace>/consort && npm run typecheck`
 Expected: FAIL — `error TS2345: Argument of type '"AS"' is not assignable to parameter of type '"FS" | "VS"'.` at the new test's `gateState(..., "AS")` call. (Note: `npx vitest run` would PASS at runtime because esbuild strips types and `gateState`'s body is key-agnostic — the typecheck is the gate that fails here.)
 
 - [ ] **Step 3: Widen the key union**
@@ -68,13 +68,13 @@ export function gateState(
 
 - [ ] **Step 4: Run typecheck + the test to verify they pass**
 
-Run: `cd /home/liupan/CC/consort && npm run typecheck && npx vitest run tests/score-gate.test.ts`
+Run: `cd <workspace>/consort && npm run typecheck && npx vitest run tests/score-gate.test.ts`
 Expected: typecheck clean; all `score-gate` tests PASS (the new `AS` case included).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/liupan/CC/consort
+cd <workspace>/consort
 git add src/core/scoreTurn.ts tests/score-gate.test.ts
 git commit -m "feat(score): widen gateState key to FS|VS|AS for prelude reuse"
 ```
@@ -154,7 +154,7 @@ describe("prelude wait-gate (verb)", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd /home/liupan/CC/consort && npx vitest run tests/prelude-gate.test.ts`
+Run: `cd <workspace>/consort && npx vitest run tests/prelude-gate.test.ts`
 Expected: FAIL — `preludeWaitGateRun` is not exported.
 
 - [ ] **Step 3: Add the import**
@@ -211,13 +211,13 @@ And in the `usage()` string (lines 33-34), insert `wait-gate` after `research-wa
 
 - [ ] **Step 6: Run to verify it passes + typecheck**
 
-Run: `cd /home/liupan/CC/consort && npm run typecheck && npx vitest run tests/prelude-gate.test.ts`
+Run: `cd <workspace>/consort && npm run typecheck && npx vitest run tests/prelude-gate.test.ts`
 Expected: typecheck clean; all `prelude-gate` tests PASS (5 tests).
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/liupan/CC/consort
+cd <workspace>/consort
 git add src/commands/prelude.ts tests/prelude-gate.test.ts
 git commit -m "feat(prelude): wait-gate verb (rc 0 only when every part is terminal)"
 ```
@@ -265,7 +265,7 @@ Replace it with:
 
 Run:
 ```bash
-cd /home/liupan/CC/consort
+cd <workspace>/consort
 grep -n "wait-gate <TOPIC> research" commands/prelude.md && grep -n "wait-gate <TOPIC> adversary" commands/prelude.md
 npm run test 2>&1 | grep -E "Test Files|Tests " | grep -v FAIL
 ```
@@ -274,7 +274,7 @@ Expected: each grep prints one line; the suite shows `Tests NNNN passed (NNNN)` 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/liupan/CC/consort
+cd <workspace>/consort
 git add commands/prelude.md
 git commit -m "docs(prelude): gate Phase 4/7 on wait-gate rc 0 (restore the all-N wait)"
 ```
@@ -293,28 +293,28 @@ Set `"version": "0.1.9",` in: `package.json` (top-level), `.claude-plugin/plugin
 
 - [ ] **Step 2: Confirm all three read 0.1.9**
 
-Run: `cd /home/liupan/CC/consort && grep -h '"version"' package.json .claude-plugin/plugin.json .claude-plugin/marketplace.json`
+Run: `cd <workspace>/consort && grep -h '"version"' package.json .claude-plugin/plugin.json .claude-plugin/marketplace.json`
 Expected: three lines, each `"version": "0.1.9",`.
 
 - [ ] **Step 3: Full gate**
 
-Run: `cd /home/liupan/CC/consort && npm run typecheck && npm run test && npm run lint`
+Run: `cd <workspace>/consort && npm run typecheck && npm run test && npm run lint`
 Expected: typecheck clean; vitest `Test Files NN passed (NN)` / `Tests NNNN passed (NNNN)` with zero failures (ignore the expected stderr `Verdict: FAIL` line from a negative-path soundcheck test — trust the final summary); lint clean.
 
 - [ ] **Step 4: Rebuild the bundle**
 
-Run: `cd /home/liupan/CC/consort && npm run build`
+Run: `cd <workspace>/consort && npm run build`
 Expected: `esbuild → dist/consort.cjs <size>` and `Done`.
 
 - [ ] **Step 5: Sanity-check the verb reached the bundle**
 
-Run: `cd /home/liupan/CC/consort && grep -c "prelude wait-gate" dist/consort.cjs`
+Run: `cd <workspace>/consort && grep -c "prelude wait-gate" dist/consort.cjs`
 Expected: a non-zero count (the verb's usage/error strings are bundled).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/liupan/CC/consort
+cd <workspace>/consort
 git add package.json .claude-plugin/plugin.json .claude-plugin/marketplace.json dist/consort.cjs
 git commit -m "chore(release): 0.1.9 — prelude wait-gate (all-N gate at both barrier stages)"
 ```

@@ -6,7 +6,7 @@
 > reference. This document is the *scoped, decision-locked* design for the **foundation
 > sub-project** and the **musical-ensemble rebrand**. Where this doc and `MIGRATION.md`
 > differ, **this doc wins** (it post-dates the naming decisions).
-> **Behavioral spec:** `/home/liupan/CC/clone-wars` (grep by symbol; line numbers drift).
+> **Behavioral spec:** `<workspace>/clone-wars` (grep by symbol; line numbers drift).
 
 ---
 
@@ -412,8 +412,8 @@ before the live run.
 ## 12. References
 
 - **Architecture + full phasing:** `MIGRATION.md` (repo root).
-- **Behavioral spec (grep by symbol):** `/home/liupan/CC/clone-wars`
+- **Behavioral spec (grep by symbol):** `<workspace>/clone-wars`
   — `bin/spawn.sh`, `bin/preflight-layout.sh`, `bin/_close-banner.sh`,
   `lib/tmux.sh`, `lib/colors.sh`, `lib/ipc.sh`, `lib/state.sh`, `lib/contracts.sh`,
   `lib/commanders.sh`, `lib/deps.sh`, `lib/log.sh`, `lib/opencode_preflight.sh`.
-- **Architecture bible:** `/home/liupan/CC/clone-wars/docs/DESIGN.md`.
+- **Architecture bible:** `<workspace>/clone-wars/docs/DESIGN.md`.

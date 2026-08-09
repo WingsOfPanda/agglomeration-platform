@@ -4,14 +4,14 @@
 
 **Goal:** Build the scaffolded TypeScript project and the fully unit-tested `core/*` + `args` library for the `consort` plugin — the substrate every command reuses. No commands yet; this plan ends with `tsc` clean, `vitest` green, and a building `dist/`.
 
-**Architecture:** A single-file esbuild bundle (`dist/consort.cjs`) dispatched by subcommand. Logic lives in typed `src/core/*` modules ported behavior-for-behavior from clone-wars Bash (`/home/liupan/CC/clone-wars`), with Bash footguns replaced by typed objects + `JSON.parse`. tmux is the only subprocess surface (via `execa`). The IPC wire protocol and tmux mechanics are preserved byte-for-byte; the only schema rename is `commander`→`instrument` (musical rebrand).
+**Architecture:** A single-file esbuild bundle (`dist/consort.cjs`) dispatched by subcommand. Logic lives in typed `src/core/*` modules ported behavior-for-behavior from clone-wars Bash (`<workspace>/clone-wars`), with Bash footguns replaced by typed objects + `JSON.parse`. tmux is the only subprocess surface (via `execa`). The IPC wire protocol and tmux mechanics are preserved byte-for-byte; the only schema rename is `commander`→`instrument` (musical rebrand).
 
 **Tech Stack:** TypeScript (ES2022, NodeNext, strict), esbuild (bundle), vitest (tests), eslint, `execa` (tmux), `yaml` (config). Node ≥18 target; dev on Node 24.
 
 **Companion references (read alongside this plan):**
 - Design spec: `docs/superpowers/specs/2026-05-29-consort-foundation-design.md`
 - Architecture: `MIGRATION.md`
-- Behavioral spec (grep by symbol): `/home/liupan/CC/clone-wars` — esp. `lib/{state,ipc,tmux,colors,contracts,commanders,deps,log,argsfile,forensics}.sh`, `bin/{spawn,preflight-layout,_close-banner}.sh`
+- Behavioral spec (grep by symbol): `<workspace>/clone-wars` — esp. `lib/{state,ipc,tmux,colors,contracts,commanders,deps,log,argsfile,forensics}.sh`, `bin/{spawn,preflight-layout,_close-banner}.sh`
 
 **Locked rebrand facts (apply throughout):**
 - `commander`→`instrument` (concept + the `pane.json`/`ready` JSON key); worker noun = "part"; conductor = "Maestro"; inbox default sender `From: maestro`.
@@ -118,7 +118,7 @@ Test helper used throughout: a `tests/helpers/tmpHome.ts` that sets `CONSORT_HOM
 
 - [ ] **Step 3: Install dependencies**
 
-Run: `cd /home/liupan/CC/consort && npm install`
+Run: `cd <workspace>/consort && npm install`
 Expected: `node_modules/` created, `package-lock.json` written, no error.
 
 - [ ] **Step 4: Commit**
@@ -213,7 +213,7 @@ git commit -m "chore: build/test toolchain + hello-world dist"
 
 - [ ] **Step 1: Copy `contracts.yaml` verbatim**
 
-Run: `cp /home/liupan/CC/clone-wars/config/contracts.yaml /home/liupan/CC/consort/config/contracts.yaml`
+Run: `cp <workspace>/clone-wars/config/contracts.yaml <workspace>/consort/config/contracts.yaml`
 Then verify it contains rows `codex`, `agy`, `claude`, `opencode` and a `consult:` block. Do NOT edit keys (they are FROZEN config keys).
 
 - [ ] **Step 2: Write `config/instruments.yaml`** (flat list, mirrors `commanders.yaml` shape)

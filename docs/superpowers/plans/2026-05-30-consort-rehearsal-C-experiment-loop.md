@@ -346,7 +346,7 @@ describe("rehearsal experiment template", () => {
 
 - [ ] **Step 2: Run to verify failure.** `npm run test -- rehearsal-core` → FAIL (template missing).
 
-- [ ] **Step 3: Create the template.** Copy `/home/liupan/CC/clone-wars/config/prompt-templates/deep-research/experiment.md` and apply, faithfully:
+- [ ] **Step 3: Create the template.** Copy `<workspace>/clone-wars/config/prompt-templates/deep-research/experiment.md` and apply, faithfully:
   - **Rebrand** every occurrence: `trooper`→`part`, `commander`→`instrument`, `Master Yoda`/`Yoda`/`the advisor (Yoda)`→`Maestro`/`the Maestro`, peers table `| Trooper |`→`| Part |`. (Gate scans `config/`.)
   - **Drop** the trailing bare `END_OF_INSTRUCTION` (last line) — `inboxWrite` appends the canonical fence.
   - **Preserve byte-identical** (modulo rebrand): the `result.json` 12-key schema block + order; the `{"event":"done","summary":"experiment {{EXP_ID}} metric=<value> status=<status>","ts":"<iso>"}` line written to `{{OUTBOX_PATH}}`; the `{"event":"heartbeat","summary":"epoch <N>/<total>","ts":"<iso>"}` line; the `audit.json` contract section; the explore-only / no-system-command / net-access paragraphs; `## Shared utilities`; the 5 numbered steps; failure handling; wall-clock/cost/independence/validation-feedback paragraphs.

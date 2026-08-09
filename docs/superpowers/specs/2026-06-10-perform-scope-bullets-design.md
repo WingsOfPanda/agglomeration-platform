@@ -24,9 +24,9 @@ Two defects compound:
 2. **Fails open-then-noisy** — an empty `compPaths` is indistinguishable from "scope declared, N
    genuine OOS." A guard no-op reads as a flood of real findings, which is easy to wave through.
 
-This has recurred a third time (playback 2026-06-10: iris-code `generalize-the-n-lin` perform —
+This has recurred a third time (playback 2026-06-10: example-repo `generalize-the-n-lin` perform —
 `format.ts` + `format.test.mjs` were genuinely in-scope but flagged because Components was bullets).
-See memory `perform-scope-check-tables-only`.
+See project memory (private).
 
 ## Goals
 

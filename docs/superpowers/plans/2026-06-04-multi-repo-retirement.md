@@ -39,7 +39,7 @@
 - [ ] **Step 1: Grep the shipped directives for the verbs/flags we will remove**
 
 ```bash
-cd /home/liupan/CC/consort
+cd <workspace>/consort
 grep -nE "detect-multi-repo|emit-dag|check-dag|dag-parse|multi-init|send-unit|drop-part|verify-dag-repos|wave-wait|cross-signal|sibling-(baseline|verify|rescue)|--targets" commands/score.md commands/perform.md commands/solo.md
 ```
 
@@ -72,7 +72,7 @@ No source changes in this task. Proceed once the verdict is recorded. (If a stub
 - [ ] **Step 1: Delete the 8 dedicated multi-repo test files**
 
 ```bash
-cd /home/liupan/CC/consort
+cd <workspace>/consort
 git rm tests/perform-dag-parse.test.ts tests/perform-multi-init.test.ts \
   tests/perform-cross-signal.test.ts tests/perform-wave-wait.test.ts \
   tests/perform-drop-part.test.ts tests/perform-verify-dag-repos.test.ts \
@@ -412,7 +412,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 - [ ] **Step 1: Confirm no multi-repo symbols survive in shipped `src`**
 
 ```bash
-cd /home/liupan/CC/consort
+cd <workspace>/consort
 grep -rnE "validateTargets|RepoHit|TargetValidation|SECTIONS_MULTI|parseMultiRepoMode|writeTargetsTsv|parseRosterTargets|extractTarget|resolveTarget|resolveHub|PerformResolveError|composeDagUnitPrompt|DocMode|detectMultiRepo\(|from \"./dag.js\"|from \"../core/dag.js\"|from \"./multirepo.js\"|from \"../core/multirepo.js\"|performSibling" src/
 ```
 
@@ -455,7 +455,7 @@ Change `"version": "0.1.22"` → `"version": "0.1.23"` in `package.json`, `.clau
 - [ ] **Step 2: Rebuild the bundle**
 
 ```bash
-cd /home/liupan/CC/consort
+cd <workspace>/consort
 npm run build
 ```
 

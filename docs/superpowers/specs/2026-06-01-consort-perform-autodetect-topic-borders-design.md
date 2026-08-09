@@ -6,15 +6,15 @@
 
 ## Origin
 
-A live `/consort:perform` run on the **iris-code** target (an npm/TS repo) surfaced three
+A live `/consort:perform` run on the **example-repo** target (an npm/TS repo) surfaced three
 problems, found via `/consort:playback` + a follow-up adversarially-verified investigation:
 
 1. The part halted at round 1 asking what test command to run — the perform prompt hardcodes
    `bash tests/run.sh`, which does not exist in an npm/TS repo.
-2. A doc-derived topic slug `iris-code-simplify-sweep-2-tiers-bce` (36 chars) was **accepted by
+2. A doc-derived topic slug `demo-repo-simplify-sweep-2-tiers-bce` (36 chars) was **accepted by
    `perform init`** but **rejected by `spawn`** (32-char cap), forcing a manual reset/re-init.
 3. The spawned part pane showed no label on its border. Root-caused to a **window-local
-   `pane-border-status off` override** on the iris-code tmux window that defeated consort's
+   `pane-border-status off` override** on the example-repo tmux window that defeated consort's
    global-only `set -g` — the part label was set but never rendered.
 
 This spec covers all three. They share the `perform` / `spawn` surface and ship as one PR.
@@ -63,7 +63,7 @@ restoration** of a dropped guard — fully in scope, no new behavior.
   `pane-border-status` and `pane-border-format` with **`set -g` (global window-option)** only,
   and **silently swallows** any tmux error (`catch { /* tolerate */ }`).
 - `pane-border-status` is a **window option**. A window-local `pane-border-status off` (as found
-  live on the iris-code window) overrides the global `top`, so a pane spawned into that window
+  live on the example-repo window) overrides the global `top`, so a pane spawned into that window
   shows no border — the `@cs_label` set by `paneLabelSet` (`tmux.ts:112-121`) never renders.
 - perform has **no pane code of its own**; it reuses the `spawn` verb (`commands/perform.md`
   Stage 1.1), so this affects every spawn path, not just perform.
@@ -143,8 +143,8 @@ unit tests, per the project convention).
   `bash tests/run.sh`; with `testCmd:""` contains the generic fallback and no backtick command.
   `blockers("npm test")` names `npm test`; `blockers("")` uses the generic wording and contains no
   `bash tests/run.sh`. `composeFixPrompt(2, "...", "/v.md", "make test")` names `make test`.
-- **Fix B:** `assertPerformTopic` accepts `iris-code-simplify` and a 32-char slug; rejects the
-  36-char `iris-code-simplify-sweep-2-tiers-bce`, an empty string, leading `-`, and `Bad_Topic`.
+- **Fix B:** `assertPerformTopic` accepts `demo-repo-simplify` and a 32-char slug; rejects the
+  36-char `demo-repo-simplify-sweep-2-tiers-bce`, an empty string, leading `-`, and `Bad_Topic`.
   `initWith` with a 36-char `--topic` returns `2` and creates **no** art dir (assert via a temp
   `CONSORT_HOME`/`CONSORT_PERFORM_ART_DIR_OVERRIDE` and a non-existent art path afterward).
 - **Fix C:** `windowBorderStatusArgs("%5")` equals

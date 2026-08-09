@@ -2,7 +2,7 @@
 
 **Status:** approved 2026-05-30. Last unported clone-wars command.
 **Branch:** `feat/prelude`.
-**Behavioral spec:** `/home/liupan/CC/clone-wars` — `commands/meditate.md`, `bin/meditate-*.sh`,
+**Behavioral spec:** `<workspace>/clone-wars` — `commands/meditate.md`, `bin/meditate-*.sh`,
 `lib/meditate.sh`, `config/prompt-templates/meditate/{research,adversary,landscape-skeleton}.md`.
 Preserve **behavior**, not implementation (line numbers drift; grep by symbol).
 

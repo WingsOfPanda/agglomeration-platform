@@ -1,11 +1,12 @@
 // tests/liveness-guards.test.ts — the 2026-08-08 evidence-gated dispatch guard.
 //
-// Origin: the xjp GUARD LOCKOUT. Every phase wait expired against a slower-than-budget worker, each
-// `timeout` tag soft-skipped the NEXT phase, and a 2-worker run degraded to two independent research
-// docs while both workers sat idle. The fix is NOT "skip unless it looks idle" — an absent status
-// file, a seeded one, or an expired wait all look idle and prove nothing. A skip is overridden only
-// by POSITIVE evidence, all four legs: the worker reported an idle status itself, a terminal event
-// landed past the failing phase's offset, that phase's artifact is settled, and its pane is alive.
+// Origin: the GUARD LOCKOUT observed on a side-lane eval box. Every phase wait expired against a
+// slower-than-budget worker, each `timeout` tag soft-skipped the NEXT phase, and a 2-worker run
+// degraded to two independent research docs while both workers sat idle. The fix is NOT "skip
+// unless it looks idle" — an absent status file, a seeded one, or an expired wait all look idle
+// and prove nothing. A skip is overridden only by POSITIVE evidence, all four legs: the worker
+// reported an idle status itself, a terminal event landed past the failing phase's offset, that
+// phase's artifact is settled, and its pane is alive.
 // The per-verb wiring and the refusal matrix live in explore-cmd.test.ts (table-driven over PHASES);
 // this file pins the predicate itself, its messages, and the two guard encodings through it.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";

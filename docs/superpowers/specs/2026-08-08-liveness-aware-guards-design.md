@@ -1,6 +1,6 @@
 # Liveness-aware dispatch guards, tunable consult budgets, degraded-run stamp — design
 
-**Date:** 2026-08-08 · **Origin:** the xjp GUARD LOCKOUT forensics flag (2026-07-31
+**Date:** 2026-08-08 · **Origin:** the GUARD LOCKOUT forensics flag from a side-lane eval box (2026-07-31
 `flashattention-head` explore, ap 0.5.4): every phase wait timed out (450–900s < real turn time),
 each `timeout` tag soft-skipped the NEXT phase via the guard chains, and a 2-worker run silently
 degraded to "two independent research docs, zero cross-verification" with no degraded-run stamp —
@@ -166,7 +166,7 @@ name the held and lost legs from the detail line; `ok` → nothing. Absent keys 
 
 ## Success Criteria
 
-- Replaying the xjp lockout shape (waits expired, workers verifiably free) on the new code dispatches
+- Replaying the side-lane eval box's lockout shape (waits expired, workers verifiably free) on the new code dispatches
   every subsequent phase instead of cascade-skipping, with one `guard-override-idle` forensics flag
   per override — and a worker that is busy, silent, mid-artifact or dead still gets today's skip.
 - A run with zero cross-verification produces `cross_verification=none` plus the detail line in
