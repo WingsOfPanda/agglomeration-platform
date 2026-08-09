@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript/ESM (NodeNext, `.js` import suffixes), vitest, esbuild → committed `dist/consort.cjs`, execa (tmux only). Tests isolate via `CONSORT_HOME` temp dirs (`tests/helpers/tmpHome.ts:freshHome`).
 
-**Reference:** design spec `docs/superpowers/specs/2026-05-31-consort-port-parity-design.md`; behavioral source `/home/liupan/CC/clone-wars` (grep by symbol).
+**Reference:** design spec `docs/superpowers/specs/2026-05-31-consort-port-parity-design.md`; behavioral source `<workspace>/clone-wars` (grep by symbol).
 
 ---
 
@@ -207,7 +207,7 @@ export function skillHintAppend(skillTxtPath: string, basePrompt: string): strin
 
 - [ ] **Step 4: Port the 3 skill-hint config files (scrubbed)**
 
-Read `/home/liupan/CC/clone-wars/config/skill-hints/brainstorming.md` and write its content to `config/skill-hints/brainstorming.md`, applying these substitutions everywhere: `the Jedi general`→`the Maestro`, `the general`/`the GENERAL`→`the Maestro`, `GENERAL`→`Maestro`, any `Yoda`→`Maestro`. Do the same for `systematic-debugging.md`. Keep the `superpowers:brainstorming` / `superpowers:systematic-debugging` skill references verbatim. Create `config/skill-hints/none.md` as an empty file.
+Read `<workspace>/clone-wars/config/skill-hints/brainstorming.md` and write its content to `config/skill-hints/brainstorming.md`, applying these substitutions everywhere: `the Jedi general`→`the Maestro`, `the general`/`the GENERAL`→`the Maestro`, `GENERAL`→`Maestro`, any `Yoda`→`Maestro`. Do the same for `systematic-debugging.md`. Keep the `superpowers:brainstorming` / `superpowers:systematic-debugging` skill references verbatim. Create `config/skill-hints/none.md` as an empty file.
 
 Verify: `grep -niE 'general|jedi|trooper|commander|yoda|clone-wars|cw_' config/skill-hints/` returns nothing.
 
@@ -398,7 +398,7 @@ git commit -m "feat(score): offset-reset clean-retry primitive with cascade (#4)
 
 - [ ] **Step 1: Port the 3 seed files (scrubbed)**
 
-Read `/home/liupan/CC/clone-wars/config/deep-research-lib-seed/arena.py` and write to `config/rehearsal-lib-seed/arena.py`, scrubbing: line 1 `troopers`→`parts`; line 3 `trooper experiments`→`part experiments`; any `<art-dir>/_deep-research/lib` path → `<art-dir>/lib`; any `Yoda`→`Maestro`. Keep the function `arena_color_rotated(...)` body byte-for-byte (pure stdlib). Create `config/rehearsal-lib-seed/__init__.py` as empty. Read `/home/liupan/CC/clone-wars/config/deep-research-lib-seed/README.md` → write to `config/rehearsal-lib-seed/README.md` scrubbing: title `_deep-research/lib/ — shared trooper utilities`→`lib/ — shared part utilities`; `conductor-shipped helpers for deep-research trooper experiments`→`Maestro-shipped helpers for rehearsal part experiments`; `<other-cmdr>`→`<other-instrument>`; `ask Yoda to promote`→`ask the Maestro to promote`; drop the `(v0.53.0)` version tags.
+Read `<workspace>/clone-wars/config/deep-research-lib-seed/arena.py` and write to `config/rehearsal-lib-seed/arena.py`, scrubbing: line 1 `troopers`→`parts`; line 3 `trooper experiments`→`part experiments`; any `<art-dir>/_deep-research/lib` path → `<art-dir>/lib`; any `Yoda`→`Maestro`. Keep the function `arena_color_rotated(...)` body byte-for-byte (pure stdlib). Create `config/rehearsal-lib-seed/__init__.py` as empty. Read `<workspace>/clone-wars/config/deep-research-lib-seed/README.md` → write to `config/rehearsal-lib-seed/README.md` scrubbing: title `_deep-research/lib/ — shared trooper utilities`→`lib/ — shared part utilities`; `conductor-shipped helpers for deep-research trooper experiments`→`Maestro-shipped helpers for rehearsal part experiments`; `<other-cmdr>`→`<other-instrument>`; `ask Yoda to promote`→`ask the Maestro to promote`; drop the `(v0.53.0)` version tags.
 
 Verify: `grep -niE 'general|jedi|trooper|commander|yoda|clone-wars|cw_|deep-research' config/rehearsal-lib-seed/` returns nothing.
 

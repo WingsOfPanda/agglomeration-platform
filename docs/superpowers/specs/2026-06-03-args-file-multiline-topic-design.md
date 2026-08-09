@@ -5,7 +5,7 @@
 ## Problem
 
 `/consort:score` delivered a truncated topic to its parts. A `/consort:playback` review of the
-2026-06-03 forensics (topic `enhance-iris-codes-e`) surfaced it: the user packed a ~6.5KB topic —
+2026-06-03 forensics (topic `enhance-example-repo`) surfaced it: the user packed a ~6.5KB topic —
 prose followed by three multi-line `ENHANCEMENT` blocks — into `score`, but **both** parts' inboxes
 were only ~4.7KB and contained **zero** mentions of the ENHANCEMENT content. One part blocked and
 asked for the missing detail; the other recovered it from external memory. The loss was **silent** —

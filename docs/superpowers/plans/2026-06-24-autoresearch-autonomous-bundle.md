@@ -4,7 +4,7 @@
 
 **Goal:** Make `/ap:autoresearch` run fully autonomously (zero `AskUserQuestion`, zero `phase=blocked` on a no-follow-up run), learn across runs via a governed lesson store, pick winners reliably (top-k), scale out safely, and gain a free data-leakage gate — all as additive, wire-protocol-safe pure cores.
 
-**Architecture:** Five additive capabilities (A arbiter, B governed memory, C operators+selection, D scale-out+budget, E leakage gate), each a pure core in `src/core/` with the filesystem/clock/LLM **injected**, plus thin impure plumbing in `src/commands/autoresearch.ts`. Mirrors the existing validity-roadmap pattern (A1/A3/A2/B1/B2/C1). Source spec: `docs/ap/specs/2026-06-24-home-liupan-ap-archi-design.md`.
+**Architecture:** Five additive capabilities (A arbiter, B governed memory, C operators+selection, D scale-out+budget, E leakage gate), each a pure core in `src/core/` with the filesystem/clock/LLM **injected**, plus thin impure plumbing in `src/commands/autoresearch.ts`. Mirrors the existing validity-roadmap pattern (A1/A3/A2/B1/B2/C1). Source spec: `docs/ap/specs/2026-06-24-ap-archi-design.md`.
 
 **Tech Stack:** TypeScript (strict), vitest, esbuild (`dist/ap.cjs` committed). Tests live in `tests/` and isolate state with a fresh `AP_HOME` per test (`tests/helpers/tmpHome.ts`). Pure cores are tested without spawning tmux panes.
 

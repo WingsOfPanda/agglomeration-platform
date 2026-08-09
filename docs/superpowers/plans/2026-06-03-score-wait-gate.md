@@ -100,7 +100,7 @@ describe("gateState (pure)", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd /home/liupan/CC/consort && npx vitest run tests/score-gate.test.ts`
+Run: `cd <workspace>/consort && npx vitest run tests/score-gate.test.ts`
 Expected: FAIL — `gateState` is not exported (import error / not a function).
 
 - [ ] **Step 3: Implement `gateState`**
@@ -133,13 +133,13 @@ export function gateState(
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd /home/liupan/CC/consort && npx vitest run tests/score-gate.test.ts`
+Run: `cd <workspace>/consort && npx vitest run tests/score-gate.test.ts`
 Expected: PASS (7 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/liupan/CC/consort
+cd <workspace>/consort
 git add src/core/scoreTurn.ts tests/score-gate.test.ts
 git commit -m "feat(score): pure gateState helper for the all-N wait gate"
 ```
@@ -211,7 +211,7 @@ describe("score wait-gate (verb)", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd /home/liupan/CC/consort && npx vitest run tests/score-gate.test.ts -t "wait-gate"`
+Run: `cd <workspace>/consort && npx vitest run tests/score-gate.test.ts -t "wait-gate"`
 Expected: FAIL — `waitGateRun` is not exported.
 
 - [ ] **Step 3: Add the import**
@@ -259,13 +259,13 @@ And in the `usage()` string (line 35), insert `wait-gate` into the verb list —
 
 - [ ] **Step 6: Run to verify it passes + typecheck**
 
-Run: `cd /home/liupan/CC/consort && npm run typecheck && npx vitest run tests/score-gate.test.ts`
+Run: `cd <workspace>/consort && npm run typecheck && npx vitest run tests/score-gate.test.ts`
 Expected: typecheck clean; all `score-gate` tests PASS (pure + verb).
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/liupan/CC/consort
+cd <workspace>/consort
 git add src/commands/score.ts tests/score-gate.test.ts
 git commit -m "feat(score): wait-gate verb (rc 0 only when every part is terminal)"
 ```
@@ -319,7 +319,7 @@ so keep handling / relay and re-run. Only on rc 0 continue.
 
 Run:
 ```bash
-cd /home/liupan/CC/consort
+cd <workspace>/consort
 grep -n "wait-gate <TOPIC> research" commands/score.md && grep -n "wait-gate <TOPIC> verify" commands/score.md
 npm run test 2>&1 | grep -E "Test Files|Tests " | grep -v FAIL
 ```
@@ -328,7 +328,7 @@ Expected: both greps print a line (Stage 5 + Stage 8 each reference the gate); s
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/liupan/CC/consort
+cd <workspace>/consort
 git add commands/score.md
 git commit -m "docs(score): gate Stage 5/8 on wait-gate rc 0 (restore the all-N wait)"
 ```
@@ -347,28 +347,28 @@ Set `"version": "0.1.8",` in: `package.json` (top-level), `.claude-plugin/plugin
 
 - [ ] **Step 2: Confirm all three read 0.1.8**
 
-Run: `cd /home/liupan/CC/consort && grep -h '"version"' package.json .claude-plugin/plugin.json .claude-plugin/marketplace.json`
+Run: `cd <workspace>/consort && grep -h '"version"' package.json .claude-plugin/plugin.json .claude-plugin/marketplace.json`
 Expected: three lines, each `"version": "0.1.8",`.
 
 - [ ] **Step 3: Full gate**
 
-Run: `cd /home/liupan/CC/consort && npm run typecheck && npm run test && npm run lint`
+Run: `cd <workspace>/consort && npm run typecheck && npm run test && npm run lint`
 Expected: typecheck clean; vitest `Test Files NN passed (NN)` / `Tests NNNN passed (NNNN)` with zero failures (ignore the expected stderr `Verdict: FAIL` line from a negative-path soundcheck test — trust the final summary); lint clean.
 
 - [ ] **Step 4: Rebuild the bundle**
 
-Run: `cd /home/liupan/CC/consort && npm run build`
+Run: `cd <workspace>/consort && npm run build`
 Expected: `esbuild → dist/consort.cjs <size>` and `Done`.
 
 - [ ] **Step 5: Sanity-check the verb reached the bundle**
 
-Run: `cd /home/liupan/CC/consort && grep -c "wait-gate" dist/consort.cjs`
+Run: `cd <workspace>/consort && grep -c "wait-gate" dist/consort.cjs`
 Expected: non-zero count.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/liupan/CC/consort
+cd <workspace>/consort
 git add package.json .claude-plugin/plugin.json .claude-plugin/marketplace.json dist/consort.cjs
 git commit -m "chore(release): 0.1.8 — score wait-gate (all-N ensemble gate)"
 ```

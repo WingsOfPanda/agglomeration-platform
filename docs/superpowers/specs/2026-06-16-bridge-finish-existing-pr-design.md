@@ -10,8 +10,8 @@ the PR*, so `gh pr create` fails with "a pull request for branch … already exi
 perfectly **mergeable** PR is sitting there. The hub then reports `pr-merge → pr-create-failed` and
 the human merges by hand.
 
-Surfaced by `/ap:review` (bl202 forensics, 2026-06-15/16): the quirk recurred across two bridge
-topics — PR #5 (`update-the-iris-cort`) and PR #8 (`two-deliverables-in`), the latter explicitly
+Surfaced by `/ap:review` (forensics from a GPU box, 2026-06-15/16): the quirk recurred across two bridge
+topics — PR #5 (`update-the-example-r`) and PR #8 (`two-deliverables-in`), the latter explicitly
 "recurred as expected (memory: `ap-bridge-finish-pr-quirk`)". Each was recovered manually with
 `gh pr merge <n> --squash` + `git fetch && git merge --ff-only`. The standing memory documented the
 quirk but did not stop it — so this escalates the memory to a fix.

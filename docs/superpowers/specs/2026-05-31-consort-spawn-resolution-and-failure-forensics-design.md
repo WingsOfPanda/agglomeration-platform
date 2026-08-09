@@ -3,7 +3,7 @@
 **Status:** approved 2026-05-31 · **Type:** bug fix (Part 1) + deliberate enhancement beyond clone-wars
 parity (Part 2)
 
-**Origin:** A live `/consort:score` dogfood against `iris-code` surfaced two problems, then a
+**Origin:** A live `/consort:score` dogfood against `example-repo` surfaced two problems, then a
 `/consort:playback` review found nothing — proving the forensics net misses real failures.
 
 ## Background — what the dogfood found

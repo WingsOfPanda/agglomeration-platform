@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript (NodeNext, strict), esbuild single-bundle (`dist/ap.cjs`, committed), vitest, `node:child_process` `execFileSync` + GNU `timeout`.
 
-**Design provenance:** `/ap:explore` landscape + `design-handoff.md` (archived at `~/.ap/archive/b1eff9a5…/in-ap-implement-an-o/_explore-20260630T131220Z/`), the adversarial-verification workflow (2026-06-30), and the in-place v1 decision recorded in memory `ap-implement-brief-verify-handoff-gap`. This plan stands in for the `/ap:design` spec (the user chose to write the plan directly); the rationale above is the spec.
+**Design provenance:** `/ap:explore` landscape + `design-handoff.md` (archived at `~/.ap/archive/b1eff9a5…/in-ap-implement-an-o/_explore-20260630T131220Z/`), the adversarial-verification workflow (2026-06-30), and the in-place v1 decision recorded in project memory (private). This plan stands in for the `/ap:design` spec (the user chose to write the plan directly); the rationale above is the spec.
 
 ## Global Constraints
 

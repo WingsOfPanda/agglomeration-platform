@@ -1,4 +1,4 @@
-# /home/liupan/.ap/archive/b1eff9a5d0583c3642d98b5509b25f6d467600d8232aa6b20b7955db59c5ff29/how-can-we-make-ap-a/_explore-20260623T045147Z/design-handoff.md
+# ~/.ap/archive/b1eff9a5d0583c3642d98b5509b25f6d467600d8232aa6b20b7955db59c5ff29/how-can-we-make-ap-a/_explore-20260623T045147Z/design-handoff.md
 
 ## Problem
 `/ap:autoresearch` today cannot run fully autonomously, and it cannot improve from one run to the next.
@@ -53,7 +53,7 @@ A new pure `autoresearchMemory.ts` gives the loop a persistent, **governed** les
 - **Selection.** A new pure `autoresearchSelect.ts` adds `selectFinalists(rows, k, signal) → ScoreRow[]` + `pickWinner(finalists)`. Instead of crowning scoreboard rank-1 (the single validation leader), take the top-k feasible `ok` rows (default `k=3`) and pick on the **most reliable signal**: a held-out/test value when the run-card exposes one, else a `Replicate`-corroborated consistency score (heeding AIRA2 — the gap is evaluation *noise*, so prefer a consistent signal over one lucky validation score). Winner + `finalists` recorded in `handoff-data.kv`/`score-handoff.md`; degrades to today's leader pick (annotated) when no reliable signal exists.
 
 ### D. Horizontal scale-out + adaptive marginal-gain budget (deeper/longer, cheaply)
-- **Scale-out.** Raise the hard N=2-3 cap (`commands/autoresearch.md:91-94`) via a `max_workers` knob; `spawn-all` issues **staggered** spawns (space each by `bootstrap_sleep_s`) to avoid the concurrent-spawn timeout (the bl202 defect softened by 0.3.9's `ready_timeout_s=150`; staggering is the durable fix).
+- **Scale-out.** Raise the hard N=2-3 cap (`commands/autoresearch.md:91-94`) via a `max_workers` knob; `spawn-all` issues **staggered** spawns (space each by `bootstrap_sleep_s`) to avoid the concurrent-spawn timeout (the observed spawn-timeout defect softened by 0.3.9's `ready_timeout_s=150`; staggering is the durable fix).
 - **Adaptive budget.** A new pure `autoresearchBudget.ts` adds a marginal-gain stop: stop when expected marginal gain per unit compute over the last window falls below `marginal_gain_threshold` — so "longer" means *adaptive*, not unbounded (test-time utility has diminishing returns). Composes with, does not replace, the existing floor/target/K/plateau/time-budget stops.
 
 ### E. Data-leakage / data-usage sanity gate (free MLE-STAR-style win)

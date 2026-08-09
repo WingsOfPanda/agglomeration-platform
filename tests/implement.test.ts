@@ -91,12 +91,12 @@ describe("iterTargets", () => {
 
 describe("assertImplementTopic", () => {
   it("accepts valid slugs up to 32 chars", () => {
-    expect(assertImplementTopic("iris-code-simplify")).toBe(true);
+    expect(assertImplementTopic("demo-repo-simplify")).toBe(true);
     expect(assertImplementTopic("a".repeat(32))).toBe(true);
     expect(assertImplementTopic("x1")).toBe(true);
   });
   it("rejects over-length, malformed, and empty slugs", () => {
-    expect(assertImplementTopic("iris-code-simplify-sweep-2-tiers-bce")).toBe(false); // 36 chars
+    expect(assertImplementTopic("demo-repo-simplify-sweep-2-tiers-bce")).toBe(false); // 36 chars
     expect(assertImplementTopic("a".repeat(33))).toBe(false);
     expect(assertImplementTopic("")).toBe(false);
     expect(assertImplementTopic("-leading")).toBe(false);

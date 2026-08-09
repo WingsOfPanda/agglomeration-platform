@@ -10,7 +10,7 @@ deliberate **follow-up PR**, not part of this work.
 
 consort carries a whole "operate across sibling sub-repos" capability — ported faithfully from
 clone-wars' `consult`/`deploy`. It exists to serve a workspace where sibling directories each carry a
-`CLAUDE.md`/`AGENTS.md` marker (the `/home/liupan/CC` shape): `score` detects those sub-projects and
+`CLAUDE.md`/`AGENTS.md` marker (the `<workspace>` shape): `score` detects those sub-projects and
 emits a multi-target design doc with a `**Target Sub-Project(s):**` header + an `## Execution DAG`;
 `perform` hub-and-spoke routes implementation into each sub-repo.
 

@@ -650,7 +650,7 @@ Expected: all clean/green — full suite including the new `tests/paths-pluginro
 
 Run:
 ```bash
-cd /tmp && CLAUDE_PLUGIN_ROOT= node /home/liupan/CC/consort/dist/consort.cjs playback survey; cd - >/dev/null
+cd /tmp && CLAUDE_PLUGIN_ROOT= node <workspace>/consort/dist/consort.cjs playback survey; cd - >/dev/null
 ```
 Expected: exit 0 with a `TRENDS` line (playback reads `globalRoot()`, not `pluginRoot()`, so this simply confirms the rebuilt bundle dispatches and runs from a foreign cwd without `CLAUDE_PLUGIN_ROOT`). The authoritative pluginRoot self-location proof is the Task 1 unit test.
 

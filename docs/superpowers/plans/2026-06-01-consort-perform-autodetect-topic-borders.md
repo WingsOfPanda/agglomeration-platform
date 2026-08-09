@@ -166,12 +166,12 @@ import { assertPerformTopic } from "../src/core/perform.js";
 
 describe("assertPerformTopic", () => {
   it("accepts valid slugs up to 32 chars", () => {
-    expect(assertPerformTopic("iris-code-simplify")).toBe(true);
+    expect(assertPerformTopic("demo-repo-simplify")).toBe(true);
     expect(assertPerformTopic("a".repeat(32))).toBe(true);
     expect(assertPerformTopic("x1")).toBe(true);
   });
   it("rejects over-length, malformed, and empty slugs", () => {
-    expect(assertPerformTopic("iris-code-simplify-sweep-2-tiers-bce")).toBe(false); // 36 chars
+    expect(assertPerformTopic("demo-repo-simplify-sweep-2-tiers-bce")).toBe(false); // 36 chars
     expect(assertPerformTopic("a".repeat(33))).toBe(false);
     expect(assertPerformTopic("")).toBe(false);
     expect(assertPerformTopic("-leading")).toBe(false);
@@ -226,7 +226,7 @@ assertion is rc 2 and that no art dir is created). Minimal shape:
 import { initWith } from "../src/commands/perform.js";
 // ... within a describe that sets CONSORT_HOME to a fresh temp dir and writes a design doc:
 it("init rejects an over-length --topic with rc 2 and scaffolds nothing", async () => {
-  const rc = await initWith(["--topic", "iris-code-simplify-sweep-2-tiers-bce", designPath], { repoRoot: () => repoRootStub });
+  const rc = await initWith(["--topic", "demo-repo-simplify-sweep-2-tiers-bce", designPath], { repoRoot: () => repoRootStub });
   expect(rc).toBe(2);
   // no _perform art dir was created for the bad topic
 });

@@ -1,6 +1,6 @@
 # quick branch --stash-wip — design
 
-**Date:** 2026-08-08 · **Origin:** /ap:review forensics cluster — FOUR consecutive xjp quick runs
+**Date:** 2026-08-08 · **Origin:** /ap:review forensics cluster — FOUR consecutive quick runs on a side-lane eval box
 (2026-08-06/07: `implement-the-verifi`, `execute-the-6-item-m`, `land-the-two-clock-r`,
 `land-the-draw-proven`) each swept ~75 unrelated dirty files into the branch-base snapshot; three
 hub reflections independently name `--stash-wip` as the durable fix. · **Scope:** one PR.

@@ -627,8 +627,8 @@ Loop until `rc 0` (bounded per section; then surface remaining ISSUEs and stop).
 
 - [ ] **Step 2: Live multi-repo dogfood (inside tmux, isolated home).** Fixture: a hub dir with ≥2
   sibling sub-project dirs each carrying `CLAUDE.md`/`AGENTS.md` whose slugs appear in the topic. The
-  `/home/liupan/CC` workspace is the natural fixture (siblings `iris-code`, `clone-wars`,
-  `hermes-agent`, `consort` — each has `CLAUDE.md`). Run a topic spanning two of them (e.g. "how
+  `<workspace>` workspace is the natural fixture (siblings `example-repo`, `clone-wars`,
+  `other-repo`, `consort` — each has `CLAUDE.md`). Run a topic spanning two of them (e.g. "how
   clone-wars and consort both gate part spawning"). Drive:
   1. `score init --ensemble --targets clone-wars,consort <topic>` (validates the two slugs against the
      hub, writes TSV `targets.txt` + `multi-repo.txt=multi`) — OR omit `--targets` and let **Stage 10

@@ -18,7 +18,7 @@ codex:
     full:      [--dangerously-bypass-approvals-and-sandbox]
     read-only: [--sandbox, read-only]
   default_mode: full
-  # 0.3.9: bumped 90 -> 150. bl202 (iris-cortex GPU box) /ap:review 2026-06-23: 3x codex
+  # 0.3.9: bumped 90 -> 150. /ap:review on a GPU-saturated box 2026-06-23: 3x codex
   # spawn_failure reason=timeout under concurrent-autoresearch load — codex never emits ready
   # within 90s when the box is training-saturated and many workers spawn at once. Mirrors the
   # 0.3.6 claude 60->150 bump (which was claude-only). Warm/idle codex spawns finish well under
@@ -65,7 +65,7 @@ claude:
     read-only: [--permission-mode, plan]     # best-effort; plan mode is read-only-ish
   default_mode: full
   # 0.3.6: bumped 60 -> 150. Opus 4.8 at xhigh thinking reads identity.md slowly;
-  # bl202 spawn forensics (review 2026-06-22: 3x spawn_failure in one night across
+  # spawn forensics from a GPU-saturated box (review 2026-06-22: 3x spawn_failure in one night across
   # the based-on-last-reulst topic) caught a claude worker at "59s, almost done
   # thinking" when the 60s deadline fired, then a brittle retry cascade. 150s clears
   # the xhigh identity read; warm / lower-effort starts finish well under it, so the
