@@ -51,8 +51,8 @@ import {
 import { paneAlive } from "./tmux.js";
 import { recordHubFlag } from "./forensics.js";
 import {
-  ARTIFACT_ACCEPT_KEY, END_OF_ARTIFACT, artifactGraceS, awaitArtifact, clearArtifactStrikes,
-  hasArtifactSentinel, realSleep, type WaitAccept,
+  ARTIFACT_ACCEPT_KEY, END_OF_ARTIFACT, WAIT_ACCEPTED, artifactGraceS, awaitArtifact,
+  clearArtifactStrikes, hasArtifactSentinel, realSleep, type WaitAccept,
 } from "./artifact.js";
 import { liveOutboxWait } from "./waitLive.js";
 import {
@@ -154,15 +154,15 @@ export const DESIGN_PHASES: PhaseRow[] = [
   },
 ];
 
-/** Which explore state file carries a given key — the guards' chain entries are keys, the files are
- *  named by phase. Derived from PHASES so the phase list stays stated once. */
-const EXPLORE_PHASE_BY_KEY: Record<PhaseKey, string> =
-  Object.fromEntries(PHASES.map((p) => [p.key, p.phase])) as Record<PhaseKey, string>;
+/** Which explore row owns a given key — the guards' chain entries are keys, while the files and the
+ *  artifact paths hang off the row. Derived from PHASES so the phase list stays stated once. */
+const EXPLORE_ROW_BY_KEY: Record<PhaseKey, PhaseRow> =
+  Object.fromEntries(PHASES.map((p) => [p.key, p])) as Record<PhaseKey, PhaseRow>;
 
 /** A worker's LAST `<key>=` value in the explore state file that owns that key; null when the phase
  *  never ran (missing file reads as ""). */
 function exploreTag(art: string, agent: string, key: PhaseKey): string | null {
-  return lastTag(readIf(join(art, `${EXPLORE_PHASE_BY_KEY[key]}-${agent}.txt`)), key);
+  return lastTag(readIf(join(art, `${EXPLORE_ROW_BY_KEY[key].phase}-${agent}.txt`)), key);
 }
 
 /** Ternary encoding (openq / crossverify / adversary). The FIRST key in `chain` whose tag is
@@ -199,6 +199,13 @@ export interface GuardLive {
   paneAlive?(pane: string): Promise<boolean>;
 }
 
+/** The GuardLive a send verb hands `guardSkipped`: the phase's two ids plus its OWN probes, so the
+ *  guard's evidence and dispatchPrompt's busy-gate read through one seam. Spelled here once — every
+ *  send site built the same literal by hand. */
+export function guardLive(topic: string, provider: string, d: SendDeps): GuardLive {
+  return { topic, provider, busyState: d.busyState, paneAlive: d.paneAlive };
+}
+
 /** The evidence quadruple, in the order it is probed. All four must hold to override a skip; the
  *  first that fails becomes the reason the warning names. Every leg answers a question the chain
  *  tag CANNOT: the tag only says a wait expired. */
@@ -206,6 +213,8 @@ async function overrideEvidence(
   row: PhaseRow, art: string, agent: string, unsafe: string, live: GuardLive,
 ): Promise<string | null> {
   const { topic, provider } = live;
+  const failKey = unsafe.split("=")[0] as PhaseKey;
+  const failRow = EXPLORE_ROW_BY_KEY[failKey];
   // (a) The worker SAID it is idle. An absent status, or the spawn seed (`last_event: "spawn"`,
   // written by the platform before the worker ever reported), is silence — never evidence.
   const report = workerStatusReport(agent, provider, topic);
@@ -217,8 +226,7 @@ async function overrideEvidence(
 
   // (b) The turn that produced the unsafe tag actually ENDED. A wait expiry proves only that the
   // HUB stopped listening; the worker's own outbox is what says the turn is over.
-  const failKey = unsafe.split("=")[0] as PhaseKey;
-  const failPhase = EXPLORE_PHASE_BY_KEY[failKey];
+  const failPhase = failRow.phase;
   const failState = readIf(join(art, `${failPhase}-${agent}.txt`));
   const offset = parseLatestOffset(failState);
   if (offset === null) return `no OFFSET recorded for ${failPhase} (cannot tell whether that turn ended)`;
@@ -229,15 +237,11 @@ async function overrideEvidence(
   // (c) The failing phase's artifact is SETTLED — absent, empty, sentinel-terminated, or already
   // given an AC= verdict by its wait. A present-but-growing file is the 0.5.8 late-done race: the
   // worker is still writing, and a send would land mid-write.
-  const failRow = PHASES.find((p) => p.key === failKey);
-  if (failRow) {
-    const artifact = failRow.artifactFor(art, agent, provider, topic);
-    const text = readIfExistsOrNull(artifact);
-    const accept = lastTag(failState, ARTIFACT_ACCEPT_KEY);
-    const settled = text === null || text.trim() === "" || hasArtifactSentinel(text)
-      || accept === "sentinel" || accept === "quiescent";
-    if (!settled) return `${artifact} has no ${END_OF_ARTIFACT} and no ${ARTIFACT_ACCEPT_KEY}= verdict (still being written)`;
-  }
+  const artifact = failRow.artifactFor(art, agent, provider, topic);
+  const text = readIfExistsOrNull(artifact);
+  const settled = text === null || text.trim() === "" || hasArtifactSentinel(text)
+    || WAIT_ACCEPTED.has(lastTag(failState, ARTIFACT_ACCEPT_KEY) ?? "");
+  if (!settled) return `${artifact} has no ${END_OF_ARTIFACT} and no ${ARTIFACT_ACCEPT_KEY}= verdict (still being written)`;
 
   // (d) The pane is ALIVE. A dead worker is idle in the most literal sense and would pass every
   // check above, but dispatching to it turns a clean `<KEY>=skipped` rc-0 walk into a send failure

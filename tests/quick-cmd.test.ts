@@ -90,7 +90,8 @@ describe("quick init", () => {
   });
 });
 
-import { branchWith, parseBranchArgs } from "../src/commands/quick.js";
+import { branchWith } from "../src/commands/quick.js";
+import { parseBranchArgs } from "../src/core/quick.js";
 import type { Runner } from "../src/core/gitwork.js";
 
 describe("quick branch (branchWith core)", () => {
@@ -200,7 +201,7 @@ describe("quick branch --stash-wip", () => {
 
   it("SEQUENCE PIN: dirty + flag parks, PROVES the park, then snapshots a clean tree", async () => {
     const { r, calls } = fakeRepo({ dirty: true });
-    expect(await branchWith("auth", "/proj", r, { stashWip: true })).toBe(0);
+    expect(await branchWith("auth", "/proj", r, true)).toBe(0);
     expect(calls).toEqual([
       ["git", "status", "--porcelain", "--untracked-files=all"],            // dirty gate (all untracked, not the repo's status.showUntrackedFiles)
       ["git", "stash", "list", "--format=%gd%x09%gs"],                      // pre-push: what already carries our name
@@ -221,7 +222,7 @@ describe("quick branch --stash-wip", () => {
 
   it("partial park (entry exists, tree still dirty): marker written AND the residue is snapshotted", async () => {
     const { r, calls } = fakeRepo({ dirty: true, cleans: false });
-    expect(await branchWith("auth", "/proj", r, { stashWip: true })).toBe(0);
+    expect(await branchWith("auth", "/proj", r, true)).toBe(0);
     expect(readFileSync(marker(), "utf8")).toBe("stash999\tap-quick-auth-wip\n");
     expect(snapshotted(calls)).toBe(true);
     expect(readFileSync(join(quickExecDir("auth"), "branch-base.sha"), "utf8").trim()).toBe("wip111");
@@ -230,7 +231,7 @@ describe("quick branch --stash-wip", () => {
   it("no park (rc 0 but nothing stashed): NO marker, no success claim, snapshot path proceeds", async () => {
     const { r, calls } = fakeRepo({ dirty: true, stashed: false, cleans: false });
     expect(existsSync(marker())).toBe(false);
-    expect(await branchWith("auth", "/proj", r, { stashWip: true })).toBe(0);
+    expect(await branchWith("auth", "/proj", r, true)).toBe(0);
     expect(existsSync(marker())).toBe(false);
     expect(calls.some((c) => c.join(" ") === "git rev-parse stash@{0}")).toBe(false);
     expect(snapshotted(calls)).toBe(true);
@@ -238,34 +239,34 @@ describe("quick branch --stash-wip", () => {
 
   it("leftover same-named stash + a push that creates nothing: NOT adopted, no marker", async () => {
     const { r, calls } = fakeRepo({ dirty: true, preExisting: true, stashed: false, cleans: false });
-    expect(await branchWith("auth", "/proj", r, { stashWip: true })).toBe(0);
+    expect(await branchWith("auth", "/proj", r, true)).toBe(0);
     expect(existsSync(marker())).toBe(false);   // finish must never pop another run's stash
     expect(snapshotted(calls)).toBe(true);
   });
 
   it("new entry created alongside a same-named leftover: the NEW sha is what the marker records", async () => {
     const { r } = fakeRepo({ dirty: true, preExisting: true });
-    expect(await branchWith("auth", "/proj", r, { stashWip: true })).toBe(0);
+    expect(await branchWith("auth", "/proj", r, true)).toBe(0);
     expect(readFileSync(marker(), "utf8")).toBe("stash999\tap-quick-auth-wip\n");
   });
 
   it("failed-with-entry (rc 1 but git left an entry): marker IS written so finish restores it", async () => {
     const { r, calls } = fakeRepo({ dirty: true, pushRc: 1, cleans: false });
-    expect(await branchWith("auth", "/proj", r, { stashWip: true })).toBe(0);
+    expect(await branchWith("auth", "/proj", r, true)).toBe(0);
     expect(readFileSync(marker(), "utf8")).toBe("stash999\tap-quick-auth-wip\n");
     expect(snapshotted(calls)).toBe(true);   // the tree may still hold the same changes
   });
 
   it("clean + flag: no stash, no marker", async () => {
     const { r, calls } = fakeRepo({ dirty: false });
-    expect(await branchWith("auth", "/proj", r, { stashWip: true })).toBe(0);
+    expect(await branchWith("auth", "/proj", r, true)).toBe(0);
     expect(calls.some((c) => c[1] === "stash")).toBe(false);
     expect(existsSync(marker())).toBe(false);
   });
 
   it("stash push fails + flag: warns, no marker, today's snapshot path proceeds", async () => {
     const { r, calls } = fakeRepo({ dirty: true, pushRc: 1, stashed: false, cleans: false });
-    expect(await branchWith("auth", "/proj", r, { stashWip: true })).toBe(0);
+    expect(await branchWith("auth", "/proj", r, true)).toBe(0);
     expect(existsSync(marker())).toBe(false);
     expect(calls).toContainEqual(["git", "add", "-A"]);
     expect(calls).toContainEqual(["git", "commit", "-q", "-m", "chore: WIP before quick auth"]);
@@ -275,7 +276,7 @@ describe("quick branch --stash-wip", () => {
   it("no state dir (branch run without an init): creates it instead of throwing after the tree was emptied", async () => {
     rmSync(quickExecDir("auth"), { recursive: true, force: true });
     const { r } = fakeRepo({ dirty: true });
-    expect(await branchWith("auth", "/proj", r, { stashWip: true })).toBe(0);
+    expect(await branchWith("auth", "/proj", r, true)).toBe(0);
     expect(readFileSync(marker(), "utf8")).toBe("stash999\tap-quick-auth-wip\n");
   });
 

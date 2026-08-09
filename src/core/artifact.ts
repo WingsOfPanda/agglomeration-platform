@@ -118,6 +118,15 @@ export type ArtifactWait = "sentinel" | "quiescent" | "expired";
  *  NO `AC=` line at all means the wait never ran for this phase — the gate-skipping hub. */
 export type WaitAccept = ArtifactWait | "unchecked";
 
+/** The `AC=` values that mean THE WAIT ACCEPTED this artifact — one vocabulary, read by every
+ *  consumer (the dispatch guard's settled-artifact leg, the handoff's coverage legs, the backstop
+ *  below). Exactly ONE consumer diverges, deliberately: `artifactBackstop` additionally counts
+ *  `unchecked`, where the operator disabled the grace loop entirely (`AP_ARTIFACT_GRACE_S=0`) and
+ *  the backstop must not re-impose a check the operator turned off. The guard and the handoff do
+ *  NOT count it — both need positive evidence that a wait judged the file, and `unchecked` is the
+ *  absence of one: no evidence is not evidence. */
+export const WAIT_ACCEPTED: ReadonlySet<string> = new Set<string>(["sentinel", "quiescent"]);
+
 /** One read per poll: does the artifact carry the sentinel, and how big is it (0 when absent)? */
 function probe(path: string): { complete: boolean; size: number } {
   const text = readIfExistsOrNull(path);
@@ -234,7 +243,7 @@ export function artifactBackstop(opts: {
 }): ArtifactVerdict {
   const text = opts.text ?? readIf(opts.artifact);
   const accept = lastTag(opts.stateText, ARTIFACT_ACCEPT_KEY);
-  if (hasArtifactSentinel(text) || accept === "sentinel" || accept === "quiescent" || accept === "unchecked") {
+  if (hasArtifactSentinel(text) || accept === "unchecked" || WAIT_ACCEPTED.has(accept ?? "")) {
     clearArtifactStrikes(opts.art, opts.agent, opts.artifact);
     return "complete";
   }

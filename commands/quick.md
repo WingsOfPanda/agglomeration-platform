@@ -131,14 +131,10 @@ HEAD is probably still on `feat/quick-<SLUG>`, not the start branch. Give the br
    `$CS quick finish <SLUG>`. With `--stash-wip` it also pops the parked stash back — but only after
    proving it is safe to: HEAD must actually be the start branch, and the entry's sha must match the
    one recorded at park time. If `execute/finish-result.txt` holds a second line
-   **`stash-wip-kept`**, the pop did NOT happen and the WIP is still in the stash (nothing was lost).
-   The stderr warning names which case it was — HEAD left on another branch, a sha/identity
-   mismatch, an unreadable stash list, or a pop conflict. Say so in your closing report and pass on
-   the branch-aware recovery: `git -C <TARGET> checkout <start-branch>` (from
-   `execute/start-branch.txt`), then `git stash list` and `git stash pop <ref>`. On a conflicted pop,
-   add: the park included untracked files, so some may already be extracted — if the pop says
-   `<file> already exists`, remove those files first (or `git checkout <ref> -- .`), then pop again.
-   The same note is recorded as a hub flag, so `/ap:review` surfaces it after teardown.
+   **`stash-wip-kept`**, the pop did NOT happen and the WIP is still in the stash (nothing was lost):
+   surface `quick finish`'s stash warning verbatim in your closing report — it names which case it
+   was and the exact recovery for it. The same note is recorded as a hub flag, so `/ap:review`
+   surfaces it after teardown.
 
 ## Stage 3 — Teardown + SUMMARY
 

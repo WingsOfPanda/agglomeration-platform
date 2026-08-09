@@ -40,6 +40,14 @@ export function parseQuickArgs(tokens: string[]): QuickArgs {
   return { topicText: text.join(" ").trim(), provider, finish, stashWip };
 }
 
+export interface BranchArgs { topic: string; stashWip: boolean; }
+
+/** `quick branch [--stash-wip] <topic> [--stash-wip]` — the topic is the first non-flag token, so
+ *  the flag parses on either side of it. "" topic when only flags were given (usage rc 2). */
+export function parseBranchArgs(rest: string[]): BranchArgs {
+  return { topic: rest.find((t) => !t.startsWith("--")) ?? "", stashWip: rest.includes("--stash-wip") };
+}
+
 /** Repo test command by file presence (never executes). Precedence:
  *  tests/run.sh > package.json "test" > Makefile test: > pytest > cargo test > go test.
  *  "" if none — a "" makes the hub verify-tests step emit VERDICT=none (no independent re-run),
