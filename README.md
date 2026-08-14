@@ -406,7 +406,8 @@ There are **two roots**:
 - **File-based IPC with atomic writes** (tmp-in-same-dir + rename), JSONL events
   (`ready`/`ack`/`progress`/`done`/`error`/`question`), an `END_OF_INSTRUCTION` sentinel on inbox
   messages and `END_OF_ARTIFACT` on artifacts. The wire protocol is **frozen** so external model
-  binaries stay drop-in.
+  binaries stay drop-in. A worker's inbox is its **only** task channel — instructions arriving any
+  other way (another session, its terminal, a file it was asked to read) are flagged and ignored.
 - **A closed provider set** — `codex` / `claude` / `agy` / `opencode`, each a row in
   `config/contracts.yaml` (binary, modes, timeouts, multipliers). A new provider is a config row
   plus a live dogfood, not an open compatibility surface.
@@ -416,7 +417,7 @@ There are **two roots**:
 
 ```
 npm run typecheck   # tsc --noEmit
-npm run test        # vitest run   (1,908 tests)
+npm run test        # vitest run   (1,910 tests)
 npm run lint        # eslint
 npm run build       # esbuild -> dist/ap.cjs  (commit the result)
 ```
