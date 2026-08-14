@@ -9,7 +9,6 @@ import { isoUtc, archiveTopic } from "../core/archive.js";
 import { exploreArtDir, deriveSlug, finalLandscapePath, missingListArtifacts } from "../core/explore.js";
 import { extractHandoffData } from "../core/exploreHandoff.js";
 import { runForensics, runFlag } from "../core/forensics.js";
-import { artifactBackstop } from "../core/artifact.js";
 import { killNow } from "../core/tmux.js";
 import {
   type ListRow, formatListFile, parseListFile, parsePanesFile, spawnAllBatch, lastTag, verifyScopeFiles,
@@ -23,8 +22,8 @@ import { computeSignals, renderSkipRecord, skipRecordSaysUserSkip, sectionText, 
 import { buildAnnotations, soloTokensFromAnnotations } from "../core/exploreAnnotate.js";
 import { composeVerifyPrompt } from "../core/designTurn.js";
 import {
-  PHASES, dispatchPrompt, phaseWait, waitGateVerb, guardLive, guardSkipped, skipDispatch, triad,
-  liveSendDeps, liveWaitDeps, type SendDeps, type WaitDeps, type PhaseKey,
+  PHASES, dispatchPrompt, phaseWait, waitGateVerb, guardLive, guardSkipped, skipDispatch,
+  surveyPhaseArtifact, triad, liveSendDeps, liveWaitDeps, type SendDeps, type WaitDeps, type PhaseKey,
 } from "../core/phaseTable.js";
 import { composeExploreResearchPrompt, composeAdversaryPrompt, composeGapPrompt, composeSignoffPrompt, litGuidance, ADVERSARY_LENSES, researchLens } from "../core/exploreTurn.js";
 import { run as spawnRun } from "./spawn.js";
@@ -198,13 +197,9 @@ export async function openqCollateRun(rest: string[]): Promise<number> {
   // "no questions" path and never reaches the backstop.
   const questionsByAgent = new Map<string, string[]>();
   for (const r of rows) {
-    const findings = join(art, `findings-${r.agent}.md`);
-    const text = readIf(findings);
-    const verdict = text.trim() ? artifactBackstop({
-      label: "explore openq-collate", command: "explore", topic, art, agent: r.agent,
-      artifact: findings, text,
-      stateText: readIf(join(art, `research-${r.agent}.txt`)), key: "FS",
-    }) : "complete";
+    const { text, verdict } = surveyPhaseArtifact(RESEARCH, r, {
+      topic, label: "explore openq-collate", emptyIsComplete: true,
+    });
     if (verdict === "still-writing") return 1;
     questionsByAgent.set(r.agent, parseOpenQuestions(verdict === "drop" ? "" : text));
   }
@@ -261,17 +256,13 @@ export async function diffExploreRun(rest: string[]): Promise<number> {
 
   const workers: DiffPart[] = [];
   for (const r of rows) {
-    const f = join(art, `findings-${r.agent}.md`);
+    const f = RESEARCH.artifactFor(art, r.agent, r.provider, topic);
     if (!existsSync(f)) { log.error(`explore diff: ${r.agent} findings missing: ${f}`); return 1; }
     // Sentinel backstop, design diff's shape: a still-writing findings file refuses the whole diff
     // (the hub runs research-wait and retries); one the wait never accepted buckets as EMPTY —
-    // bucketing half a worker's Approaches would mis-scope every later phase. The bytes judged are
-    // the bytes bucketed (one read, passed in) — a `mv` landing between the two would otherwise
-    // bucket exactly the half-written file the check just cleared.
-    const text = readFileSync(f, "utf8");
-    const verdict = artifactBackstop({
-      label: "explore diff", command: "explore", topic, art, agent: r.agent, artifact: f, text,
-      stateText: readIf(join(art, `research-${r.agent}.txt`)), key: "FS",
+    // bucketing half a worker's Approaches would mis-scope every later phase.
+    const { text, verdict } = surveyPhaseArtifact(RESEARCH, r, {
+      topic, label: "explore diff", emptyIsComplete: false,
     });
     if (verdict === "still-writing") return 1;
     workers.push({ name: r.agent, findings: verdict === "drop" ? "" : text });
@@ -339,15 +330,10 @@ export async function rebuttalSendWith(topic: string, agent: string, provider: s
   // what this worker is asked to defend. A critique the wait never accepted contributes nothing.
   const critiques: CritiqueInput[] = [];
   for (const r of rows) {
-    const stateText = readIf(join(art, `adversary-${r.agent}.txt`));
-    if (lastTag(stateText, "AS") === "skipped") continue;
-    const critique = join(art, `adversary-${r.agent}.md`);
-    const text = readIf(critique);
-    if (!text.trim()) continue;
-    const verdict = artifactBackstop({
-      label: "explore rebuttal-send", command: "explore", topic, art, agent: r.agent,
-      artifact: critique, text, stateText, key: "AS",
+    const { text, verdict } = surveyPhaseArtifact(ADVERSARY, r, {
+      topic, label: "explore rebuttal-send", emptyIsComplete: true, skipTag: true,
     });
+    if (verdict === "skipped" || !text.trim()) continue; // an empty critique is omitted, never judged
     if (verdict === "still-writing") return 1;
     if (verdict === "complete") critiques.push({ agent: r.agent, text });
   }
@@ -483,10 +469,8 @@ export async function survivorsRun(rest: string[]): Promise<number> {
   let stillWriting = false;
   for (const r of rows) {
     if (missing.has(`findings-${r.agent}.md`)) continue;
-    const verdict = artifactBackstop({
-      label: "explore survivors", command: "explore", topic, art, agent: r.agent,
-      artifact: join(art, `findings-${r.agent}.md`),
-      stateText: readIf(join(art, `research-${r.agent}.txt`)), key: "FS",
+    const { verdict } = surveyPhaseArtifact(RESEARCH, r, {
+      topic, label: "explore survivors", emptyIsComplete: false,
     });
     if (verdict === "still-writing") stillWriting = true;
     else if (verdict === "drop") missing.add(`findings-${r.agent}.md`);
@@ -530,10 +514,8 @@ export async function synthPreliminaryRun(rest: string[]): Promise<number> {
   let stillWriting = false;
   for (const r of rows) {
     if (missing.includes(`findings-${r.agent}.md`)) continue;
-    const verdict = artifactBackstop({
-      label: "explore synth-preliminary", command: "explore", topic, art, agent: r.agent,
-      artifact: join(art, `findings-${r.agent}.md`),
-      stateText: readIf(join(art, `research-${r.agent}.txt`)), key: "FS",
+    const { verdict } = surveyPhaseArtifact(RESEARCH, r, {
+      topic, label: "explore synth-preliminary", emptyIsComplete: false,
     });
     if (verdict === "still-writing") stillWriting = true;
     else if (verdict === "drop") missing.push(`findings-${r.agent}.md`);
@@ -687,10 +669,8 @@ export async function synthFinalRun(rest: string[]): Promise<number> {
     let stillWriting = false;
     for (const r of active) {
       if (missing.includes(`adversary-${r.agent}.md`)) continue;
-      const verdict = artifactBackstop({
-        label: "explore synth-final", command: "explore", topic, art, agent: r.agent,
-        artifact: join(art, `adversary-${r.agent}.md`),
-        stateText: readIf(join(art, `adversary-${r.agent}.txt`)), key: "AS",
+      const { verdict } = surveyPhaseArtifact(ADVERSARY, r, {
+        topic, label: "explore synth-final", emptyIsComplete: false,
       });
       if (verdict === "still-writing") stillWriting = true;
       else if (verdict === "drop") missing.push(`adversary-${r.agent}.md`);
@@ -723,14 +703,10 @@ export async function verdictTallyRun(rest: string[]): Promise<number> {
   // a critique the wait never accepted tallies as if empty, which IS `unavailable`, but recorded.
   const verdictRows: Array<{ agent: string; verdict: string }> = [];
   for (const r of rows) {
-    const stateText = readIf(join(art, `adversary-${r.agent}.txt`));
-    if (lastTag(stateText, "AS") === "skipped") { verdictRows.push({ agent: r.agent, verdict: "skipped" }); continue; }
-    const critique = join(art, `adversary-${r.agent}.md`);
-    const text = readIf(critique);
-    const verdict = text.trim() ? artifactBackstop({
-      label: "explore verdict-tally", command: "explore", topic, art, agent: r.agent,
-      artifact: critique, text, stateText, key: "AS",
-    }) : "complete";
+    const { text, verdict } = surveyPhaseArtifact(ADVERSARY, r, {
+      topic, label: "explore verdict-tally", emptyIsComplete: true, skipTag: true,
+    });
+    if (verdict === "skipped") { verdictRows.push({ agent: r.agent, verdict: "skipped" }); continue; }
     if (verdict === "still-writing") return 1;
     verdictRows.push({ agent: r.agent, verdict: parseAdversaryVerdict(verdict === "drop" ? "" : text) });
   }

@@ -19862,6 +19862,31 @@ async function phaseWait(row, topic, agent, provider, d) {
   log.ok(`${label}: ${agent} ${row.key}=${state}`);
   return 0;
 }
+function surveyPhaseArtifact(row, w, ctx) {
+  const { topic, label } = ctx;
+  const art = row.artDir(topic);
+  const stateText = readIfExists((0, import_node_path26.join)(art, `${row.phase}-${w.agent}.txt`));
+  const tag = lastTag(stateText, row.key);
+  const artifact = row.artifactFor(art, w.agent, w.provider, topic);
+  const text = readIfExists(artifact);
+  if (ctx.skipTag && tag === "skipped") return { text, tag, verdict: "skipped" };
+  if (ctx.emptyIsComplete && !text.trim()) return { text, tag, verdict: "complete" };
+  return {
+    text,
+    tag,
+    verdict: artifactBackstop({
+      label,
+      command: row.cmd,
+      topic,
+      art,
+      agent: w.agent,
+      artifact,
+      text,
+      stateText,
+      key: row.key
+    })
+  };
+}
 function waitGateVerb(label, art, phase, key) {
   const listPath = (0, import_node_path26.join)(art, "list.txt");
   if (!(0, import_node_fs32.existsSync)(listPath)) {
@@ -20436,22 +20461,15 @@ async function diffRun(rest) {
   }
   const workers = [];
   for (const r of rows) {
-    const f = (0, import_node_path28.join)(workerDir(r.agent, r.provider, topic), "findings.md");
+    const f = RESEARCH.artifactFor(art, r.agent, r.provider, topic);
     if (!(0, import_node_fs34.existsSync)(f)) {
       log.error(`design diff: ${r.agent} findings.md missing: ${f}`);
       return 1;
     }
-    const text = (0, import_node_fs34.readFileSync)(f, "utf8");
-    const verdict = artifactBackstop({
-      label: "design diff",
-      command: "design",
+    const { text, verdict } = surveyPhaseArtifact(RESEARCH, r, {
       topic,
-      art,
-      agent: r.agent,
-      artifact: f,
-      text,
-      stateText: readIfExists((0, import_node_path28.join)(art, `research-${r.agent}.txt`)),
-      key: "FS"
+      label: "design diff",
+      emptyIsComplete: false
     });
     if (verdict === "still-writing") return 1;
     workers.push({ name: r.agent, findings: verdict === "drop" ? "" : text });
@@ -20534,21 +20552,11 @@ async function adjudicateRun(rest) {
   const verify = {};
   const vs = {};
   for (const r of rows) {
-    const verifyPath = (0, import_node_path28.join)(workerDir(r.agent, r.provider, topic), "verify.md");
-    const text = readIfExists(verifyPath);
-    const stateText = readIfExists((0, import_node_path28.join)(art, `verify-${r.agent}.txt`));
-    const tag = lastTag(stateText, "VS");
-    const verdict = text.trim() ? artifactBackstop({
-      label: "design adjudicate",
-      command: "design",
+    const { text, tag, verdict } = surveyPhaseArtifact(VERIFY, r, {
       topic,
-      art,
-      agent: r.agent,
-      artifact: verifyPath,
-      text,
-      stateText,
-      key: "VS"
-    }) : "complete";
+      label: "design adjudicate",
+      emptyIsComplete: true
+    });
     if (verdict === "still-writing") return 1;
     verify[r.agent] = verdict === "drop" ? "" : text;
     vs[r.agent] = tag ?? "skipped";
@@ -27446,19 +27454,11 @@ async function openqCollateRun(rest) {
   }
   const questionsByAgent = /* @__PURE__ */ new Map();
   for (const r of rows) {
-    const findings = (0, import_node_path41.join)(art, `findings-${r.agent}.md`);
-    const text = readIfExists(findings);
-    const verdict = text.trim() ? artifactBackstop({
-      label: "explore openq-collate",
-      command: "explore",
+    const { text, verdict } = surveyPhaseArtifact(RESEARCH2, r, {
       topic,
-      art,
-      agent: r.agent,
-      artifact: findings,
-      text,
-      stateText: readIfExists((0, import_node_path41.join)(art, `research-${r.agent}.txt`)),
-      key: "FS"
-    }) : "complete";
+      label: "explore openq-collate",
+      emptyIsComplete: true
+    });
     if (verdict === "still-writing") return 1;
     questionsByAgent.set(r.agent, parseOpenQuestions(verdict === "drop" ? "" : text));
   }
@@ -27527,22 +27527,15 @@ async function diffExploreRun(rest) {
   }
   const workers = [];
   for (const r of rows) {
-    const f = (0, import_node_path41.join)(art, `findings-${r.agent}.md`);
+    const f = RESEARCH2.artifactFor(art, r.agent, r.provider, topic);
     if (!(0, import_node_fs43.existsSync)(f)) {
       log.error(`explore diff: ${r.agent} findings missing: ${f}`);
       return 1;
     }
-    const text = (0, import_node_fs43.readFileSync)(f, "utf8");
-    const verdict = artifactBackstop({
-      label: "explore diff",
-      command: "explore",
+    const { text, verdict } = surveyPhaseArtifact(RESEARCH2, r, {
       topic,
-      art,
-      agent: r.agent,
-      artifact: f,
-      text,
-      stateText: readIfExists((0, import_node_path41.join)(art, `research-${r.agent}.txt`)),
-      key: "FS"
+      label: "explore diff",
+      emptyIsComplete: false
     });
     if (verdict === "still-writing") return 1;
     workers.push({ name: r.agent, findings: verdict === "drop" ? "" : text });
@@ -27609,22 +27602,13 @@ async function rebuttalSendWith(topic, agent, provider, d) {
   for (const r of rows) buckets.set(r.agent, parseBucketLines(readIfExists((0, import_node_path41.join)(art, `${r.agent}_only_items.txt`))));
   const critiques = [];
   for (const r of rows) {
-    const stateText = readIfExists((0, import_node_path41.join)(art, `adversary-${r.agent}.txt`));
-    if (lastTag(stateText, "AS") === "skipped") continue;
-    const critique = (0, import_node_path41.join)(art, `adversary-${r.agent}.md`);
-    const text = readIfExists(critique);
-    if (!text.trim()) continue;
-    const verdict = artifactBackstop({
-      label: "explore rebuttal-send",
-      command: "explore",
+    const { text, verdict } = surveyPhaseArtifact(ADVERSARY, r, {
       topic,
-      art,
-      agent: r.agent,
-      artifact: critique,
-      text,
-      stateText,
-      key: "AS"
+      label: "explore rebuttal-send",
+      emptyIsComplete: true,
+      skipTag: true
     });
+    if (verdict === "skipped" || !text.trim()) continue;
     if (verdict === "still-writing") return 1;
     if (verdict === "complete") critiques.push({ agent: r.agent, text });
   }
@@ -27757,15 +27741,10 @@ async function survivorsRun(rest) {
   let stillWriting = false;
   for (const r of rows) {
     if (missing.has(`findings-${r.agent}.md`)) continue;
-    const verdict = artifactBackstop({
-      label: "explore survivors",
-      command: "explore",
+    const { verdict } = surveyPhaseArtifact(RESEARCH2, r, {
       topic,
-      art,
-      agent: r.agent,
-      artifact: (0, import_node_path41.join)(art, `findings-${r.agent}.md`),
-      stateText: readIfExists((0, import_node_path41.join)(art, `research-${r.agent}.txt`)),
-      key: "FS"
+      label: "explore survivors",
+      emptyIsComplete: false
     });
     if (verdict === "still-writing") stillWriting = true;
     else if (verdict === "drop") missing.add(`findings-${r.agent}.md`);
@@ -27816,15 +27795,10 @@ async function synthPreliminaryRun(rest) {
   let stillWriting = false;
   for (const r of rows) {
     if (missing.includes(`findings-${r.agent}.md`)) continue;
-    const verdict = artifactBackstop({
-      label: "explore synth-preliminary",
-      command: "explore",
+    const { verdict } = surveyPhaseArtifact(RESEARCH2, r, {
       topic,
-      art,
-      agent: r.agent,
-      artifact: (0, import_node_path41.join)(art, `findings-${r.agent}.md`),
-      stateText: readIfExists((0, import_node_path41.join)(art, `research-${r.agent}.txt`)),
-      key: "FS"
+      label: "explore synth-preliminary",
+      emptyIsComplete: false
     });
     if (verdict === "still-writing") stillWriting = true;
     else if (verdict === "drop") missing.push(`findings-${r.agent}.md`);
@@ -28017,15 +27991,10 @@ async function synthFinalRun(rest) {
     let stillWriting = false;
     for (const r of active) {
       if (missing.includes(`adversary-${r.agent}.md`)) continue;
-      const verdict = artifactBackstop({
-        label: "explore synth-final",
-        command: "explore",
+      const { verdict } = surveyPhaseArtifact(ADVERSARY, r, {
         topic,
-        art,
-        agent: r.agent,
-        artifact: (0, import_node_path41.join)(art, `adversary-${r.agent}.md`),
-        stateText: readIfExists((0, import_node_path41.join)(art, `adversary-${r.agent}.txt`)),
-        key: "AS"
+        label: "explore synth-final",
+        emptyIsComplete: false
       });
       if (verdict === "still-writing") stillWriting = true;
       else if (verdict === "drop") missing.push(`adversary-${r.agent}.md`);
@@ -28062,24 +28031,16 @@ async function verdictTallyRun(rest) {
   const rows = parseListFile(listRaw);
   const verdictRows = [];
   for (const r of rows) {
-    const stateText = readIfExists((0, import_node_path41.join)(art, `adversary-${r.agent}.txt`));
-    if (lastTag(stateText, "AS") === "skipped") {
+    const { text, verdict } = surveyPhaseArtifact(ADVERSARY, r, {
+      topic,
+      label: "explore verdict-tally",
+      emptyIsComplete: true,
+      skipTag: true
+    });
+    if (verdict === "skipped") {
       verdictRows.push({ agent: r.agent, verdict: "skipped" });
       continue;
     }
-    const critique = (0, import_node_path41.join)(art, `adversary-${r.agent}.md`);
-    const text = readIfExists(critique);
-    const verdict = text.trim() ? artifactBackstop({
-      label: "explore verdict-tally",
-      command: "explore",
-      topic,
-      art,
-      agent: r.agent,
-      artifact: critique,
-      text,
-      stateText,
-      key: "AS"
-    }) : "complete";
     if (verdict === "still-writing") return 1;
     verdictRows.push({ agent: r.agent, verdict: parseAdversaryVerdict(verdict === "drop" ? "" : text) });
   }
@@ -28169,7 +28130,6 @@ var init_explore2 = __esm({
     init_explore();
     init_exploreHandoff();
     init_forensics();
-    init_artifact();
     init_tmux();
     init_roster();
     init_providers();

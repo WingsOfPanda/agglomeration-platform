@@ -51,8 +51,8 @@ import {
 import { paneAlive } from "./tmux.js";
 import { recordHubFlag } from "./forensics.js";
 import {
-  ARTIFACT_ACCEPT_KEY, END_OF_ARTIFACT, WAIT_ACCEPTED, artifactGraceS, awaitArtifact,
-  clearArtifactStrikes, hasArtifactSentinel, realSleep, type WaitAccept,
+  ARTIFACT_ACCEPT_KEY, END_OF_ARTIFACT, WAIT_ACCEPTED, artifactBackstop, artifactGraceS, awaitArtifact,
+  clearArtifactStrikes, hasArtifactSentinel, realSleep, type ArtifactVerdict, type WaitAccept,
 } from "./artifact.js";
 import { liveOutboxWait } from "./waitLive.js";
 import {
@@ -423,6 +423,53 @@ export async function phaseWait(
   writeFileSync(join(art, `${row.phase}-${agent}.done`), "");
   log.ok(`${label}: ${agent} ${row.key}=${state}`);
   return 0;
+}
+
+/** What one worker's phase artifact is worth to a validator: the bytes it may parse, the phase tag
+ *  that state file carries, and the backstop's verdict on it. `skipped` is NOT a backstop verdict —
+ *  it is the `skipTag` slot's answer, kept distinct because its consumers differ (rebuttal omits
+ *  that worker, verdict-tally records it). */
+export interface PhaseArtifactSurvey {
+  text: string;
+  tag: string | null;
+  verdict: ArtifactVerdict | "skipped";
+}
+
+/** The read every validator does before consuming one worker's phase artifact: derive the state file
+ *  and the artifact from the ROW, read both once, and run `artifactBackstop` over them. The bytes
+ *  judged are the bytes returned — a `mv` landing between check and use would otherwise hand the
+ *  caller exactly the half-written file the check just cleared.
+ *
+ *  Two per-site slots, both transcribed from the shipped validators:
+ *  - `emptyIsComplete` — an absent/empty artifact is that site's PRE-EXISTING no-op path (no questions
+ *    to route, VS=skipped, an empty critique), so it never reaches the backstop; the diff/survivor
+ *    sites have no such path and judge whatever is there.
+ *  - `skipTag` — a `<key>=skipped` phase (the dispatch guard's, or a zero-input skip) is reported as
+ *    `skipped` before anything is judged.
+ *
+ *  ONE worker per call, deliberately: `artifactBackstop` WRITES (strike logs, hub flags, STILL_WRITING
+ *  on stderr), and the callers differ in when they stop — six refuse the whole verb at the first
+ *  `still-writing` while three finish the roster — so surveying a worker the caller would never have
+ *  reached would record strikes the shipped code never recorded. The fan-out stays at the caller. */
+export function surveyPhaseArtifact(
+  row: PhaseRow,
+  w: { agent: string; provider: string },
+  ctx: { topic: string; label: string; emptyIsComplete: boolean; skipTag?: boolean },
+): PhaseArtifactSurvey {
+  const { topic, label } = ctx;
+  const art = row.artDir(topic);
+  const stateText = readIf(join(art, `${row.phase}-${w.agent}.txt`));
+  const tag = lastTag(stateText, row.key);
+  const artifact = row.artifactFor(art, w.agent, w.provider, topic);
+  const text = readIf(artifact);
+  if (ctx.skipTag && tag === "skipped") return { text, tag, verdict: "skipped" };
+  if (ctx.emptyIsComplete && !text.trim()) return { text, tag, verdict: "complete" };
+  return {
+    text, tag,
+    verdict: artifactBackstop({
+      label, command: row.cmd, topic, art, agent: w.agent, artifact, text, stateText, key: row.key,
+    }),
+  };
 }
 
 /** The wait-gate read-out, shared by explore's and design's `wait-gate` verb: one `<agent>\t<status>`

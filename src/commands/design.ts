@@ -10,7 +10,7 @@ import {
   resolveDrilldownPath, cascadeTargets, exportDocTo, type ResetPhase,
 } from "../core/design.js";
 import {
-  formatListFile, parseListFile, spawnAllBatch, verifyScopeFiles, lastTag, type ListRow,
+  formatListFile, parseListFile, spawnAllBatch, verifyScopeFiles, type ListRow,
 } from "../core/roster.js";
 import { assembleDoc, SECTIONS_SINGLE, synthesizeSeeds } from "../core/designDoc.js";
 import { auditDoc } from "../core/audit.js";
@@ -21,13 +21,13 @@ import { pickAgents } from "../core/agents.js";
 import { agentConsultValidated, consultTimeout } from "../core/contracts.js";
 import { composeResearchPrompt, scaledTimeout, composeVerifyPrompt, composeDrilldownPrompt, drilldownState, parseLatestOffset } from "../core/designTurn.js";
 import {
-  DESIGN_PHASES, dispatchPrompt, phaseWait, waitGateVerb, skipDispatch, triad,
+  DESIGN_PHASES, dispatchPrompt, phaseWait, waitGateVerb, skipDispatch, surveyPhaseArtifact, triad,
   liveSendDeps, liveWaitDeps, type SendDeps, type WaitDeps,
 } from "../core/phaseTable.js";
 import { statusPath, workerBusyState } from "../core/ipc.js";
 import { envNum } from "../core/env.js";
 import { runForensics, runFlag } from "../core/forensics.js";
-import { artifactBackstop, clearAgentStrikes } from "../core/artifact.js";
+import { clearAgentStrikes } from "../core/artifact.js";
 import { diffFindings, type DiffPart } from "../core/designDiff.js";
 import { adjudicate, type AdjudicateInput } from "../core/designAdjudicate.js";
 import { classifyTopic, skillHintAppend } from "../core/designSkill.js";
@@ -221,15 +221,12 @@ export async function diffRun(rest: string[]): Promise<number> {
 
   const workers: DiffPart[] = [];
   for (const r of rows) {
-    const f = join(workerDir(r.agent, r.provider, topic), "findings.md");
+    const f = RESEARCH.artifactFor(art, r.agent, r.provider, topic);
     if (!existsSync(f)) { log.error(`design diff: ${r.agent} findings.md missing: ${f}`); return 1; }
     // Sentinel backstop: a still-writing findings file refuses the whole diff (the hub runs
-    // research-wait and retries); one the wait never accepted diffs as EMPTY. The bytes judged are
-    // the bytes diffed — one read, passed in, so a `mv` cannot land between check and use.
-    const text = readFileSync(f, "utf8");
-    const verdict = artifactBackstop({
-      label: "design diff", command: "design", topic, art, agent: r.agent, artifact: f, text,
-      stateText: readIf(join(art, `research-${r.agent}.txt`)), key: "FS",
+    // research-wait and retries); one the wait never accepted diffs as EMPTY.
+    const { text, verdict } = surveyPhaseArtifact(RESEARCH, r, {
+      topic, label: "design diff", emptyIsComplete: false,
     });
     if (verdict === "still-writing") return 1;
     workers.push({ name: r.agent, findings: verdict === "drop" ? "" : text });
@@ -297,17 +294,12 @@ export async function adjudicateRun(rest: string[]): Promise<number> {
   const verify: Record<string, string> = {};
   const vs: Record<string, string> = {};
   for (const r of rows) {
-    const verifyPath = join(workerDir(r.agent, r.provider, topic), "verify.md");
-    const text = readIf(verifyPath);
-    const stateText = readIf(join(art, `verify-${r.agent}.txt`));
-    const tag = lastTag(stateText, "VS");
     // Same backstop as diff, over the OTHER worker-authored artifact this command adjudicates: a
     // half-written verify.md would silently under-report its verdicts. An absent/empty verify.md is
     // the pre-existing VS=skipped path (nothing was ever sent) and never reaches the backstop.
-    const verdict = text.trim() ? artifactBackstop({
-      label: "design adjudicate", command: "design", topic, art, agent: r.agent,
-      artifact: verifyPath, text, stateText, key: "VS",
-    }) : "complete";
+    const { text, tag, verdict } = surveyPhaseArtifact(VERIFY, r, {
+      topic, label: "design adjudicate", emptyIsComplete: true,
+    });
     if (verdict === "still-writing") return 1;
     verify[r.agent] = verdict === "drop" ? "" : text;
     vs[r.agent] = tag ?? "skipped";
