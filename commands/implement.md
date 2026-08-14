@@ -81,8 +81,20 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
 5. **Pre-snapshot + branch.** `$CS implement pre-snapshot <TOPIC>` (commits any dirty tree so the
    implement branch forks clean; rc 2 = the target is not a git repo → surface and stop). Then, unless
    the user passed `--no-branch`, `$CS implement branch <TOPIC>` (creates/resumes `feat/implement-<TOPIC>`
-   from the clean HEAD and records `branch-base.sha`). With `--no-branch`, run
+   from the clean HEAD and records `branch-base.sha` plus the branch mode). With `--no-branch`, run
    `$CS implement branch --no-branch <TOPIC>` (stays on the current branch).
+   `branch` exits **rc 1** on two refusals (read the message — a missing art-dir is rc 1 too):
+   - **"HEAD was already `feat/implement-<TOPIC>` at pre-snapshot"** — the baseline IS the feat
+     branch, so the work branch and the base are one ref and finish would have nothing to merge or
+     push.
+   - **"pre-snapshot recorded a detached HEAD"** — there is no start branch to restore or merge into.
+
+   Nothing was written in either case. **AskUserQuestion** how to proceed — offer the base branches
+   the repo actually has (`git -C "$TARGET_CWD" branch --format='%(refname:short)'`) as "checkout
+   `<base>` and re-snapshot", plus "implement on the current branch (`--no-branch`)" for the first
+   refusal only. Then either `git -C "$TARGET_CWD" checkout <base>` + re-run `pre-snapshot` +
+   `branch`, or re-run as `$CS implement branch --no-branch <TOPIC>`. Do not work around it by
+   proceeding as if `branch` had succeeded.
 
 > **Claude-confirm gate (before the spawn).** `init` records the worker's auto-detected provider
 > (`PROVIDER=<codex|claude>` on stdout; also written to `$ART/auto_provider.txt`). **Before
@@ -265,7 +277,15 @@ Then `ROUND=$((ROUND+1))`, `RETRY=0`, and loop back to Stage 1.
    then apply: `$CS implement finish <TOPIC> <merge|pr|keep|discard>`. Read the outcome from
    `$ART/finish-results.tsv` (`<slug>\t<action>\t<outcome>`); on `merge-conflict-left`, tell the user
    the branch was preserved and the repo restored to the start branch (resolve `git merge
-   feat/implement-<TOPIC>` by hand).
+   feat/implement-<TOPIC>` by hand). **`same-branch`** means there was no branch distinct from the
+   baseline to act on (it was never left, its ref is gone, or the baseline was detached), so the
+   action did NOTHING — the work is on the baseline branch, unpushed and unmerged. Say so plainly
+   and hand the user the recovery: push and open the PR by hand, or checkout the intended base,
+   re-run `pre-snapshot` + `branch`, and finish again. **First check `$ART/branch-mode.txt`**: if the
+   file is absent this is a pre-0.5.14 art dir, where `same-branch` may simply be a deliberate
+   `--no-branch` run that predates the record — confirm with the user before relaying the
+   stranded-work recovery. (With the file present, `no-branch` is the deliberate run and needs no
+   recovery; `branch` means the work really is stranded.)
 4. **Forensics + reflection.** `$CS implement forensics <TOPIC>`. If it printed a path, use the
    **Edit/Write tool** to APPEND an idempotent `## Hub reflection` section to that file — 3-5
    short bullets interpreting the mechanical findings.

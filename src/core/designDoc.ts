@@ -21,30 +21,45 @@ export function assembleDoc(input: AssembleInput): string {
   return out;
 }
 
-const SEED_SPECS: { section: string; heading: string; comment: string; match: (l: string) => boolean }[] = [
-  { section: "problem", heading: "## Problem", comment: "<!-- seed: cross-verified facts about the current state -->",
-    match: (l) => /^- \[/.test(l) },
+// A steer tag is the section word FOLLOWED BY a terminator (`]`, `:`, or a space) — without one,
+// `- [problem.md:3]` and `- [components/Button.tsx:10]` (ordinary adjudicated citations, which all
+// open with `[`) would be claimed as tags. The terminator costs the old prefix tolerance: a
+// pluralized `- [Goals]` no longer routes.
+const SEED_SPECS: { section: string; heading: string; comment: string; tag: RegExp }[] = [
+  { section: "problem", heading: "## Problem", comment: "<!-- seed: claims tagged [Problem] -->",
+    tag: /^- \[Problem[\]:\s]/i },
   { section: "goal", heading: "## Goal", comment: "<!-- seed: claims tagged [Goal] -->",
-    match: (l) => /^- \[Goal/i.test(l) },
+    tag: /^- \[Goal[\]:\s]/i },
   { section: "architecture", heading: "## Architecture", comment: "<!-- seed: claims tagged [Architecture] -->",
-    match: (l) => /^- \[Architecture/i.test(l) },
+    tag: /^- \[Architecture[\]:\s]/i },
   { section: "components", heading: "## Components", comment: "<!-- seed: claims tagged [Components] -->",
-    match: (l) => /^- \[Components/i.test(l) },
+    tag: /^- \[Components[\]:\s]/i },
   { section: "testing", heading: "## Testing", comment: "<!-- seed: claims tagged [Testing] or containing \"test\" -->",
-    match: (l) => /^- \[Testing/i.test(l) || /^- .*\btest/i.test(l) },
+    tag: /^- \[Testing[\]:\s]/i },
   { section: "success-criteria", heading: "## Success Criteria", comment: "<!-- seed: claims tagged [Success Criteria] -->",
-    match: (l) => /^- \[Success/i.test(l) },
+    tag: /^- \[Success( Criteria)?[\]:\s]/i },
 ];
 const SEED_PLACEHOLDER = "_(no seed content matched; Hub drafts from scratch in the design walk)_";
 
 /** Port of bin/consult-synthesize.sh — 6 single-repo seed drafts from adjudicated.md content.
- *  Each: heading + blank + seed comment + matched claim lines (placeholder if none matched). */
+ *  Each: heading + blank + seed comment + matched claim lines (placeholder if none matched).
+ *
+ *  Routing is FIRST-MATCH over the steer tags, so every line has at most one home: `problem` takes
+ *  only `- [Problem` lines (it used to take every `- [` bullet — i.e. the whole adjudicated corpus,
+ *  since adjudicate renders each claim as `- [<cite>] …`, which both dumped an untagged corpus into
+ *  problem.md and landed every tagged line twice). The `testing` "contains test" heuristic is the
+ *  one untagged claim, so it only sees lines no tag took. */
 export function synthesizeSeeds(adjText: string): { section: string; body: string }[] {
-  const lines = adjText.split("\n");
+  const matched = new Map<string, string[]>(SEED_SPECS.map((s) => [s.section, []]));
+  for (const l of adjText.split("\n")) {
+    const spec = SEED_SPECS.find((s) => s.tag.test(l));
+    if (spec) matched.get(spec.section)!.push(l);
+    else if (/^- .*\btest/i.test(l)) matched.get("testing")!.push(l);
+  }
   return SEED_SPECS.map((spec) => {
-    const matched = lines.filter(spec.match);
+    const lines = matched.get(spec.section)!;
     const body = `${spec.heading}\n\n${spec.comment}\n` +
-      (matched.length ? matched.join("\n") + "\n" : SEED_PLACEHOLDER + "\n");
+      (lines.length ? lines.join("\n") + "\n" : SEED_PLACEHOLDER + "\n");
     return { section: spec.section, body };
   });
 }

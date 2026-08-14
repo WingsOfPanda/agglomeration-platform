@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { existsSync, readdirSync, mkdirSync, readFileSync } from "node:fs";
 import { atomicWrite } from "./atomic.js";
 import { topicDir } from "./paths.js";
+import { WALK_DIRNAME } from "./designWalk.js";
 export { deriveSlug } from "./quick.js"; // identical to consult's slug rule; reused, not duplicated
 
 /** `_design` art dir for a topic. */
@@ -15,6 +16,10 @@ export function designArtDir(topic: string, opts?: { home?: string; cwd?: string
 /** Where the per-section drafts live. */
 export function designDraftDir(topic: string, opts?: { home?: string; cwd?: string }): string {
   return join(designArtDir(topic, opts), "design-doc", ".draft");
+}
+/** Where the walk's per-section verdict markers live (siblings of the drafts). */
+export function designWalkDir(topic: string, opts?: { home?: string; cwd?: string }): string {
+  return join(designArtDir(topic, opts), "design-doc", WALK_DIRNAME);
 }
 
 export interface DesignArgs { topicText: string; ensemble: boolean; }

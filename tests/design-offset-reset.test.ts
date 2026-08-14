@@ -1,19 +1,20 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
+import { waitDeps } from "./helpers/phaseDeps.js";
 import { designArtDir } from "../src/core/design.js";
 import { workerDir } from "../src/core/paths.js";
-import { offsetResetRun } from "../src/commands/design.js";
+import { offsetResetRun, researchWaitWith } from "../src/commands/design.js";
 
 let env: { home: string; cleanup: () => void };
 beforeEach(() => { env = freshHome(); });
 afterEach(() => { env.cleanup(); });
 
 describe("design offset-reset", () => {
-  it("research: removes state+question+findings+cascade; keeps verify.md", async () => {
+  it("research (full cascade): deletes state+question+findings+cascade; keeps verify.md", async () => {
     const art = designArtDir("t"); mkdirSync(art, { recursive: true });
-    writeFileSync(join(art, "research-alpha.txt"), "OFFSET=5\n");
+    writeFileSync(join(art, "research-alpha.txt"), "OFFSET=5\nFS=timeout\nAC=expired\nOFFSET=9\nFS=failed\n");
     writeFileSync(join(art, "research-alpha.done"), "ok\n");
     writeFileSync(join(art, "question-alpha.txt"), "{}\n");
     writeFileSync(join(art, "diff.md"), "x\n");
@@ -25,10 +26,45 @@ describe("design offset-reset", () => {
     writeFileSync(join(pd, "verify.md"), "keep\n");
 
     expect(await offsetResetRun(["t", "alpha", "research"])).toBe(0);
+    // This mode destroyed the findings a re-armed wait would judge, so keeping the OFFSET would
+    // only re-derive a terminal miss while blocking the re-SEND that is the actual recovery.
     for (const f of ["research-alpha.txt", "research-alpha.done", "question-alpha.txt", "diff.md", "alpha_only_items.txt", "charlie_only_items.txt", "adjudicated-draft.md"])
       expect(existsSync(join(art, f))).toBe(false);
     expect(existsSync(join(pd, "findings.md"))).toBe(false);
     expect(existsSync(join(pd, "verify.md"))).toBe(true);
+  });
+
+  it("--keep-findings: the state file is reduced to its LAST OFFSET= line (the busy-worker re-arm)", async () => {
+    const art = designArtDir("t"); mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "research-alpha.txt"), "OFFSET=5\nFS=timeout\nAC=expired\nOFFSET=9\nFS=failed\n");
+    const pd = workerDir("alpha", "codex", "t"); mkdirSync(pd, { recursive: true });
+    writeFileSync(join(pd, "findings.md"), "still being written\n");
+    expect(await offsetResetRun(["t", "alpha", "research", "--keep-findings"])).toBe(0);
+    expect(readFileSync(join(art, "research-alpha.txt"), "utf8")).toBe("OFFSET=9\n");
+    expect(existsSync(join(pd, "findings.md"))).toBe(true);
+  });
+
+  it("a state file that never carried an OFFSET= is deleted in BOTH modes", async () => {
+    const art = designArtDir("t"); mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "research-alpha.txt"), "FS=skipped\n");
+    expect(await offsetResetRun(["t", "alpha", "research"])).toBe(0);
+    expect(existsSync(join(art, "research-alpha.txt"))).toBe(false);
+    writeFileSync(join(art, "research-alpha.txt"), "FS=skipped\n");
+    expect(await offsetResetRun(["t", "alpha", "research", "--keep-findings"])).toBe(0);
+    expect(existsSync(join(art, "research-alpha.txt"))).toBe(false);
+  });
+
+  it("the preserved OFFSET re-arms the wait (which used to die 'state file missing')", async () => {
+    const art = designArtDir("t"); mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "research-alpha.txt"), "OFFSET=12\nFS=timeout\n");
+    mkdirSync(workerDir("alpha", "codex", "t"), { recursive: true });
+    expect(await offsetResetRun(["t", "alpha", "research", "--keep-findings"])).toBe(0);
+    let sawOffset: number | null = null;
+    const rc = await researchWaitWith("t", "alpha", "codex", waitDeps({
+      wait: async (_a, _p, _t, offset) => { sawOffset = offset; return { event: "error", fatal: "x" }; },
+    }));
+    expect(rc).toBe(0);
+    expect(sawOffset).toBe(12);
   });
 
   it("--keep-findings: removes state+question+that agent's still-writing strikes, keeps cascade+worker files", async () => {
@@ -43,7 +79,8 @@ describe("design offset-reset", () => {
     const pd = workerDir("alpha", "codex", "t"); mkdirSync(pd, { recursive: true });
     writeFileSync(join(pd, "verify.md"), "keep\n");
     expect(await offsetResetRun(["t", "alpha", "verify", "--keep-findings"])).toBe(0);
-    expect(existsSync(join(art, "verify-alpha.txt"))).toBe(false);
+    expect(readFileSync(join(art, "verify-alpha.txt"), "utf8")).toBe("OFFSET=2\n"); // kept in BOTH modes
+
     expect(existsSync(join(art, "question-alpha.txt"))).toBe(false);
     // The reset re-arms the phase, so alpha's refusal strikes must not carry into the retry.
     expect(existsSync(join(art, "stillwriting-alpha-verify.md.txt"))).toBe(false);

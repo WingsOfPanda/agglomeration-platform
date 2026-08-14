@@ -107,6 +107,43 @@ describe("implement branch", () => {
     expect(rc).toBe(0);
     expect(readFileSync(join(art, "implement-branches.tsv"), "utf8")).toBe("main\tfeat/implement-add-oauth\n");
     expect(readFileSync(join(art, "branch-base.sha"), "utf8")).toBe("ABC\n");
+    expect(readFileSync(join(art, "branch-mode.txt"), "utf8")).toBe("branch\n");
+  });
+
+  it("baseline branch IS the feat branch → rc 1, nothing written (the hub pre-checkout accident)", async () => {
+    const art = seedArt();
+    seedTargetCwd(art, "/repo/main");
+    mkdirSync(join(art, "baselines"), { recursive: true });
+    writeFileSync(join(art, "baselines", "main.tsv"), "slug=main\nbranch=feat/implement-add-oauth\nbaseline_sha=ABC\n");
+    let sawCheckout = false;
+    const r: Runner = { run(cmd, args) { if (args[0] === "checkout") sawCheckout = true; return { code: 0, stdout: "" }; } };
+    const { rc, err } = await capture(() => branchWith({ topic: TOPIC, noBranch: false }, {}, () => r));
+    expect(rc).toBe(1);
+    expect(err).toContain("HEAD was already feat/implement-add-oauth at pre-snapshot");
+    expect(sawCheckout).toBe(false);
+    for (const f of ["implement-branches.tsv", "branch-mode.txt", "branch-base.sha"]) expect(existsSync(join(art, f))).toBe(false);
+  });
+
+  it("detached-HEAD baseline → rc 1, nothing written (no start branch to restore)", async () => {
+    const art = seedArt();
+    seedTargetCwd(art, "/repo/main");
+    mkdirSync(join(art, "baselines"), { recursive: true });
+    writeFileSync(join(art, "baselines", "main.tsv"), "slug=main\nbranch=(detached)\nbaseline_sha=ABC\n");
+    const { rc, err } = await capture(() => branchWith({ topic: TOPIC, noBranch: false }, {}, () => fakeRunner({})));
+    expect(rc).toBe(1);
+    expect(err).toContain("detached HEAD");
+    for (const f of ["implement-branches.tsv", "branch-mode.txt"]) expect(existsSync(join(art, f))).toBe(false);
+  });
+
+  it("--no-branch is never refused by the baseline check (staying put is the point)", async () => {
+    const art = seedArt();
+    seedTargetCwd(art, "/repo/main");
+    mkdirSync(join(art, "baselines"), { recursive: true });
+    writeFileSync(join(art, "baselines", "main.tsv"), "slug=main\nbranch=feat/implement-add-oauth\n");
+    const r = fakeRunner({ "git symbolic-ref --short HEAD": { code: 0, stdout: "feat/implement-add-oauth\n" } });
+    const { rc } = await capture(() => branchWith({ topic: TOPIC, noBranch: true }, {}, () => r));
+    expect(rc).toBe(0);
+    expect(readFileSync(join(art, "branch-mode.txt"), "utf8")).toBe("no-branch\n");
   });
 
   it("--no-branch → records the current branch (symbolic-ref), no checkout -b", async () => {
@@ -125,6 +162,7 @@ describe("implement branch", () => {
     expect(rc).toBe(0);
     expect(sawCheckoutB).toBe(false);
     expect(readFileSync(join(art, "implement-branches.tsv"), "utf8")).toBe("main\tdevelop\n");
+    expect(readFileSync(join(art, "branch-mode.txt"), "utf8")).toBe("no-branch\n");
   });
 
   it("--branch=custom (ref absent) → records custom", async () => {
@@ -216,6 +254,86 @@ describe("implement finish", () => {
     const { rc } = await capture(() => finishWith2(TOPIC, "merge", () => r, false));
     expect(rc).toBe(0);
     expect(readFileSync(join(art, "finish-results.tsv"), "utf8")).toBe("main\tmerge\tmerged\n");
+  });
+
+  // The recorded mode is what tells a deliberate --no-branch run from the pre-checkout accident:
+  // on disk both leave the work sitting on the baseline branch.
+  function seedSameBranch(art: string): void {
+    seedTargetCwd(art, "/repo/main");
+    writeFileSync(join(art, "implement-branches.tsv"), "main\tmain\n");
+    mkdirSync(join(art, "baselines"), { recursive: true });
+    writeFileSync(join(art, "baselines", "main.tsv"), "slug=main\ncwd=/repo/main\nbranch=main\n");
+  }
+
+  it("mode no-branch recorded → outcome no-branch, no action attempted", async () => {
+    const art = seedArt();
+    seedSameBranch(art);
+    writeFileSync(join(art, "branch-mode.txt"), "no-branch\n");
+    let sawMerge = false;
+    const r: Runner = { run(cmd, args) { if (args[0] === "merge") sawMerge = true; return { code: 0, stdout: "" }; } };
+    const { rc, err } = await capture(() => finishWith2(TOPIC, "merge", () => r, false));
+    expect(rc).toBe(0);
+    expect(readFileSync(join(art, "finish-results.tsv"), "utf8")).toBe("main\tmerge\tno-branch\n");
+    expect(sawMerge).toBe(false);
+    expect(err).not.toContain("NOTHING was merged");
+  });
+
+  it("mode no-branch never touches a branch it did not create (a drifted feat/ ref survives)", async () => {
+    const art = seedArt();
+    seedFinish(art); // recorded branch feat/implement-foo, baseline main — but the run was --no-branch
+    writeFileSync(join(art, "branch-mode.txt"), "no-branch\n");
+    const seen: string[] = [];
+    const r: Runner = { run(cmd, args) { seen.push([cmd, ...args].join(" ")); return { code: 0, stdout: "" }; } };
+    const { rc } = await capture(() => finishWith2(TOPIC, "merge", () => r, false));
+    expect(rc).toBe(0);
+    expect(readFileSync(join(art, "finish-results.tsv"), "utf8")).toBe("main\tmerge\tno-branch\n");
+    expect(seen).toEqual([]); // not even a show-ref: the recorded intent settles it
+  });
+
+  it("mode branch + branch === baseline → outcome same-branch, a loud warn, and a forensics flag", async () => {
+    const art = seedArt();
+    seedSameBranch(art);
+    writeFileSync(join(art, "branch-mode.txt"), "branch\n");
+    const { rc, out, err } = await capture(() => finishWith2(TOPIC, "pr", () => fakeRunner({}), true));
+    expect(rc).toBe(0);
+    expect(readFileSync(join(art, "finish-results.tsv"), "utf8")).toBe("main\tpr\tsame-branch\n");
+    expect(err).toContain("NOTHING was merged, pushed, or discarded");
+    expect(err).toContain("recover:");
+    expect(out).toMatch(/forensics\/.*-implement-flag-add-oauth\.md/); // reaches /ap:review
+  });
+
+  it("detached baseline → same-branch, never a merge into whatever HEAD was", async () => {
+    const art = seedArt();
+    seedTargetCwd(art, "/repo/main");
+    writeFileSync(join(art, "implement-branches.tsv"), "main\tfeat/implement-foo\n");
+    mkdirSync(join(art, "baselines"), { recursive: true });
+    writeFileSync(join(art, "baselines", "main.tsv"), "slug=main\ncwd=/repo/main\nbranch=(detached)\n");
+    writeFileSync(join(art, "branch-mode.txt"), "branch\n");
+    let sawMerge = false;
+    const r: Runner = { run(cmd, args) { if (args[0] === "merge") sawMerge = true; return { code: 0, stdout: "" }; } };
+    const { rc, err } = await capture(() => finishWith2(TOPIC, "merge", () => r, false));
+    expect(rc).toBe(0);
+    expect(readFileSync(join(art, "finish-results.tsv"), "utf8")).toBe("main\tmerge\tsame-branch\n");
+    expect(sawMerge).toBe(false);
+    expect(err).toContain("detached HEAD");
+  });
+
+  it("no branch-mode.txt (pre-0.5.14 art dir) + same branch → same-branch, not a silent no-branch", async () => {
+    const art = seedArt();
+    seedSameBranch(art);
+    const { rc } = await capture(() => finishWith2(TOPIC, "merge", () => fakeRunner({}), false));
+    expect(rc).toBe(0);
+    expect(readFileSync(join(art, "finish-results.tsv"), "utf8")).toBe("main\tmerge\tsame-branch\n");
+  });
+
+  it("mode branch + a recorded branch whose ref is gone → same-branch", async () => {
+    const art = seedArt();
+    seedFinish(art); // branch feat/implement-foo, baseline main
+    writeFileSync(join(art, "branch-mode.txt"), "branch\n");
+    const r = fakeRunner({ "git show-ref --verify --quiet refs/heads/feat/implement-foo": { code: 1, stdout: "" } });
+    const { rc } = await capture(() => finishWith2(TOPIC, "keep", () => r, false));
+    expect(rc).toBe(0);
+    expect(readFileSync(join(art, "finish-results.tsv"), "utf8")).toBe("main\tkeep\tsame-branch\n");
   });
 });
 
