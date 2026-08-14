@@ -84,6 +84,15 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
    ```
    Bash(command='$CS quick turn-wait <SLUG> 1', run_in_background: true, description='quick await turn 1')
    ```
+   Since 0.5.15 the wait CONFIRMS a terminal event against continued outbox activity (quiet window
+   `AP_TURN_CONFIRM_S`, default 20s; `0` disables): a worker that emits `done` mid-turn and keeps
+   working is vetoed, the wait re-arms for the turn's real end, and each veto records a
+   `turn-confirm-veto` flag for `/ap:review`. It is bounded — at most 2 vetoes (3 windows), and the
+   re-arm expires at `max(wait-start + budget, first-leg-end + 3 windows)`; a `turn-confirm-cap` or
+   `turn-confirm-deadline` flag means the turn was accepted UNCONFIRMED, so treat that `TS=` with
+   suspicion. The verdict is the LATEST terminal event in FILE order, so done-then-error is
+   `TS=failed`; a `question` is never held (it returns at once, so you can relay), and
+   done-then-question is `TS=question` — the worker's last word wins.
 5. On the completion notification, read the **last** `TS=` line from
    `<SLUG state>/_quick/execute/turn-1.txt` and branch on it —
    `TS=$(grep '^TS=' <SLUG state>/_quick/execute/turn-1.txt | tail -1 | cut -d= -f2)`. (`turn-wait`

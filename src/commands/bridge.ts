@@ -11,16 +11,16 @@ import { pickRandomAgent } from "../core/agents.js";
 import { runnerAt, preSnapshot, createOrResumeBranch, finishBranchPrMerge, shortstat } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
 import { readIfExists, readField, kvField } from "../core/fsread.js";
-import { runForensics, runFlag } from "../core/forensics.js";
+import { runForensics, runFlag, recordHubFlag } from "../core/forensics.js";
 import { detectTestCommand } from "../core/quick.js";
 import { repoRoot } from "../core/paths.js";
 import { parseBridgeArgs, deriveSlug, bridgeArtDir, bridgeExecDir, renderBridgeSummary, renderBridgeResume } from "../core/bridge.js";
 import type { BridgeSummaryFacts } from "../core/bridge.js";
 import { composeBridgeBrief, composeBridgeFollowup } from "../core/bridgeTurn.js";
-import { classifyTurn } from "../core/turn.js";
+import { classifyTurn, waitTurnConfirmed } from "../core/turn.js";
 import { parseLatestOffset, recordWaitOutcome } from "../core/designTurn.js";
 import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
-import { outboxOffset, outboxPath, workerSendGate, TERMINAL_EVENTS } from "../core/ipc.js";
+import { outboxOffset, outboxPath, workerSendGate } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
 import type { OutboxEvent } from "../core/ipc.js";
 import { run as sendRun } from "./send.js";
@@ -183,6 +183,7 @@ export async function roundSendWith(topic: string, round: number, d: TurnSendDep
 
 export interface TurnWaitDeps {
   wait(agent: string, model: string, topic: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null>;
+  sleep?(ms: number): Promise<void>;
 }
 
 async function roundWaitRun(rest: string[]): Promise<number> {
@@ -204,7 +205,10 @@ export async function roundWaitWith(topic: string, round: number, d: TurnWaitDep
   if (offset === null) { log.error(`bridge round-wait: OFFSET not set in ${stateFile}`); return 1; }
 
   log.info(`bridge round-wait: round=${round} offset=${offset} timeout=${DUET_TURN_TIMEOUT}s`);
-  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, DUET_TURN_TIMEOUT);
+  const ev = await waitTurnConfirmed(agent, provider, topic, offset, DUET_TURN_TIMEOUT, {
+    wait: d.wait, sleep: d.sleep,
+    onVeto: (note) => { recordHubFlag({ command: "bridge", topic, note }); },
+  });
   const ts = classifyTurn(ev);
   recordWaitOutcome(agent, provider, topic, stateFile, ts, "TS",
     ev ? { file: join(exec, `question-${round}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);

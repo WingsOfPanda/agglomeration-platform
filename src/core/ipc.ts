@@ -183,6 +183,21 @@ export function outboxTerminalSince(i: string, m: string, t: string, offset: num
   return lastMatch(readFrom(outboxPath(i, m, t), offset), TERMINAL_EVENTS) !== null;
 }
 
+/** EVERY parsed event in the worker's outbox at or after `offset`, in FILE order (non-JSON lines
+ *  skipped, same readFrom shrink handling as the waits). The evidence source for the turn-wait
+ *  confirmation layer, which needs the whole region — not the one event a matcher picked — to say
+ *  which terminal event came LAST. Deliberately not folded into lastMatch: that function's
+ *  argument-order precedence is the frozen wait semantics and stays untouched. */
+export function outboxEventsSince(i: string, m: string, t: string, offset: number): OutboxEvent[] {
+  const out: OutboxEvent[] = [];
+  for (const line of readFrom(outboxPath(i, m, t), offset).split("\n")) {
+    if (!line) continue;
+    const obj = parseEvent(line);
+    if (obj) out.push(obj);
+  }
+  return out;
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Optional pane-liveness escape hatch for outboxWaitSince. A worker whose tmux pane has died will

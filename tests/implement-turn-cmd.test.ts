@@ -118,6 +118,9 @@ describe("implement turn-send", () => {
 function waitDeps(over: Partial<ImplementWaitDeps> = {}): ImplementWaitDeps {
   return {
     wait: over.wait ?? (async () => null),
+    // The terminal-confirmation window is real wall time; inject it away (the layer itself is
+    // pinned in tests/turn-confirm.test.ts).
+    sleep: over.sleep ?? (async () => {}),
     multiplier: over.multiplier ?? (() => "1"),
     now: over.now ?? (() => 1700000000),
   };

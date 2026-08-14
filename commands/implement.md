@@ -142,7 +142,17 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
    for unusually large or small tasks. Since 0.5.5 the budget is liveness-extended: while the
    worker's pane stays alive the wait runs up to `AP_WAIT_EXTEND_MULT`× the budget (default 3,
    so worst case 12h; set `AP_WAIT_EXTEND_MULT=1` for a hard cap) — a pane death still fails
-   fast regardless.
+   fast regardless. Since 0.5.15 the wait also CONFIRMS a terminal event against continued outbox
+   activity (quiet window `AP_TURN_CONFIRM_S`, default 20s; `0` disables): a worker that emits `done`
+   mid-turn and keeps working is vetoed, the wait re-arms for the turn's real end, and each veto
+   records a `turn-confirm-veto` flag for `/ap:review`. It is bounded — at most 2 vetoes (3 windows),
+   and the re-arm expires at `max(wait-start + budget, first-leg-end + 3 windows)`; a
+   `turn-confirm-cap` or `turn-confirm-deadline` flag means the turn was accepted UNCONFIRMED, so
+   treat that `TS=` with suspicion. The verdict is the LATEST terminal event in FILE order, so
+   done-then-error is `TS=failed`; a `question` is never held (it returns at once, so you can relay),
+   and done-then-question is `TS=question` — the worker's last word wins. Confirmation does not
+   replace the verify gate: a confirmed `done` still becomes `TS=failed` unless
+   `verify-report-<ROUND>.md` is present and passing.
 3. On completion, read `TS=` from `$ART/turn-lead-<ROUND>.txt` (the **last** `TS=` line). Branch:
    - **`TS=ok`** → Stage 2.
    - **`TS=failed` / `TS=timeout`** → auto-retry **once**: if `RETRY==0`, set `RETRY=1`,

@@ -329,6 +329,7 @@ prefix a single command. They survive plugin updates (unlike editing the shipped
 | `AP_CONSULT_TIMEOUT_<KIND>` | Per-phase worker wait budget (seconds), before the provider multiplier | research 600 · verify 300 · adversary 600 · experiment 1800 · openq 300 · rebuttal 300 · gap 600 · signoff 300 | kinds: `RESEARCH VERIFY ADVERSARY EXPERIMENT OPENQ REBUTTAL GAP SIGNOFF`. Explore's cross-verify reuses **`VERIFY`** — there is no `…_CROSSVERIFY`. Invalid values fall through, never NaN. |
 | `AP_WAIT_EXTEND_MULT` | Extend an expired wait up to N× while the worker's pane is still alive | `3` (cap 10) | **`1` is the only off-switch** — `0`/unset fall back to 3 |
 | `AP_ARTIFACT_GRACE_S` | How long a wait holds after a worker's `done` for its artifact to finish (sentinel or quiescence) | `60` (clamp 10–300) | **`0` disables the artifact-completeness layer entirely** |
+| `AP_TURN_CONFIRM_S` | Quiet window a turn/round wait needs after a terminal event before it classifies the turn (quick · implement · bridge) | `20` (clamp 5–120) | **`0` disables the terminal-confirmation layer entirely**; a worker still writing vetoes the classification (at most 2 vetoes) |
 | `AP_QUICK_TURN_TIMEOUT` | quick's turn wall-clock | `14400` (4 h) | |
 | `AP_IMPLEMENT_TURN_TIMEOUT_S` | implement's turn wall-clock | `14400` | |
 | `AP_DUET_TURN_TIMEOUT` | bridge's round wall-clock (legacy name, still the one the code reads) | `14400` | |
@@ -381,6 +382,11 @@ There are **two roots**:
   layers doing their job (a guard dispatched a verifiably-free worker past a stale timeout tag; an
   artifact was accepted on quiescence; quick kept your WIP safe in a stash). They all land in
   forensics — `/ap:review` is the intended way to read them, with lifetime trend attached.
+- **`turn-confirm-veto` flags** — a worker emitted `done`/`error` and kept writing, so the wait
+  refused the premature verdict and re-armed for the turn's real end (`AP_TURN_CONFIRM_S`).
+  The companions `turn-confirm-cap` (still writing after the veto cap) and `turn-confirm-deadline`
+  (the re-arm outlived its budget) mean the turn was accepted UNCONFIRMED — read those two as
+  "check this run by hand".
 - **A wait outlived its budget but the pane is alive** — that's `AP_WAIT_EXTEND_MULT` extending;
   a dead pane fails fast instead.
 
@@ -410,7 +416,7 @@ There are **two roots**:
 
 ```
 npm run typecheck   # tsc --noEmit
-npm run test        # vitest run   (1,855 tests)
+npm run test        # vitest run   (1,908 tests)
 npm run lint        # eslint
 npm run build       # esbuild -> dist/ap.cjs  (commit the result)
 ```
