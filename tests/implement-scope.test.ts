@@ -1,6 +1,9 @@
 // tests/implement-scope.test.ts
-import { describe, it, expect } from "vitest";
-import { extractComponentsPaths, matchDiffAgainstComponents } from "../src/core/implementScope.js";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { extractComponentsPaths, lintComponentsPaths, matchDiffAgainstComponents } from "../src/core/implementScope.js";
 
 function doc(...lines: string[]): string { return lines.join("\n") + "\n"; }
 
@@ -151,5 +154,66 @@ describe("matchDiffAgainstComponents", () => {
   it("extension-less comp stays an implicit DIRECTORY, so a clean sibling FILE is still out of scope", () => {
     // 'src/core' has no extension -> rules 4/5 are gated off; rule 3 (implicit dir) governs.
     expect(matchDiffAgainstComponents(["src/other.ts"], ["src/core"])).toEqual(["src/other.ts"]);
+  });
+});
+
+// ---- lintComponentsPaths (2026-08-14-components-path-lint-design.md) ----
+// Warn-only authoring check: which declared Components paths are absent from the checkout. It must
+// never influence extraction or the scope verdict — it only names paths for a log.warn.
+describe("lintComponentsPaths", () => {
+  let root: string;
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "ap-lint-"));
+    mkdirSync(join(root, "src", "core"), { recursive: true });
+    mkdirSync(join(root, "tests"), { recursive: true });
+    writeFileSync(join(root, "src", "core", "real.ts"), "");
+    writeFileSync(join(root, "README.md"), "");
+  });
+  afterAll(() => { rmSync(root, { recursive: true, force: true }); });
+
+  it("reports a missing relative path and stays silent on an existing one", () => {
+    const d = doc("## Components", "- `src/core/real.ts` — edit", "- `src/core/phantom.ts` — new");
+    expect(lintComponentsPaths(d, root)).toEqual(["src/core/phantom.ts"]);
+  });
+  it("reports a missing ABSOLUTE path as-is (never re-joined to root)", () => {
+    const abs = join(root, "src", "core", "gone.ts");
+    expect(lintComponentsPaths(doc("## Components", `- ${abs} — new`), root)).toEqual([abs]);
+  });
+  it("an existing ABSOLUTE path is silent", () => {
+    expect(lintComponentsPaths(doc("## Components", `- ${join(root, "README.md")} — edit`), root)).toEqual([]);
+  });
+  it("table rows are linted like bullets (first cell)", () => {
+    const d = doc("## Components", "| File | Change |", "| ---- | ------ |",
+      "| `src/core/real.ts` | edit |", "| `src/core/phantom.ts` | new |");
+    expect(lintComponentsPaths(d, root)).toEqual(["src/core/phantom.ts"]);
+  });
+  it("[on-box] exempts EVERY path on its line, bullet or table row", () => {
+    const d = doc("## Components",
+      "- `~/.ap/contracts.yaml` and `~/.ap/agents.yaml` [on-box] — read at spawn time",
+      "| `etc/box-local.conf` [on-box] | box config |",
+      "- `src/core/phantom.ts` — new");
+    expect(lintComponentsPaths(d, root)).toEqual(["src/core/phantom.ts"]);
+  });
+  it("[on-box] on one line does not exempt the next line", () => {
+    const d = doc("## Components", "- `a/box.conf` [on-box] — box config", "- `a/other.conf` — repo config");
+    expect(lintComponentsPaths(d, root)).toEqual(["a/other.conf"]);
+  });
+  it("trailing-slash dirs resolve as directories: existing dir silent, missing dir reported", () => {
+    const d = doc("## Components", "- `src/core/` — the module", "- `src/gone/` — new module");
+    expect(lintComponentsPaths(d, root)).toEqual(["src/gone/"]);
+  });
+  it("a prose line's tokens are linted too (same extraction as the guard)", () => {
+    expect(lintComponentsPaths(doc("## Components", "we also touch `src/core/phantom.ts` here"), root)).toEqual(["src/core/phantom.ts"]);
+  });
+  it("no Components section → no warnings", () => {
+    expect(lintComponentsPaths(doc("# T", "## Goal", "g", "## Testing", "- `src/core/phantom.ts`"), root)).toEqual([]);
+  });
+  it("reports missing paths in document order, and only from inside the section", () => {
+    const d = doc("## Components", "- `x/one.ts`", "- `x/two.ts`", "## Testing", "- `x/three.ts`");
+    expect(lintComponentsPaths(d, root)).toEqual(["x/one.ts", "x/two.ts"]);
+  });
+  it("does not disturb extraction: the same doc extracts every path, [on-box] included", () => {
+    const d = doc("## Components", "- `src/core/real.ts` — edit", "- `etc/box.conf` [on-box] — box config");
+    expect(extractComponentsPaths(d)).toEqual(["src/core/real.ts", "etc/box.conf"]);
   });
 });

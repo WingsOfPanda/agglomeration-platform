@@ -84,6 +84,11 @@ tool** (atomic single-shot writes), one file per section:
 - `.draft/components.md` → `## Components` + bullets of files/functions/classes touched. **Lead each
   bullet with the file path** (`` - `src/x/foo.ts` — <what changes> ``) so `implement`'s scope-check
   can read it; a bullet that names only a function/class with no path contributes nothing to scope.
+  **Every path you cite must exist in the target checkout — stat it before you cite it** (a phantom
+  path costs the implementing worker a whole question round). A path that deliberately lives
+  somewhere other than this checkout (a box-local config, a sibling repo) is tagged **`[on-box]`** on
+  the same line — `` - `~/.ap/contracts.yaml` [on-box] — read at spawn time `` — which exempts that
+  line from the path check; `assemble` warns (never fails) on every unmarked path it cannot find.
 - `.draft/testing.md` → `## Testing` + bullets of test coverage. *(required)*
 - `.draft/success-criteria.md` → `## Success Criteria` + measurable bullets. *(required)*
 
@@ -292,6 +297,11 @@ so keep handling / relay and re-run. Only on rc 0 continue.
    - **Skip** → Write `_(skipped)_` as the whole body, then `$CS design walk-approve <TOPIC>
      <section> skipped`. **Skip is NOT offered for the four audit-required sections** (goal,
      architecture, testing, success-criteria) — they must be drafted.
+   - **components**, additionally: lead each bullet with the file path, and **stat every path before
+     you cite it — it must exist in the target checkout** (a phantom path costs the implementing
+     worker a whole question round). A path that deliberately lives elsewhere (a box-local config, a
+     sibling repo) is tagged **`[on-box]`** on the same line, which exempts that line from the
+     path check; Stage 11's `assemble` warns (never fails) on every unmarked path it cannot find.
 
 ## Stage 11 — assemble + deploy-audit gate (retry loop)
 

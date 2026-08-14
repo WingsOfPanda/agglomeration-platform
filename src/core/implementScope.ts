@@ -9,6 +9,9 @@
 //     matchDiffAgainstComponents tolerates a declared bare filename (basename match) and a
 //     same-directory sibling of a declared file (one directory level), so a worker that renames or
 //     splits a module in place is not flagged out-of-scope.
+// A third addition (2026-08-14-components-path-lint-design.md) sits beside the guard rather than in
+// it: lintComponentsPaths, the warn-only authoring-time check that every declared path exists in the
+// checkout unless its line is tagged [on-box]. It never feeds the scope verdict.
 // deploy_extract_components_paths -> extractComponentsPaths,
 // deploy_match_diff_against_components -> matchDiffAgainstComponents. The Bash helpers read files via
 // awk; the TS ports take the already-read strings (file IO is the caller's concern). Table-row
@@ -16,6 +19,9 @@
 // dir-prefix match rules are preserved; the prose/bullet token scan and the bare-name/sibling rules
 // are the documented divergences. All new rules STRICTLY WIDEN in-scope — they can only suppress an
 // OOS warning, never invent one, so they cannot turn a passing scope-check into a failing one.
+
+import { existsSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 
 const COMPONENTS_HEADER = /^## Components[ \t]*$/;
 const OTHER_H2 = /^## [^ ]/;
@@ -26,6 +32,8 @@ const BULLET_MARKER = /^[ \t]*[-*+][ \t]+/;
 const HEADER_CELL = /^(File|Path|Name|Files?[ \t]+(edited|moved|touched))$/;
 const HAS_SLASH = /\//;
 const ENDS_WITH_EXT = /\.[a-zA-Z]+$/;
+/** Line-level opt-out of the path lint: the line's paths live on another box, not in this checkout. */
+const ON_BOX_TAG = "[on-box]";
 
 /** The directory portion of a path (everything before the last "/"), "" when there is no "/". */
 function parentOf(p: string): string { const i = p.lastIndexOf("/"); return i < 0 ? "" : p.slice(0, i); }
@@ -47,19 +55,17 @@ function pathTokensFrom(text: string): string[] {
   return out;
 }
 
-/** Port of deploy_extract_components_paths (deploy-scope:26-55), extended (2026-06-10, 2026-06-19).
- *  Locates the `## Components` section and extracts: the first cell of every markdown table row, AND
- *  every path-like token of every NON-table line within it (bullets AND prose) — backticks stripped,
- *  trimmed, keeping tokens that contain `/` OR end with `.ext`. Skips the separator row, table header
- *  rows. Returns [] when no section / no path-like token. The table branch stays first-cell-only
- *  (structured columns); bullets and prose are unstructured, so every token is scanned. */
-export function extractComponentsPaths(docText: string): string[] {
-  const out: string[] = [];
+/** The `## Components` walk shared by extraction and the path lint: every source line in the section
+ *  that yields path-like tokens, paired with the tokens it yielded, in document order. Extraction
+ *  concatenates the tokens; the lint needs the source LINE too (the `[on-box]` tag is line-level). */
+function componentsPathsByLine(docText: string): { line: string; paths: string[] }[] {
+  const out: { line: string; paths: string[] }[] = [];
   let inSection = false;
   for (const record of docText.split("\n")) {
     if (COMPONENTS_HEADER.test(record)) { inSection = true; continue; }
     if (OTHER_H2.test(record) && !ANY_COMPONENTS_PREFIX.test(record)) { inSection = false; continue; }
-    if (inSection && TABLE_ROW.test(record)) {
+    if (!inSection) continue;
+    if (TABLE_ROW.test(record)) {
       if (SEPARATOR_ROW.test(record)) continue;
       let line = record;
       line = line.replace(/^[ \t]*\|[ \t]*/, "");
@@ -68,13 +74,39 @@ export function extractComponentsPaths(docText: string): string[] {
       line = line.replace(/^[ \t]+/, "");
       line = line.replace(/[ \t]+$/, "");
       if (HEADER_CELL.test(line)) continue;
-      if (HAS_SLASH.test(line) || ENDS_WITH_EXT.test(line)) out.push(line);
-    } else if (inSection) {
+      if (HAS_SLASH.test(line) || ENDS_WITH_EXT.test(line)) out.push({ line: record, paths: [line] });
+    } else {
       // Any non-table line in the section — a bullet OR free prose. Strip an optional leading bullet
       // marker, then harvest every path-like token. A prose sentence that names a path ("we touch
       // `src/a.ts`") is now in-scope, where before it extracted nothing and flagged the whole diff.
-      out.push(...pathTokensFrom(record.replace(BULLET_MARKER, "")));
+      const paths = pathTokensFrom(record.replace(BULLET_MARKER, ""));
+      if (paths.length > 0) out.push({ line: record, paths });
     }
+  }
+  return out;
+}
+
+/** Port of deploy_extract_components_paths (deploy-scope:26-55), extended (2026-06-10, 2026-06-19).
+ *  Locates the `## Components` section and extracts: the first cell of every markdown table row, AND
+ *  every path-like token of every NON-table line within it (bullets AND prose) — backticks stripped,
+ *  trimmed, keeping tokens that contain `/` OR end with `.ext`. Skips the separator row, table header
+ *  rows. Returns [] when no section / no path-like token. The table branch stays first-cell-only
+ *  (structured columns); bullets and prose are unstructured, so every token is scanned. */
+export function extractComponentsPaths(docText: string): string[] {
+  const out: string[] = [];
+  for (const rec of componentsPathsByLine(docText)) out.push(...rec.paths);
+  return out;
+}
+
+/** Warn-only Components path lint (2026-08-14-components-path-lint-design.md). Returns the declared
+ *  Components paths that do NOT exist under `root` — absolute paths as-is, relative ones joined to
+ *  `root`, trailing-`/` dirs checked as directories. A source line carrying the literal `[on-box]`
+ *  tag is deliberately box-local: ALL of its paths are exempt. Callers warn; nothing here fails. */
+export function lintComponentsPaths(docText: string, root: string): string[] {
+  const out: string[] = [];
+  for (const rec of componentsPathsByLine(docText)) {
+    if (rec.line.includes(ON_BOX_TAG)) continue;
+    for (const p of rec.paths) if (!existsSync(isAbsolute(p) ? p : join(root, p))) out.push(p);
   }
   return out;
 }

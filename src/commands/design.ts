@@ -14,6 +14,7 @@ import {
 } from "../core/roster.js";
 import { assembleDoc, SECTIONS_SINGLE, synthesizeSeeds } from "../core/designDoc.js";
 import { auditDoc } from "../core/audit.js";
+import { lintComponentsPaths } from "../core/implementScope.js";
 import { readProviderList } from "../core/providers.js";
 import { activeProvidersPath, workerDir, repoRoot, topicDir } from "../core/paths.js";
 import { pickAgents } from "../core/agents.js";
@@ -130,6 +131,12 @@ async function assembleRun(rest: string[]): Promise<number> {
   const out = designDocPath(topic, date);
   mkdirSync(join(art, "design-doc"), { recursive: true });
   atomicWrite(out, doc);
+
+  // Warn-only path lint: a phantom Components path costs a worker question round later, so name it
+  // here. The audit below owns the verdict — this loop never changes it.
+  for (const p of lintComponentsPaths(doc, repoRoot())) {
+    log.warn(`design assemble: Components path not found in this checkout: ${p} — mark it [on-box] if it is deliberately box-local, or fix the path`);
+  }
 
   const result = auditDoc(doc);
   const auditText = [`VERDICT=${result.verdict}`, ...result.issues.map((i) => `ISSUE=${i}`)].join("\n") + "\n";

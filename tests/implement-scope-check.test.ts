@@ -57,10 +57,13 @@ describe("implement scope-check (single-repo path locked)", () => {
     writeFileSync(join(art, "branch-base.sha"), "BASE\n");
     writeFileSync(join(art, "design.md"), "# d\n\n## Components\n\n- `src/a.ts` — edit\n");
     const deps = { runnerFor: (_cwd: string): Runner => ({ run: (): RunResult => ({ code: 0, stdout: "src/a.ts\n" }) }) };
-    const { rc, out } = await capture(() => scopeCheckWith("scope-decl", deps));
+    const { rc, out, err } = await capture(() => scopeCheckWith("scope-decl", deps));
     expect(rc).toBe(0);
     expect(out).toContain("SCOPE_DECLARED=1\n");
     expect(out).toContain("OOS_COUNT=0\n");
+    // The path lint lives at assemble/audit time only: scope-check never lints, even though this
+    // design's `src/a.ts` does not exist in the checkout.
+    expect(err).not.toContain("not found in this checkout");
     h.cleanup();
   });
 

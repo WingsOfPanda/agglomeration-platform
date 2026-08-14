@@ -142,6 +142,33 @@ describe("implement init", () => {
     expect(await implementRun(["audit"])).toBe(2);
   });
 
+  // ---- warn-only Components path lint (2026-08-14-components-path-lint-design.md) ----
+  // Resolved against repoRoot(), which under vitest is this repository: `src/core/implementScope.ts`
+  // exists, `src/core/phantom-xyz.ts` does not. The rc is the audit's alone in every case.
+  const LINT = /implement audit: Components path not found in this checkout/g;
+
+  it("audit verb: a phantom Components path warns once and the doc STILL passes (rc 0)", async () => {
+    const p = docFile("phantom-design.md", PASSING_DOC + "\n## Components\n\n- `src/core/phantom-xyz.ts` — new helper\n");
+    expect(await implementRun(["audit", p])).toBe(0);
+    expect(errSpy.text().match(LINT) ?? []).toHaveLength(1);
+    expect(errSpy.text()).toContain("src/core/phantom-xyz.ts");
+    expect(errSpy.text()).toContain("mark it [on-box] if it is deliberately box-local");
+  });
+
+  it("audit verb: an audit-FAIL doc still returns rc 1, with both the ISSUE and the phantom warn", async () => {
+    const p = docFile("phantom-bad-design.md", NO_GOAL_DOC + "\n## Components\n\n- `src/core/phantom-xyz.ts` — new helper\n");
+    expect(await implementRun(["audit", p])).toBe(1);
+    expect(errSpy.text()).toContain("ISSUE=no_goal_section");
+    expect(errSpy.text().match(LINT) ?? []).toHaveLength(1);
+  });
+
+  it("audit verb: existing paths and [on-box]-tagged paths produce no warn", async () => {
+    const p = docFile("clean-design.md", PASSING_DOC +
+      "\n## Components\n\n- `src/core/implementScope.ts` — edit\n- `~/.ap/contracts.yaml` [on-box] — read at spawn time\n");
+    expect(await implementRun(["audit", p])).toBe(0);
+    expect(errSpy.text().match(LINT) ?? []).toHaveLength(0);
+  });
+
   // ---- init --force (bypass an audit FAIL — deploy "Proceed anyway") ----
   it("init WITHOUT --force on a failing doc → rc 1 (audit FAIL not bypassed)", async () => {
     const p = docFile("2026-05-30-add-oauth-design.md", NO_GOAL_DOC);
