@@ -47,11 +47,12 @@ export function inspectionRow(r: InspectionRow): string {
   return `${r.expId}\t${r.agent}\t${r.verdict}\t${r.reason}\t${r.reimplMetric}\t${r.ts}\n`;
 }
 export function inspectionTsvPath(art: string): string { return join(art, "inspection.tsv"); }
-/** inspection.tsv text -> rows (the full row, unlike parseInspections' verdict-only map). Same
- *  read-back-as-written caveat on `verdict` as verification.tsv. */
-export function parseInspectionRows(text: string): InspectionRow[] {
+/** An inspection.tsv row as READ BACK — `verdict` is the raw token (see ParsedVerificationRow). */
+export type ParsedInspectionRow = Omit<InspectionRow, "verdict"> & { verdict: string };
+/** inspection.tsv text -> rows (the full row, unlike parseInspections' verdict-only map). */
+export function parseInspectionRows(text: string): ParsedInspectionRow[] {
   return splitTsvRows(text, "exp_id\t").map((c) => ({
-    expId: c[0] ?? "", agent: c[1] ?? "", verdict: (c[2] ?? "") as InspectVerdict, reason: c[3] ?? "",
+    expId: c[0] ?? "", agent: c[1] ?? "", verdict: c[2] ?? "", reason: c[3] ?? "",
     reimplMetric: c[4] ?? "", ts: c[5] ?? "",
   }));
 }

@@ -235,35 +235,52 @@ describe("autoresearch finalize", () => {
     const h = home();
     const { art } = scaffoldArt(h, ["golf"]);
     scaffoldPart(h, art, "golf", "phase=idle\n", "");
+    // parent_id and knobs_changed differ, so a reader that swapped them would fail here.
     writeFileSync(join(art, "lineage.tsv"),
       "exp_id\tagent\tparent_id\tknobs_changed\tverdict\tts\n" +
       "exp-003\tgolf\texp-002\t2\timprove-multi\tT\n");
     const rc = await finalizeWith([TOPIC], deps(h));
     expect(rc).toBe(0);
     const w = readFileSync(join(art, "warnings.txt"), "utf8");
-    expect(w).toContain("lineage");
-    expect(w).toContain("improve-multi");
-    expect(w).toContain("golf/exp-003");
+    expect(w).toContain("lineage\tgolf/exp-003\timprove-multi\tparent=exp-002 knobs_changed=2");
     // ...and it must reach the rendered ## Warnings section of session-summary.md (not just warnings.txt).
     const ss = readFileSync(join(art, "session-summary.md"), "utf8");
     expect(ss).toContain("## Warnings");
-    expect(ss).toContain("lineage: golf/exp-003 improve-multi");
+    expect(ss).toContain("lineage: golf/exp-003 improve-multi (parent=exp-002 knobs_changed=2)");
   });
 
   it("folds a not-reproduced inspection into warnings.txt AND ## Warnings (C1)", async () => {
     const h = home();
     const { art } = scaffoldArt(h, ["golf"]);
     scaffoldPart(h, art, "golf", "phase=idle\n", "");
+    // reason and reimpl_metric differ, so a reader that swapped them would fail here.
     writeFileSync(join(art, "inspection.tsv"),
       "exp_id\tagent\tverdict\treason\treimpl_metric\tts\n" +
       "exp-003\tgolf\tnot-reproduced\tvalue:0.5vs0.9\t0.5\tT\n");
     expect(await finalizeWith([TOPIC], deps(h))).toBe(0);
     const w = readFileSync(join(art, "warnings.txt"), "utf8");
-    expect(w).toContain("reimpl");
-    expect(w).toContain("not-reproduced");
+    expect(w).toContain("reimpl\tgolf/exp-003\tnot-reproduced\tvalue:0.5vs0.9");
     const ss = readFileSync(join(art, "session-summary.md"), "utf8");
     expect(ss).toContain("## Warnings");
-    expect(ss).toContain("reimpl: golf/exp-003 not-reproduced");
+    expect(ss).toContain("reimpl: golf/exp-003 not-reproduced (value:0.5vs0.9)");
+  });
+
+  it("folds sanity rows into warnings.txt, dropping the audit-knob-drift dupe (A3)", async () => {
+    const h = home();
+    const { art } = scaffoldArt(h, ["golf"]);
+    scaffoldPart(h, art, "golf", "phase=idle\n", "");
+    // flag and detail differ, so a reader that swapped them would fail here; the
+    // audit-knob-drift row must NOT fold (finalize's own audit_warn already covers it).
+    writeFileSync(join(art, "sanity.tsv"),
+      "exp_id\tagent\tflag\tdetail\tts\n" +
+      "exp-003\tgolf\tunder-run\truntime=0.1 floor=1\tT\n" +
+      "exp-004\tgolf\taudit-knob-drift\tmax_params=120000 vs mandated 100000\tT\n");
+    expect(await finalizeWith([TOPIC], deps(h))).toBe(0);
+    const w = readFileSync(join(art, "warnings.txt"), "utf8");
+    expect(w).toContain("sanity\tgolf/exp-003\tunder-run\truntime=0.1 floor=1");
+    expect(w).not.toContain("golf/exp-004");
+    const ss = readFileSync(join(art, "session-summary.md"), "utf8");
+    expect(ss).toContain("sanity: golf/exp-003 under-run (runtime=0.1 floor=1)");
   });
 
   it("failed worker is preserved (not coerced) when no terminal event reconciles it", async () => {

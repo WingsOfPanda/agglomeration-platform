@@ -154,7 +154,11 @@ Files on disk byte-identical; all output byte-identical.
    re-expressions are trivially byte-identical (same guard, same key, same last-write-wins), and
    routing inspection.tsv through the VERIFICATION parser would have left inspection's column
    order stated in another artifact's module — failing this spec's own success criterion.
-6. **`results.tsv` is deliberately NOT in scope.** Its `exp_id\t` header token is still restated at
+6. **`writeFinalizeLessons` now evaluates `globalRoot()`/`repoHash()` eagerly**, at the top of its
+   try block, where the old code deferred them to the write call after the draft loop. Same catch,
+   no output/rc/artifact difference — the only effect is one extra realpath+sha when a campaign
+   produces no drafts. Recorded for the record.
+7. **`results.tsv` is deliberately NOT in scope.** Its `exp_id\t` header token is still restated at
    `autoresearch.ts:830` (ledger tail) and `autoresearchScore.ts:29`. It is a sixth artifact with
    its own module (`autoresearchResult.ts`) and its own row type; folding it in is a separate
    change, not this one.

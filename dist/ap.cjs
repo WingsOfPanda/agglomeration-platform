@@ -23225,7 +23225,6 @@ var init_autoresearchLessonMap = __esm({
 
 // src/core/autoresearchMemoryStore.ts
 function resolveMemoryScope(metricMdText, o2 = {}) {
-  if (metricMdText === null) return null;
   const thresholds = parseMetricMd(metricMdText);
   const family = metricFamilyOf(thresholds.primaryMetric);
   if (family === null) return null;
@@ -24431,6 +24430,7 @@ __export(autoresearch_exports, {
   initWith: () => initWith4,
   inspectCheckWith: () => inspectCheckWith,
   inspectPlanWith: () => inspectPlanWith,
+  liveInspectPlanDeps: () => liveInspectPlanDeps,
   liveScoreDeps: () => liveScoreDeps,
   memoryRetrieveWith: () => memoryRetrieveWith,
   metricWith: () => metricWith,
@@ -25471,10 +25471,9 @@ async function finalizeWith(args, deps) {
     }
     if (lines.length) (0, import_node_fs41.appendFileSync)(warningsPath, lines.join("\n") + "\n");
   };
-  const tsvText = (path6) => readIfExistsOrNull(path6) ?? "";
-  foldWarnings(parseSanityRows(tsvText(sanityTsvPath(art))), (r) => r.flag !== "audit-knob-drift" && r.expId && r.agent && r.flag ? `sanity	${r.agent}/${r.expId}	${r.flag}	${r.detail}` : null);
-  foldWarnings(parseLineageRows(tsvText(lineageTsvPath(art))), (r) => r.verdict === "improve-multi" && r.expId && r.agent ? `lineage	${r.agent}/${r.expId}	improve-multi	parent=${r.parentId} knobs_changed=${r.knobsChanged}` : null);
-  foldWarnings(parseInspectionRows(tsvText(inspectionTsvPath(art))), (r) => r.verdict === "not-reproduced" && r.expId && r.agent ? `reimpl	${r.agent}/${r.expId}	not-reproduced	${r.reason}` : null);
+  foldWarnings(parseSanityRows(readIfExists(sanityTsvPath(art))), (r) => r.flag !== "audit-knob-drift" && r.expId && r.agent && r.flag ? `sanity	${r.agent}/${r.expId}	${r.flag}	${r.detail}` : null);
+  foldWarnings(parseLineageRows(readIfExists(lineageTsvPath(art))), (r) => r.verdict === "improve-multi" && r.expId && r.agent ? `lineage	${r.agent}/${r.expId}	improve-multi	parent=${r.parentId} knobs_changed=${r.knobsChanged}` : null);
+  foldWarnings(parseInspectionRows(readIfExists(inspectionTsvPath(art))), (r) => r.verdict === "not-reproduced" && r.expId && r.agent ? `reimpl	${r.agent}/${r.expId}	not-reproduced	${r.reason}` : null);
   const statusRows = gatherStatusRows(art, agents);
   const { scoreboardMd, completion } = gatherCompletion(art);
   const budgetPath = (0, import_node_path43.join)(art, "time-budget.txt");
@@ -26089,7 +26088,7 @@ async function corpusDigestWith(args, deps) {
       const mm = readIfExistsOrNull((0, import_node_path43.join)(dir, "metric.md"));
       const fam = mm ? metricFamilyOf(parseMetricMd(mm).primaryMetric) : null;
       if (fam === null) continue;
-      const verified = parseVerificationRows(readIfExistsOrNull(verificationTsvPath(dir)) ?? "").filter((r) => r.verdict === "verified").length;
+      const verified = parseVerificationRows(readIfExists(verificationTsvPath(dir))).filter((r) => r.verdict === "verified").length;
       const halt = readHaltFlag(readIfExistsOrNull((0, import_node_path43.join)(dir, "halt.flag")));
       const haltReason = halt.format === "structured" ? halt.fields?.reason ?? halt.fields?.halted_by ?? "halted" : halt.format === "prose" ? halt.reason ?? "halted" : "completed";
       dated.push({ ts: artName.slice("_autoresearch-".length), e: {
@@ -26349,7 +26348,7 @@ var init_autoresearch2 = __esm({
     liveInspectPlanDeps = {
       readResult: liveVerifyPlanDeps.readResult,
       readMetricMd,
-      inspectionCount: (art) => parseInspectionRows(readIfExistsOrNull(inspectionTsvPath(art)) ?? "").length,
+      inspectionCount: (art) => parseInspectionRows(readIfExists(inspectionTsvPath(art))).length,
       workerProvider: (_art, i2, topic) => resolveModel(i2, topic),
       writeRow: appendInspectionRow,
       now: () => isoUtc()

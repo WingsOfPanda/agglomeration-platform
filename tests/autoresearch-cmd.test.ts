@@ -1159,7 +1159,7 @@ describe("autoresearch verify-check", () => {
   });
 });
 
-import { inspectPlanWith, inspectCheckWith, type InspectPlanDeps, type InspectCheckDeps } from "../src/commands/autoresearch.js";
+import { inspectPlanWith, inspectCheckWith, liveInspectPlanDeps, type InspectPlanDeps, type InspectCheckDeps } from "../src/commands/autoresearch.js";
 type InspectionRowT = import("../src/core/autoresearchInspect.js").InspectionRow;
 
 describe("autoresearch inspect-plan (C1)", () => {
@@ -1198,6 +1198,25 @@ describe("autoresearch inspect-plan (C1)", () => {
     const { deps, rows } = mkPlan({ workerProvider: () => "claude" });
     expect(await inspectPlanWith(["t", "golf", "exp-001", "--authorize-inspect"], deps)).toBe(0);
     expect(rows[0].reason).toBe("same-family");
+  });
+  it("the LIVE inspectionCount skips the header: budget-1 real rows do not exhaust the budget", async () => {
+    const h = home();
+    const art = autoresearchArtDir("ic-topic", { home: h.home });
+    mkdirSync(art, { recursive: true });
+    // c1_budget=2 with exactly ONE data row: counting the header line as a row would reach the
+    // budget and flip this verdict to budget-exhausted.
+    writeFileSync(join(art, "inspection.tsv"),
+      "exp_id\tagent\tverdict\treason\treimpl_metric\tts\nexp-001\tgolf\treproduced\t\t0.9\tT\n");
+    expect(liveInspectPlanDeps.inspectionCount(art)).toBe(1);
+    const { deps, rows, lines } = mkPlan({
+      inspectionCount: liveInspectPlanDeps.inspectionCount,
+      readMetricMd: () => "**c1_budget:** 2\n**Primary metric:** accuracy\n",
+    });
+    expect(await inspectPlanWith(["ic-topic", "golf", "exp-001", "--authorize-inspect"],
+      { ...deps, opts: { home: h.home } })).toBe(0);
+    // Under budget the verb dispatches (run-card, no row); at budget it would write budget-exhausted.
+    expect(rows.map((r) => r.reason)).not.toContain("budget-exhausted");
+    expect(lines.join("\n")).toContain("INSPECT_CWD=");
   });
   it("authorized + sufficient -> prints INSPECT_CWD + run-card", async () => {
     const { deps, lines } = mkPlan();

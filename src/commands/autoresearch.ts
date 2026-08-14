@@ -1257,17 +1257,16 @@ export async function finalizeWith(args: string[], deps: AutoresearchFinalizeDep
     }
     if (lines.length) appendFileSync(warningsPath, lines.join("\n") + "\n");
   };
-  const tsvText = (path: string): string => readIfExistsOrNull(path) ?? "";
   // A3: non-audit sanity flags (audit-knob-drift deduped — finalize's audit_warn already covers it).
-  foldWarnings(parseSanityRows(tsvText(sanityTsvPath(art))), (r) =>
+  foldWarnings(parseSanityRows(readIfExists(sanityTsvPath(art))), (r) =>
     r.flag !== "audit-knob-drift" && r.expId && r.agent && r.flag
       ? `sanity\t${r.agent}/${r.expId}\t${r.flag}\t${r.detail}` : null);
   // B2: improve-multi lineage rows (advisory: delta not cleanly attributable).
-  foldWarnings(parseLineageRows(tsvText(lineageTsvPath(art))), (r) =>
+  foldWarnings(parseLineageRows(readIfExists(lineageTsvPath(art))), (r) =>
     r.verdict === "improve-multi" && r.expId && r.agent
       ? `lineage\t${r.agent}/${r.expId}\timprove-multi\tparent=${r.parentId} knobs_changed=${r.knobsChanged}` : null);
   // C1: not-reproduced inspections (advisory in the summary; computeScore already demotes to x<rank>).
-  foldWarnings(parseInspectionRows(tsvText(inspectionTsvPath(art))), (r) =>
+  foldWarnings(parseInspectionRows(readIfExists(inspectionTsvPath(art))), (r) =>
     r.verdict === "not-reproduced" && r.expId && r.agent
       ? `reimpl\t${r.agent}/${r.expId}\tnot-reproduced\t${r.reason}` : null);
 
@@ -2023,7 +2022,7 @@ export async function corpusDigestWith(args: string[], deps: CorpusDigestDeps): 
       const mm = readIfExistsOrNull(join(dir, "metric.md"));
       const fam = mm ? metricFamilyOf(parseMetricMd(mm).primaryMetric) : null;
       if (fam === null) continue;
-      const verified = parseVerificationRows(readIfExistsOrNull(verificationTsvPath(dir)) ?? "")
+      const verified = parseVerificationRows(readIfExists(verificationTsvPath(dir)))
         .filter((r) => r.verdict === "verified").length;
       const halt = readHaltFlag(readIfExistsOrNull(join(dir, "halt.flag")));
       const haltReason = halt.format === "structured"
@@ -2077,10 +2076,10 @@ function appendInspectionRow(art: string, agent: string, expId: string, row: Ins
   atomicWrite(join(experimentDir(art, agent, expId), "inspection.txt"),
     `${row.verdict} reason=${row.reason} reimpl_metric=${row.reimplMetric} at ${row.ts}\n`);
 }
-const liveInspectPlanDeps: InspectPlanDeps = {
+export const liveInspectPlanDeps: InspectPlanDeps = {
   readResult: liveVerifyPlanDeps.readResult,
   readMetricMd,
-  inspectionCount: (art) => parseInspectionRows(readIfExistsOrNull(inspectionTsvPath(art)) ?? "").length,
+  inspectionCount: (art) => parseInspectionRows(readIfExists(inspectionTsvPath(art))).length,
   workerProvider: (_art, i, topic) => resolveModel(i, topic),
   writeRow: appendInspectionRow,
   now: () => isoUtc(),

@@ -25,15 +25,11 @@ describe("resolveMemoryScope", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it("null on missing text", () => {
-    expect(resolveMemoryScope(null, {})).toBeNull();
-  });
-
   it("null on an out-of-taxonomy family (an unknown family must never reach scopeKey)", () => {
     expect(resolveMemoryScope(metricMd("wibbliness"), {})).toBeNull();
   });
 
-  it("null on empty text (no primary metric to map)", () => {
+  it("null on empty text — the shape an absent metric.md reaches both callers as", () => {
     expect(resolveMemoryScope("", {})).toBeNull();
   });
 

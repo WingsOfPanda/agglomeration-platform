@@ -66,18 +66,17 @@ export interface MemoryScope {
 
 /**
  * "Which scope am I" from a metric.md body — the preamble both the finalize write and the
- * dispatch retrieve need before they can call this module. Returns null on missing text or an
- * out-of-taxonomy family (the callers' shared fail-closed guard: an unknown family must never
- * reach scopeKey, which throws).
+ * dispatch retrieve need before they can call this module. Returns null on an out-of-taxonomy
+ * family, which an absent metric.md ("") also produces: the callers' shared fail-closed guard,
+ * since an unknown family must never reach scopeKey, which throws.
  *
  * Takes the TEXT, not a path: this module's filesystem surface stays MemoryIo-only, so each
  * caller keeps its own one-line read and its own early-return.
  */
 export function resolveMemoryScope(
-  metricMdText: string | null,
+  metricMdText: string,
   o: { storeRoot?: string; repoHash?: string } = {},
 ): MemoryScope | null {
-  if (metricMdText === null) return null;
   const thresholds = parseMetricMd(metricMdText);
   const family = metricFamilyOf(thresholds.primaryMetric);
   if (family === null) return null;

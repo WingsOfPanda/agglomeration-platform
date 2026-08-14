@@ -5,7 +5,7 @@
 
 import { parseVerificationRows } from "./autoresearchVerify.js";
 
-export const INFEASIBLE_FLAGS =["under-run", "log-contradiction", "audit-knob-drift", "data-leakage"] as const;
+export const INFEASIBLE_FLAGS = ["under-run", "log-contradiction", "audit-knob-drift", "data-leakage"] as const;
 
 /** Returns the trigger reason (verdict or flag name) when infeasible, else null. */
 export function classifyInfeasible(verdict: string | undefined, flags: string[]): string | null {

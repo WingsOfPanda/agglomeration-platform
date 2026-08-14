@@ -72,11 +72,14 @@ export function verificationRow(r: VerificationRow): string {
   return `${r.expId}\t${r.agent}\t${r.verdict}\t${r.reason}\t${r.recomputed}\t${r.ts}\n`;
 }
 export function verificationTsvPath(art: string): string { return join(art, "verification.tsv"); }
-/** verification.tsv text -> rows. The file is ours, so `verdict` is read back as the Verdict it was
- *  written as; a foreign token would carry through unmapped. Missing trailing cells read as "". */
-export function parseVerificationRows(text: string): VerificationRow[] {
+/** A verification.tsv row as READ BACK. `verdict` is whatever token the column holds — a short or
+ *  foreign row flows through unchecked, exactly as the inline readers it replaced did; only the
+ *  WRITE side is constrained to a Verdict. */
+export type ParsedVerificationRow = Omit<VerificationRow, "verdict"> & { verdict: string };
+/** verification.tsv text -> rows. Missing trailing cells read as "". */
+export function parseVerificationRows(text: string): ParsedVerificationRow[] {
   return splitTsvRows(text, "exp_id\t").map((c) => ({
-    expId: c[0] ?? "", agent: c[1] ?? "", verdict: (c[2] ?? "") as Verdict, reason: c[3] ?? "",
+    expId: c[0] ?? "", agent: c[1] ?? "", verdict: c[2] ?? "", reason: c[3] ?? "",
     recomputed: c[4] ?? "", ts: c[5] ?? "",
   }));
 }

@@ -88,9 +88,11 @@ describe("lineage.tsv codec", () => {
   it("render -> parse round-trips every column, empty fields included", () => {
     expect(parseLineageRows(render(LINEAGE_TSV_HEADER, rows, lineageRow))).toEqual(rows);
   });
-  it("verdict is the 5th column, not the 3rd (a swapped parser would read parent_id here)", () => {
-    expect(parseLineageRows(render(LINEAGE_TSV_HEADER, rows, lineageRow))
-      .filter((r) => r.verdict === "improve-multi").map((r) => r.expId)).toEqual(["exp-002"]);
+  it("reads a LITERAL on-disk row positionally (verdict is column 5, parent_id column 3)", () => {
+    // A literal string, not a re-render: a lockstep header+renderer+parser transposition still fails here.
+    expect(parseLineageRows("exp-002\talpha\texp-001\t2\timprove-multi\tT2\n")).toEqual([
+      { expId: "exp-002", agent: "alpha", parentId: "exp-001", knobsChanged: "2", verdict: "improve-multi", ts: "T2" },
+    ]);
   });
   it("header-only / absent-as-empty yields no rows", () => {
     expect(parseLineageRows(LINEAGE_TSV_HEADER)).toEqual([]);
