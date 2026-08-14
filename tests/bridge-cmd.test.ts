@@ -166,7 +166,7 @@ describe("bridge round-send / round-wait", () => {
   it("round-wait classifies done→ok and writes TS=ok", async () => {
     seedPart("t", "/abs/repoB");
     writeFileSync(join(bridgeExecDir("t"), "round-1.txt"), "OFFSET=0\n");
-    const deps: TurnWaitDeps = { wait: async () => ({ event: "done", summary: "x", ts: "now" } as OutboxEvent) };
+    const deps: TurnWaitDeps = { wait: async () => ({ event: "done", summary: "x", ts: "now" } as OutboxEvent), sleep: async () => {} };
     expect(await roundWaitWith("t", 1, deps)).toBe(0);
     expect(readFileSync(join(bridgeExecDir("t"), "round-1.txt"), "utf8")).toContain("TS=ok");
   });
@@ -176,7 +176,7 @@ describe("bridge round-send / round-wait", () => {
     writeFileSync(join(bridgeExecDir("t"), "round-1.txt"), "OFFSET=0\n");
     // make the outbox non-empty so the bumped offset differs
     writeFileSync(join(workerDir("alpha", "codex", "t"), "outbox.jsonl"), '{"event":"question","question":"?","ts":"now"}\n');
-    const deps: TurnWaitDeps = { wait: async () => ({ event: "question", question: "?", ts: "now" } as unknown as OutboxEvent) };
+    const deps: TurnWaitDeps = { wait: async () => ({ event: "question", question: "?", ts: "now" } as unknown as OutboxEvent), sleep: async () => {} };
     expect(await roundWaitWith("t", 1, deps)).toBe(0);
     const st = readFileSync(join(bridgeExecDir("t"), "round-1.txt"), "utf8");
     expect(st).toMatch(/TS=question/);

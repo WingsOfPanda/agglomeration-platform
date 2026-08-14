@@ -680,6 +680,15 @@ function lastMatch(text, events) {
 function outboxTerminalSince(i2, m, t, offset) {
   return lastMatch(readFrom(outboxPath(i2, m, t), offset), TERMINAL_EVENTS) !== null;
 }
+function outboxEventsSince(i2, m, t, offset) {
+  const out = [];
+  for (const line of readFrom(outboxPath(i2, m, t), offset).split("\n")) {
+    if (!line) continue;
+    const obj = parseEvent(line);
+    if (obj) out.push(obj);
+  }
+  return out;
+}
 async function outboxWaitSince(i2, m, t, offset, events, timeoutSec, live) {
   const path6 = outboxPath(i2, m, t);
   const everyS = live?.everyS ?? 15;
@@ -18339,182 +18348,6 @@ var init_waitLive = __esm({
   }
 });
 
-// src/core/turn.ts
-function composeRound1Prompt(briefText, branch) {
-  return [
-    `You are implementing a single, self-contained change on the branch \`${branch}\` of this repository.`,
-    "",
-    "This is one autonomous turn: read the task, implement it, commit your work, then report.",
-    "",
-    "THE TASK:",
-    "",
-    briefText.trim(),
-    "",
-    "INSTRUCTIONS:",
-    `- Implement the change directly in this repository's working tree (you are on \`${branch}\`).`,
-    "- Commit per logical change with Conventional Commits messages.",
-    "- If the repository has a test suite, run it and make your change pass it.",
-    "- When the implementation is complete and committed, emit the done event (see below).",
-    "",
-    BRANCH_DISCIPLINE,
-    BLOCKERS
-  ].join("\n");
-}
-function classifyTurn(ev) {
-  if (!ev) return "timeout";
-  if (ev.event === "done") return "ok";
-  if (ev.event === "question") return "question";
-  return "failed";
-}
-function composeFixPrompt(issuesText, round) {
-  return [
-    `You are entering ROUND ${round} of /ap:quick (fix loop), still on the same branch.`,
-    "",
-    "This is one autonomous turn: fix each issue below, commit per fix, re-run the tests, then report.",
-    "",
-    "ISSUES TO ADDRESS:",
-    "",
-    issuesText.trim(),
-    "",
-    "INSTRUCTIONS:",
-    "- Fix each issue above. Commit per fix with Conventional Commits messages.",
-    "- Re-run the repository's test suite and confirm it passes.",
-    "- When all issues are addressed and committed, emit the done event (see below).",
-    "",
-    BRANCH_DISCIPLINE,
-    BLOCKERS
-  ].join("\n");
-}
-var BRANCH_DISCIPLINE, BLOCKERS;
-var init_turn = __esm({
-  "src/core/turn.ts"() {
-    "use strict";
-    BRANCH_DISCIPLINE = 'BRANCH DISCIPLINE (hard rule):\n- You are already on the correct branch. Do NOT run `git checkout`, `git switch`,\n  or `git branch`, and do NOT create new branches.\n- If the work genuinely needs a different branch, do NOT switch; instead emit\n  {"event":"error","reason":"branch-discipline: needed a different branch"} and stop.\n';
-    BLOCKERS = 'IF YOU ARE BLOCKED:\n- If a path, file, command, or assumption is wrong or missing, do NOT guess or invent a\n  workaround. Append a question event to your outbox and stop:\n  {"event":"question","message":"<what you need and why>","ts":"<iso>"}\n  The conductor will reply via your inbox, then re-engage you.\n';
-  }
-});
-
-// src/core/designDiff.ts
-function parseClaims(findings, headings = ["Claims"]) {
-  const out = [];
-  let inClaims = false;
-  for (const line of findings.split("\n")) {
-    if (headings.some((h2) => line.startsWith(`## ${h2}`))) {
-      inClaims = true;
-      continue;
-    }
-    if (/^## /.test(line)) {
-      inClaims = false;
-      continue;
-    }
-    if (inClaims && /^[0-9]+\. \[[^\]]+\] /.test(line)) {
-      const m = line.match(/\[[^\]]+\]/);
-      if (!m || m.index === void 0) continue;
-      const cite = m[0].slice(1, -1);
-      const text = line.slice(m.index + m[0].length).replace(/^[ \t]+/, "");
-      out.push({ cite, text });
-    }
-  }
-  return out;
-}
-function citationOverlaps(aRaw, bRaw) {
-  const a2 = aRaw.replace(/^\.\//, "");
-  const b = bRaw.replace(/^\.\//, "");
-  if (a2.startsWith("http") || b.startsWith("http")) return a2 === b;
-  if (a2.startsWith("runtime:") || b.startsWith("runtime:")) return a2 === b;
-  if (a2.startsWith("paper:") || b.startsWith("paper:")) return a2 === b;
-  const aPath = a2.split(":")[0];
-  const bPath = b.split(":")[0];
-  if (aPath !== bPath) return false;
-  const aLines = a2.includes(":") ? a2.slice(a2.indexOf(":") + 1) : "";
-  const bLines = b.includes(":") ? b.slice(b.indexOf(":") + 1) : "";
-  if (aLines === "" || bLines === "") return true;
-  const split = (s) => s.includes("-") ? [s.slice(0, s.indexOf("-")), s.slice(s.indexOf("-") + 1)] : [s, s];
-  const [a1s, a2s] = split(aLines);
-  const [b1s, b2s] = split(bLines);
-  if (![a1s, a2s, b1s, b2s].every((x) => /^[0-9]+$/.test(x))) return false;
-  const a1 = parseInt(a1s, 10), a22 = parseInt(a2s, 10), b1 = parseInt(b1s, 10), b2 = parseInt(b2s, 10);
-  return a1 <= b2 && b1 <= a22;
-}
-function mdSection(header, lines) {
-  return header + "\n" + (lines && lines.length ? lines.map((l) => `- ${l}`).join("\n") + "\n" : "");
-}
-function diffFindings(workers, headings) {
-  const n2 = workers.length;
-  if (n2 < 2) throw new Error(`diffFindings: need >=2 workers, got ${n2}`);
-  const names = workers.map((p) => p.name);
-  const owner = [], cite = [], text = [], flag = [];
-  const start = [], end = [];
-  for (let idx = 0; idx < n2; idx++) {
-    start[idx] = owner.length;
-    for (const c3 of parseClaims(workers[idx].findings, headings)) {
-      owner.push(idx);
-      cite.push(c3.cite);
-      text.push(c3.text);
-      flag.push(false);
-    }
-    end[idx] = owner.length;
-  }
-  const buckets = /* @__PURE__ */ new Map();
-  const add = (key, line) => {
-    if (!buckets.has(key)) buckets.set(key, []);
-    buckets.get(key).push(line);
-  };
-  for (let i2 = 0; i2 < n2; i2++) {
-    for (let j = start[i2]; j < end[i2]; j++) {
-      if (flag[j]) continue;
-      let memberKeys = names[i2];
-      const firstCite = cite[j];
-      let combined = text[j];
-      flag[j] = true;
-      for (let k = i2 + 1; k < n2; k++) {
-        for (let m = start[k]; m < end[k]; m++) {
-          if (flag[m]) continue;
-          if (citationOverlaps(firstCite, cite[m])) {
-            memberKeys += `,${names[k]}`;
-            combined += ` | ${text[m]}`;
-            flag[m] = true;
-            break;
-          }
-        }
-      }
-      add(memberKeys, `[${firstCite}] ${combined}`);
-    }
-  }
-  const allKey = names.join(",");
-  const files = [];
-  let diffMd = "";
-  if (n2 === 2) {
-    for (const name of names) files.push({ filename: `${name}_only_items.txt`, content: fileBody(buckets.get(name)) });
-    diffMd = mdSection("## Agreed", buckets.get(allKey)) + "\n" + mdSection(`## ${titlecase(names[0])}-only`, buckets.get(names[0])) + "\n" + mdSection(`## ${titlecase(names[1])}-only`, buckets.get(names[1]));
-  } else {
-    files.push({ filename: "consensus.txt", content: fileBody(buckets.get(allKey)) });
-    const pairKeys = [];
-    for (let i2 = 0; i2 < n2; i2++) for (let j = i2 + 1; j < n2; j++) pairKeys.push(`${names[i2]},${names[j]}`);
-    for (const key of pairKeys) {
-      const [a2, b] = key.split(",");
-      files.push({ filename: `${a2}+${b}_only.txt`, content: fileBody(buckets.get(key)) });
-    }
-    for (const name of names) files.push({ filename: `${name}_only_items.txt`, content: fileBody(buckets.get(name)) });
-    let md = mdSection("## Consensus", buckets.get(allKey));
-    for (const key of pairKeys) {
-      const [a2, b] = key.split(",");
-      md += "\n" + mdSection(`## ${titlecase(a2)}+${titlecase(b)} only`, buckets.get(key));
-    }
-    for (const name of names) md += "\n" + mdSection(`## ${titlecase(name)}-only`, buckets.get(name));
-    diffMd = md;
-  }
-  return { files, diffMd };
-}
-var titlecase, fileBody;
-var init_designDiff = __esm({
-  "src/core/designDiff.ts"() {
-    "use strict";
-    titlecase = (s) => s.length ? s[0].toUpperCase() + s.slice(1) : s;
-    fileBody = (lines) => lines && lines.length ? lines.join("\n") + "\n" : "";
-  }
-});
-
 // src/core/artifact.ts
 function artifactGraceS() {
   const raw = process.env.AP_ARTIFACT_GRACE_S;
@@ -18637,6 +18470,236 @@ var init_artifact = __esm({
       setTimeout(r, ms);
     });
     WAIT_ACCEPTED = /* @__PURE__ */ new Set(["sentinel", "quiescent"]);
+  }
+});
+
+// src/core/turn.ts
+function composeRound1Prompt(briefText, branch) {
+  return [
+    `You are implementing a single, self-contained change on the branch \`${branch}\` of this repository.`,
+    "",
+    "This is one autonomous turn: read the task, implement it, commit your work, then report.",
+    "",
+    "THE TASK:",
+    "",
+    briefText.trim(),
+    "",
+    "INSTRUCTIONS:",
+    `- Implement the change directly in this repository's working tree (you are on \`${branch}\`).`,
+    "- Commit per logical change with Conventional Commits messages.",
+    "- If the repository has a test suite, run it and make your change pass it.",
+    "- When the implementation is complete and committed, emit the done event (see below).",
+    "",
+    BRANCH_DISCIPLINE,
+    BLOCKERS
+  ].join("\n");
+}
+function classifyTurn(ev) {
+  if (!ev) return "timeout";
+  if (ev.event === "done") return "ok";
+  if (ev.event === "question") return "question";
+  return "failed";
+}
+function turnConfirmS() {
+  const raw = process.env.AP_TURN_CONFIRM_S;
+  const n2 = raw === void 0 || raw.trim() === "" ? TURN_CONFIRM_DEFAULT_S : Number(raw);
+  if (!Number.isFinite(n2)) return TURN_CONFIRM_DEFAULT_S;
+  if (n2 <= 0) return 0;
+  return Math.min(120, Math.max(5, n2));
+}
+function latestTerminal(events) {
+  for (let k = events.length - 1; k >= 0; k--) if (TERMINAL_EVENTS.includes(events[k].event)) return events[k];
+  return null;
+}
+async function waitTurnConfirmed(i2, m, t, offset, timeoutS, d) {
+  const now = d.nowMs ?? (() => Date.now());
+  const startMs = now();
+  const first = await d.wait(i2, m, t, offset, TERMINAL_EVENTS, timeoutS);
+  const confirmS = turnConfirmS();
+  if (!first || confirmS === 0) return first;
+  const legEndMs = now();
+  const path6 = outboxPath(i2, m, t);
+  const sleep5 = d.sleep ?? realSleep;
+  const windowMs = confirmS * 1e3;
+  const deadlineMs = Math.max(startMs + timeoutS * 1e3, legEndMs + REARM_FLOOR_WINDOWS * windowMs);
+  let armed = latestTerminal(outboxEventsSince(i2, m, t, offset)) ?? first;
+  let vetoes = 0;
+  for (; ; ) {
+    if (armed.event === "question") return armed;
+    const s0 = outboxOffset(path6);
+    await sleep5(windowMs);
+    if (outboxOffset(path6) <= s0) return armed;
+    if (vetoes >= MAX_VETOES) {
+      d.onVeto?.(`turn-confirm-cap: ${m} still writing after ${vetoes + 1} windows \u2014 accepting ${armed.event}`);
+      return armed;
+    }
+    d.onVeto?.(`turn-confirm-veto: ${m} premature ${armed.event} \u2014 outbox still active`);
+    vetoes++;
+    let next = null;
+    while (!next) {
+      const before = outboxOffset(path6);
+      next = await d.wait(i2, m, t, s0, TERMINAL_EVENTS, confirmS);
+      if (next) break;
+      if (outboxOffset(path6) <= before) return armed;
+      if (now() >= deadlineMs) {
+        d.onVeto?.(`turn-confirm-deadline: ${m} re-arm expired \u2014 accepting ${armed.event}`);
+        return armed;
+      }
+    }
+    armed = latestTerminal(outboxEventsSince(i2, m, t, s0)) ?? next;
+  }
+}
+function composeFixPrompt(issuesText, round) {
+  return [
+    `You are entering ROUND ${round} of /ap:quick (fix loop), still on the same branch.`,
+    "",
+    "This is one autonomous turn: fix each issue below, commit per fix, re-run the tests, then report.",
+    "",
+    "ISSUES TO ADDRESS:",
+    "",
+    issuesText.trim(),
+    "",
+    "INSTRUCTIONS:",
+    "- Fix each issue above. Commit per fix with Conventional Commits messages.",
+    "- Re-run the repository's test suite and confirm it passes.",
+    "- When all issues are addressed and committed, emit the done event (see below).",
+    "",
+    BRANCH_DISCIPLINE,
+    BLOCKERS
+  ].join("\n");
+}
+var BRANCH_DISCIPLINE, BLOCKERS, TURN_CONFIRM_DEFAULT_S, MAX_VETOES, REARM_FLOOR_WINDOWS;
+var init_turn = __esm({
+  "src/core/turn.ts"() {
+    "use strict";
+    init_ipc();
+    init_artifact();
+    BRANCH_DISCIPLINE = 'BRANCH DISCIPLINE (hard rule):\n- You are already on the correct branch. Do NOT run `git checkout`, `git switch`,\n  or `git branch`, and do NOT create new branches.\n- If the work genuinely needs a different branch, do NOT switch; instead emit\n  {"event":"error","reason":"branch-discipline: needed a different branch"} and stop.\n';
+    BLOCKERS = 'IF YOU ARE BLOCKED:\n- If a path, file, command, or assumption is wrong or missing, do NOT guess or invent a\n  workaround. Append a question event to your outbox and stop:\n  {"event":"question","message":"<what you need and why>","ts":"<iso>"}\n  The conductor will reply via your inbox, then re-engage you.\n';
+    TURN_CONFIRM_DEFAULT_S = 20;
+    MAX_VETOES = 2;
+    REARM_FLOOR_WINDOWS = 3;
+  }
+});
+
+// src/core/designDiff.ts
+function parseClaims(findings, headings = ["Claims"]) {
+  const out = [];
+  let inClaims = false;
+  for (const line of findings.split("\n")) {
+    if (headings.some((h2) => line.startsWith(`## ${h2}`))) {
+      inClaims = true;
+      continue;
+    }
+    if (/^## /.test(line)) {
+      inClaims = false;
+      continue;
+    }
+    if (inClaims && /^[0-9]+\. \[[^\]]+\] /.test(line)) {
+      const m = line.match(/\[[^\]]+\]/);
+      if (!m || m.index === void 0) continue;
+      const cite = m[0].slice(1, -1);
+      const text = line.slice(m.index + m[0].length).replace(/^[ \t]+/, "");
+      out.push({ cite, text });
+    }
+  }
+  return out;
+}
+function citationOverlaps(aRaw, bRaw) {
+  const a2 = aRaw.replace(/^\.\//, "");
+  const b = bRaw.replace(/^\.\//, "");
+  if (a2.startsWith("http") || b.startsWith("http")) return a2 === b;
+  if (a2.startsWith("runtime:") || b.startsWith("runtime:")) return a2 === b;
+  if (a2.startsWith("paper:") || b.startsWith("paper:")) return a2 === b;
+  const aPath = a2.split(":")[0];
+  const bPath = b.split(":")[0];
+  if (aPath !== bPath) return false;
+  const aLines = a2.includes(":") ? a2.slice(a2.indexOf(":") + 1) : "";
+  const bLines = b.includes(":") ? b.slice(b.indexOf(":") + 1) : "";
+  if (aLines === "" || bLines === "") return true;
+  const split = (s) => s.includes("-") ? [s.slice(0, s.indexOf("-")), s.slice(s.indexOf("-") + 1)] : [s, s];
+  const [a1s, a2s] = split(aLines);
+  const [b1s, b2s] = split(bLines);
+  if (![a1s, a2s, b1s, b2s].every((x) => /^[0-9]+$/.test(x))) return false;
+  const a1 = parseInt(a1s, 10), a22 = parseInt(a2s, 10), b1 = parseInt(b1s, 10), b2 = parseInt(b2s, 10);
+  return a1 <= b2 && b1 <= a22;
+}
+function mdSection(header, lines) {
+  return header + "\n" + (lines && lines.length ? lines.map((l) => `- ${l}`).join("\n") + "\n" : "");
+}
+function diffFindings(workers, headings) {
+  const n2 = workers.length;
+  if (n2 < 2) throw new Error(`diffFindings: need >=2 workers, got ${n2}`);
+  const names = workers.map((p) => p.name);
+  const owner = [], cite = [], text = [], flag = [];
+  const start = [], end = [];
+  for (let idx = 0; idx < n2; idx++) {
+    start[idx] = owner.length;
+    for (const c3 of parseClaims(workers[idx].findings, headings)) {
+      owner.push(idx);
+      cite.push(c3.cite);
+      text.push(c3.text);
+      flag.push(false);
+    }
+    end[idx] = owner.length;
+  }
+  const buckets = /* @__PURE__ */ new Map();
+  const add = (key, line) => {
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(line);
+  };
+  for (let i2 = 0; i2 < n2; i2++) {
+    for (let j = start[i2]; j < end[i2]; j++) {
+      if (flag[j]) continue;
+      let memberKeys = names[i2];
+      const firstCite = cite[j];
+      let combined = text[j];
+      flag[j] = true;
+      for (let k = i2 + 1; k < n2; k++) {
+        for (let m = start[k]; m < end[k]; m++) {
+          if (flag[m]) continue;
+          if (citationOverlaps(firstCite, cite[m])) {
+            memberKeys += `,${names[k]}`;
+            combined += ` | ${text[m]}`;
+            flag[m] = true;
+            break;
+          }
+        }
+      }
+      add(memberKeys, `[${firstCite}] ${combined}`);
+    }
+  }
+  const allKey = names.join(",");
+  const files = [];
+  let diffMd = "";
+  if (n2 === 2) {
+    for (const name of names) files.push({ filename: `${name}_only_items.txt`, content: fileBody(buckets.get(name)) });
+    diffMd = mdSection("## Agreed", buckets.get(allKey)) + "\n" + mdSection(`## ${titlecase(names[0])}-only`, buckets.get(names[0])) + "\n" + mdSection(`## ${titlecase(names[1])}-only`, buckets.get(names[1]));
+  } else {
+    files.push({ filename: "consensus.txt", content: fileBody(buckets.get(allKey)) });
+    const pairKeys = [];
+    for (let i2 = 0; i2 < n2; i2++) for (let j = i2 + 1; j < n2; j++) pairKeys.push(`${names[i2]},${names[j]}`);
+    for (const key of pairKeys) {
+      const [a2, b] = key.split(",");
+      files.push({ filename: `${a2}+${b}_only.txt`, content: fileBody(buckets.get(key)) });
+    }
+    for (const name of names) files.push({ filename: `${name}_only_items.txt`, content: fileBody(buckets.get(name)) });
+    let md = mdSection("## Consensus", buckets.get(allKey));
+    for (const key of pairKeys) {
+      const [a2, b] = key.split(",");
+      md += "\n" + mdSection(`## ${titlecase(a2)}+${titlecase(b)} only`, buckets.get(key));
+    }
+    for (const name of names) md += "\n" + mdSection(`## ${titlecase(name)}-only`, buckets.get(name));
+    diffMd = md;
+  }
+  return { files, diffMd };
+}
+var titlecase, fileBody;
+var init_designDiff = __esm({
+  "src/core/designDiff.ts"() {
+    "use strict";
+    titlecase = (s) => s.length ? s[0].toUpperCase() + s.slice(1) : s;
+    fileBody = (lines) => lines && lines.length ? lines.join("\n") + "\n" : "";
   }
 });
 
@@ -19069,7 +19132,13 @@ async function turnWaitWith(topic, round, d) {
     return 1;
   }
   log.info(`quick turn-wait: round=${round} offset=${offset} timeout=${QUICK_TURN_TIMEOUT}s`);
-  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, QUICK_TURN_TIMEOUT);
+  const ev = await waitTurnConfirmed(agent, provider, topic, offset, QUICK_TURN_TIMEOUT, {
+    wait: d.wait,
+    sleep: d.sleep,
+    onVeto: (note) => {
+      recordHubFlag({ command: "quick", topic, note });
+    }
+  });
   const ts = classifyTurn(ev);
   recordWaitOutcome(
     agent,
@@ -21300,7 +21369,13 @@ async function turnWaitWith2(topic, round, d) {
   }
   const timeout = scaledTimeout(IMPLEMENT_TURN_TIMEOUT(), d.multiplier(model));
   log.info(`[turn-wait] ${WORKER} round=${round} offset=${offset} timeout=${timeout}s`);
-  const ev = await d.wait(WORKER, model, topic, offset, TERMINAL_EVENTS, timeout);
+  const ev = await waitTurnConfirmed(WORKER, model, topic, offset, timeout, {
+    wait: d.wait,
+    sleep: d.sleep,
+    onVeto: (note) => {
+      recordHubFlag({ command: "implement", topic, note });
+    }
+  });
   const verifyPath = (0, import_node_path30.join)(art, `verify-report-${round}.md`);
   const verifyText = readIfExistsOrNull(verifyPath);
   let ts = implementState(ev, verifyText);
@@ -21722,6 +21797,7 @@ var init_implement2 = __esm({
     init_implementQuestions();
     init_ipc();
     init_waitLive();
+    init_turn();
     init_fsread();
     init_contracts();
     init_designTurn();
@@ -28480,7 +28556,13 @@ async function roundWaitWith(topic, round, d) {
     return 1;
   }
   log.info(`bridge round-wait: round=${round} offset=${offset} timeout=${DUET_TURN_TIMEOUT}s`);
-  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, DUET_TURN_TIMEOUT);
+  const ev = await waitTurnConfirmed(agent, provider, topic, offset, DUET_TURN_TIMEOUT, {
+    wait: d.wait,
+    sleep: d.sleep,
+    onVeto: (note) => {
+      recordHubFlag({ command: "bridge", topic, note });
+    }
+  });
   const ts = classifyTurn(ev);
   recordWaitOutcome(
     agent,
