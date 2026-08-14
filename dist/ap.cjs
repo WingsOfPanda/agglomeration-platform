@@ -18217,8 +18217,11 @@ function finishBranch(r, o2) {
   r.run("git", ["checkout", "-q", o2.startBranch]);
   return { action, outcome };
 }
+function hasDistinctBranch(r, branch, startBranch) {
+  return Boolean(branch) && branch !== startBranch && r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]).code === 0;
+}
 function finishBranchAction(r, o2) {
-  if (!o2.branch || o2.branch === o2.startBranch || r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${o2.branch}`]).code !== 0) return "no-branch";
+  if (!hasDistinctBranch(r, o2.branch, o2.startBranch)) return "no-branch";
   switch (o2.action) {
     case "merge":
       r.run("git", ["checkout", "-q", o2.startBranch]);
@@ -19250,12 +19253,66 @@ var init_quick2 = __esm({
   }
 });
 
+// src/core/designWalk.ts
+function auditIssueToSection(key) {
+  switch (key) {
+    case "no_goal_section":
+      return "goal";
+    case "no_arch_section":
+      return "architecture";
+    case "no_testing_section":
+      return "testing";
+    case "no_success_section":
+      return "success-criteria";
+    case "tbd_marker":
+    case "todo_marker":
+    case "fill_in_later_marker":
+    case "to_be_determined_marker":
+      return "ASK";
+    case "unresolved_placeholder":
+      return "architecture";
+    default:
+      return "";
+  }
+}
+function parseWalkVerdict(text) {
+  const v = text.trim();
+  return WALK_VERDICTS.includes(v) ? v : null;
+}
+function walkSectionState(dir, opts) {
+  let files;
+  try {
+    files = (0, import_node_fs28.readdirSync)(dir).filter((f) => f.endsWith(".state"));
+  } catch {
+    return [];
+  }
+  const settled = [];
+  for (const f of files.sort()) {
+    const status = parseWalkVerdict((0, import_node_fs28.readFileSync)((0, import_node_path22.join)(dir, f), "utf8"));
+    if (status) settled.push({ name: f.replace(/\.state$/, ""), status });
+  }
+  return opts?.withStatus ? settled : settled.map((s) => s.name);
+}
+var import_node_fs28, import_node_path22, WALK_DIRNAME, WALK_VERDICTS;
+var init_designWalk = __esm({
+  "src/core/designWalk.ts"() {
+    "use strict";
+    import_node_fs28 = require("node:fs");
+    import_node_path22 = require("node:path");
+    WALK_DIRNAME = ".walk";
+    WALK_VERDICTS = ["approved", "skipped"];
+  }
+});
+
 // src/core/design.ts
 function designArtDir(topic, opts) {
-  return (0, import_node_path22.join)(topicDir(topic, opts), "_design");
+  return (0, import_node_path23.join)(topicDir(topic, opts), "_design");
 }
 function designDraftDir(topic, opts) {
-  return (0, import_node_path22.join)(designArtDir(topic, opts), "design-doc", ".draft");
+  return (0, import_node_path23.join)(designArtDir(topic, opts), "design-doc", ".draft");
+}
+function designWalkDir(topic, opts) {
+  return (0, import_node_path23.join)(designArtDir(topic, opts), "design-doc", WALK_DIRNAME);
 }
 function parseDesignArgs(tokens) {
   let ensemble = false;
@@ -19271,7 +19328,7 @@ function parseDesignArgs(tokens) {
   return { topicText: rest.join(" "), ensemble };
 }
 function designDocPath(topic, dateUtc, opts) {
-  return (0, import_node_path22.join)(designArtDir(topic, opts), "design-doc", `${dateUtc}-${topic}-design.md`);
+  return (0, import_node_path23.join)(designArtDir(topic, opts), "design-doc", `${dateUtc}-${topic}-design.md`);
 }
 function cascadeTargets(phase, keepFindings) {
   const workerFile = phase === "research" ? "findings.md" : "verify.md";
@@ -19284,34 +19341,35 @@ function resolveDrilldownPath(scratchDir, section, agent) {
   const base = `drilldown-${slug}-${agent}`;
   let cand = base;
   let n2 = 2;
-  while ((0, import_node_fs28.existsSync)((0, import_node_path22.join)(scratchDir, `${cand}.md`))) {
+  while ((0, import_node_fs29.existsSync)((0, import_node_path23.join)(scratchDir, `${cand}.md`))) {
     cand = `${cand.replace(/-[0-9]+$/, "")}-${n2}`;
     if (++n2 > 100) throw new Error("resolveDrilldownPath: too many same-section drilldown collisions");
   }
-  return (0, import_node_path22.join)(scratchDir, `${cand}.md`);
+  return (0, import_node_path23.join)(scratchDir, `${cand}.md`);
 }
 function designExportDocPath(repoRoot2, basename5) {
-  return (0, import_node_path22.join)(repoRoot2, "docs", "ap", "specs", basename5);
+  return (0, import_node_path23.join)(repoRoot2, "docs", "ap", "specs", basename5);
 }
 function exportDocTo(topic, destRoot, opts) {
-  const ddir = (0, import_node_path22.join)(designArtDir(topic, opts), "design-doc");
-  if (!(0, import_node_fs28.existsSync)(ddir)) return null;
-  const hits = (0, import_node_fs28.readdirSync)(ddir).filter((f) => f.endsWith(`-${topic}-design.md`)).sort();
+  const ddir = (0, import_node_path23.join)(designArtDir(topic, opts), "design-doc");
+  if (!(0, import_node_fs29.existsSync)(ddir)) return null;
+  const hits = (0, import_node_fs29.readdirSync)(ddir).filter((f) => f.endsWith(`-${topic}-design.md`)).sort();
   if (hits.length === 0) return null;
   const basename5 = hits[hits.length - 1];
   const dest = designExportDocPath(destRoot, basename5);
-  (0, import_node_fs28.mkdirSync)((0, import_node_path22.join)(destRoot, "docs", "ap", "specs"), { recursive: true });
-  atomicWrite(dest, (0, import_node_fs28.readFileSync)((0, import_node_path22.join)(ddir, basename5), "utf8"));
+  (0, import_node_fs29.mkdirSync)((0, import_node_path23.join)(destRoot, "docs", "ap", "specs"), { recursive: true });
+  atomicWrite(dest, (0, import_node_fs29.readFileSync)((0, import_node_path23.join)(ddir, basename5), "utf8"));
   return dest;
 }
-var import_node_path22, import_node_fs28;
+var import_node_path23, import_node_fs29;
 var init_design = __esm({
   "src/core/design.ts"() {
     "use strict";
-    import_node_path22 = require("node:path");
-    import_node_fs28 = require("node:fs");
+    import_node_path23 = require("node:path");
+    import_node_fs29 = require("node:fs");
     init_atomic();
     init_paths();
+    init_designWalk();
     init_quick();
   }
 });
@@ -19337,13 +19395,18 @@ _(missing draft)_
   return out;
 }
 function synthesizeSeeds(adjText) {
-  const lines = adjText.split("\n");
+  const matched = new Map(SEED_SPECS.map((s) => [s.section, []]));
+  for (const l of adjText.split("\n")) {
+    const spec = SEED_SPECS.find((s) => s.tag.test(l));
+    if (spec) matched.get(spec.section).push(l);
+    else if (/^- .*\btest/i.test(l)) matched.get("testing").push(l);
+  }
   return SEED_SPECS.map((spec) => {
-    const matched = lines.filter(spec.match);
+    const lines = matched.get(spec.section);
     const body = `${spec.heading}
 
 ${spec.comment}
-` + (matched.length ? matched.join("\n") + "\n" : SEED_PLACEHOLDER + "\n");
+` + (lines.length ? lines.join("\n") + "\n" : SEED_PLACEHOLDER + "\n");
     return { section: spec.section, body };
   });
 }
@@ -19364,38 +19427,38 @@ var init_designDoc = __esm({
       {
         section: "problem",
         heading: "## Problem",
-        comment: "<!-- seed: cross-verified facts about the current state -->",
-        match: (l) => /^- \[/.test(l)
+        comment: "<!-- seed: claims tagged [Problem] -->",
+        tag: /^- \[Problem[\]:\s]/i
       },
       {
         section: "goal",
         heading: "## Goal",
         comment: "<!-- seed: claims tagged [Goal] -->",
-        match: (l) => /^- \[Goal/i.test(l)
+        tag: /^- \[Goal[\]:\s]/i
       },
       {
         section: "architecture",
         heading: "## Architecture",
         comment: "<!-- seed: claims tagged [Architecture] -->",
-        match: (l) => /^- \[Architecture/i.test(l)
+        tag: /^- \[Architecture[\]:\s]/i
       },
       {
         section: "components",
         heading: "## Components",
         comment: "<!-- seed: claims tagged [Components] -->",
-        match: (l) => /^- \[Components/i.test(l)
+        tag: /^- \[Components[\]:\s]/i
       },
       {
         section: "testing",
         heading: "## Testing",
         comment: '<!-- seed: claims tagged [Testing] or containing "test" -->',
-        match: (l) => /^- \[Testing/i.test(l) || /^- .*\btest/i.test(l)
+        tag: /^- \[Testing[\]:\s]/i
       },
       {
         section: "success-criteria",
         heading: "## Success Criteria",
         comment: "<!-- seed: claims tagged [Success Criteria] -->",
-        match: (l) => /^- \[Success/i.test(l)
+        tag: /^- \[Success( Criteria)?[\]:\s]/i
       }
     ];
     SEED_PLACEHOLDER = "_(no seed content matched; Hub drafts from scratch in the design walk)_";
@@ -19424,27 +19487,27 @@ var init_audit = __esm({
 
 // src/core/explore.ts
 function exploreArtDir(topic, opts) {
-  return (0, import_node_path23.join)(topicDir(topic, opts), "_explore");
+  return (0, import_node_path24.join)(topicDir(topic, opts), "_explore");
 }
 function finalLandscapePath(art) {
   let names;
   try {
-    names = (0, import_node_fs29.readdirSync)(art);
+    names = (0, import_node_fs30.readdirSync)(art);
   } catch {
     return null;
   }
   const finals = names.filter((f) => /^landscape-\d{4}-\d{2}-\d{2}-.+\.md$/.test(f)).sort();
-  return finals.length ? (0, import_node_path23.join)(art, finals[finals.length - 1]) : null;
+  return finals.length ? (0, import_node_path24.join)(art, finals[finals.length - 1]) : null;
 }
 function missingListArtifacts(art, rows, prefix) {
-  return rows.filter((r) => !readIfExists((0, import_node_path23.join)(art, `${prefix}-${r.agent}.md`)).trim()).map((r) => `${prefix}-${r.agent}.md`);
+  return rows.filter((r) => !readIfExists((0, import_node_path24.join)(art, `${prefix}-${r.agent}.md`)).trim()).map((r) => `${prefix}-${r.agent}.md`);
 }
-var import_node_path23, import_node_fs29;
+var import_node_path24, import_node_fs30;
 var init_explore = __esm({
   "src/core/explore.ts"() {
     "use strict";
-    import_node_path23 = require("node:path");
-    import_node_fs29 = require("node:fs");
+    import_node_path24 = require("node:path");
+    import_node_fs30 = require("node:fs");
     init_paths();
     init_fsread();
     init_quick();
@@ -19453,7 +19516,7 @@ var init_explore = __esm({
 
 // src/core/phaseTable.ts
 function exploreTag(art, agent, key) {
-  return lastTag(readIfExists((0, import_node_path24.join)(art, `${EXPLORE_ROW_BY_KEY[key].phase}-${agent}.txt`)), key);
+  return lastTag(readIfExists((0, import_node_path25.join)(art, `${EXPLORE_ROW_BY_KEY[key].phase}-${agent}.txt`)), key);
 }
 function anyPriorUnsafe(art, agent, chain) {
   for (const key of chain) {
@@ -19482,7 +19545,7 @@ async function overrideEvidence(row, art, agent, unsafe, live) {
   const busy = (live.busyState ?? workerBusyState)(agent, provider, topic);
   if (busy) return `live state=${busy}`;
   const failPhase = failRow.phase;
-  const failState = readIfExists((0, import_node_path24.join)(art, `${failPhase}-${agent}.txt`));
+  const failState = readIfExists((0, import_node_path25.join)(art, `${failPhase}-${agent}.txt`));
   const offset = parseLatestOffset(failState);
   if (offset === null) return `no OFFSET recorded for ${failPhase} (cannot tell whether that turn ended)`;
   if (!outboxTerminalSince(agent, provider, topic, offset)) {
@@ -19549,15 +19612,15 @@ async function dispatchPrompt(row, ctx, d) {
 }
 async function phaseWait(row, topic, agent, provider, d) {
   const art = row.artDir(topic);
-  const stateFile = (0, import_node_path24.join)(art, `${row.phase}-${agent}.txt`);
+  const stateFile = (0, import_node_path25.join)(art, `${row.phase}-${agent}.txt`);
   const label = `${row.cmd} ${row.phase}-wait`;
-  if (!(0, import_node_fs30.existsSync)(stateFile)) {
+  if (!(0, import_node_fs31.existsSync)(stateFile)) {
     log.error(`${label}: ${stateFile} missing (run ${row.cmd} ${row.phase}-send first)`);
     return 1;
   }
-  const text = (0, import_node_fs30.readFileSync)(stateFile, "utf8");
+  const text = (0, import_node_fs31.readFileSync)(stateFile, "utf8");
   if (row.skippable && lastTag(text, row.key) === "skipped") {
-    (0, import_node_fs30.writeFileSync)((0, import_node_path24.join)(art, `${row.phase}-${agent}.done`), "");
+    (0, import_node_fs31.writeFileSync)((0, import_node_path25.join)(art, `${row.phase}-${agent}.done`), "");
     log.ok(`${label}: ${agent} ${row.key}=skipped (already)`);
     return 0;
   }
@@ -19597,28 +19660,28 @@ async function phaseWait(row, topic, agent, provider, d) {
     stateFile,
     state,
     row.key,
-    ev ? { file: (0, import_node_path24.join)(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : void 0,
+    ev ? { file: (0, import_node_path25.join)(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : void 0,
     accept ? `${ARTIFACT_ACCEPT_KEY}=${accept}` : void 0
   );
-  (0, import_node_fs30.writeFileSync)((0, import_node_path24.join)(art, `${row.phase}-${agent}.done`), "");
+  (0, import_node_fs31.writeFileSync)((0, import_node_path25.join)(art, `${row.phase}-${agent}.done`), "");
   log.ok(`${label}: ${agent} ${row.key}=${state}`);
   return 0;
 }
 function waitGateVerb(label, art, phase, key) {
-  const listPath = (0, import_node_path24.join)(art, "list.txt");
-  if (!(0, import_node_fs30.existsSync)(listPath)) {
+  const listPath = (0, import_node_path25.join)(art, "list.txt");
+  if (!(0, import_node_fs31.existsSync)(listPath)) {
     log.error(`${label} wait-gate: list.txt missing at ${art}`);
     return 2;
   }
-  const rows = parseListFile((0, import_node_fs30.readFileSync)(listPath, "utf8"));
+  const rows = parseListFile((0, import_node_fs31.readFileSync)(listPath, "utf8"));
   if (rows.length === 0) {
     log.error(`${label} wait-gate: list.txt has no workers`);
     return 2;
   }
   const workers = rows.map((r) => ({
     agent: r.agent,
-    doneExists: (0, import_node_fs30.existsSync)((0, import_node_path24.join)(art, `${phase}-${r.agent}.done`)),
-    stateText: readIfExistsOrNull((0, import_node_path24.join)(art, `${phase}-${r.agent}.txt`))
+    doneExists: (0, import_node_fs31.existsSync)((0, import_node_path25.join)(art, `${phase}-${r.agent}.done`)),
+    stateText: readIfExistsOrNull((0, import_node_path25.join)(art, `${phase}-${r.agent}.txt`))
   }));
   const states = gateState(workers, key);
   for (const s of states) process.stdout.write(`${s.agent}	${s.status}
@@ -19638,12 +19701,12 @@ function triad(usageLabel, fn, deps) {
     return fn(topic, agent, provider, deps);
   };
 }
-var import_node_fs30, import_node_path24, PHASES, DESIGN_PHASES, EXPLORE_ROW_BY_KEY, liveSendDeps, liveWaitDeps;
+var import_node_fs31, import_node_path25, PHASES, DESIGN_PHASES, EXPLORE_ROW_BY_KEY, liveSendDeps, liveWaitDeps;
 var init_phaseTable = __esm({
   "src/core/phaseTable.ts"() {
     "use strict";
-    import_node_fs30 = require("node:fs");
-    import_node_path24 = require("node:path");
+    import_node_fs31 = require("node:fs");
+    import_node_path25 = require("node:path");
     init_log();
     init_atomic();
     init_fsread();
@@ -19666,7 +19729,7 @@ var init_phaseTable = __esm({
         cmd: "explore",
         artDir: exploreArtDir,
         timeoutKind: "research",
-        artifactFor: (art, agent) => (0, import_node_path24.join)(art, `findings-${agent}.md`),
+        artifactFor: (art, agent) => (0, import_node_path25.join)(art, `findings-${agent}.md`),
         stateFn: researchState,
         skippable: false
       },
@@ -19676,7 +19739,7 @@ var init_phaseTable = __esm({
         cmd: "explore",
         artDir: exploreArtDir,
         timeoutKind: "openq",
-        artifactFor: (art, agent) => (0, import_node_path24.join)(art, `openq-${agent}.md`),
+        artifactFor: (art, agent) => (0, import_node_path25.join)(art, `openq-${agent}.md`),
         stateFn: verifyState,
         skippable: true,
         guard: { kind: "any", noun: "research", chain: ["FS"] }
@@ -19687,7 +19750,7 @@ var init_phaseTable = __esm({
         cmd: "explore",
         artDir: exploreArtDir,
         timeoutKind: "verify",
-        artifactFor: (art, agent) => (0, import_node_path24.join)(art, `crossverify-${agent}.md`),
+        artifactFor: (art, agent) => (0, import_node_path25.join)(art, `crossverify-${agent}.md`),
         stateFn: verifyState,
         skippable: true,
         guard: { kind: "any", noun: "previous phase", chain: ["FS", "QS"] }
@@ -19698,7 +19761,7 @@ var init_phaseTable = __esm({
         cmd: "explore",
         artDir: exploreArtDir,
         timeoutKind: "adversary",
-        artifactFor: (art, agent) => (0, import_node_path24.join)(art, `adversary-${agent}.md`),
+        artifactFor: (art, agent) => (0, import_node_path25.join)(art, `adversary-${agent}.md`),
         stateFn: verifyState,
         skippable: true,
         guard: { kind: "any", noun: "previous phase", chain: ["VS", "QS", "FS"] }
@@ -19709,7 +19772,7 @@ var init_phaseTable = __esm({
         cmd: "explore",
         artDir: exploreArtDir,
         timeoutKind: "rebuttal",
-        artifactFor: (art, agent) => (0, import_node_path24.join)(art, `rebuttal-${agent}.md`),
+        artifactFor: (art, agent) => (0, import_node_path25.join)(art, `rebuttal-${agent}.md`),
         stateFn: verifyState,
         skippable: true,
         guard: { kind: "latest", noun: "latest phase", chain: ["AS", "VS", "QS", "FS"] }
@@ -19720,7 +19783,7 @@ var init_phaseTable = __esm({
         cmd: "explore",
         artDir: exploreArtDir,
         timeoutKind: "gap",
-        artifactFor: (art, agent) => (0, import_node_path24.join)(art, `gap-${agent}.md`),
+        artifactFor: (art, agent) => (0, import_node_path25.join)(art, `gap-${agent}.md`),
         stateFn: verifyState,
         skippable: true,
         guard: { kind: "latest", noun: "latest phase", chain: ["RS", "AS", "VS", "QS", "FS"] }
@@ -19731,7 +19794,7 @@ var init_phaseTable = __esm({
         cmd: "explore",
         artDir: exploreArtDir,
         timeoutKind: "signoff",
-        artifactFor: (art, agent) => (0, import_node_path24.join)(art, `signoff-${agent}.md`),
+        artifactFor: (art, agent) => (0, import_node_path25.join)(art, `signoff-${agent}.md`),
         stateFn: verifyState,
         skippable: true,
         guard: { kind: "latest", noun: "latest phase", chain: ["GS", "RS", "AS", "VS", "QS", "FS"] }
@@ -19744,7 +19807,7 @@ var init_phaseTable = __esm({
         cmd: "design",
         artDir: designArtDir,
         timeoutKind: "research",
-        artifactFor: (_art, agent, provider, topic) => (0, import_node_path24.join)(workerDir(agent, provider, topic), "findings.md"),
+        artifactFor: (_art, agent, provider, topic) => (0, import_node_path25.join)(workerDir(agent, provider, topic), "findings.md"),
         stateFn: researchState,
         skippable: false
       },
@@ -19754,7 +19817,7 @@ var init_phaseTable = __esm({
         cmd: "design",
         artDir: designArtDir,
         timeoutKind: "verify",
-        artifactFor: (_art, agent, provider, topic) => (0, import_node_path24.join)(workerDir(agent, provider, topic), "verify.md"),
+        artifactFor: (_art, agent, provider, topic) => (0, import_node_path25.join)(workerDir(agent, provider, topic), "verify.md"),
         stateFn: verifyState,
         skippable: true
       }
@@ -19919,71 +19982,26 @@ function classifyTopic(topic) {
 }
 function skillHintAppend(skillTxtPath, basePrompt) {
   let skill = "none";
-  if ((0, import_node_fs31.existsSync)(skillTxtPath)) skill = (0, import_node_fs31.readFileSync)(skillTxtPath, "utf8").replace(/\s/g, "");
+  if ((0, import_node_fs32.existsSync)(skillTxtPath)) skill = (0, import_node_fs32.readFileSync)(skillTxtPath, "utf8").replace(/\s/g, "");
   if (process.env.AP_DESIGN_SKILL_OVERRIDE === "none") skill = "none";
   if (skill !== "brainstorming" && skill !== "systematic-debugging") return basePrompt;
-  const hintFile = (0, import_node_path25.join)(pluginRoot(), "config", "skill-hints", `${skill}.md`);
-  if (!(0, import_node_fs31.existsSync)(hintFile)) return basePrompt;
+  const hintFile = (0, import_node_path26.join)(pluginRoot(), "config", "skill-hints", `${skill}.md`);
+  if (!(0, import_node_fs32.existsSync)(hintFile)) return basePrompt;
   return `${basePrompt}
 
 ---
 
-${(0, import_node_fs31.readFileSync)(hintFile, "utf8")}`;
+${(0, import_node_fs32.readFileSync)(hintFile, "utf8")}`;
 }
-var import_node_fs31, import_node_path25, BRAINSTORMING, DEBUGGING;
+var import_node_fs32, import_node_path26, BRAINSTORMING, DEBUGGING;
 var init_designSkill = __esm({
   "src/core/designSkill.ts"() {
     "use strict";
-    import_node_fs31 = require("node:fs");
-    import_node_path25 = require("node:path");
+    import_node_fs32 = require("node:fs");
+    import_node_path26 = require("node:path");
     init_paths();
     BRAINSTORMING = ["design patterns?", "how should", "best way", "what s the best way", "what is the best way", "decide between"];
     DEBUGGING = ["why", "broken", "failing", "regressions?", "edge cases?", "bugs?", "doesn t work", "does not work"];
-  }
-});
-
-// src/core/designWalk.ts
-function auditIssueToSection(key) {
-  switch (key) {
-    case "no_goal_section":
-      return "goal";
-    case "no_arch_section":
-      return "architecture";
-    case "no_testing_section":
-      return "testing";
-    case "no_success_section":
-      return "success-criteria";
-    case "tbd_marker":
-    case "todo_marker":
-    case "fill_in_later_marker":
-    case "to_be_determined_marker":
-      return "ASK";
-    case "unresolved_placeholder":
-      return "architecture";
-    default:
-      return "";
-  }
-}
-function walkSectionState(dir, opts) {
-  let files;
-  try {
-    files = (0, import_node_fs32.readdirSync)(dir).filter((f) => f.endsWith(".md"));
-  } catch {
-    return [];
-  }
-  const names = files.map((f) => f.replace(/\.md$/, "")).sort();
-  if (!opts?.withStatus) return names;
-  return names.map((name) => {
-    const body = (0, import_node_fs32.readFileSync)((0, import_node_path26.join)(dir, `${name}.md`), "utf8").replace(/\s/g, "");
-    return { name, status: body === "_(skipped)_" ? "skipped" : "approved" };
-  });
-}
-var import_node_fs32, import_node_path26;
-var init_designWalk = __esm({
-  "src/core/designWalk.ts"() {
-    "use strict";
-    import_node_fs32 = require("node:fs");
-    import_node_path26 = require("node:path");
   }
 });
 
@@ -20005,10 +20023,11 @@ __export(design_exports, {
   verifySendWith: () => verifySendWith,
   verifyWaitWith: () => verifyWaitWith,
   waitGateRun: () => waitGateRun,
+  walkApproveRun: () => walkApproveRun,
   walkStateRun: () => walkStateRun
 });
 function usage2() {
-  log.error("usage: design <init|assemble|spawn-all|research-send|research-wait|wait-gate|diff|verify-send|verify-wait|adjudicate|synthesize|walk-state|drilldown|offset-reset|export-doc|flag|forensics|archive> ...");
+  log.error("usage: design <init|assemble|spawn-all|research-send|research-wait|wait-gate|diff|verify-send|verify-wait|adjudicate|synthesize|walk-approve|walk-state|drilldown|offset-reset|export-doc|flag|forensics|archive> ...");
   return 2;
 }
 async function run10(args) {
@@ -20035,6 +20054,8 @@ async function run10(args) {
       return adjudicateRun(rest);
     case "synthesize":
       return synthesizeRun(rest);
+    case "walk-approve":
+      return walkApproveRun(rest);
     case "walk-state":
       return walkStateRun(rest);
     case "wait-gate":
@@ -20368,9 +20389,36 @@ async function synthesizeRun(rest) {
   }
   const draftDir = designDraftDir(topic);
   (0, import_node_fs33.mkdirSync)(draftDir, { recursive: true });
-  const seeds = synthesizeSeeds(adjText);
+  const settled = new Set(walkSectionState(designWalkDir(topic)));
+  const seeds = synthesizeSeeds(adjText).filter((s) => !settled.has(s.section));
   for (const s of seeds) atomicWrite((0, import_node_path27.join)(draftDir, `${s.section}.md`), s.body);
+  if (settled.size) log.info(`design synthesize: kept ${[...settled].sort().join(", ")} (already walked; rm the .walk/<section>.state marker to re-seed)`);
   log.ok(`design synthesize: wrote ${seeds.length} seed drafts to ${draftDir}`);
+  return 0;
+}
+async function walkApproveRun(rest) {
+  const [topic, section, verdict] = rest;
+  if (rest.length !== 3 || !topic || !section || !verdict) {
+    log.error("usage: design walk-approve <topic> <section> <approved|skipped>");
+    return 2;
+  }
+  if (!SECTIONS_SINGLE.includes(section)) {
+    log.error(`design walk-approve: unknown section '${section}' (expected one of: ${SECTIONS_SINGLE.join(", ")})`);
+    return 2;
+  }
+  if (!parseWalkVerdict(verdict)) {
+    log.error(`design walk-approve: verdict must be ${WALK_VERDICTS.join("|")} (got ${verdict})`);
+    return 2;
+  }
+  const art = designArtDir(topic);
+  if (!(0, import_node_fs33.existsSync)(art)) {
+    log.error(`design walk-approve: art dir missing: ${art} (run design init first)`);
+    return 1;
+  }
+  const dir = designWalkDir(topic);
+  (0, import_node_fs33.mkdirSync)(dir, { recursive: true });
+  atomicWrite((0, import_node_path27.join)(dir, `${section}.state`), verdict + "\n");
+  log.ok(`design walk-approve: ${section}=${verdict}`);
   return 0;
 }
 async function walkStateRun(rest) {
@@ -20379,7 +20427,7 @@ async function walkStateRun(rest) {
     log.error("usage: design walk-state <topic>");
     return 2;
   }
-  const states = walkSectionState(designDraftDir(topic), { withStatus: true });
+  const states = walkSectionState(designWalkDir(topic), { withStatus: true });
   for (const s of states) process.stdout.write(`${s.name}	${s.status}
 `);
   return 0;
@@ -20457,7 +20505,12 @@ async function offsetResetRun(rest) {
     log.error(`design offset-reset: art dir missing: ${art}`);
     return 1;
   }
-  for (const f of [`${phase}-${agent}.txt`, `${phase}-${agent}.done`, `question-${agent}.txt`])
+  const stateFile = (0, import_node_path27.join)(art, `${phase}-${agent}.txt`);
+  const keptOffset = keepFindings ? parseLatestOffset(readIfExists(stateFile)) : null;
+  if (keptOffset === null) (0, import_node_fs33.rmSync)(stateFile, { force: true });
+  else atomicWrite(stateFile, `OFFSET=${keptOffset}
+`);
+  for (const f of [`${phase}-${agent}.done`, `question-${agent}.txt`])
     (0, import_node_fs33.rmSync)((0, import_node_path27.join)(art, f), { force: true });
   clearAgentStrikes(art, agent);
   const c3 = cascadeTargets(phase, keepFindings);
@@ -20474,7 +20527,7 @@ async function offsetResetRun(rest) {
       for (const n2 of names) if (re.test(n2)) (0, import_node_fs33.rmSync)((0, import_node_path27.join)(art, n2), { force: true });
     }
   }
-  log.ok(`design offset-reset: ${phase}/${agent}${keepFindings ? " (kept findings)" : ""}`);
+  log.ok(`design offset-reset: ${phase}/${agent}${keepFindings ? " (kept findings)" : ""}${keptOffset === null ? "" : `; state file kept at OFFSET=${keptOffset}; re-arm the wait, or rm it to re-send`}`);
   return 0;
 }
 async function forensicsRun2(rest) {
@@ -21368,6 +21421,18 @@ async function branchWith2(a2, opts, runnerFor) {
     return 1;
   }
   const defaultBranch = a2.branchName ?? `feat/implement-${a2.topic}`;
+  if (!a2.noBranch) for (const { slug, cwd } of iterTargets(a2.topic, opts)) {
+    if (!slug || !cwd) continue;
+    const baselineBranch = kvField((0, import_node_path30.join)(art, "baselines", `${slug}.tsv`), "branch");
+    if (baselineBranch === defaultBranch) {
+      log.error(`implement branch: HEAD was already ${defaultBranch} at pre-snapshot; checkout the intended base branch, re-run pre-snapshot, then branch, or pass --no-branch if implementing on the current branch is intended`);
+      return 1;
+    }
+    if (baselineBranch === "(detached)") {
+      log.error("implement branch: pre-snapshot recorded a detached HEAD, which has no restorable start branch; checkout a branch, re-run pre-snapshot, then branch");
+      return 1;
+    }
+  }
   const rows = [];
   for (const { slug, cwd } of iterTargets(a2.topic, opts)) {
     if (!slug || !cwd) continue;
@@ -21395,6 +21460,7 @@ async function branchWith2(a2, opts, runnerFor) {
     }
   }
   atomicWrite((0, import_node_path30.join)(art, "implement-branches.tsv"), rows.length ? rows.join("\n") + "\n" : "");
+  atomicWrite((0, import_node_path30.join)(art, "branch-mode.txt"), (a2.noBranch ? "no-branch" : "branch") + "\n");
   log.ok(`implement branch: ${rows.length} target(s) recorded`);
   return 0;
 }
@@ -21580,10 +21646,25 @@ async function finishRun2(rest) {
   }
   return finishWith2(topic, action, liveFinishDeps);
 }
+function readBranchMode(art) {
+  return readField((0, import_node_path30.join)(art, "branch-mode.txt")) === "no-branch" ? "no-branch" : "branch";
+}
 function applyFinish(art, t, action, d) {
+  if (readBranchMode(art) === "no-branch") return "no-branch";
   const branch = branchMapField((0, import_node_path30.join)(art, "implement-branches.tsv"), t.slug);
   const startBranch = kvField((0, import_node_path30.join)(art, "baselines", `${t.slug}.tsv`), "branch");
-  return finishBranchAction(d.runnerFor(t.cwd), { branch, startBranch, action, hasGh: d.hasGh });
+  const r = d.runnerFor(t.cwd);
+  if (startBranch === "(detached)") {
+    log.warn(`finish: ${t.slug} baseline is a detached HEAD \u2014 no start branch to merge into or return to, so NOTHING was merged, pushed, or discarded`);
+    log.warn(`  recover: the work is on '${branch || "the current branch"}'; checkout the intended base branch, re-run pre-snapshot + branch, and finish again`);
+    return "same-branch";
+  }
+  if (!hasDistinctBranch(r, branch, startBranch)) {
+    log.warn(`finish: ${t.slug} has no branch distinct from the baseline '${startBranch}' (recorded branch: '${branch || "none"}') \u2014 NOTHING was merged, pushed, or discarded`);
+    log.warn("  recover: push and open the PR by hand, or checkout the intended base branch, re-run pre-snapshot + branch, and finish again");
+    return "same-branch";
+  }
+  return finishBranchAction(r, { branch, startBranch, action, hasGh: d.hasGh });
 }
 async function finishWith2(topic, action, d) {
   const art = implementArtDir(topic);
@@ -21593,15 +21674,17 @@ async function finishWith2(topic, action, d) {
   }
   const results = (0, import_node_path30.join)(art, "finish-results.tsv");
   (0, import_node_fs35.writeFileSync)(results, "");
-  let n2 = 0;
+  let n2 = 0, stranded = 0;
   for (const t of iterTargets(topic)) {
     if (!t.slug || !t.cwd) continue;
     const outcome = applyFinish(art, { slug: t.slug, cwd: t.cwd }, action, d);
+    if (outcome === "same-branch") stranded++;
     (0, import_node_fs35.appendFileSync)(results, `${t.slug}	${action}	${outcome}
 `);
     log.info(`finish: ${t.slug} -> ${action} -> ${outcome}`);
     n2++;
   }
+  if (stranded) runFlag("implement", topic, `finish ${action}: same-branch on ${stranded} target(s) \u2014 the work was left on the baseline branch (no distinct branch to act on), nothing merged, pushed, or discarded`);
   log.ok(`implement finish: ${n2} target(s) completed`);
   return 0;
 }

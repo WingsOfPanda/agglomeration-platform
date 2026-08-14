@@ -188,11 +188,18 @@ export interface FinishActionOpts {
   branch: string; startBranch: string; action: "merge" | "pr" | "keep" | "discard";
   hasGh: boolean; originUrl?: string; title?: string; body?: string;
 }
+/** Whether there is a real branch, distinct from the start branch, for a finish to act on. The
+ *  finishers short-circuit to a no-op without one; implement's finish also asks BEFORE calling, to
+ *  tell a deliberate `--no-branch` run from the accident of having started on the feat branch. */
+export function hasDistinctBranch(r: Runner, branch: string, startBranch: string): boolean {
+  return Boolean(branch) && branch !== startBranch &&
+    r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]).code === 0;
+}
+
 /** Action-driven finisher (port of deploy_finish_branch @ deploy.sh:651). Restores startBranch
  *  (best-effort). New additive export; the auto finishBranch (used by quick) is unchanged. */
 export function finishBranchAction(r: Runner, o: FinishActionOpts): string {
-  if (!o.branch || o.branch === o.startBranch ||
-      r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${o.branch}`]).code !== 0) return "no-branch";
+  if (!hasDistinctBranch(r, o.branch, o.startBranch)) return "no-branch";
   switch (o.action) {
     case "merge":
       r.run("git", ["checkout", "-q", o.startBranch]);

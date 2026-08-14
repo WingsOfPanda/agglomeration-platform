@@ -6,7 +6,7 @@ import { applyArgsFile } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
 import { isoUtc, archiveTopic } from "../core/archive.js";
 import {
-  deriveSlug, parseDesignArgs, designArtDir, designDraftDir, designDocPath,
+  deriveSlug, parseDesignArgs, designArtDir, designDraftDir, designWalkDir, designDocPath,
   resolveDrilldownPath, cascadeTargets, exportDocTo, type ResetPhase,
 } from "../core/design.js";
 import {
@@ -18,7 +18,7 @@ import { readProviderList } from "../core/providers.js";
 import { activeProvidersPath, workerDir, repoRoot, topicDir } from "../core/paths.js";
 import { pickAgents } from "../core/agents.js";
 import { agentConsultValidated, consultTimeout } from "../core/contracts.js";
-import { composeResearchPrompt, scaledTimeout, composeVerifyPrompt, composeDrilldownPrompt, drilldownState } from "../core/designTurn.js";
+import { composeResearchPrompt, scaledTimeout, composeVerifyPrompt, composeDrilldownPrompt, drilldownState, parseLatestOffset } from "../core/designTurn.js";
 import {
   DESIGN_PHASES, dispatchPrompt, phaseWait, waitGateVerb, skipDispatch, triad,
   liveSendDeps, liveWaitDeps, type SendDeps, type WaitDeps,
@@ -31,11 +31,11 @@ import { diffFindings, type DiffPart } from "../core/designDiff.js";
 import { adjudicate, type AdjudicateInput } from "../core/designAdjudicate.js";
 import { classifyTopic, skillHintAppend } from "../core/designSkill.js";
 import { readIfExists as readIf, readIfExistsOrNull } from "../core/fsread.js";
-import { walkSectionState, auditIssueToSection } from "../core/designWalk.js";
+import { walkSectionState, auditIssueToSection, parseWalkVerdict, WALK_VERDICTS } from "../core/designWalk.js";
 import { run as spawnRun } from "./spawn.js";
 import { run as preflightRun } from "./preflight.js";
 
-function usage(): number { log.error("usage: design <init|assemble|spawn-all|research-send|research-wait|wait-gate|diff|verify-send|verify-wait|adjudicate|synthesize|walk-state|drilldown|offset-reset|export-doc|flag|forensics|archive> ..."); return 2; }
+function usage(): number { log.error("usage: design <init|assemble|spawn-all|research-send|research-wait|wait-gate|diff|verify-send|verify-wait|adjudicate|synthesize|walk-approve|walk-state|drilldown|offset-reset|export-doc|flag|forensics|archive> ..."); return 2; }
 
 export async function run(args: string[]): Promise<number> {
   const verb = args[0];
@@ -51,6 +51,7 @@ export async function run(args: string[]): Promise<number> {
     case "verify-wait": return triad("design verify-wait", verifyWaitWith, liveWaitDeps)(rest);
     case "adjudicate": return adjudicateRun(rest);
     case "synthesize": return synthesizeRun(rest);
+    case "walk-approve": return walkApproveRun(rest);
     case "walk-state": return walkStateRun(rest);
     case "wait-gate": return waitGateRun(rest);
     case "drilldown": return drilldownRun(rest);
@@ -330,16 +331,36 @@ export async function synthesizeRun(rest: string[]): Promise<number> {
 
   const draftDir = designDraftDir(topic);
   mkdirSync(draftDir, { recursive: true });
-  const seeds = synthesizeSeeds(adjText);
+  // A section the walk already settled keeps its draft. Re-seeding it would overwrite the approved
+  // (or skipped) text on every Stage-10 re-entry — destroying exactly the work the markers record.
+  const settled = new Set(walkSectionState(designWalkDir(topic)));
+  const seeds = synthesizeSeeds(adjText).filter((s) => !settled.has(s.section));
   for (const s of seeds) atomicWrite(join(draftDir, `${s.section}.md`), s.body);
+  if (settled.size) log.info(`design synthesize: kept ${[...settled].sort().join(", ")} (already walked; rm the .walk/<section>.state marker to re-seed)`);
   log.ok(`design synthesize: wrote ${seeds.length} seed drafts to ${draftDir}`);
+  return 0;
+}
+
+/** The walk's own record of a settled section — the ONLY thing walk-state reads back. Called once
+ *  per user decision in the Stage 10 walk (Approve/Skip); a section nobody decided stays pending. */
+export async function walkApproveRun(rest: string[]): Promise<number> {
+  const [topic, section, verdict] = rest;
+  if (rest.length !== 3 || !topic || !section || !verdict) { log.error("usage: design walk-approve <topic> <section> <approved|skipped>"); return 2; }
+  if (!(SECTIONS_SINGLE as readonly string[]).includes(section)) { log.error(`design walk-approve: unknown section '${section}' (expected one of: ${SECTIONS_SINGLE.join(", ")})`); return 2; }
+  if (!parseWalkVerdict(verdict)) { log.error(`design walk-approve: verdict must be ${WALK_VERDICTS.join("|")} (got ${verdict})`); return 2; }
+  const art = designArtDir(topic);
+  if (!existsSync(art)) { log.error(`design walk-approve: art dir missing: ${art} (run design init first)`); return 1; }
+  const dir = designWalkDir(topic);
+  mkdirSync(dir, { recursive: true });
+  atomicWrite(join(dir, `${section}.state`), verdict + "\n");
+  log.ok(`design walk-approve: ${section}=${verdict}`);
   return 0;
 }
 
 export async function walkStateRun(rest: string[]): Promise<number> {
   const topic = rest[0];
   if (!topic) { log.error("usage: design walk-state <topic>"); return 2; }
-  const states = walkSectionState(designDraftDir(topic), { withStatus: true });
+  const states = walkSectionState(designWalkDir(topic), { withStatus: true });
   for (const s of states) process.stdout.write(`${s.name}\t${s.status}\n`);
   return 0;
 }
@@ -418,11 +439,22 @@ export async function offsetResetRun(rest: string[]): Promise<number> {
   const art = designArtDir(topic);
   if (!existsSync(art)) { log.error(`design offset-reset: art dir missing: ${art}`); return 1; }
 
+  // With --keep-findings the state file is REDUCED to its last `OFFSET=` line instead of deleted:
+  // the worker's artifact is still on disk, so a re-armed `<phase>-wait` resumes from that offset
+  // and re-judges it. That is the busy-worker recovery — a re-SEND is refused while the file exists
+  // and would clobber the live turn if the file were simply removed. The default path has just
+  // destroyed the findings and the whole cascade, so nothing is left for a re-wait to judge and a
+  // kept offset would only re-derive a terminal miss; the file goes, as it did before. Either way a
+  // file that never carried an OFFSET= (nothing was ever sent) is deleted.
+  const stateFile = join(art, `${phase}-${agent}.txt`);
+  const keptOffset = keepFindings ? parseLatestOffset(readIf(stateFile)) : null;
+  if (keptOffset === null) rmSync(stateFile, { force: true });
+  else atomicWrite(stateFile, `OFFSET=${keptOffset}\n`);
   // The refusal logs go with the state file, in BOTH modes (--keep-findings included): a reset
   // re-arms the phase, so strikes from the episode it just cleared must not carry into the retry
   // and degrade a fresh artifact as "no growth". Swept by agent prefix — the logs are per ARTIFACT
   // (`stillwriting-<agent>-<file>.txt`), and a reset re-arms all of that agent's work.
-  for (const f of [`${phase}-${agent}.txt`, `${phase}-${agent}.done`, `question-${agent}.txt`])
+  for (const f of [`${phase}-${agent}.done`, `question-${agent}.txt`])
     rmSync(join(art, f), { force: true });
   clearAgentStrikes(art, agent);
 
@@ -435,7 +467,7 @@ export async function offsetResetRun(rest: string[]): Promise<number> {
     const names = readdirSync(art);
     for (const g of c.artGlobs) { const re = new RegExp("^" + g.replace(/[.]/g, "\\.").replace(/\*/g, ".*") + "$"); for (const n of names) if (re.test(n)) rmSync(join(art, n), { force: true }); }
   }
-  log.ok(`design offset-reset: ${phase}/${agent}${keepFindings ? " (kept findings)" : ""}`);
+  log.ok(`design offset-reset: ${phase}/${agent}${keepFindings ? " (kept findings)" : ""}${keptOffset === null ? "" : `; state file kept at OFFSET=${keptOffset}; re-arm the wait, or rm it to re-send`}`);
   return 0;
 }
 

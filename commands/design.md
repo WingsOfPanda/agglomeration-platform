@@ -209,7 +209,16 @@ written. **The recovery is to run the missing wait** — `$CS design research-wa
 cannot fix it, it only reads state back. Re-running a wait is always safe and re-judges the artifact
 (it resumes from the recorded `OFFSET=`, re-reads the same terminal event, and appends a fresh `AC=`
 line), so it is also how you rescue an `AC=expired` worker whose file has since finished.
-`design offset-reset <TOPIC> <INST> <phase>` re-arms the phase and clears that agent's strikes. The verb self-bounds — three refusals with no growth
+`design offset-reset <TOPIC> <INST> <phase>` re-arms the phase and clears that agent's strikes. What
+happens to `$ART/<phase>-<INST>.txt` depends on the mode, and the `[ OK ]` line tells you which:
+with **`--keep-findings`** the file is reduced to its last `OFFSET=` line (log suffix `state file
+kept at OFFSET=<n>; re-arm the wait, or rm it to re-send`) — the worker's artifact survives, so
+re-running the WAIT resumes from that offset and re-judges it, which is the recovery for a reset
+landing on a still-busy worker; a re-SEND still needs the file removed first. Without the flag (the
+full cascade) the file is **deleted** as before — the findings it pointed at are gone, so re-SEND is
+the only move. A file that never carried an `OFFSET=` (nothing was ever sent) is deleted in both
+modes, and no `state file kept` suffix is printed. The verb
+self-bounds — three refusals with no growth
 in between (or six refusals however much it grew) and it treats that worker as empty. When you quote
 a worker's `findings.md`/`verify.md` into any doc, strip the trailing `END_OF_ARTIFACT` line.
 
@@ -257,25 +266,32 @@ so keep handling / relay and re-run. Only on rc 0 continue.
 3. **Read** `$ART/adjudicated.md`. For **every** `- PENDING:` line: read the cited source, decide, and
    **Edit** the line in place — rewrite the `PENDING` prefix to `CONFIRMED`/`REFUTED`, or move the item
    under `## Contested`. **Done only when no `- PENDING:` line remains** (`synthesize` refuses otherwise).
-   You may also lead claim lines with a steer-tag — `- [Goal] …`, `- [Architecture] …`,
-   `- [Components] …`, `- [Testing] …`, `- [Success Criteria] …` — to route them into the matching
-   synthesize seed.
+   You may also lead claim lines with a steer-tag — `- [Problem] …`, `- [Goal] …`,
+   `- [Architecture] …`, `- [Components] …`, `- [Testing] …`, `- [Success Criteria] …` — to route
+   them into the matching synthesize seed. First tag wins, so each line seeds at most one section;
+   an untagged line seeds nothing (except the `testing` "contains test" heuristic), and a section
+   with no tagged lines gets the placeholder for you to draft from.
 
 ## Stage 10 — interactive per-section design walk
 
 1. Seed the drafts: `$CS design synthesize <TOPIC>` (refuses while any `- PENDING:` remains, or if
    `adjudicated.md` is missing). Writes the 6 `.draft/<section>.md`.
-2. Resume check: `$CS design walk-state <TOPIC>` prints `<section>\t<approved|skipped>` for drafts
-   already settled — skip those on re-entry.
+2. Resume check: `$CS design walk-state <TOPIC>` prints `<section>\t<approved|skipped>` for the
+   sections the walk itself already settled (step 3 records them). A seeded or hand-written draft
+   counts for nothing here — only a recorded verdict does. Skip exactly the sections it lists; walk
+   every other one, including any whose draft already looks finished.
 3. **Walk the 6 sections in order** (problem, goal, architecture, components, testing, success-criteria).
    For each: **Read** `$ART/design-doc/.draft/<section>.md` (the seed) + `$ART/adjudicated.md` + the
    workers' `findings.md`; **draft** the section and **Write** it to that `.draft/<section>.md` path;
-   present it in chat; then **AskUserQuestion**: Approve / Revise / Skip.
-   - **Approve** → keep, next section.
+   present it in chat; then **AskUserQuestion**: Approve / Revise / Skip. Record the outcome of every
+   settled section with `$CS design walk-approve <TOPIC> <section> <approved|skipped>` — unrecorded
+   means unwalked, and a re-entry will walk it again.
+   - **Approve** → `$CS design walk-approve <TOPIC> <section> approved`, next section.
    - **Revise** → take free-form direction via a follow-up, re-draft, re-present (cap 4 revises; after
-     the cap, force-approve the current draft and move on).
-   - **Skip** → Write `_(skipped)_` as the whole body. **Skip is NOT offered for the four
-     audit-required sections** (goal, architecture, testing, success-criteria) — they must be drafted.
+     the cap, force-approve the current draft — record it `approved` — and move on).
+   - **Skip** → Write `_(skipped)_` as the whole body, then `$CS design walk-approve <TOPIC>
+     <section> skipped`. **Skip is NOT offered for the four audit-required sections** (goal,
+     architecture, testing, success-criteria) — they must be drafted.
 
 ## Stage 11 — assemble + deploy-audit gate (retry loop)
 

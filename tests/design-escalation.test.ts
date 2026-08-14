@@ -9,7 +9,7 @@ import { workerDir } from "../src/core/paths.js";
 import { outboxPath } from "../src/core/ipc.js";
 import { END_OF_ARTIFACT } from "../src/core/artifact.js";
 import { composeDrilldownPrompt } from "../src/core/designTurn.js";
-import { researchSendWith, researchWaitWith, diffRun, spawnAllWith, verifySendWith, verifyWaitWith, adjudicateRun, synthesizeRun, walkStateRun, drilldownWith, forensicsRun, archiveRun } from "../src/commands/design.js";
+import { researchSendWith, researchWaitWith, diffRun, spawnAllWith, verifySendWith, verifyWaitWith, adjudicateRun, synthesizeRun, walkApproveRun, walkStateRun, drilldownWith, forensicsRun, archiveRun } from "../src/commands/design.js";
 
 let env: { home: string; cleanup: () => void };
 beforeEach(() => { env = freshHome(); });
@@ -330,16 +330,51 @@ describe("design synthesize", () => {
   });
 });
 
-describe("design walk-state", () => {
-  it("prints section\\tstatus (skipped detected) to stdout", async () => {
-    const dd = join(designArtDir("t"), "design-doc", ".draft"); mkdirSync(dd, { recursive: true });
-    writeFileSync(join(dd, "goal.md"), "## Goal\n\nship it\n");
-    writeFileSync(join(dd, "problem.md"), "_(skipped)_");
+describe("design walk-approve + walk-state", () => {
+  async function walkState(topic: string): Promise<string> {
     let out = ""; const orig = process.stdout.write.bind(process.stdout);
     (process.stdout as any).write = (s: string) => { out += s; return true; };
-    try { await walkStateRun(["t"]); } finally { (process.stdout as any).write = orig; }
+    try { await walkStateRun([topic]); } finally { (process.stdout as any).write = orig; }
+    return out;
+  }
+
+  it("records each verdict as a .walk marker; walk-state prints section\\tstatus", async () => {
+    const art = designArtDir("t"); mkdirSync(art, { recursive: true });
+    expect(await walkApproveRun(["t", "goal", "approved"])).toBe(0);
+    expect(await walkApproveRun(["t", "problem", "skipped"])).toBe(0);
+    expect(readFileSync(join(art, "design-doc", ".walk", "goal.state"), "utf8")).toBe("approved\n");
+    const out = await walkState("t");
     expect(out).toContain("goal\tapproved");
     expect(out).toContain("problem\tskipped");
+  });
+
+  it("a freshly synthesized topic settles NOTHING (the false-approval regression)", async () => {
+    const art = designArtDir("t"); mkdirSync(join(art, "design-doc", ".draft"), { recursive: true });
+    writeFileSync(join(art, "adjudicated.md"), "## Cross-verified\n- [Goal] ship it [a:1]\n");
+    expect(await synthesizeRun(["t"])).toBe(0);
+    expect(await walkState("t")).toBe("");
+  });
+
+  it("a settled section survives a re-run of synthesize; unmarked sections are re-seeded", async () => {
+    const art = designArtDir("t"); const draft = join(art, "design-doc", ".draft");
+    mkdirSync(draft, { recursive: true });
+    writeFileSync(join(art, "adjudicated.md"), "## Cross-verified\n- [Goal] ship it [a:1]\n");
+    expect(await synthesizeRun(["t"])).toBe(0);
+    writeFileSync(join(draft, "goal.md"), "## Goal\n\nthe walked, user-approved text\n");
+    writeFileSync(join(draft, "problem.md"), "## Problem\n\nstale seed\n");
+    expect(await walkApproveRun(["t", "goal", "approved"])).toBe(0);
+    expect(await synthesizeRun(["t"])).toBe(0);                                   // Stage 10 re-entry
+    expect(readFileSync(join(draft, "goal.md"), "utf8")).toBe("## Goal\n\nthe walked, user-approved text\n");
+    expect(readFileSync(join(draft, "problem.md"), "utf8")).toContain("no seed content matched");
+    expect(await walkState("t")).toBe("goal\tapproved\n");
+  });
+
+  it("bad usage/section/verdict → rc 2; missing art dir → rc 1", async () => {
+    expect(await walkApproveRun(["t", "goal"])).toBe(2);
+    expect(await walkApproveRun(["t", "goals", "approved"])).toBe(2);
+    expect(await walkApproveRun(["t", "goal", "Approved"])).toBe(2);
+    expect(await walkApproveRun(["t", "goal", "approved"])).toBe(1);       // no art dir yet
+    expect(existsSync(join(designArtDir("t"), "design-doc", ".walk"))).toBe(false);
   });
 });
 

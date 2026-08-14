@@ -15,20 +15,34 @@ export function auditIssueToSection(key: string): string {
   }
 }
 
-export interface SectionStatus { name: string; status: "approved" | "skipped"; }
+/** The walk's verdict markers live in `design-doc/.walk/<section>.state`, beside `.draft/`. */
+export const WALK_DIRNAME = ".walk";
+export const WALK_VERDICTS = ["approved", "skipped"] as const;
+export type WalkVerdict = (typeof WALK_VERDICTS)[number];
 
-/** Port of consult_walk_section_state (lib/consult-walk.sh:106-129). Lists *.md basenames (sorted). A draft whose whitespace-
- *  stripped body is exactly "_(skipped)_" is skipped; anything else approved. Missing dir → []. */
+/** A marker's verdict word, or null when it is absent/garbage. Only the walk writes these files
+ *  (via `design walk-approve`, which validates first), so garbage means hand-surgery — and an
+ *  unreadable verdict is not a verdict: the section stays unsettled. */
+export function parseWalkVerdict(text: string): WalkVerdict | null {
+  const v = text.trim();
+  return (WALK_VERDICTS as readonly string[]).includes(v) ? (v as WalkVerdict) : null;
+}
+
+export interface SectionStatus { name: string; status: WalkVerdict; }
+
+/** The sections the walk has SETTLED, by their recorded markers (sorted). A drafted-but-unmarked
+ *  section is pending and simply absent — the draft file is the walk's input, never its verdict
+ *  (a seeded `.draft/` used to read as six approvals before the walk had run). Missing dir → []. */
 export function walkSectionState(dir: string): string[];
 export function walkSectionState(dir: string, opts: { withStatus: true }): SectionStatus[];
 export function walkSectionState(dir: string, opts?: { withStatus?: boolean }): string[] | SectionStatus[] {
   let files: string[];
-  try { files = readdirSync(dir).filter((f) => f.endsWith(".md")); }
+  try { files = readdirSync(dir).filter((f) => f.endsWith(".state")); }
   catch { return []; }
-  const names = files.map((f) => f.replace(/\.md$/, "")).sort();
-  if (!opts?.withStatus) return names;
-  return names.map((name) => {
-    const body = readFileSync(join(dir, `${name}.md`), "utf8").replace(/\s/g, "");
-    return { name, status: body === "_(skipped)_" ? "skipped" : "approved" } as SectionStatus;
-  });
+  const settled: SectionStatus[] = [];
+  for (const f of files.sort()) {
+    const status = parseWalkVerdict(readFileSync(join(dir, f), "utf8"));
+    if (status) settled.push({ name: f.replace(/\.state$/, ""), status });
+  }
+  return opts?.withStatus ? settled : settled.map((s) => s.name);
 }
