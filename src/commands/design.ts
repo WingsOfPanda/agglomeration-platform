@@ -16,12 +16,12 @@ import { assembleDoc, SECTIONS_SINGLE, synthesizeSeeds } from "../core/designDoc
 import { auditDoc } from "../core/audit.js";
 import { lintComponentsPaths } from "../core/implementScope.js";
 import { readProviderList } from "../core/providers.js";
-import { activeProvidersPath, workerDir, repoRoot, topicDir } from "../core/paths.js";
+import { activeProvidersPath, repoRoot, topicDir } from "../core/paths.js";
 import { pickAgents } from "../core/agents.js";
 import { agentConsultValidated, consultTimeout } from "../core/contracts.js";
 import { composeResearchPrompt, scaledTimeout, composeVerifyPrompt, composeDrilldownPrompt, drilldownState, parseLatestOffset } from "../core/designTurn.js";
 import {
-  DESIGN_PHASES, dispatchPrompt, phaseWait, waitGateVerb, skipDispatch, surveyPhaseArtifact, triad,
+  DESIGN_PHASES, phaseSend, phaseWait, waitGateVerb, surveyPhaseArtifact, triad,
   liveSendDeps, liveWaitDeps, type SendDeps, type WaitDeps,
 } from "../core/phaseTable.js";
 import { statusPath, workerBusyState } from "../core/ipc.js";
@@ -190,17 +190,13 @@ const [RESEARCH, VERIFY] = DESIGN_PHASES;
 export type { SendDeps, WaitDeps };
 
 export async function researchSendWith(topic: string, agent: string, provider: string, d: SendDeps): Promise<number> {
-  const art = designArtDir(topic);
-  const stateFile = join(art, `research-${agent}.txt`);
-  if (existsSync(stateFile)) { log.error(`design research-send: ${stateFile} exists; rm to retry`); return 1; }
-
-  const topicText = readIf(join(art, "topic.txt")).trim();
-  if (!topicText) { log.error(`design research-send: topic.txt missing/empty at ${art} (run design init)`); return 1; }
-
-  const findingsPath = join(workerDir(agent, provider, topic), "findings.md");
-  const promptFile = join(art, `${agent}_research_prompt.md`);
-  atomicWrite(promptFile, skillHintAppend(join(art, "skill.txt"), composeResearchPrompt(topicText, findingsPath)));
-  return dispatchPrompt(RESEARCH, { topic, agent, provider, stateFile, promptFile }, d);
+  return phaseSend(RESEARCH, { topic, agent, provider }, d, {
+    prepare: ({ art, artifact }) => {
+      const topicText = readIf(join(art, "topic.txt")).trim();
+      if (!topicText) { log.error(`design research-send: topic.txt missing/empty at ${art} (run design init)`); return { fail: 1 }; }
+      return { prompt: skillHintAppend(join(art, "skill.txt"), composeResearchPrompt(topicText, artifact)) };
+    },
+  });
 }
 
 export async function researchWaitWith(topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> {
@@ -247,33 +243,32 @@ export async function diffRun(rest: string[]): Promise<number> {
 // ---- Phase D: cross-verify -> adjudicate -> synthesize ----
 
 export async function verifySendWith(topic: string, agent: string, provider: string, d: SendDeps): Promise<number> {
+  // The art-dir check runs BEFORE the state-file check, as the shipped verb did.
   const art = designArtDir(topic);
   if (!existsSync(art)) { log.error(`design verify-send: ${art} not found`); return 1; }
-  const stateFile = join(art, `verify-${agent}.txt`);
-  if (existsSync(stateFile)) { log.error(`design verify-send: ${stateFile} exists; rm to retry`); return 1; }
 
-  const listPath = join(art, "list.txt");
-  if (!existsSync(listPath)) { log.error("design verify-send: list.txt missing — run design init first"); return 1; }
-  const agents = parseListFile(readFileSync(listPath, "utf8")).map((r) => r.agent);
-  if (agents.length < 2) { log.error(`design verify-send: need >=2 workers, got ${agents.length}`); return 1; }
-  if (!agents.includes(agent)) { log.error(`design verify-send: ${agent} not in list.txt`); return 1; }
+  return phaseSend(VERIFY, { topic, agent, provider }, d, {
+    prepare: ({ artifact }) => {
+      const listPath = join(art, "list.txt");
+      if (!existsSync(listPath)) { log.error("design verify-send: list.txt missing — run design init first"); return { fail: 1 }; }
+      const agents = parseListFile(readFileSync(listPath, "utf8")).map((r) => r.agent);
+      if (agents.length < 2) { log.error(`design verify-send: need >=2 workers, got ${agents.length}`); return { fail: 1 }; }
+      if (!agents.includes(agent)) { log.error(`design verify-send: ${agent} not in list.txt`); return { fail: 1 }; }
 
-  const workers: string[] = [];
-  for (const f of verifyScopeFiles(agent, agents)) {
-    const p = join(art, f);
-    if (!existsSync(p)) { log.error(`design verify-send: expected bucket missing: ${p} (run design diff first)`); return 1; }
-    const c = readFileSync(p, "utf8");
-    if (c.split("\n").some((l) => l.length > 0)) workers.push(c.replace(/\n+$/, ""));
-  }
-  const items = workers.join("\n");
-  atomicWrite(join(art, `verify-claims-${agent}.txt`), items ? items + "\n" : "");
+      const workers: string[] = [];
+      for (const f of verifyScopeFiles(agent, agents)) {
+        const p = join(art, f);
+        if (!existsSync(p)) { log.error(`design verify-send: expected bucket missing: ${p} (run design diff first)`); return { fail: 1 }; }
+        const c = readFileSync(p, "utf8");
+        if (c.split("\n").some((l) => l.length > 0)) workers.push(c.replace(/\n+$/, ""));
+      }
+      const items = workers.join("\n");
+      atomicWrite(join(art, `verify-claims-${agent}.txt`), items ? items + "\n" : "");
 
-  if (!items) return skipDispatch(VERIFY, agent, stateFile, "no claims to verify");
-
-  const verifyPath = join(workerDir(agent, provider, topic), "verify.md");
-  const promptFile = join(art, `${agent}_verify_prompt.md`);
-  atomicWrite(promptFile, skillHintAppend(join(art, "skill.txt"), composeVerifyPrompt(items, verifyPath)));
-  return dispatchPrompt(VERIFY, { topic, agent, provider, stateFile, promptFile }, d);
+      if (!items) return { skip: "no claims to verify" };
+      return { prompt: skillHintAppend(join(art, "skill.txt"), composeVerifyPrompt(items, artifact)) };
+    },
+  });
 }
 
 export async function verifyWaitWith(topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> {

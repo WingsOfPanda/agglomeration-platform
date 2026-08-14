@@ -98,8 +98,15 @@ export interface PhaseRow {
   /** Whether the wait honours a `<key>=skipped` fast-path. Research never skips — nothing precedes
    *  it — so its wait reads the offset unconditionally, exactly as its hand-written body did. */
   skippable: boolean;
+  /** The exists-precondition's tail, after `${stateFile} `. Seven phases say `rm to retry`; the two
+   *  one-turn-cap phases each name their own cap in their own words, so it is a string, not a flag. */
+  retryNote?: string;
   guard?: PhaseGuard;
 }
+
+/** The default exists-precondition tail: a state file already there means the phase ran, and the
+ *  documented recovery is to remove it. */
+const RETRY_NOTE = "exists; rm to retry";
 
 /** explore's seven worker phases in pipeline order. */
 export const PHASES: PhaseRow[] = [
@@ -125,6 +132,7 @@ export const PHASES: PhaseRow[] = [
   {
     phase: "rebuttal", key: "RS", cmd: "explore", artDir: exploreArtDir, timeoutKind: "rebuttal",
     artifactFor: (art, agent) => join(art, `rebuttal-${agent}.md`), stateFn: verifyState, skippable: true,
+    retryNote: "exists — one rebuttal round per worker (the one-turn cap)",
     guard: { kind: "latest", noun: "latest phase", chain: ["AS", "VS", "QS", "FS"] },
   },
   {
@@ -135,6 +143,7 @@ export const PHASES: PhaseRow[] = [
   {
     phase: "signoff", key: "SS", cmd: "explore", artDir: exploreArtDir, timeoutKind: "signoff",
     artifactFor: (art, agent) => join(art, `signoff-${agent}.md`), stateFn: verifyState, skippable: true,
+    retryNote: "exists — one sign-off turn per worker (the one-turn cap)",
     guard: { kind: "latest", noun: "latest phase", chain: ["GS", "RS", "AS", "VS", "QS", "FS"] },
   },
 ];
@@ -326,6 +335,63 @@ export const liveWaitDeps: WaitDeps = {
   multiplier: agentTimeoutMultiplier,
   sleep: realSleep,
 };
+
+/** The row-derived paths a phase's own preconditions and composer work from. Everything here is
+ *  `join`ed from the row and the ids — a send verb never spells a phase path itself. */
+export interface PhaseSendIO {
+  art: string;
+  stateFile: string;
+  artifact: string;
+  promptFile: string;
+}
+
+/** What a phase's preconditions decided: the composed prompt, a `<key>=skipped` no-op with its
+ *  reason, or a refusal whose rc the verb chose (its own log.error is already out). */
+export type PhasePrep = { prompt: string } | { skip: string } | { fail: number };
+
+/** The two per-verb slots of the send skeleton. `prepare` is the real work — this phase's own
+ *  preconditions, any side-effect write of its inputs, and its composer. `preGuard` exists for the
+ *  ONE phase (gap) whose trigger check precedes its dispatch guard: both paths end in `GS=skipped`
+ *  but they log different text, and the guard's evidence probes must not fire for a round that was
+ *  never triggered. A precondition that must precede even the exists-check (adversary's draft,
+ *  design verify's art dir) stays in the verb, ahead of its phaseSend call. */
+export interface PhaseSendHooks {
+  preGuard?(io: PhaseSendIO): { skip: string } | null;
+  prepare(io: PhaseSendIO): PhasePrep;
+}
+
+/** The send head every dispatching phase opens with, in the shipped order: art dir, state file, the
+ *  exists-precondition in the row's own words, the trigger check where a phase has one, the
+ *  dispatch guard (a no-op for rows without one), the phase's own preconditions + composer, the
+ *  prompt file, and dispatchPrompt's tail. Nine verbs hand-copied this; the only per-verb parts are
+ *  the two hooks. */
+export async function phaseSend(
+  row: PhaseRow,
+  ctx: { topic: string; agent: string; provider: string },
+  d: SendDeps,
+  hooks: PhaseSendHooks,
+): Promise<number> {
+  const { topic, agent, provider } = ctx;
+  const art = row.artDir(topic);
+  const stateFile = join(art, `${row.phase}-${agent}.txt`);
+  if (existsSync(stateFile)) {
+    log.error(`${row.cmd} ${row.phase}-send: ${stateFile} ${row.retryNote ?? RETRY_NOTE}`);
+    return 1;
+  }
+  const io: PhaseSendIO = {
+    art, stateFile,
+    artifact: row.artifactFor(art, agent, provider, topic),
+    promptFile: join(art, `${agent}_${row.phase}_prompt.md`),
+  };
+  const untriggered = hooks.preGuard?.(io);
+  if (untriggered) return skipDispatch(row, agent, stateFile, untriggered.skip);
+  if (await guardSkipped(row, art, agent, stateFile, guardLive(topic, provider, d))) return 0;
+  const prep = hooks.prepare(io);
+  if ("fail" in prep) return prep.fail;
+  if ("skip" in prep) return skipDispatch(row, agent, stateFile, prep.skip);
+  atomicWrite(io.promptFile, prep.prompt);
+  return dispatchPrompt(row, { topic, agent, provider, stateFile, promptFile: io.promptFile }, d);
+}
 
 /** The send tail every dispatching phase ends with. The outbox offset is captured BEFORE the send
  *  and written first, so a crash between write and send leaves a state file the retry can see — the

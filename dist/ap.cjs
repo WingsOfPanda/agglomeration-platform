@@ -19784,6 +19784,29 @@ function skipDispatch(row, agent, stateFile, reason) {
   log.ok(`${row.cmd} ${row.phase}-send: ${agent} ${row.key}=skipped (${reason})`);
   return 0;
 }
+async function phaseSend(row, ctx, d, hooks) {
+  const { topic, agent, provider } = ctx;
+  const art = row.artDir(topic);
+  const stateFile = (0, import_node_path26.join)(art, `${row.phase}-${agent}.txt`);
+  if ((0, import_node_fs32.existsSync)(stateFile)) {
+    log.error(`${row.cmd} ${row.phase}-send: ${stateFile} ${row.retryNote ?? RETRY_NOTE}`);
+    return 1;
+  }
+  const io = {
+    art,
+    stateFile,
+    artifact: row.artifactFor(art, agent, provider, topic),
+    promptFile: (0, import_node_path26.join)(art, `${agent}_${row.phase}_prompt.md`)
+  };
+  const untriggered = hooks.preGuard?.(io);
+  if (untriggered) return skipDispatch(row, agent, stateFile, untriggered.skip);
+  if (await guardSkipped(row, art, agent, stateFile, guardLive(topic, provider, d))) return 0;
+  const prep = hooks.prepare(io);
+  if ("fail" in prep) return prep.fail;
+  if ("skip" in prep) return skipDispatch(row, agent, stateFile, prep.skip);
+  atomicWrite(io.promptFile, prep.prompt);
+  return dispatchPrompt(row, { topic, agent, provider, stateFile, promptFile: io.promptFile }, d);
+}
 async function dispatchPrompt(row, ctx, d) {
   const { topic, agent, provider, stateFile, promptFile } = ctx;
   const art = row.artDir(topic);
@@ -19921,7 +19944,7 @@ function triad(usageLabel, fn, deps) {
     return fn(topic, agent, provider, deps);
   };
 }
-var import_node_fs32, import_node_path26, PHASES, DESIGN_PHASES, EXPLORE_ROW_BY_KEY, liveSendDeps, liveWaitDeps;
+var import_node_fs32, import_node_path26, RETRY_NOTE, PHASES, DESIGN_PHASES, EXPLORE_ROW_BY_KEY, liveSendDeps, liveWaitDeps;
 var init_phaseTable = __esm({
   "src/core/phaseTable.ts"() {
     "use strict";
@@ -19942,6 +19965,7 @@ var init_phaseTable = __esm({
     init_waitLive();
     init_designTurn();
     init_send2();
+    RETRY_NOTE = "exists; rm to retry";
     PHASES = [
       {
         phase: "research",
@@ -19995,6 +20019,7 @@ var init_phaseTable = __esm({
         artifactFor: (art, agent) => (0, import_node_path26.join)(art, `rebuttal-${agent}.md`),
         stateFn: verifyState,
         skippable: true,
+        retryNote: "exists \u2014 one rebuttal round per worker (the one-turn cap)",
         guard: { kind: "latest", noun: "latest phase", chain: ["AS", "VS", "QS", "FS"] }
       },
       {
@@ -20017,6 +20042,7 @@ var init_phaseTable = __esm({
         artifactFor: (art, agent) => (0, import_node_path26.join)(art, `signoff-${agent}.md`),
         stateFn: verifyState,
         skippable: true,
+        retryNote: "exists \u2014 one sign-off turn per worker (the one-turn cap)",
         guard: { kind: "latest", noun: "latest phase", chain: ["GS", "RS", "AS", "VS", "QS", "FS"] }
       }
     ];
@@ -20415,21 +20441,16 @@ async function spawnAllWith(topic, d) {
   return spawnAllBatch("design", topic, designArtDir(topic), d);
 }
 async function researchSendWith(topic, agent, provider, d) {
-  const art = designArtDir(topic);
-  const stateFile = (0, import_node_path28.join)(art, `research-${agent}.txt`);
-  if ((0, import_node_fs34.existsSync)(stateFile)) {
-    log.error(`design research-send: ${stateFile} exists; rm to retry`);
-    return 1;
-  }
-  const topicText = readIfExists((0, import_node_path28.join)(art, "topic.txt")).trim();
-  if (!topicText) {
-    log.error(`design research-send: topic.txt missing/empty at ${art} (run design init)`);
-    return 1;
-  }
-  const findingsPath = (0, import_node_path28.join)(workerDir(agent, provider, topic), "findings.md");
-  const promptFile = (0, import_node_path28.join)(art, `${agent}_research_prompt.md`);
-  atomicWrite(promptFile, skillHintAppend((0, import_node_path28.join)(art, "skill.txt"), composeResearchPrompt(topicText, findingsPath)));
-  return dispatchPrompt(RESEARCH, { topic, agent, provider, stateFile, promptFile }, d);
+  return phaseSend(RESEARCH, { topic, agent, provider }, d, {
+    prepare: ({ art, artifact }) => {
+      const topicText = readIfExists((0, import_node_path28.join)(art, "topic.txt")).trim();
+      if (!topicText) {
+        log.error(`design research-send: topic.txt missing/empty at ${art} (run design init)`);
+        return { fail: 1 };
+      }
+      return { prompt: skillHintAppend((0, import_node_path28.join)(art, "skill.txt"), composeResearchPrompt(topicText, artifact)) };
+    }
+  });
 }
 async function researchWaitWith(topic, agent, provider, d) {
   return phaseWait(RESEARCH, topic, agent, provider, d);
@@ -20487,42 +20508,38 @@ async function verifySendWith(topic, agent, provider, d) {
     log.error(`design verify-send: ${art} not found`);
     return 1;
   }
-  const stateFile = (0, import_node_path28.join)(art, `verify-${agent}.txt`);
-  if ((0, import_node_fs34.existsSync)(stateFile)) {
-    log.error(`design verify-send: ${stateFile} exists; rm to retry`);
-    return 1;
-  }
-  const listPath = (0, import_node_path28.join)(art, "list.txt");
-  if (!(0, import_node_fs34.existsSync)(listPath)) {
-    log.error("design verify-send: list.txt missing \u2014 run design init first");
-    return 1;
-  }
-  const agents = parseListFile((0, import_node_fs34.readFileSync)(listPath, "utf8")).map((r) => r.agent);
-  if (agents.length < 2) {
-    log.error(`design verify-send: need >=2 workers, got ${agents.length}`);
-    return 1;
-  }
-  if (!agents.includes(agent)) {
-    log.error(`design verify-send: ${agent} not in list.txt`);
-    return 1;
-  }
-  const workers = [];
-  for (const f of verifyScopeFiles(agent, agents)) {
-    const p = (0, import_node_path28.join)(art, f);
-    if (!(0, import_node_fs34.existsSync)(p)) {
-      log.error(`design verify-send: expected bucket missing: ${p} (run design diff first)`);
-      return 1;
+  return phaseSend(VERIFY, { topic, agent, provider }, d, {
+    prepare: ({ artifact }) => {
+      const listPath = (0, import_node_path28.join)(art, "list.txt");
+      if (!(0, import_node_fs34.existsSync)(listPath)) {
+        log.error("design verify-send: list.txt missing \u2014 run design init first");
+        return { fail: 1 };
+      }
+      const agents = parseListFile((0, import_node_fs34.readFileSync)(listPath, "utf8")).map((r) => r.agent);
+      if (agents.length < 2) {
+        log.error(`design verify-send: need >=2 workers, got ${agents.length}`);
+        return { fail: 1 };
+      }
+      if (!agents.includes(agent)) {
+        log.error(`design verify-send: ${agent} not in list.txt`);
+        return { fail: 1 };
+      }
+      const workers = [];
+      for (const f of verifyScopeFiles(agent, agents)) {
+        const p = (0, import_node_path28.join)(art, f);
+        if (!(0, import_node_fs34.existsSync)(p)) {
+          log.error(`design verify-send: expected bucket missing: ${p} (run design diff first)`);
+          return { fail: 1 };
+        }
+        const c3 = (0, import_node_fs34.readFileSync)(p, "utf8");
+        if (c3.split("\n").some((l) => l.length > 0)) workers.push(c3.replace(/\n+$/, ""));
+      }
+      const items = workers.join("\n");
+      atomicWrite((0, import_node_path28.join)(art, `verify-claims-${agent}.txt`), items ? items + "\n" : "");
+      if (!items) return { skip: "no claims to verify" };
+      return { prompt: skillHintAppend((0, import_node_path28.join)(art, "skill.txt"), composeVerifyPrompt(items, artifact)) };
     }
-    const c3 = (0, import_node_fs34.readFileSync)(p, "utf8");
-    if (c3.split("\n").some((l) => l.length > 0)) workers.push(c3.replace(/\n+$/, ""));
-  }
-  const items = workers.join("\n");
-  atomicWrite((0, import_node_path28.join)(art, `verify-claims-${agent}.txt`), items ? items + "\n" : "");
-  if (!items) return skipDispatch(VERIFY, agent, stateFile, "no claims to verify");
-  const verifyPath = (0, import_node_path28.join)(workerDir(agent, provider, topic), "verify.md");
-  const promptFile = (0, import_node_path28.join)(art, `${agent}_verify_prompt.md`);
-  atomicWrite(promptFile, skillHintAppend((0, import_node_path28.join)(art, "skill.txt"), composeVerifyPrompt(items, verifyPath)));
-  return dispatchPrompt(VERIFY, { topic, agent, provider, stateFile, promptFile }, d);
+  });
 }
 async function verifyWaitWith(topic, agent, provider, d) {
   return phaseWait(VERIFY, topic, agent, provider, d);
@@ -27416,22 +27433,17 @@ async function spawnAllWith3(topic, d) {
   return spawnAllBatch("explore", topic, exploreArtDir(topic), d);
 }
 async function researchSendWith2(topic, agent, provider, d) {
-  const art = exploreArtDir(topic);
-  const stateFile = (0, import_node_path41.join)(art, `research-${agent}.txt`);
-  if ((0, import_node_fs43.existsSync)(stateFile)) {
-    log.error(`explore research-send: ${stateFile} exists; rm to retry`);
-    return 1;
-  }
-  const topicText = readIfExists((0, import_node_path41.join)(art, "topic.txt")).trim();
-  if (!topicText) {
-    log.error(`explore research-send: topic.txt missing/empty at ${art} (run explore init)`);
-    return 1;
-  }
-  const track = readIfExists((0, import_node_path41.join)(art, "lit-track.txt")).startsWith("ON") ? "ON" : "OFF";
-  const findingsPath = (0, import_node_path41.join)(art, `findings-${agent}.md`);
-  const promptFile = (0, import_node_path41.join)(art, `${agent}_research_prompt.md`);
-  atomicWrite(promptFile, composeExploreResearchPrompt(topicText, findingsPath, litGuidance(track), researchLens(provider), (0, import_node_path41.join)(art, `selfassess-${agent}.md`)));
-  return dispatchPrompt(RESEARCH2, { topic, agent, provider, stateFile, promptFile }, d);
+  return phaseSend(RESEARCH2, { topic, agent, provider }, d, {
+    prepare: ({ art, artifact }) => {
+      const topicText = readIfExists((0, import_node_path41.join)(art, "topic.txt")).trim();
+      if (!topicText) {
+        log.error(`explore research-send: topic.txt missing/empty at ${art} (run explore init)`);
+        return { fail: 1 };
+      }
+      const track = readIfExists((0, import_node_path41.join)(art, "lit-track.txt")).startsWith("ON") ? "ON" : "OFF";
+      return { prompt: composeExploreResearchPrompt(topicText, artifact, litGuidance(track), researchLens(provider), (0, import_node_path41.join)(art, `selfassess-${agent}.md`)) };
+    }
+  });
 }
 async function researchWaitWith2(topic, agent, provider, d) {
   return phaseWait(RESEARCH2, topic, agent, provider, d);
@@ -27483,19 +27495,13 @@ async function openqCollateRun(rest) {
   return 0;
 }
 async function openqSendWith(topic, agent, provider, d) {
-  const art = exploreArtDir(topic);
-  const stateFile = (0, import_node_path41.join)(art, `openq-${agent}.txt`);
-  if ((0, import_node_fs43.existsSync)(stateFile)) {
-    log.error(`explore openq-send: ${stateFile} exists; rm to retry`);
-    return 1;
-  }
-  if (await guardSkipped(OPENQ, art, agent, stateFile, guardLive(topic, provider, d))) return 0;
-  const claims = parseOpenqClaims(readIfExists((0, import_node_path41.join)(art, `openq-claims-${agent}.txt`)));
-  if (claims.length === 0) return skipDispatch(OPENQ, agent, stateFile, "no questions routed to it");
-  const answersPath = (0, import_node_path41.join)(art, `openq-${agent}.md`);
-  const promptFile = (0, import_node_path41.join)(art, `${agent}_openq_prompt.md`);
-  atomicWrite(promptFile, composeOpenqPrompt(claims, answersPath));
-  return dispatchPrompt(OPENQ, { topic, agent, provider, stateFile, promptFile }, d);
+  return phaseSend(OPENQ, { topic, agent, provider }, d, {
+    prepare: ({ art, artifact }) => {
+      const claims = parseOpenqClaims(readIfExists((0, import_node_path41.join)(art, `openq-claims-${agent}.txt`)));
+      if (claims.length === 0) return { skip: "no questions routed to it" };
+      return { prompt: composeOpenqPrompt(claims, artifact) };
+    }
+  });
 }
 async function openqWaitWith(topic, agent, provider, d) {
   return phaseWait(OPENQ, topic, agent, provider, d);
@@ -27548,137 +27554,115 @@ async function diffExploreRun(rest) {
   return 0;
 }
 async function crossverifySendWith(topic, agent, provider, d) {
-  const art = exploreArtDir(topic);
-  const stateFile = (0, import_node_path41.join)(art, `crossverify-${agent}.txt`);
-  if ((0, import_node_fs43.existsSync)(stateFile)) {
-    log.error(`explore crossverify-send: ${stateFile} exists; rm to retry`);
-    return 1;
-  }
-  if (await guardSkipped(CROSSVERIFY, art, agent, stateFile, guardLive(topic, provider, d))) return 0;
-  const agents = parseListFile(readIfExists((0, import_node_path41.join)(art, "list.txt"))).map((r) => r.agent);
-  if (agents.length < 2) {
-    log.error(`explore crossverify-send: need >=2 workers in list.txt, got ${agents.length}`);
-    return 1;
-  }
-  if (!agents.includes(agent)) {
-    log.error(`explore crossverify-send: ${agent} not in list.txt`);
-    return 1;
-  }
-  const parts = [];
-  for (const f of verifyScopeFiles(agent, agents)) {
-    const p = (0, import_node_path41.join)(art, f);
-    if (!(0, import_node_fs43.existsSync)(p)) {
-      log.error(`explore crossverify-send: expected bucket missing: ${p} (run explore diff first)`);
-      return 1;
+  return phaseSend(CROSSVERIFY, { topic, agent, provider }, d, {
+    prepare: ({ art, artifact }) => {
+      const agents = parseListFile(readIfExists((0, import_node_path41.join)(art, "list.txt"))).map((r) => r.agent);
+      if (agents.length < 2) {
+        log.error(`explore crossverify-send: need >=2 workers in list.txt, got ${agents.length}`);
+        return { fail: 1 };
+      }
+      if (!agents.includes(agent)) {
+        log.error(`explore crossverify-send: ${agent} not in list.txt`);
+        return { fail: 1 };
+      }
+      const parts = [];
+      for (const f of verifyScopeFiles(agent, agents)) {
+        const p = (0, import_node_path41.join)(art, f);
+        if (!(0, import_node_fs43.existsSync)(p)) {
+          log.error(`explore crossverify-send: expected bucket missing: ${p} (run explore diff first)`);
+          return { fail: 1 };
+        }
+        const c3 = (0, import_node_fs43.readFileSync)(p, "utf8");
+        if (c3.split("\n").some((l) => l.length > 0)) parts.push(c3.replace(/\n+$/, ""));
+      }
+      const items = parts.join("\n");
+      atomicWrite((0, import_node_path41.join)(art, `crossverify-claims-${agent}.txt`), items ? items + "\n" : "");
+      if (!items) return { skip: "no peer claims to verify" };
+      return { prompt: composeVerifyPrompt(items, artifact) };
     }
-    const c3 = (0, import_node_fs43.readFileSync)(p, "utf8");
-    if (c3.split("\n").some((l) => l.length > 0)) parts.push(c3.replace(/\n+$/, ""));
-  }
-  const items = parts.join("\n");
-  atomicWrite((0, import_node_path41.join)(art, `crossverify-claims-${agent}.txt`), items ? items + "\n" : "");
-  if (!items) return skipDispatch(CROSSVERIFY, agent, stateFile, "no peer claims to verify");
-  const outPath = (0, import_node_path41.join)(art, `crossverify-${agent}.md`);
-  const promptFile = (0, import_node_path41.join)(art, `${agent}_crossverify_prompt.md`);
-  atomicWrite(promptFile, composeVerifyPrompt(items, outPath));
-  return dispatchPrompt(CROSSVERIFY, { topic, agent, provider, stateFile, promptFile }, d);
+  });
 }
 async function crossverifyWaitWith(topic, agent, provider, d) {
   return phaseWait(CROSSVERIFY, topic, agent, provider, d);
 }
 async function rebuttalSendWith(topic, agent, provider, d) {
-  const art = exploreArtDir(topic);
-  const stateFile = (0, import_node_path41.join)(art, `rebuttal-${agent}.txt`);
-  if ((0, import_node_fs43.existsSync)(stateFile)) {
-    log.error(`explore rebuttal-send: ${stateFile} exists \u2014 one rebuttal round per worker (the one-turn cap)`);
-    return 1;
-  }
-  if (await guardSkipped(REBUTTAL, art, agent, stateFile, guardLive(topic, provider, d))) return 0;
-  const rows = parseListFile(readIfExists((0, import_node_path41.join)(art, "list.txt")));
-  if (!rows.some((r) => r.agent === agent)) {
-    log.error(`explore rebuttal-send: ${agent} not in list.txt at ${art}`);
-    return 1;
-  }
-  const buckets = /* @__PURE__ */ new Map();
-  for (const r of rows) buckets.set(r.agent, parseBucketLines(readIfExists((0, import_node_path41.join)(art, `${r.agent}_only_items.txt`))));
-  const critiques = [];
-  for (const r of rows) {
-    const { text, verdict } = surveyPhaseArtifact(ADVERSARY, r, {
-      topic,
-      label: "explore rebuttal-send",
-      emptyIsComplete: true,
-      skipTag: true
-    });
-    if (verdict === "skipped" || !text.trim()) continue;
-    if (verdict === "still-writing") return 1;
-    if (verdict === "complete") critiques.push({ agent: r.agent, text });
-  }
-  const mine = selectRebuttalTargets(critiques, buckets).get(agent);
-  if (!mine || mine.findings.length === 0) {
-    return skipDispatch(REBUTTAL, agent, stateFile, "no needs-attention findings attributed to it");
-  }
-  const outPath = (0, import_node_path41.join)(art, `rebuttal-${agent}.md`);
-  const promptFile = (0, import_node_path41.join)(art, `${agent}_rebuttal_prompt.md`);
-  atomicWrite(promptFile, composeRebuttalPrompt(mine.claims, mine.findings, outPath));
-  return dispatchPrompt(REBUTTAL, { topic, agent, provider, stateFile, promptFile }, d);
+  return phaseSend(REBUTTAL, { topic, agent, provider }, d, {
+    prepare: ({ art, artifact }) => {
+      const rows = parseListFile(readIfExists((0, import_node_path41.join)(art, "list.txt")));
+      if (!rows.some((r) => r.agent === agent)) {
+        log.error(`explore rebuttal-send: ${agent} not in list.txt at ${art}`);
+        return { fail: 1 };
+      }
+      const buckets = /* @__PURE__ */ new Map();
+      for (const r of rows) buckets.set(r.agent, parseBucketLines(readIfExists((0, import_node_path41.join)(art, `${r.agent}_only_items.txt`))));
+      const critiques = [];
+      for (const r of rows) {
+        const { text, verdict } = surveyPhaseArtifact(ADVERSARY, r, {
+          topic,
+          label: "explore rebuttal-send",
+          emptyIsComplete: true,
+          skipTag: true
+        });
+        if (verdict === "skipped" || !text.trim()) continue;
+        if (verdict === "still-writing") return { fail: 1 };
+        if (verdict === "complete") critiques.push({ agent: r.agent, text });
+      }
+      const mine = selectRebuttalTargets(critiques, buckets).get(agent);
+      if (!mine || mine.findings.length === 0) return { skip: "no needs-attention findings attributed to it" };
+      return { prompt: composeRebuttalPrompt(mine.claims, mine.findings, artifact) };
+    }
+  });
 }
 async function rebuttalWaitWith(topic, agent, provider, d) {
   return phaseWait(REBUTTAL, topic, agent, provider, d);
 }
 async function gapSendWith(topic, agent, provider, d) {
-  const art = exploreArtDir(topic);
-  const stateFile = (0, import_node_path41.join)(art, `gap-${agent}.txt`);
-  if ((0, import_node_fs43.existsSync)(stateFile)) {
-    log.error(`explore gap-send: ${stateFile} exists; rm to retry`);
-    return 1;
-  }
-  const signalsLine = readIfExists((0, import_node_path41.join)(art, "adversary-skip.txt")).split("\n").find((l) => l.startsWith("signals_passed:")) ?? "";
-  if (!/\bS1=false\b/.test(signalsLine) && !/\bS2=false\b/.test(signalsLine)) {
-    return skipDispatch(GAP, agent, stateFile, "no recorded S1/S2 failure \u2014 trigger not fired");
-  }
-  if (await guardSkipped(GAP, art, agent, stateFile, guardLive(topic, provider, d))) return 0;
-  const agents = parseListFile(readIfExists((0, import_node_path41.join)(art, "list.txt"))).map((r) => r.agent);
-  if (!agents.includes(agent)) {
-    log.error(`explore gap-send: ${agent} not in list.txt at ${art}`);
-    return 1;
-  }
-  const items = [];
-  for (const f of verifyScopeFiles(agent, agents)) {
-    for (const l of readIfExists((0, import_node_path41.join)(art, f)).split("\n")) if (l.length > 0) items.push(l);
-  }
-  if (items.length === 0) return skipDispatch(GAP, agent, stateFile, "no peer-only items to enrich");
-  const outPath = (0, import_node_path41.join)(art, `gap-${agent}.md`);
-  const promptFile = (0, import_node_path41.join)(art, `${agent}_gap_prompt.md`);
-  atomicWrite(promptFile, composeGapPrompt(items, outPath));
-  return dispatchPrompt(GAP, { topic, agent, provider, stateFile, promptFile }, d);
+  return phaseSend(GAP, { topic, agent, provider }, d, {
+    // Trigger: the Phase 5.5 record's signals_passed line — S1=false or S2=false fires the round.
+    // The record is READ ONLY here; the gate ran once and adversary-skip.txt is never rewritten.
+    // It precedes the dispatch guard, as the shipped verb did: an untriggered round must not probe.
+    preGuard: ({ art }) => {
+      const signalsLine = readIfExists((0, import_node_path41.join)(art, "adversary-skip.txt")).split("\n").find((l) => l.startsWith("signals_passed:")) ?? "";
+      if (/\bS1=false\b/.test(signalsLine) || /\bS2=false\b/.test(signalsLine)) return null;
+      return { skip: "no recorded S1/S2 failure \u2014 trigger not fired" };
+    },
+    prepare: ({ art, artifact }) => {
+      const agents = parseListFile(readIfExists((0, import_node_path41.join)(art, "list.txt"))).map((r) => r.agent);
+      if (!agents.includes(agent)) {
+        log.error(`explore gap-send: ${agent} not in list.txt at ${art}`);
+        return { fail: 1 };
+      }
+      const items = [];
+      for (const f of verifyScopeFiles(agent, agents)) {
+        for (const l of readIfExists((0, import_node_path41.join)(art, f)).split("\n")) if (l.length > 0) items.push(l);
+      }
+      if (items.length === 0) return { skip: "no peer-only items to enrich" };
+      return { prompt: composeGapPrompt(items, artifact) };
+    }
+  });
 }
 async function gapWaitWith(topic, agent, provider, d) {
   return phaseWait(GAP, topic, agent, provider, d);
 }
 async function signoffSendWith(topic, agent, provider, d) {
-  const art = exploreArtDir(topic);
-  const stateFile = (0, import_node_path41.join)(art, `signoff-${agent}.txt`);
-  if ((0, import_node_fs43.existsSync)(stateFile)) {
-    log.error(`explore signoff-send: ${stateFile} exists \u2014 one sign-off turn per worker (the one-turn cap)`);
-    return 1;
-  }
-  if (await guardSkipped(SIGNOFF, art, agent, stateFile, guardLive(topic, provider, d))) return 0;
-  const rows = parseListFile(readIfExists((0, import_node_path41.join)(art, "list.txt")));
-  if (!rows.some((r) => r.agent === agent)) {
-    log.error(`explore signoff-send: ${agent} not in list.txt at ${art}`);
-    return 1;
-  }
-  const finalPath = finalLandscapePath(art);
-  const conclusion = finalPath ? sectionText(readIfExists(finalPath), ["Conclusion"]) : "";
-  if (!conclusion) {
-    log.error(`explore signoff-send: final landscape doc missing or has no ## Conclusion at ${art} \u2014 author it (Phase 8) first`);
-    return 1;
-  }
-  const soloBucketLines = readIfExists((0, import_node_path41.join)(art, `${agent}_only_items.txt`)).split("\n").filter((l) => l.length > 0);
-  const agreedText = sectionText(readIfExists((0, import_node_path41.join)(art, "diff.md")), ["Agreed", "Consensus"]);
-  const outPath = (0, import_node_path41.join)(art, `signoff-${agent}.md`);
-  const promptFile = (0, import_node_path41.join)(art, `${agent}_signoff_prompt.md`);
-  atomicWrite(promptFile, composeSignoffPrompt(conclusion, soloBucketLines, agreedText, outPath));
-  return dispatchPrompt(SIGNOFF, { topic, agent, provider, stateFile, promptFile }, d);
+  return phaseSend(SIGNOFF, { topic, agent, provider }, d, {
+    prepare: ({ art, artifact }) => {
+      const rows = parseListFile(readIfExists((0, import_node_path41.join)(art, "list.txt")));
+      if (!rows.some((r) => r.agent === agent)) {
+        log.error(`explore signoff-send: ${agent} not in list.txt at ${art}`);
+        return { fail: 1 };
+      }
+      const finalPath = finalLandscapePath(art);
+      const conclusion = finalPath ? sectionText(readIfExists(finalPath), ["Conclusion"]) : "";
+      if (!conclusion) {
+        log.error(`explore signoff-send: final landscape doc missing or has no ## Conclusion at ${art} \u2014 author it (Phase 8) first`);
+        return { fail: 1 };
+      }
+      const soloBucketLines = readIfExists((0, import_node_path41.join)(art, `${agent}_only_items.txt`)).split("\n").filter((l) => l.length > 0);
+      const agreedText = sectionText(readIfExists((0, import_node_path41.join)(art, "diff.md")), ["Agreed", "Consensus"]);
+      return { prompt: composeSignoffPrompt(conclusion, soloBucketLines, agreedText, artifact) };
+    }
+  });
 }
 async function signoffWaitWith(topic, agent, provider, d) {
   return phaseWait(SIGNOFF, topic, agent, provider, d);
@@ -27913,31 +27897,26 @@ async function adversarySendWith(topic, agent, provider, d) {
     log.error("explore adversary-send: landscape-draft.md missing or empty \u2014 run synth-preliminary first");
     return 1;
   }
-  const stateFile = (0, import_node_path41.join)(art, `adversary-${agent}.txt`);
-  if ((0, import_node_fs43.existsSync)(stateFile)) {
-    log.error(`explore adversary-send: ${stateFile} exists; rm to retry`);
-    return 1;
-  }
-  if (await guardSkipped(ADVERSARY, art, agent, stateFile, guardLive(topic, provider, d))) return 0;
-  const rows = parseListFile(readIfExists((0, import_node_path41.join)(art, "list.txt")));
-  const index = rows.findIndex((r) => r.agent === agent);
-  if (index < 0) {
-    log.error(`explore adversary-send: ${agent} not in list.txt at ${art}`);
-    return 1;
-  }
-  const peerFindingsPaths = rows.filter((r) => r.agent !== agent).map((r) => (0, import_node_path41.join)(art, `findings-${r.agent}.md`));
-  const lens = ADVERSARY_LENSES[index % ADVERSARY_LENSES.length];
-  const priorityTargets = soloTokensFromAnnotations(readIfExistsOrNull((0, import_node_path41.join)(art, "annotations.json")));
-  const lowConfidenceClaims = [];
-  for (const r of rows) {
-    for (const l of parseSelfAssessment(readIfExists((0, import_node_path41.join)(art, `selfassess-${r.agent}.md`))).leastSure) {
-      if (!lowConfidenceClaims.includes(l)) lowConfidenceClaims.push(l);
+  return phaseSend(ADVERSARY, { topic, agent, provider }, d, {
+    prepare: ({ artifact }) => {
+      const rows = parseListFile(readIfExists((0, import_node_path41.join)(art, "list.txt")));
+      const index = rows.findIndex((r) => r.agent === agent);
+      if (index < 0) {
+        log.error(`explore adversary-send: ${agent} not in list.txt at ${art}`);
+        return { fail: 1 };
+      }
+      const peerFindingsPaths = rows.filter((r) => r.agent !== agent).map((r) => RESEARCH2.artifactFor(art, r.agent, r.provider, topic));
+      const lens = ADVERSARY_LENSES[index % ADVERSARY_LENSES.length];
+      const priorityTargets = soloTokensFromAnnotations(readIfExistsOrNull((0, import_node_path41.join)(art, "annotations.json")));
+      const lowConfidenceClaims = [];
+      for (const r of rows) {
+        for (const l of parseSelfAssessment(readIfExists((0, import_node_path41.join)(art, `selfassess-${r.agent}.md`))).leastSure) {
+          if (!lowConfidenceClaims.includes(l)) lowConfidenceClaims.push(l);
+        }
+      }
+      return { prompt: composeAdversaryPrompt(draft, agent, artifact, { peerFindingsPaths, lens, priorityTargets, lowConfidenceClaims }) };
     }
-  }
-  const outPath = (0, import_node_path41.join)(art, `adversary-${agent}.md`);
-  const promptFile = (0, import_node_path41.join)(art, `${agent}_adversary_prompt.md`);
-  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath, { peerFindingsPaths, lens, priorityTargets, lowConfidenceClaims }));
-  return dispatchPrompt(ADVERSARY, { topic, agent, provider, stateFile, promptFile }, d);
+  });
 }
 async function adversaryWaitWith(topic, agent, provider, d) {
   return phaseWait(ADVERSARY, topic, agent, provider, d);
