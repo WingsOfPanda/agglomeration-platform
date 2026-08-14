@@ -1,10 +1,10 @@
 // tests/autoresearch-validity.test.ts — the validity verbs' real append path + threshold defaults.
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdirSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { autoresearchArtDir, experimentDir } from "../src/core/autoresearch.js";
-import { appendVerificationRow, appendInspectionRow } from "../src/core/autoresearchValidity.js";
+import { appendVerificationRow, appendInspectionRow, readExperimentResult } from "../src/core/autoresearchValidity.js";
 import { resolveValidityThresholds } from "../src/core/autoresearchMetric.js";
 
 const cleanups: Array<() => void> = [];
@@ -56,6 +56,34 @@ describe("appendInspectionRow", () => {
     appendInspectionRow(art, "alpha", "exp-001", { expId: "exp-001", agent: "alpha", verdict: "not-reproduced", reason: "integrity-refuted", reimplMetric: "", ts: "T1" });
     expect(readFileSync(join(experimentDir(art, "alpha", "exp-001"), "inspection.txt"), "utf8"))
       .toBe("not-reproduced reason=integrity-refuted reimpl_metric= at T1\n");
+  });
+});
+
+// chmod is a no-op for root, so the sidecar write would succeed and the ordering go unprobed.
+const asRoot = process.getuid?.() === 0;
+describe.skipIf(asRoot)("append ordering", () => {
+  it("writes the TSV before the sidecar: a sidecar that cannot be written keeps the row", () => {
+    const art = artWithExperiment();
+    const exp = experimentDir(art, "alpha", "exp-001");
+    chmodSync(exp, 0o555);
+    try {
+      expect(() => appendVerificationRow(art, "alpha", "exp-001",
+        { expId: "exp-001", agent: "alpha", verdict: "verified", reason: "", recomputed: "0.9", ts: "T1" })).toThrow();
+      expect(readFileSync(join(art, "verification.tsv"), "utf8")).toBe(
+        "exp_id\tagent\tverdict\treason\trecomputed\tts\nexp-001\talpha\tverified\t\t0.9\tT1\n");
+      expect(existsSync(join(exp, "verification.txt"))).toBe(false);
+    } finally {
+      chmodSync(exp, 0o755); // else the home cleanup cannot unlink through it
+    }
+  });
+});
+
+describe("readExperimentResult", () => {
+  it("reads the experiment's result.json", () => {
+    const art = artWithExperiment();
+    writeFileSync(join(experimentDir(art, "alpha", "exp-001"), "result.json"), '{"metric_value":0.9}\n');
+    expect(readExperimentResult(art, "alpha", "exp-001")).toEqual({ metric_value: 0.9 });
+    expect(readExperimentResult(art, "alpha", "exp-002")).toBeNull();
   });
 });
 

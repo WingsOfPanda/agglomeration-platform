@@ -1157,12 +1157,13 @@ describe("autoresearch verify-check", () => {
     const { d } = deps({});
     expect(await verifyCheckWith(["topic", "alpha", "exp-001"], d)).toBe(2);
   });
-  // The resolved default (0.01) straddles these two: a verb that re-inlines a drifted chain flips one.
+  // Straddles 0.01 at |d|=0.0095 / 0.0105 against the reported 0.9, so any resolved default
+  // outside (0.0095, 0.0105] — a halving, a doubling, a re-inlined chain that drifted — flips one.
   it("no metric.md -> the resolved 0.01 default decides", async () => {
-    const near = deps({ readMetricMd: () => null, readStdout: () => "VERIFY_METRIC=0.905\n" });
+    const near = deps({ readMetricMd: () => null, readStdout: () => "VERIFY_METRIC=0.9095\n" });
     await verifyCheckWith(["topic", "alpha", "exp-001", "--stdout-file", "/x"], near.d);
     expect(near.rows[0].verdict).toBe("verified");
-    const far = deps({ readMetricMd: () => null, readStdout: () => "VERIFY_METRIC=0.92\n" });
+    const far = deps({ readMetricMd: () => null, readStdout: () => "VERIFY_METRIC=0.9105\n" });
     await verifyCheckWith(["topic", "alpha", "exp-001", "--stdout-file", "/x"], far.d);
     expect(far.rows[0].verdict).toBe("mismatch");
   });

@@ -2032,7 +2032,7 @@ const liveCorpusDigestDeps: CorpusDigestDeps = { now: () => isoUtc() };
 
 const readMetricMd = (art: string): string | null => readIfExistsOrNull(join(art, "metric.md"));
 /** The reads both -check verbs share; only the row writer differs between them. */
-const liveValidityCheckDeps = {
+const liveValidityCheckDeps: Omit<ValidityCheckDeps<unknown>, "writeRow"> = {
   readResult: readExperimentResult, readMetricMd,
   readStdout: readIfExistsOrNull, readJson: readIfExistsOrNull,
   now: () => isoUtc(),

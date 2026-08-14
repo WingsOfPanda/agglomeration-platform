@@ -22,8 +22,8 @@ interface RowSpec<R> {
 }
 
 /** Append `row` to the campaign TSV (header-seeded on first write) then stamp the experiment's
- *  sidecar. Read-or-header before the write, TSV before sidecar — a reader that sees the sidecar
- *  always sees the row. */
+ *  sidecar. TSV first so a failed sidecar write still leaves the adjudication recorded. The
+ *  read-modify-write is single-writer only: concurrent appends to one campaign drop rows. */
 function appendRow<R>(art: string, agent: string, expId: string, spec: RowSpec<R>, row: R): void {
   const tsv = spec.tsvPath(art);
   const prior = existsSync(tsv) ? readFileSync(tsv, "utf8") : spec.header;
