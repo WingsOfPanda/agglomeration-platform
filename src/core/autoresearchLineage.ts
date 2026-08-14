@@ -3,6 +3,10 @@
 // whether an Improve's metric delta is cleanly attributable. Flag-don't-block (A3 philosophy);
 // only "improve-multi" is surfaced by the status brief.
 
+import { join } from "node:path";
+
+import { splitTsvRows } from "./tsv.js";
+
 export interface LineageRow {
   expId: string;
   agent: string;
@@ -16,6 +20,15 @@ export const LINEAGE_TSV_HEADER = "exp_id\tagent\tparent_id\tknobs_changed\tverd
 
 export function lineageRow(r: LineageRow): string {
   return `${r.expId}\t${r.agent}\t${r.parentId}\t${r.knobsChanged}\t${r.verdict}\t${r.ts}\n`;
+}
+export function lineageTsvPath(art: string): string { return join(art, "lineage.tsv"); }
+/** lineage.tsv text -> rows. Missing trailing cells read as ""; picking out the improve-multi rows
+ *  (the only verdict any reader surfaces) is the caller's. */
+export function parseLineageRows(text: string): LineageRow[] {
+  return splitTsvRows(text, "exp_id\t").map((c) => ({
+    expId: c[0] ?? "", agent: c[1] ?? "", parentId: c[2] ?? "", knobsChanged: c[3] ?? "",
+    verdict: c[4] ?? "", ts: c[5] ?? "",
+  }));
 }
 
 /** Numeric-tolerant value compare: differ iff both parse as numbers and are unequal, else compared

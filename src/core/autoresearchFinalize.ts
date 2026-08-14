@@ -9,16 +9,15 @@ import { join, relative, resolve } from "node:path";
 import { log } from "./log.js";
 import { atomicWrite } from "./atomic.js";
 import { readJsonOr, readOr } from "./fsread.js";
-import { globalRoot, repoHash } from "./paths.js";
 import { experimentsDir, workerStateDir } from "./autoresearch.js";
 import { EXP_ID_RE } from "./autoresearchExperiment.js";
 import { normalizeResult, type ResultJson } from "./autoresearchResult.js";
 import { parseState } from "./autoresearchState.js";
-import { parseMetricMd } from "./autoresearchMetric.js";
 import { parseVerdicts } from "./autoresearchInfeasible.js";
-import { parseInspections } from "./autoresearchInspect.js";
-import { metricFamilyOf, lessonVerdictOf, policyFromMetric, buildLessonDraft, type LessonDraft } from "./autoresearchLessonMap.js";
-import { writeLessonsAtFinalize, liveMemoryIo, type MemoryIo } from "./autoresearchMemoryStore.js";
+import { parseInspections, inspectionTsvPath } from "./autoresearchInspect.js";
+import { verificationTsvPath } from "./autoresearchVerify.js";
+import { lessonVerdictOf, buildLessonDraft, type LessonDraft } from "./autoresearchLessonMap.js";
+import { writeLessonsAtFinalize, resolveMemoryScope, liveMemoryIo, type MemoryIo } from "./autoresearchMemoryStore.js";
 import { type LessonVerdict } from "./autoresearchMemory.js";
 import { inboxPath, outboxPath, resolveModel } from "./ipc.js";
 
@@ -218,13 +217,12 @@ export function computeAuditWarnings(art: string, agents: string[], warningsPath
  */
 export function writeFinalizeLessons(art: string, agents: string[], deps: AutoresearchFinalizeDeps): void {
   try {
-    const thresholds = parseMetricMd(readOr(join(art, "metric.md")));
-    const family = metricFamilyOf(thresholds.primaryMetric);
-    if (!family) return; // unknown / outside taxonomy -> skip (fail-closed, no lessons)
+    const scope = resolveMemoryScope(readOr(join(art, "metric.md")),
+      { storeRoot: deps.memoryStoreRoot, repoHash: deps.repoHash });
+    if (!scope) return; // unknown / outside taxonomy -> skip (fail-closed, no lessons)
 
-    const direction: "maximize" | "minimize" = thresholds.direction ?? "maximize";
-    const a1 = parseVerdicts(readOr(join(art, "verification.tsv")));
-    const c1 = parseInspections(readOr(join(art, "inspection.tsv")));
+    const a1 = parseVerdicts(readOr(verificationTsvPath(art)));
+    const c1 = parseInspections(readOr(inspectionTsvPath(art)));
     const now = deps.now();
 
     const drafts: LessonDraft[] = [];
@@ -259,8 +257,8 @@ export function writeFinalizeLessons(art: string, agents: string[], deps: Autore
           metricName: r.metric_name,
           metricValue: r.metric_value,
           parentMetric,
-          direction,
-          family,
+          direction: scope.direction,
+          family: scope.family,
           operator,
           runId: expId,   // result.json has no run_id; the exp-id is the per-run identity
           expId,
@@ -274,12 +272,12 @@ export function writeFinalizeLessons(art: string, agents: string[], deps: Autore
     if (!drafts.length) return;
 
     writeLessonsAtFinalize(deps.memoryIo ?? liveMemoryIo, {
-      storeRoot: deps.memoryStoreRoot ?? join(globalRoot(), "autoresearch-memory"),
-      repoHash: deps.repoHash ?? repoHash(),
-      metricFamily: family,
+      storeRoot: scope.storeRoot,
+      repoHash: scope.repoHash,
+      metricFamily: scope.family,
       drafts,
       verdicts,
-      policy: policyFromMetric(thresholds),
+      policy: scope.policy,
       now,
     });
   } catch (e) {

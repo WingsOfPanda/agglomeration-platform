@@ -1035,6 +1035,36 @@ describe("autoresearch status-brief", () => {
     expect(text).toContain("**Coverage:** 2 families [single-pass×2, typed-routing×1]");
     expect(text).toContain("min_families=2 (met)");
   });
+
+  it("joins sanity.tsv's flag and lineage.tsv's verdict onto the leader row (A3/B2)", async () => {
+    const h = home();
+    const o = { home: h.home };
+    const art = autoresearchArtDir(TOPIC, o);
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "metric.md"),
+      "# Research goal\n\n**Primary metric:** accuracy\n**Direction:** maximize\n**min_families:** 2\n");
+    writeFileSync(join(art, "scoreboard.md"), [
+      "| Rank | Experiment | Agent | Metric | Status | Runtime | Approach | metric_name |",
+      "|---|---|---|---|---|---|---|---|",
+      "| 1 | exp-001 | alpha | 0.9600 | ok | 10.00s | single-pass | accuracy |",
+      "| 2 | exp-002 | alpha | 0.9400 | ok | 10.00s | typed-routing | accuracy |",
+    ].join("\n") + "\n");
+    writeFileSync(join(art, "workers.txt"), INST + "\n");
+    // Only exp-001 is flagged / improve-multi; exp-002 is clean and a draft.
+    writeFileSync(join(art, "sanity.tsv"),
+      "exp_id\tagent\tflag\tdetail\tts\nexp-001\talpha\tunder-run\truntime=0.1 floor=1\tT\n");
+    writeFileSync(join(art, "lineage.tsv"),
+      "exp_id\tagent\tparent_id\tknobs_changed\tverdict\tts\n" +
+      "exp-001\talpha\texp-000\t2\timprove-multi\tT\nexp-002\talpha\t\t\tdraft\tT\n");
+    const { rc, text } = await capture((stdout) => statusBriefWith([TOPIC], { opts: o, stdout }));
+    expect(rc).toBe(0);
+    const l1 = text.split("\n").find((l) => l.includes("alpha/exp-001")) ?? "";
+    const l2 = text.split("\n").find((l) => l.includes("alpha/exp-002")) ?? "";
+    expect(l1).toContain("[suspect: under-run]");
+    expect(l1).toContain("[multi-change]");
+    expect(l2).not.toContain("[suspect:");
+    expect(l2).not.toContain("[multi-change]");
+  });
 });
 
 import { createHash } from "node:crypto";
@@ -1129,7 +1159,7 @@ describe("autoresearch verify-check", () => {
   });
 });
 
-import { inspectPlanWith, inspectCheckWith, type InspectPlanDeps, type InspectCheckDeps } from "../src/commands/autoresearch.js";
+import { inspectPlanWith, inspectCheckWith, liveInspectPlanDeps, type InspectPlanDeps, type InspectCheckDeps } from "../src/commands/autoresearch.js";
 type InspectionRowT = import("../src/core/autoresearchInspect.js").InspectionRow;
 
 describe("autoresearch inspect-plan (C1)", () => {
@@ -1168,6 +1198,25 @@ describe("autoresearch inspect-plan (C1)", () => {
     const { deps, rows } = mkPlan({ workerProvider: () => "claude" });
     expect(await inspectPlanWith(["t", "golf", "exp-001", "--authorize-inspect"], deps)).toBe(0);
     expect(rows[0].reason).toBe("same-family");
+  });
+  it("the LIVE inspectionCount skips the header: budget-1 real rows do not exhaust the budget", async () => {
+    const h = home();
+    const art = autoresearchArtDir("ic-topic", { home: h.home });
+    mkdirSync(art, { recursive: true });
+    // c1_budget=2 with exactly ONE data row: counting the header line as a row would reach the
+    // budget and flip this verdict to budget-exhausted.
+    writeFileSync(join(art, "inspection.tsv"),
+      "exp_id\tagent\tverdict\treason\treimpl_metric\tts\nexp-001\tgolf\treproduced\t\t0.9\tT\n");
+    expect(liveInspectPlanDeps.inspectionCount(art)).toBe(1);
+    const { deps, rows, lines } = mkPlan({
+      inspectionCount: liveInspectPlanDeps.inspectionCount,
+      readMetricMd: () => "**c1_budget:** 2\n**Primary metric:** accuracy\n",
+    });
+    expect(await inspectPlanWith(["ic-topic", "golf", "exp-001", "--authorize-inspect"],
+      { ...deps, opts: { home: h.home } })).toBe(0);
+    // Under budget the verb dispatches (run-card, no row); at budget it would write budget-exhausted.
+    expect(rows.map((r) => r.reason)).not.toContain("budget-exhausted");
+    expect(lines.join("\n")).toContain("INSPECT_CWD=");
   });
   it("authorized + sufficient -> prints INSPECT_CWD + run-card", async () => {
     const { deps, lines } = mkPlan();

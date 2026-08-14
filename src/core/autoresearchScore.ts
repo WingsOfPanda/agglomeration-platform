@@ -6,12 +6,12 @@ import { join } from "node:path";
 import { validateResult, buildScoreboard, type ScoreRow } from "./autoresearchResult.js";
 import { mergeState, parseState } from "./autoresearchState.js";
 import { parseMetricMd } from "./autoresearchMetric.js";
-import { parseVerifyBlock, buildManifest } from "./autoresearchVerify.js";
+import { parseVerifyBlock, buildManifest, verificationTsvPath } from "./autoresearchVerify.js";
 import { sanityFlags, type SanityRow } from "./autoresearchSanity.js";
 import { tallyCoverage, type CoverageRow } from "./autoresearchCoverage.js";
 import { diffAuditKnobs, classifyLineage, type LineageRow } from "./autoresearchLineage.js";
 import { classifyInfeasible, parseVerdicts } from "./autoresearchInfeasible.js";
-import { parseInspections, inspectInfeasibleReason } from "./autoresearchInspect.js";
+import { parseInspections, inspectInfeasibleReason, inspectionTsvPath } from "./autoresearchInspect.js";
 import { parseHardConstraints } from "./autoresearchFinalize.js";
 import { workersDir, workerStateDir, experimentsDir, experimentDir } from "./autoresearch.js";
 
@@ -62,8 +62,8 @@ function parseAudit(raw: string | null): Record<string, unknown> | null {
 export function computeScore(art: string, fs: ScoreFs, now: () => string): ScoreComputation {
   const metricMd = fs.read(join(art, "metric.md"));
   const parsed = metricMd ? parseMetricMd(metricMd) : null;
-  const verdicts = parseVerdicts(fs.read(join(art, "verification.tsv")) ?? "");
-  const inspections = parseInspections(fs.read(join(art, "inspection.tsv")) ?? "");
+  const verdicts = parseVerdicts(fs.read(verificationTsvPath(art)) ?? "");
+  const inspections = parseInspections(fs.read(inspectionTsvPath(art)) ?? "");
   const expectedMetric = parsed?.primaryMetric || undefined;
 
   const rows: ScoreRow[] = [];

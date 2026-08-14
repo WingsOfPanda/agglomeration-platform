@@ -3,6 +3,10 @@
 // shared with checkCompletion's approach-aware plateau so the tally and the plateau
 // bucket experiments identically.
 
+import { join } from "node:path";
+
+import { splitTsvRows } from "./tsv.js";
+
 export interface CoverageRow {
   family: string;
   count: number;
@@ -11,6 +15,16 @@ export interface CoverageRow {
 }
 
 export const COVERAGE_TSV_HEADER = "family\tcount\tbest\tts\n";
+
+export function coverageTsvPath(art: string): string { return join(art, "coverage.tsv"); }
+
+/** coverage.tsv text -> rows. `count` is the tolerant parse the status brief has always used
+ *  (unparseable/absent -> 0); missing trailing cells read as "". */
+export function parseCoverageRows(text: string): CoverageRow[] {
+  return splitTsvRows(text, "family\t").map((c) => ({
+    family: c[0] ?? "", count: parseInt(c[1] ?? "0", 10) || 0, best: c[2] ?? "", ts: c[3] ?? "",
+  }));
+}
 
 const NUM = /^[0-9.]+$/;
 

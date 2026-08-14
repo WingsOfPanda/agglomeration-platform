@@ -3,6 +3,8 @@
 // sanity flags include a core-unambiguous invalidating flag. ceiling-exceeded /
 // integrity-attestation-incomplete stay advisory (do NOT make a result infeasible). Pure.
 
+import { parseVerificationRows } from "./autoresearchVerify.js";
+
 export const INFEASIBLE_FLAGS = ["under-run", "log-contradiction", "audit-knob-drift", "data-leakage"] as const;
 
 /** Returns the trigger reason (verdict or flag name) when infeasible, else null. */
@@ -17,10 +19,8 @@ export function classifyInfeasible(verdict: string | undefined, flags: string[])
 /** Parse verification.tsv into agent/exp -> latest verdict (last write wins). */
 export function parseVerdicts(tsv: string): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const line of tsv.split("\n")) {
-    if (!line || line.startsWith("exp_id\t")) continue;
-    const c = line.split("\t");          // exp_id, agent, verdict, ...
-    if (c[0] && c[1] && c[2]) out[`${c[1]}/${c[0]}`] = c[2];
+  for (const r of parseVerificationRows(tsv)) {
+    if (r.expId && r.agent && r.verdict) out[`${r.agent}/${r.expId}`] = r.verdict;
   }
   return out;
 }

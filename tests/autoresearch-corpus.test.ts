@@ -66,7 +66,10 @@ describe("corpus-digest verb", () => {
     mkdirSync(prior, { recursive: true });
     writeFileSync(join(prior, "metric.md"), "# Research goal\n\n**Primary metric:** accuracy\n**Direction:** maximize\n");
     writeFileSync(join(prior, "scoreboard.md"), "| Rank | Experiment | Agent | Metric | Status | Runtime | Approach | metric_name |\n|---|---|---|---|---|---|---|---|\n| 1 | exp-003 | b | 0.88 | ok | 5 | fam | accuracy |\n");
-    writeFileSync(join(prior, "verification.tsv"), "exp_id\tagent\tverdict\nexp-003\tb\tverified\n");
+    // One verified + one mismatch: verified_lessons=1 discriminates the verdict filter from a
+    // bare row count (a .length over all data rows would say 2).
+    writeFileSync(join(prior, "verification.tsv"),
+      "exp_id\tagent\tverdict\nexp-003\tb\tverified\nexp-004\tb\tmismatch\n");
     writeFileSync(join(prior, "halt.flag"), "halted_by=user\nreason=plateau\n");
     // fake forensics: <forensicsRoot>/<date>/<file>.md
     const forensicsRoot = join(h.home, "fake-forensics");

@@ -1,4 +1,6 @@
-import { parseVerdicts } from "./autoresearchInfeasible.js";
+import { join } from "node:path";
+
+import { splitTsvRows } from "./tsv.js";
 
 // Independent re-implementation inspector pure logic for /ap:autoresearch (research-validity C1).
 // The cross-family Hub re-runs the experiment from the run-card alone and re-derives the metric;
@@ -27,10 +29,14 @@ export function inspectInfeasibleReason(verdict: string | undefined): string | n
   return verdict === "not-reproduced" ? "reimpl-mismatch" : null;
 }
 
-/** inspection.tsv -> agent/exp -> latest verdict (last write wins). Same TSV shape as
- *  verification.tsv (exp_id/agent/verdict in cols 0-2), so it reuses parseVerdicts. */
+/** inspection.tsv -> agent/exp -> latest verdict (last write wins). The keyed shape computeScore
+ *  and finalize consume; parseInspectionRows below is the full-row read. */
 export function parseInspections(tsv: string): Record<string, string> {
-  return parseVerdicts(tsv);
+  const out: Record<string, string> = {};
+  for (const r of parseInspectionRows(tsv)) {
+    if (r.expId && r.agent && r.verdict) out[`${r.agent}/${r.expId}`] = r.verdict;
+  }
+  return out;
 }
 
 export interface InspectionRow {
@@ -39,4 +45,14 @@ export interface InspectionRow {
 export const INSPECTION_TSV_HEADER = "exp_id\tagent\tverdict\treason\treimpl_metric\tts\n";
 export function inspectionRow(r: InspectionRow): string {
   return `${r.expId}\t${r.agent}\t${r.verdict}\t${r.reason}\t${r.reimplMetric}\t${r.ts}\n`;
+}
+export function inspectionTsvPath(art: string): string { return join(art, "inspection.tsv"); }
+/** An inspection.tsv row as READ BACK — `verdict` is the raw token (see ParsedVerificationRow). */
+export type ParsedInspectionRow = Omit<InspectionRow, "verdict"> & { verdict: string };
+/** inspection.tsv text -> rows (the full row, unlike parseInspections' verdict-only map). */
+export function parseInspectionRows(text: string): ParsedInspectionRow[] {
+  return splitTsvRows(text, "exp_id\t").map((c) => ({
+    expId: c[0] ?? "", agent: c[1] ?? "", verdict: c[2] ?? "", reason: c[3] ?? "",
+    reimplMetric: c[4] ?? "", ts: c[5] ?? "",
+  }));
 }
