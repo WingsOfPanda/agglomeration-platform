@@ -12,7 +12,7 @@ import { envNum } from "../core/env.js";
 import { splitNonCommentLines } from "../core/text.js";
 import { archiveTopic, isoUtc } from "../core/archive.js";
 import { deriveSlug } from "../core/quick.js";
-import { extractMetric, formatMetricBlock, formatSotaBlock, parseMetricMd } from "../core/autoresearchMetric.js";
+import { extractMetric, formatMetricBlock, formatSotaBlock, parseMetricMd, resolveValidityThresholds } from "../core/autoresearchMetric.js";
 import { autoresearchArtDir, workersDir, workerStateDir, experimentsDir, experimentDir, seedLib, latestExpDir } from "../core/autoresearch.js";
 import { computeScore, type ScoreFs, type ScoreComputation } from "../core/autoresearchScore.js";
 import { sanityRow, sanityTsvPath, parseSanityRows, SANITY_TSV_HEADER } from "../core/autoresearchSanity.js";
@@ -36,8 +36,9 @@ import { runForensics, runFlag } from "../core/forensics.js";
 import { parseScoreboard, buildHandoffKv, type HandoffInput } from "../core/autoresearchHandoff.js";
 import { buildConsensus } from "../core/autoresearchConsensus.js";
 import { frameMetric, defaultTimeBudget } from "../core/autoresearchArbiter.js";
-import { parseVerifyBlock, planVerify, checkVerify, recomputedFromOutput, verificationRow, verificationTsvPath, parseVerificationRows, VERIFICATION_TSV_HEADER, type VerifyManifest, type VerificationRow } from "../core/autoresearchVerify.js";
-import { classifyInspect, inspectionRow, inspectionTsvPath, parseInspections, parseInspectionRows, INSPECTION_TSV_HEADER, type InspectVerdict, type InspectionRow } from "../core/autoresearchInspect.js";
+import { parseVerifyBlock, planVerify, checkVerify, recomputedFromOutput, verificationTsvPath, parseVerificationRows, type VerifyManifest, type VerificationRow } from "../core/autoresearchVerify.js";
+import { classifyInspect, inspectionTsvPath, parseInspections, parseInspectionRows, type InspectVerdict, type InspectionRow } from "../core/autoresearchInspect.js";
+import { appendVerificationRow, appendInspectionRow, readExperimentResult, inspectionCount } from "../core/autoresearchValidity.js";
 import { parseVerdicts } from "../core/autoresearchInfeasible.js";
 import { metricFamilyOf } from "../core/autoresearchLessonMap.js";
 import { retrieveForDispatch, resolveMemoryScope, liveMemoryIo, type MemoryIo } from "../core/autoresearchMemoryStore.js";
@@ -346,15 +347,27 @@ export async function dropWorkerWith(rest: string[], deps: DropWorkerDeps, opts?
   return 0;
 }
 
-// ---- A1: verify-plan — plan the harness re-execution + persist terminal verdicts ----
-export interface VerifyPlanDeps {
+// ---- A1/C1: the research-validity verbs share one deps shape; each adds its own extras ----
+/** The experiment read, the row writer (`R` is the verb's row type), and the clock/stdout seams. */
+export interface ValidityDeps<R> {
   readResult(art: string, agent: string, expId: string): Record<string, unknown> | null;
-  readManifest(art: string, agent: string, expId: string): VerifyManifest | null;
-  readInput(art: string, agent: string, expId: string, rel: string): string | null;
-  writeRow(art: string, agent: string, expId: string, row: VerificationRow): void;
+  writeRow(art: string, agent: string, expId: string, row: R): void;
   now(): string;
   stdout?: (l: string) => void;
   opts?: PathOpts;
+}
+/** The campaign metric.md — every validity verb but verify-plan resolves thresholds from it. */
+interface MetricMdDep { readMetricMd(art: string): string | null; }
+/** Both -check verbs adjudicate a captured re-run: the same two reads over the same shape. */
+export interface ValidityCheckDeps<R> extends ValidityDeps<R>, MetricMdDep {
+  readStdout(path: string): string | null;
+  readJson(path: string): string | null;
+}
+
+// ---- A1: verify-plan — plan the harness re-execution + persist terminal verdicts ----
+export interface VerifyPlanDeps extends ValidityDeps<VerificationRow> {
+  readManifest(art: string, agent: string, expId: string): VerifyManifest | null;
+  readInput(art: string, agent: string, expId: string, rel: string): string | null;
 }
 
 export async function verifyPlanWith(args: string[], deps: VerifyPlanDeps): Promise<number> {
@@ -381,16 +394,7 @@ export async function verifyPlanWith(args: string[], deps: VerifyPlanDeps): Prom
 }
 
 // ---- A1: verify-check — adjudicate the harness re-execution into a verdict ----
-export interface VerifyCheckDeps {
-  readResult(art: string, agent: string, expId: string): Record<string, unknown> | null;
-  readMetricMd(art: string): string | null;
-  readStdout(path: string): string | null;
-  readJson(path: string): string | null;
-  writeRow(art: string, agent: string, expId: string, row: VerificationRow): void;
-  now(): string;
-  stdout?: (l: string) => void;
-  opts?: PathOpts;
-}
+export type VerifyCheckDeps = ValidityCheckDeps<VerificationRow>;
 
 export async function verifyCheckWith(args: string[], deps: VerifyCheckDeps): Promise<number> {
   const runFailed = args.includes("--run-failed");
@@ -410,15 +414,14 @@ export async function verifyCheckWith(args: string[], deps: VerifyCheckDeps): Pr
   const reported = typeof result.metric_value === "number" ? result.metric_value : null;
   const block = parseVerifyBlock(result);
   const metricFrom = block?.metric_from ?? "marker";
-  const md = deps.readMetricMd(art);
-  const epsilon = (md ? parseMetricMd(md).verifyEpsilon : undefined) ?? 0.01;
+  const { verifyEpsilon } = resolveValidityThresholds(deps.readMetricMd(art));
 
   let recomputed: number | null = null;
   if (!runFailed) {
     const stdout = stdoutFile ? deps.readStdout(stdoutFile) : null;
     recomputed = stdout === null ? null : recomputedFromOutput(stdout, metricFrom, (p) => deps.readJson(join(experimentDir(art, agent, expId), p)));
   }
-  const { verdict, reason } = checkVerify({ recomputed, runFailed, reported, epsilon });
+  const { verdict, reason } = checkVerify({ recomputed, runFailed, reported, epsilon: verifyEpsilon });
   deps.writeRow(art, agent, expId, { expId, agent, verdict, reason, recomputed: recomputed === null ? "" : String(recomputed), ts: deps.now() });
   const out = deps.stdout ?? stdoutLine;
   out(`VERDICT=${verdict} reason=${reason}`);
@@ -426,15 +429,9 @@ export async function verifyCheckWith(args: string[], deps: VerifyCheckDeps): Pr
 }
 
 // ---- C1: inspect-plan — adjudicate eligibility + emit the run-card for an independent re-implementation ----
-export interface InspectPlanDeps {
-  readResult(art: string, agent: string, expId: string): Record<string, unknown> | null;
-  readMetricMd(art: string): string | null;
+export interface InspectPlanDeps extends ValidityDeps<InspectionRow>, MetricMdDep {
   inspectionCount(art: string): number;
   workerProvider(art: string, agent: string, topic: string): string | null;
-  writeRow(art: string, agent: string, expId: string, row: InspectionRow): void;
-  now(): string;
-  stdout?: (l: string) => void;
-  opts?: PathOpts;
 }
 
 export async function inspectPlanWith(args: string[], deps: InspectPlanDeps): Promise<number> {
@@ -451,9 +448,8 @@ export async function inspectPlanWith(args: string[], deps: InspectPlanDeps): Pr
     out(`VERDICT=${verdict} reason=${reason}`); return 0;
   };
   if (!authorize) return term("inconclusive", "inspect-deferred");
-  const md = deps.readMetricMd(art);
-  const budget = (md ? parseMetricMd(md).c1Budget : undefined) ?? 2;
-  if (deps.inspectionCount(art) >= budget) return term("inconclusive", "budget-exhausted");
+  const { c1Budget } = resolveValidityThresholds(deps.readMetricMd(art));
+  if (deps.inspectionCount(art) >= c1Budget) return term("inconclusive", "budget-exhausted");
   if (result.data_spec === undefined || result.data_spec === null || typeof result.metric_formula !== "string" || result.metric_formula === "") {
     return term("inconclusive", "run-card-insufficient");
   }
@@ -469,16 +465,7 @@ export async function inspectPlanWith(args: string[], deps: InspectPlanDeps): Pr
 }
 
 // ---- C1: inspect-check — adjudicate the independent re-implementation into a three-way verdict ----
-export interface InspectCheckDeps {
-  readResult(art: string, agent: string, expId: string): Record<string, unknown> | null;
-  readMetricMd(art: string): string | null;
-  readStdout(path: string): string | null;
-  readJson(path: string): string | null;
-  writeRow(art: string, agent: string, expId: string, row: InspectionRow): void;
-  now(): string;
-  stdout?: (l: string) => void;
-  opts?: PathOpts;
-}
+export type InspectCheckDeps = ValidityCheckDeps<InspectionRow>;
 
 export async function inspectCheckWith(args: string[], deps: InspectCheckDeps): Promise<number> {
   const runFailed = args.includes("--run-failed");
@@ -497,15 +484,13 @@ export async function inspectCheckWith(args: string[], deps: InspectCheckDeps): 
   const result = deps.readResult(art, agent, expId);
   if (result === null) { log.error(`autoresearch inspect-check: result.json missing for ${agent}/${expId}`); return 1; }
   const reported = typeof result.metric_value === "number" ? result.metric_value : null;
-  const md = deps.readMetricMd(art);
-  const t = md ? parseMetricMd(md) : null;
-  const epsilon = t?.c1Epsilon ?? (2 * (t?.verifyEpsilon ?? 0.01));
+  const { c1Epsilon } = resolveValidityThresholds(deps.readMetricMd(art));
   let reimplMetric: number | null = null;
   if (!runFailed && !integrityRefuted) {
     const stdout = stdoutFile ? deps.readStdout(stdoutFile) : null;
     reimplMetric = stdout === null ? null : recomputedFromOutput(stdout, "marker", (p) => deps.readJson(join(experimentDir(art, agent, expId), p)));
   }
-  const { verdict, reason } = classifyInspect({ reimplMetric, runFailed, reported, epsilon, integrityRefuted });
+  const { verdict, reason } = classifyInspect({ reimplMetric, runFailed, reported, epsilon: c1Epsilon, integrityRefuted });
   deps.writeRow(art, agent, expId, { expId, agent, verdict, reason, reimplMetric: reimplMetric === null ? "" : String(reimplMetric), ts: deps.now() });
   const out = deps.stdout ?? stdoutLine;
   out(`VERDICT=${verdict} reason=${reason}`);
@@ -2045,53 +2030,31 @@ export async function corpusDigestWith(args: string[], deps: CorpusDigestDeps): 
 
 const liveCorpusDigestDeps: CorpusDigestDeps = { now: () => isoUtc() };
 
-function appendVerificationRow(art: string, agent: string, expId: string, row: VerificationRow): void {
-  const tsv = verificationTsvPath(art);
-  const prior = existsSync(tsv) ? readFileSync(tsv, "utf8") : VERIFICATION_TSV_HEADER;
-  atomicWrite(tsv, prior + verificationRow(row));
-  atomicWrite(join(experimentDir(art, agent, expId), "verification.txt"),
-    `${row.verdict} reason=${row.reason} recomputed=${row.recomputed} at ${row.ts}\n`);
-}
-const liveVerifyPlanDeps: VerifyPlanDeps = {
-  readResult: (art, i, e) => readJsonOr<Record<string, unknown>>(join(experimentDir(art, i, e), "result.json"), null),
-  readManifest: (art, i, e) => readJsonOr<VerifyManifest>(join(experimentDir(art, i, e), "verify-manifest.json"), null),
-  readInput: (art, i, e, rel) => { const p = join(experimentDir(art, i, e), rel); return readIfExistsOrNull(p); },
-  writeRow: appendVerificationRow,
-  now: () => isoUtc(),
-};
 const readMetricMd = (art: string): string | null => readIfExistsOrNull(join(art, "metric.md"));
-const liveVerifyCheckDeps: VerifyCheckDeps = {
-  readResult: liveVerifyPlanDeps.readResult,
-  readMetricMd,
-  readStdout: readIfExistsOrNull,
-  readJson: readIfExistsOrNull,
-  writeRow: appendVerificationRow,
+/** The reads both -check verbs share; only the row writer differs between them. */
+const liveValidityCheckDeps = {
+  readResult: readExperimentResult, readMetricMd,
+  readStdout: readIfExistsOrNull, readJson: readIfExistsOrNull,
   now: () => isoUtc(),
 };
 
-function appendInspectionRow(art: string, agent: string, expId: string, row: InspectionRow): void {
-  const tsv = inspectionTsvPath(art);
-  const prior = existsSync(tsv) ? readFileSync(tsv, "utf8") : INSPECTION_TSV_HEADER;
-  atomicWrite(tsv, prior + inspectionRow(row));
-  atomicWrite(join(experimentDir(art, agent, expId), "inspection.txt"),
-    `${row.verdict} reason=${row.reason} reimpl_metric=${row.reimplMetric} at ${row.ts}\n`);
-}
+const liveVerifyPlanDeps: VerifyPlanDeps = {
+  readResult: readExperimentResult,
+  readManifest: (art, i, e) => readJsonOr<VerifyManifest>(join(experimentDir(art, i, e), "verify-manifest.json"), null),
+  readInput: (art, i, e, rel) => readIfExistsOrNull(join(experimentDir(art, i, e), rel)),
+  writeRow: appendVerificationRow,
+  now: () => isoUtc(),
+};
+const liveVerifyCheckDeps: VerifyCheckDeps = { ...liveValidityCheckDeps, writeRow: appendVerificationRow };
 export const liveInspectPlanDeps: InspectPlanDeps = {
-  readResult: liveVerifyPlanDeps.readResult,
+  readResult: readExperimentResult,
   readMetricMd,
-  inspectionCount: (art) => parseInspectionRows(readIfExists(inspectionTsvPath(art))).length,
+  inspectionCount,
   workerProvider: (_art, i, topic) => resolveModel(i, topic),
   writeRow: appendInspectionRow,
   now: () => isoUtc(),
 };
-const liveInspectCheckDeps: InspectCheckDeps = {
-  readResult: liveVerifyPlanDeps.readResult,
-  readMetricMd,
-  readStdout: readIfExistsOrNull,
-  readJson: readIfExistsOrNull,
-  writeRow: appendInspectionRow,
-  now: () => isoUtc(),
-};
+const liveInspectCheckDeps: InspectCheckDeps = { ...liveValidityCheckDeps, writeRow: appendInspectionRow };
 
 export async function run(args: string[]): Promise<number> {
   const [verb, ...rest] = args;

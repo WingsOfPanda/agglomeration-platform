@@ -43,7 +43,9 @@ collapse to injectable overrides of core defaults; the verbs shrink to arg parsi
 
 - **`src/core/autoresearchValidity.ts`** (new):
   - private `appendRow(art, agent, expId, cfg, row)` parameterized by
-    `{ tsvName, header, renderRow, sidecarName, sidecarLine(row) }`;
+    `{ tsvPath, header, renderRow, sidecarName, sidecarLine(row) }` — AMENDED from `tsvName`: the
+    cfg takes the codecs' exported `verificationTsvPath`/`inspectionTsvPath` rather than a bare
+    filename, so the TSV's location stays owned by the codec module that owns its format;
   - exported `appendVerificationRow` / `appendInspectionRow` — byte-identical file contents to the
     command-file originals (read-or-header + atomicWrite ordering preserved);
   - exported `readExperimentResult(art, agent, expId)` — the shared
@@ -84,7 +86,11 @@ collapse to injectable overrides of core defaults; the verbs shrink to arg parsi
 - Resolver table pins the three chains, including c1Epsilon = 2×verifyEpsilon when unset and the
   0.01 / 2 defaults.
 - Mutation (Q10): re-inlining an epsilon chain in a verb must fail the resolver-consumption pin;
-  breaking the appender's read-or-header must fail the round-trip.
+  breaking the appender's read-or-header must fail the round-trip. AMENDED: a byte-exact re-inline
+  is behaviorally indistinguishable from the resolver, so no test can catch it — the pins are
+  verb-level default pins that catch a re-inline that DRIFTS. Verified: dropping inspect-check's
+  2x derivation, defaulting inspect-plan's budget to 3, and seeding the appender's header
+  unconditionally each fail exactly the intended pin.
 - Full gate green; dist rebuilt and committed.
 
 ## Success Criteria
