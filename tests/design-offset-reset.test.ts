@@ -5,7 +5,12 @@ import { freshHome } from "./helpers/tmpHome.js";
 import { waitDeps } from "./helpers/phaseDeps.js";
 import { designArtDir } from "../src/core/design.js";
 import { workerDir } from "../src/core/paths.js";
-import { offsetResetRun, researchWaitWith } from "../src/commands/design.js";
+import { offsetResetRun } from "../src/commands/design.js";
+import { DESIGN_PHASES, phaseWait, type WaitDeps } from "../src/core/phaseTable.js";
+
+/** design's research wait — the shared skeleton bound to its row (there is no per-phase wrapper). */
+const researchWaitWith = (topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> =>
+  phaseWait(DESIGN_PHASES[0], topic, agent, provider, d);
 
 let env: { home: string; cleanup: () => void };
 beforeEach(() => { env = freshHome(); });

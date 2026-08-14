@@ -19910,7 +19910,15 @@ function surveyPhaseArtifact(row, w, ctx) {
     })
   };
 }
-function waitGateVerb(label, art, phase, key) {
+function rowFor(cmd, stem) {
+  return (cmd === "explore" ? PHASES : DESIGN_PHASES).find((p) => p.phase === stem) ?? null;
+}
+function phaseStems(cmd) {
+  return (cmd === "explore" ? PHASES : DESIGN_PHASES).map((p) => p.phase).join("|");
+}
+function waitGateVerb(row, topic) {
+  const { cmd: label, phase, key } = row;
+  const art = row.artDir(topic);
   const listPath = (0, import_node_path26.join)(art, "list.txt");
   if (!(0, import_node_fs32.existsSync)(listPath)) {
     log.error(`${label} wait-gate: list.txt missing at ${art}`);
@@ -20262,12 +20270,10 @@ __export(design_exports, {
   initWith: () => initWith2,
   offsetResetRun: () => offsetResetRun,
   researchSendWith: () => researchSendWith,
-  researchWaitWith: () => researchWaitWith,
   run: () => run10,
   spawnAllWith: () => spawnAllWith,
   synthesizeRun: () => synthesizeRun,
   verifySendWith: () => verifySendWith,
-  verifyWaitWith: () => verifyWaitWith,
   waitGateRun: () => waitGateRun,
   walkApproveRun: () => walkApproveRun,
   walkStateRun: () => walkStateRun
@@ -20288,14 +20294,10 @@ async function run10(args) {
       return spawnAllRun(rest);
     case "research-send":
       return triad("design research-send", researchSendWith, liveSendDeps)(rest);
-    case "research-wait":
-      return triad("design research-wait", researchWaitWith, liveWaitDeps)(rest);
     case "diff":
       return diffRun(rest);
     case "verify-send":
       return triad("design verify-send", verifySendWith, liveSendDeps)(rest);
-    case "verify-wait":
-      return triad("design verify-wait", verifyWaitWith, liveWaitDeps)(rest);
     case "adjudicate":
       return adjudicateRun(rest);
     case "synthesize":
@@ -20318,8 +20320,11 @@ async function run10(args) {
       return archiveRun(rest);
     case "export-doc":
       return exportDocRun(rest);
-    default:
-      return usage2();
+    default: {
+      const row = verb?.endsWith("-wait") ? rowFor("design", verb.slice(0, -"-wait".length)) : null;
+      if (!row) return usage2();
+      return triad(`design ${row.phase}-wait`, (t, a2, p, d) => phaseWait(row, t, a2, p, d), liveWaitDeps)(rest);
+    }
   }
 }
 async function initRun2(tokens) {
@@ -20452,9 +20457,6 @@ async function researchSendWith(topic, agent, provider, d) {
     }
   });
 }
-async function researchWaitWith(topic, agent, provider, d) {
-  return phaseWait(RESEARCH, topic, agent, provider, d);
-}
 async function diffRun(rest) {
   const topic = rest[0];
   if (!topic) {
@@ -20540,9 +20542,6 @@ async function verifySendWith(topic, agent, provider, d) {
       return { prompt: skillHintAppend((0, import_node_path28.join)(art, "skill.txt"), composeVerifyPrompt(items, artifact)) };
     }
   });
-}
-async function verifyWaitWith(topic, agent, provider, d) {
-  return phaseWait(VERIFY, topic, agent, provider, d);
 }
 async function adjudicateRun(rest) {
   const topic = rest[0];
@@ -20658,14 +20657,15 @@ async function walkStateRun(rest) {
 async function waitGateRun(rest) {
   const [topic, phase] = rest;
   if (!topic || !phase) {
-    log.error("usage: design wait-gate <topic> <research|verify>");
+    log.error(`usage: design wait-gate <topic> <${phaseStems("design")}>`);
     return 2;
   }
-  if (phase !== "research" && phase !== "verify") {
-    log.error(`design wait-gate: phase must be research|verify (got ${phase})`);
+  const row = rowFor("design", phase);
+  if (!row) {
+    log.error(`design wait-gate: phase must be ${phaseStems("design")} (got ${phase})`);
     return 2;
   }
-  return waitGateVerb("design", designArtDir(topic), phase, phase === "research" ? "FS" : "VS");
+  return waitGateVerb(row, topic);
 }
 async function drilldownRun(rest) {
   return drilldownWith(rest, { ...liveSendDeps, ...liveWaitDeps }, {});
@@ -20719,8 +20719,8 @@ async function offsetResetRun(rest) {
     log.error("usage: design offset-reset <topic> <agent> <phase> [--keep-findings]");
     return 2;
   }
-  if (phase !== "research" && phase !== "verify") {
-    log.error(`design offset-reset: phase must be research|verify (got ${phase})`);
+  if (!rowFor("design", phase)) {
+    log.error(`design offset-reset: phase must be ${phaseStems("design")} (got ${phase})`);
     return 2;
   }
   const art = designArtDir(topic);
@@ -27249,30 +27249,23 @@ var init_exploreContribution = __esm({
 var explore_exports = {};
 __export(explore_exports, {
   adversarySendWith: () => adversarySendWith,
-  adversaryWaitWith: () => adversaryWaitWith,
   annotateRun: () => annotateRun,
   classifyRun: () => classifyRun,
   confidenceRun: () => confidenceRun,
   contributionRun: () => contributionRun,
   crossverifySendWith: () => crossverifySendWith,
-  crossverifyWaitWith: () => crossverifyWaitWith,
   diffExploreRun: () => diffExploreRun,
   exploreWaitGateRun: () => exploreWaitGateRun,
   forensicsRun: () => forensicsRun5,
   gapSendWith: () => gapSendWith,
-  gapWaitWith: () => gapWaitWith,
   handoffExtractRun: () => handoffExtractRun,
   initWith: () => initWith5,
   openqCollateRun: () => openqCollateRun,
   openqSendWith: () => openqSendWith,
-  openqWaitWith: () => openqWaitWith,
   rebuttalSendWith: () => rebuttalSendWith,
-  rebuttalWaitWith: () => rebuttalWaitWith,
   researchSendWith: () => researchSendWith2,
-  researchWaitWith: () => researchWaitWith2,
   run: () => run14,
   signoffSendWith: () => signoffSendWith,
-  signoffWaitWith: () => signoffWaitWith,
   spawnAllWith: () => spawnAllWith3,
   survivorsRun: () => survivorsRun,
   synthFinalRun: () => synthFinalRun,
@@ -27296,34 +27289,22 @@ async function run14(args) {
       return spawnAllRun2(rest);
     case "research-send":
       return triad("explore research-send", researchSendWith2, liveSendDeps)(rest);
-    case "research-wait":
-      return triad("explore research-wait", researchWaitWith2, liveWaitDeps)(rest);
     case "survivors":
       return survivorsRun(rest);
     case "openq-collate":
       return openqCollateRun(rest);
     case "openq-send":
       return triad("explore openq-send", openqSendWith, liveSendDeps)(rest);
-    case "openq-wait":
-      return triad("explore openq-wait", openqWaitWith, liveWaitDeps)(rest);
     case "diff":
       return diffExploreRun(rest);
     case "crossverify-send":
       return triad("explore crossverify-send", crossverifySendWith, liveSendDeps)(rest);
-    case "crossverify-wait":
-      return triad("explore crossverify-wait", crossverifyWaitWith, liveWaitDeps)(rest);
     case "rebuttal-send":
       return triad("explore rebuttal-send", rebuttalSendWith, liveSendDeps)(rest);
-    case "rebuttal-wait":
-      return triad("explore rebuttal-wait", rebuttalWaitWith, liveWaitDeps)(rest);
     case "gap-send":
       return triad("explore gap-send", gapSendWith, liveSendDeps)(rest);
-    case "gap-wait":
-      return triad("explore gap-wait", gapWaitWith, liveWaitDeps)(rest);
     case "signoff-send":
       return triad("explore signoff-send", signoffSendWith, liveSendDeps)(rest);
-    case "signoff-wait":
-      return triad("explore signoff-wait", signoffWaitWith, liveWaitDeps)(rest);
     case "contribution":
       return contributionRun(rest);
     case "wait-gate":
@@ -27336,8 +27317,6 @@ async function run14(args) {
       return annotateRun(rest);
     case "adversary-send":
       return triad("explore adversary-send", adversarySendWith, liveSendDeps)(rest);
-    case "adversary-wait":
-      return triad("explore adversary-wait", adversaryWaitWith, liveWaitDeps)(rest);
     case "synth-final":
       return synthFinalRun(rest);
     case "verdict-tally":
@@ -27350,8 +27329,11 @@ async function run14(args) {
       return teardownRun(rest);
     case "handoff-extract":
       return handoffExtractRun(rest);
-    default:
-      return usage5();
+    default: {
+      const row = verb?.endsWith("-wait") ? rowFor("explore", verb.slice(0, -"-wait".length)) : null;
+      if (!row) return usage5();
+      return triad(`explore ${row.phase}-wait`, (t, a2, p, d) => phaseWait(row, t, a2, p, d), liveWaitDeps)(rest);
+    }
   }
 }
 async function initRun4(tokens) {
@@ -27445,9 +27427,6 @@ async function researchSendWith2(topic, agent, provider, d) {
     }
   });
 }
-async function researchWaitWith2(topic, agent, provider, d) {
-  return phaseWait(RESEARCH2, topic, agent, provider, d);
-}
 async function openqCollateRun(rest) {
   const topic = rest[0];
   if (!topic) {
@@ -27502,9 +27481,6 @@ async function openqSendWith(topic, agent, provider, d) {
       return { prompt: composeOpenqPrompt(claims, artifact) };
     }
   });
-}
-async function openqWaitWith(topic, agent, provider, d) {
-  return phaseWait(OPENQ, topic, agent, provider, d);
 }
 async function diffExploreRun(rest) {
   const topic = rest[0];
@@ -27582,9 +27558,6 @@ async function crossverifySendWith(topic, agent, provider, d) {
     }
   });
 }
-async function crossverifyWaitWith(topic, agent, provider, d) {
-  return phaseWait(CROSSVERIFY, topic, agent, provider, d);
-}
 async function rebuttalSendWith(topic, agent, provider, d) {
   return phaseSend(REBUTTAL, { topic, agent, provider }, d, {
     prepare: ({ art, artifact }) => {
@@ -27613,9 +27586,6 @@ async function rebuttalSendWith(topic, agent, provider, d) {
     }
   });
 }
-async function rebuttalWaitWith(topic, agent, provider, d) {
-  return phaseWait(REBUTTAL, topic, agent, provider, d);
-}
 async function gapSendWith(topic, agent, provider, d) {
   return phaseSend(GAP, { topic, agent, provider }, d, {
     // Trigger: the Phase 5.5 record's signals_passed line — S1=false or S2=false fires the round.
@@ -27641,9 +27611,6 @@ async function gapSendWith(topic, agent, provider, d) {
     }
   });
 }
-async function gapWaitWith(topic, agent, provider, d) {
-  return phaseWait(GAP, topic, agent, provider, d);
-}
 async function signoffSendWith(topic, agent, provider, d) {
   return phaseSend(SIGNOFF, { topic, agent, provider }, d, {
     prepare: ({ art, artifact }) => {
@@ -27663,9 +27630,6 @@ async function signoffSendWith(topic, agent, provider, d) {
       return { prompt: composeSignoffPrompt(conclusion, soloBucketLines, agreedText, artifact) };
     }
   });
-}
-async function signoffWaitWith(topic, agent, provider, d) {
-  return phaseWait(SIGNOFF, topic, agent, provider, d);
 }
 async function contributionRun(rest) {
   const topic = rest[0];
@@ -27918,30 +27882,18 @@ async function adversarySendWith(topic, agent, provider, d) {
     }
   });
 }
-async function adversaryWaitWith(topic, agent, provider, d) {
-  return phaseWait(ADVERSARY, topic, agent, provider, d);
-}
 async function exploreWaitGateRun(rest) {
   const [topic, phase] = rest;
-  const KEYS = {
-    research: "FS",
-    openq: "QS",
-    crossverify: "VS",
-    adversary: "AS",
-    rebuttal: "RS",
-    gap: "GS",
-    signoff: "SS"
-  };
   if (!topic || !phase) {
-    log.error("usage: explore wait-gate <topic> <research|openq|crossverify|adversary|rebuttal|gap|signoff>");
+    log.error(`usage: explore wait-gate <topic> <${phaseStems("explore")}>`);
     return 2;
   }
-  const key = KEYS[phase];
-  if (!key) {
-    log.error(`explore wait-gate: phase must be research|openq|crossverify|adversary|rebuttal|gap|signoff (got ${phase})`);
+  const row = rowFor("explore", phase);
+  if (!row) {
+    log.error(`explore wait-gate: phase must be ${phaseStems("explore")} (got ${phase})`);
     return 2;
   }
-  return waitGateVerb("explore", exploreArtDir(topic), phase, key);
+  return waitGateVerb(row, topic);
 }
 async function synthFinalRun(rest) {
   const topic = rest[0];

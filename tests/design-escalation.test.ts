@@ -9,7 +9,15 @@ import { workerDir } from "../src/core/paths.js";
 import { outboxPath } from "../src/core/ipc.js";
 import { END_OF_ARTIFACT } from "../src/core/artifact.js";
 import { composeDrilldownPrompt } from "../src/core/designTurn.js";
-import { researchSendWith, researchWaitWith, diffRun, spawnAllWith, verifySendWith, verifyWaitWith, adjudicateRun, synthesizeRun, walkApproveRun, walkStateRun, drilldownWith, forensicsRun, archiveRun } from "../src/commands/design.js";
+import { researchSendWith, diffRun, spawnAllWith, verifySendWith, adjudicateRun, synthesizeRun, walkApproveRun, walkStateRun, drilldownWith, forensicsRun, archiveRun } from "../src/commands/design.js";
+import { DESIGN_PHASES, phaseWait, type WaitDeps } from "../src/core/phaseTable.js";
+
+/** design's two waits — the shared skeleton bound to its row (there is no per-phase wrapper). */
+const [DESIGN_RESEARCH, DESIGN_VERIFY] = DESIGN_PHASES;
+const researchWaitWith = (topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> =>
+  phaseWait(DESIGN_RESEARCH, topic, agent, provider, d);
+const verifyWaitWith = (topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> =>
+  phaseWait(DESIGN_VERIFY, topic, agent, provider, d);
 
 let env: { home: string; cleanup: () => void };
 beforeEach(() => { env = freshHome(); });

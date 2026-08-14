@@ -21,7 +21,7 @@ import { pickAgents } from "../core/agents.js";
 import { agentConsultValidated, consultTimeout } from "../core/contracts.js";
 import { composeResearchPrompt, scaledTimeout, composeVerifyPrompt, composeDrilldownPrompt, drilldownState, parseLatestOffset } from "../core/designTurn.js";
 import {
-  DESIGN_PHASES, phaseSend, phaseWait, waitGateVerb, surveyPhaseArtifact, triad,
+  DESIGN_PHASES, phaseSend, phaseWait, phaseStems, rowFor, waitGateVerb, surveyPhaseArtifact, triad,
   liveSendDeps, liveWaitDeps, type SendDeps, type WaitDeps,
 } from "../core/phaseTable.js";
 import { statusPath, workerBusyState } from "../core/ipc.js";
@@ -46,10 +46,8 @@ export async function run(args: string[]): Promise<number> {
     case "assemble": return assembleRun(rest);
     case "spawn-all": return spawnAllRun(rest);
     case "research-send": return triad("design research-send", researchSendWith, liveSendDeps)(rest);
-    case "research-wait": return triad("design research-wait", researchWaitWith, liveWaitDeps)(rest);
     case "diff": return diffRun(rest);
     case "verify-send": return triad("design verify-send", verifySendWith, liveSendDeps)(rest);
-    case "verify-wait": return triad("design verify-wait", verifyWaitWith, liveWaitDeps)(rest);
     case "adjudicate": return adjudicateRun(rest);
     case "synthesize": return synthesizeRun(rest);
     case "walk-approve": return walkApproveRun(rest);
@@ -61,7 +59,13 @@ export async function run(args: string[]): Promise<number> {
     case "flag": return runFlag("design", rest[0], rest.slice(1).join(" "));
     case "archive": return archiveRun(rest);
     case "export-doc": return exportDocRun(rest);
-    default: return usage();
+    default: {
+      // The `-wait` half is the table's: every phase's wait is one bound phaseWait, so a new
+      // DESIGN_PHASES row needs no case here.
+      const row = verb?.endsWith("-wait") ? rowFor("design", verb.slice(0, -"-wait".length)) : null;
+      if (!row) return usage();
+      return triad<WaitDeps>(`design ${row.phase}-wait`, (t, a, p, d) => phaseWait(row, t, a, p, d), liveWaitDeps)(rest);
+    }
   }
 }
 
@@ -199,10 +203,6 @@ export async function researchSendWith(topic: string, agent: string, provider: s
   });
 }
 
-export async function researchWaitWith(topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> {
-  return phaseWait(RESEARCH, topic, agent, provider, d);
-}
-
 export async function diffRun(rest: string[]): Promise<number> {
   const topic = rest[0];
   if (!topic) { log.error("usage: design diff <topic>"); return 2; }
@@ -269,10 +269,6 @@ export async function verifySendWith(topic: string, agent: string, provider: str
       return { prompt: skillHintAppend(join(art, "skill.txt"), composeVerifyPrompt(items, artifact)) };
     },
   });
-}
-
-export async function verifyWaitWith(topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> {
-  return phaseWait(VERIFY, topic, agent, provider, d);
 }
 
 export async function adjudicateRun(rest: string[]): Promise<number> {
@@ -361,9 +357,10 @@ export async function walkStateRun(rest: string[]): Promise<number> {
 
 export async function waitGateRun(rest: string[]): Promise<number> {
   const [topic, phase] = rest;
-  if (!topic || !phase) { log.error("usage: design wait-gate <topic> <research|verify>"); return 2; }
-  if (phase !== "research" && phase !== "verify") { log.error(`design wait-gate: phase must be research|verify (got ${phase})`); return 2; }
-  return waitGateVerb("design", designArtDir(topic), phase, phase === "research" ? "FS" : "VS");
+  if (!topic || !phase) { log.error(`usage: design wait-gate <topic> <${phaseStems("design")}>`); return 2; }
+  const row = rowFor("design", phase);
+  if (!row) { log.error(`design wait-gate: phase must be ${phaseStems("design")} (got ${phase})`); return 2; }
+  return waitGateVerb(row, topic);
 }
 
 // ---- Phase F: drilldown (optional, workers still live) ----
@@ -429,7 +426,7 @@ export async function offsetResetRun(rest: string[]): Promise<number> {
   const pos = rest.filter((t) => !t.startsWith("--"));
   const [topic, agent, phase] = pos;
   if (!topic || !agent || !phase) { log.error("usage: design offset-reset <topic> <agent> <phase> [--keep-findings]"); return 2; }
-  if (phase !== "research" && phase !== "verify") { log.error(`design offset-reset: phase must be research|verify (got ${phase})`); return 2; }
+  if (!rowFor("design", phase)) { log.error(`design offset-reset: phase must be ${phaseStems("design")} (got ${phase})`); return 2; }
   const art = designArtDir(topic);
   if (!existsSync(art)) { log.error(`design offset-reset: art dir missing: ${art}`); return 1; }
 

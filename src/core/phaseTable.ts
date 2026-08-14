@@ -5,8 +5,10 @@
 // as ~50 lines of hand-copied control flow per phase — nine copies of one send/wait skeleton — so
 // every wait-protocol change (the 0.5.5 liveness extension) had to be applied nine times, and the
 // 0.5.5 VS-gap bug was exactly one missed slot in one hand-written copy. Here each phase is one
-// PHASES row and the skeletons exist once: dispatchPrompt (the send tail), phaseWait (the whole
-// wait body), waitGateVerb (the gate read-out), triad (the 3-positional arg parse).
+// PHASES row and the skeletons exist once: phaseSend (the send head) and dispatchPrompt (its tail),
+// phaseWait (the whole wait body), surveyPhaseArtifact (the read every validator does before
+// consuming a phase artifact), waitGateVerb (the gate read-out), rowFor (the phase map every verb
+// that takes a phase as an argument resolves through), triad (the 3-positional arg parse).
 //
 // Byte-for-byte fidelity is the contract. Every log line, state-file write and rc below is the
 // literal text the copied bodies emitted; the only per-phase variation is a row slot. What is NOT
@@ -538,11 +540,26 @@ export function surveyPhaseArtifact(
   };
 }
 
+/** The row a command's verb stem names — the phase map stated once, for the verbs that take a phase
+ *  as an ARGUMENT (both wait-gates, design's offset-reset) and for the table-driven `-wait` dispatch.
+ *  null is the caller's cue to print its own unknown-phase wording. */
+export function rowFor(cmd: "explore" | "design", stem: string): PhaseRow | null {
+  return (cmd === "explore" ? PHASES : DESIGN_PHASES).find((p) => p.phase === stem) ?? null;
+}
+
+/** Every phase stem of one command, in pipeline order — the `<research|openq|...>` alternation both
+ *  commands print in their usage and unknown-phase lines. */
+export function phaseStems(cmd: "explore" | "design"): string {
+  return (cmd === "explore" ? PHASES : DESIGN_PHASES).map((p) => p.phase).join("|");
+}
+
 /** The wait-gate read-out, shared by explore's and design's `wait-gate` verb: one `<agent>\t<status>`
  *  stdout line per worker, a stderr warning for each terminal-but-anomalous worker, rc 0 only when
- *  every worker is terminal. `label` is the command name — each verb keeps its own arg validation,
- *  whose usage/error wording differs per command. */
-export function waitGateVerb(label: string, art: string, phase: string, key: PhaseKey): number {
+ *  every worker is terminal. Everything it reads hangs off the row; each verb keeps its own arg
+ *  validation, whose usage/error wording differs per command. */
+export function waitGateVerb(row: PhaseRow, topic: string): number {
+  const { cmd: label, phase, key } = row;
+  const art = row.artDir(topic);
   const listPath = join(art, "list.txt");
   if (!existsSync(listPath)) { log.error(`${label} wait-gate: list.txt missing at ${art}`); return 2; }
   const rows = parseListFile(readFileSync(listPath, "utf8"));

@@ -137,6 +137,35 @@ the run() switch and tests keep their names; their bodies shrink to the genuinel
   least one test.
 - Full gate green; dist rebuilt and committed.
 
+## Amendments (as implemented, 2026-08-14)
+
+Four places where the code was the truth and this spec was not; the shipped shapes are these.
+
+1. **The collector is per-WORKER, not per-roster: `surveyPhaseArtifact(row, {agent, provider}, ctx)`
+   returning one `{ text, tag, verdict }`.** `artifactBackstop` WRITES (strike log, hub flag,
+   `STILL_WRITING` on stderr), and the nine sites disagree about when to stop: six refuse the verb at
+   the first `still-writing` while survivors / synth-preliminary / synth-final finish the roster. A
+   collector that surveyed every worker eagerly would record strikes the shipped code never records —
+   a state-file difference, not a cosmetic one. Two sites (explore diff, design diff) also interleave
+   a per-worker `existsSync` refusal with the backstop, which no roster-shaped signature preserves.
+   Per-worker keeps every side effect in its shipped order with the fan-out still at the caller. It
+   also carries design's per-agent `provider` (the spec's `agents: string[]` could not).
+2. **Verdict `skipped` + the returned `tag`.** `skipTag` is not "omit": rebuttal omits that worker but
+   verdict-tally RECORDS it as `VERDICT=<agent>:skipped`, so the slot reports and the caller decides.
+   `tag` (the state file's last `<key>=`) is returned because design adjudicate needs it for `vs[]`
+   and re-reading the state file would restate the path the row owns. `art` is derived from
+   `row.artDir(topic)` rather than passed.
+3. **Two verbs keep a precondition ahead of the skeleton.** explore adversary-send checks the draft,
+   and design verify-send checks its art dir, BEFORE the state-file exists-check — an order that
+   `preGuard` (which runs after it) cannot express. Rather than a third hook for two callers, those
+   two verbs run their check in the verb and then call `phaseSend`. Both hooks are synchronous (no
+   prepare body awaits), and `phaseSend` calls `guardSkipped` unconditionally — the row's `guard`
+   presence decides inside it, exactly as before.
+4. **`waitGateVerb(row, topic)`.** With the row in hand both `label` (`row.cmd`) and `art`
+   (`row.artDir(topic)`) are derived, so the signature is two parameters, not four. `phaseStems(cmd)`
+   generates the `<research|openq|...>` alternation that the usage and unknown-phase lines print
+   (byte-identical, pinned literally in tests/phase-dispatch.test.ts).
+
 ## Success Criteria
 
 - Adding a hypothetical explore phase = one PHASES row + one -send body (demonstrated in a test

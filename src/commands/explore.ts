@@ -22,8 +22,8 @@ import { computeSignals, renderSkipRecord, skipRecordSaysUserSkip, sectionText, 
 import { buildAnnotations, soloTokensFromAnnotations } from "../core/exploreAnnotate.js";
 import { composeVerifyPrompt } from "../core/designTurn.js";
 import {
-  PHASES, phaseSend, phaseWait, waitGateVerb, surveyPhaseArtifact, triad,
-  liveSendDeps, liveWaitDeps, type SendDeps, type WaitDeps, type PhaseKey,
+  PHASES, phaseSend, phaseWait, phaseStems, rowFor, waitGateVerb, surveyPhaseArtifact, triad,
+  liveSendDeps, liveWaitDeps, type SendDeps, type WaitDeps,
 } from "../core/phaseTable.js";
 import { composeExploreResearchPrompt, composeAdversaryPrompt, composeGapPrompt, composeSignoffPrompt, litGuidance, ADVERSARY_LENSES, researchLens } from "../core/exploreTurn.js";
 import { run as spawnRun } from "./spawn.js";
@@ -50,34 +50,33 @@ export async function run(args: string[]): Promise<number> {
     case "classify": return classifyRun(rest);
     case "spawn-all": return spawnAllRun(rest);
     case "research-send": return triad("explore research-send", researchSendWith, liveSendDeps)(rest);
-    case "research-wait": return triad("explore research-wait", researchWaitWith, liveWaitDeps)(rest);
     case "survivors": return survivorsRun(rest);
     case "openq-collate": return openqCollateRun(rest);
     case "openq-send": return triad("explore openq-send", openqSendWith, liveSendDeps)(rest);
-    case "openq-wait": return triad("explore openq-wait", openqWaitWith, liveWaitDeps)(rest);
     case "diff": return diffExploreRun(rest);
     case "crossverify-send": return triad("explore crossverify-send", crossverifySendWith, liveSendDeps)(rest);
-    case "crossverify-wait": return triad("explore crossverify-wait", crossverifyWaitWith, liveWaitDeps)(rest);
     case "rebuttal-send": return triad("explore rebuttal-send", rebuttalSendWith, liveSendDeps)(rest);
-    case "rebuttal-wait": return triad("explore rebuttal-wait", rebuttalWaitWith, liveWaitDeps)(rest);
     case "gap-send": return triad("explore gap-send", gapSendWith, liveSendDeps)(rest);
-    case "gap-wait": return triad("explore gap-wait", gapWaitWith, liveWaitDeps)(rest);
     case "signoff-send": return triad("explore signoff-send", signoffSendWith, liveSendDeps)(rest);
-    case "signoff-wait": return triad("explore signoff-wait", signoffWaitWith, liveWaitDeps)(rest);
     case "contribution": return contributionRun(rest);
     case "wait-gate": return exploreWaitGateRun(rest);
     case "synth-preliminary": return synthPreliminaryRun(rest);
     case "confidence": return confidenceRun(rest);
     case "annotate": return annotateRun(rest);
     case "adversary-send": return triad("explore adversary-send", adversarySendWith, liveSendDeps)(rest);
-    case "adversary-wait": return triad("explore adversary-wait", adversaryWaitWith, liveWaitDeps)(rest);
     case "synth-final": return synthFinalRun(rest);
     case "verdict-tally": return verdictTallyRun(rest);
     case "forensics": return forensicsRun(rest);
     case "flag": return runFlag("explore", rest[0], rest.slice(1).join(" "));
     case "teardown": return teardownRun(rest);
     case "handoff-extract": return handoffExtractRun(rest);
-    default: return usage();
+    default: {
+      // The `-wait` half is the table's: every phase's wait is one bound phaseWait, so a new PHASES
+      // row needs no case here (the `-send` bodies below are what genuinely differ per phase).
+      const row = verb?.endsWith("-wait") ? rowFor("explore", verb.slice(0, -"-wait".length)) : null;
+      if (!row) return usage();
+      return triad<WaitDeps>(`explore ${row.phase}-wait`, (t, a, p, d) => phaseWait(row, t, a, p, d), liveWaitDeps)(rest);
+    }
   }
 }
 
@@ -175,10 +174,6 @@ export async function researchSendWith(topic: string, agent: string, provider: s
   });
 }
 
-export async function researchWaitWith(topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> {
-  return phaseWait(RESEARCH, topic, agent, provider, d);
-}
-
 // ---- openq-collate / openq-send / openq-wait (Phase 4b open-questions peer relay) ----
 export async function openqCollateRun(rest: string[]): Promise<number> {
   const topic = rest[0];
@@ -228,10 +223,6 @@ export async function openqSendWith(topic: string, agent: string, provider: stri
       return { prompt: composeOpenqPrompt(claims, artifact) };
     },
   });
-}
-
-export async function openqWaitWith(topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> {
-  return phaseWait(OPENQ, topic, agent, provider, d);
 }
 
 // ---- diff (Approaches-schema buckets; foundation for crossverify/rebuttal/gap rounds) ----
@@ -293,10 +284,6 @@ export async function crossverifySendWith(topic: string, agent: string, provider
   });
 }
 
-export async function crossverifyWaitWith(topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> {
-  return phaseWait(CROSSVERIFY, topic, agent, provider, d);
-}
-
 // ---- rebuttal-send / rebuttal-wait (Phase 7b bounded defend-or-concede) ----
 export async function rebuttalSendWith(topic: string, agent: string, provider: string, d: SendDeps): Promise<number> {
   return phaseSend(REBUTTAL, { topic, agent, provider }, d, {
@@ -328,10 +315,6 @@ export async function rebuttalSendWith(topic: string, agent: string, provider: s
   });
 }
 
-export async function rebuttalWaitWith(topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> {
-  return phaseWait(REBUTTAL, topic, agent, provider, d);
-}
-
 // ---- gap-send / gap-wait (Phase 7c post-gate gap enrichment; trigger = recorded S1/S2 false) ----
 export async function gapSendWith(topic: string, agent: string, provider: string, d: SendDeps): Promise<number> {
   return phaseSend(GAP, { topic, agent, provider }, d, {
@@ -357,10 +340,6 @@ export async function gapSendWith(topic: string, agent: string, provider: string
   });
 }
 
-export async function gapWaitWith(topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> {
-  return phaseWait(GAP, topic, agent, provider, d);
-}
-
 // ---- signoff-send / signoff-wait (Phase 8b bounded final-doc fairness check) ----
 export async function signoffSendWith(topic: string, agent: string, provider: string, d: SendDeps): Promise<number> {
   return phaseSend(SIGNOFF, { topic, agent, provider }, d, {
@@ -379,10 +358,6 @@ export async function signoffSendWith(topic: string, agent: string, provider: st
       return { prompt: composeSignoffPrompt(conclusion, soloBucketLines, agreedText, artifact) };
     },
   });
-}
-
-export async function signoffWaitWith(topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> {
-  return phaseWait(SIGNOFF, topic, agent, provider, d);
 }
 
 // ---- contribution (Phase 8a read-only per-provider scoreboard; archived, never gates) ----
@@ -601,20 +576,13 @@ export async function adversarySendWith(topic: string, agent: string, provider: 
   });
 }
 
-export async function adversaryWaitWith(topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> {
-  return phaseWait(ADVERSARY, topic, agent, provider, d);
-}
-
 // ---- wait-gate (composes the pure gateState over the per-phase state files) ----
 export async function exploreWaitGateRun(rest: string[]): Promise<number> {
   const [topic, phase] = rest;
-  const KEYS: Record<string, PhaseKey> = {
-    research: "FS", openq: "QS", crossverify: "VS", adversary: "AS", rebuttal: "RS", gap: "GS", signoff: "SS",
-  };
-  if (!topic || !phase) { log.error("usage: explore wait-gate <topic> <research|openq|crossverify|adversary|rebuttal|gap|signoff>"); return 2; }
-  const key = KEYS[phase];
-  if (!key) { log.error(`explore wait-gate: phase must be research|openq|crossverify|adversary|rebuttal|gap|signoff (got ${phase})`); return 2; }
-  return waitGateVerb("explore", exploreArtDir(topic), phase, key);
+  if (!topic || !phase) { log.error(`usage: explore wait-gate <topic> <${phaseStems("explore")}>`); return 2; }
+  const row = rowFor("explore", phase);
+  if (!row) { log.error(`explore wait-gate: phase must be ${phaseStems("explore")} (got ${phase})`); return 2; }
+  return waitGateVerb(row, topic);
 }
 
 // ---- synth-final (input validator) ----
