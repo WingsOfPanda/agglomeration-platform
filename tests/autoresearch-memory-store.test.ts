@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -6,24 +6,13 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { scopeKey, type MemoryPolicy } from "../src/core/autoresearchMemory.js";
 import {
+  liveMemoryIo,
   retrieveForDispatch,
   writeLessonsAtFinalize,
-  type MemoryIo,
 } from "../src/core/autoresearchMemoryStore.js";
 
-// Real-fs io rooted at a temp store dir, so the roundtrip exercises the actual
-// read/merge/atomic-write/append path (not a fake) without touching ~/.ap.
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
-const realIo: MemoryIo = {
-  exists: (p) => existsSync(p),
-  readFile: (p) => readFileSync(p, "utf8"),
-  mkdir: (p) => mkdirSync(p, { recursive: true }),
-  writeAtomic: (dest, content) => {
-    const tmp = `${dest}.tmp.${process.pid}.${Math.random().toString(16).slice(2)}`;
-    writeFileSync(tmp, content);
-    renameSync(tmp, dest);
-  },
-};
+// The SHIPPED node-fs io, rooted at a temp store dir: the roundtrip exercises the real
+// read/merge/atomicWrite path (not a re-implementation of it) without touching ~/.ap.
 
 const policy: MemoryPolicy = {
   halfLifeDays: 30,
@@ -71,7 +60,7 @@ afterEach(() => {
 
 describe("autoresearchMemoryStore — finalize<->dispatch roundtrip", () => {
   test("two corroborating verifier-passing drafts are written, then retrieved (promotion + persistence)", () => {
-    writeLessonsAtFinalize(realIo, {
+    writeLessonsAtFinalize(liveMemoryIo, {
       storeRoot,
       repoHash: "repoA",
       metricFamily: "accuracy",
@@ -92,7 +81,7 @@ describe("autoresearchMemoryStore — finalize<->dispatch roundtrip", () => {
 
     // A fresh dispatch reads the same store and retrieves the rendered lesson —
     // proving promotion-after-corroboration AND persistence across calls.
-    const rendered = retrieveForDispatch(realIo, {
+    const rendered = retrieveForDispatch(liveMemoryIo, {
       storeRoot,
       repoHash: "repoA",
       metricFamily: "accuracy",
@@ -108,7 +97,7 @@ describe("autoresearchMemoryStore — finalize<->dispatch roundtrip", () => {
   });
 
   test("a single verifier-passing positive draft is written but NOT yet retrievable (uncorroborated)", () => {
-    writeLessonsAtFinalize(realIo, {
+    writeLessonsAtFinalize(liveMemoryIo, {
       storeRoot,
       repoHash: "repoA",
       metricFamily: "accuracy",
@@ -120,7 +109,7 @@ describe("autoresearchMemoryStore — finalize<->dispatch roundtrip", () => {
     const path = join(storeRoot, scopeKey("repoA", "accuracy"), "lessons.jsonl");
     expect(readFileSync(path, "utf8").split("\n").filter(Boolean).length).toBe(1);
 
-    const rendered = retrieveForDispatch(realIo, {
+    const rendered = retrieveForDispatch(liveMemoryIo, {
       storeRoot,
       repoHash: "repoA",
       metricFamily: "accuracy",
@@ -134,7 +123,7 @@ describe("autoresearchMemoryStore — finalize<->dispatch roundtrip", () => {
   });
 
   test("rejected drafts (failed source / injection / external provenance) are never written", () => {
-    writeLessonsAtFinalize(realIo, {
+    writeLessonsAtFinalize(liveMemoryIo, {
       storeRoot,
       repoHash: "repoA",
       metricFamily: "accuracy",
@@ -156,7 +145,7 @@ describe("autoresearchMemoryStore — finalize<->dispatch roundtrip", () => {
   });
 
   test("cross-family retrieve returns nothing (scope isolation)", () => {
-    writeLessonsAtFinalize(realIo, {
+    writeLessonsAtFinalize(liveMemoryIo, {
       storeRoot,
       repoHash: "repoA",
       metricFamily: "accuracy",
@@ -166,7 +155,7 @@ describe("autoresearchMemoryStore — finalize<->dispatch roundtrip", () => {
       now,
     });
     // Same repo, different metric family => different scopeKey directory => empty.
-    const rendered = retrieveForDispatch(realIo, {
+    const rendered = retrieveForDispatch(liveMemoryIo, {
       storeRoot,
       repoHash: "repoA",
       metricFamily: "loss",
@@ -179,7 +168,7 @@ describe("autoresearchMemoryStore — finalize<->dispatch roundtrip", () => {
   });
 
   test("missing store file is tolerated on retrieve (returns empty, no throw)", () => {
-    const rendered = retrieveForDispatch(realIo, {
+    const rendered = retrieveForDispatch(liveMemoryIo, {
       storeRoot,
       repoHash: "repoNONE",
       metricFamily: "accuracy",

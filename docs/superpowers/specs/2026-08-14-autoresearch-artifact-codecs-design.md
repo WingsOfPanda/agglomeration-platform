@@ -55,15 +55,17 @@ Files on disk byte-identical; all output byte-identical.
 - **Per-artifact parsers**, one in each existing module, pure:
   `parseSanityRows(text): SanityRow[]`, `parseCoverageRows(text): CoverageRow[]`,
   `parseLineageRows(text): LineageRow[]`, `parseVerificationRows(text): VerificationRow[]`,
-  `parseInspectionRows(text): InspectionRow[]` (introduce the full row types where only partial
-  ones exist — verification/inspection rows carry reason/recomputed/reimpl_metric fields that
-  today nothing parses). Numeric fields (e.g. CoverageRow.count) parsed exactly as the current
+  `parseInspectionRows(text): InspectionRow[]`, each returning the artifact's FULL row (the row
+  types are already complete; it is the parsing that is partial — verification/inspection carry
+  reason/recomputed/reimpl_metric fields that today nothing reads back). Numeric fields (e.g.
+  CoverageRow.count) parsed exactly as the current
   reader does (`parseInt(cells[1] ?? "0", 10) || 0`). The parser owns ONLY split + header-skip +
   field naming; every caller-side FILTER predicate (`if (cells[0] …)`) stays at the caller,
   re-expressed over named fields — byte-identical selectivity.
 - **Per-artifact path helpers**: `sanityTsvPath(art)` etc., pure joins beside each header
   constant — the filename stated once.
-- **Reader conversions** (behavior pinned by existing tests):
+- **Reader conversions** (behavior pinned by existing tests — but see Amendments: the statusBrief
+  sanity/lineage joins turned out NOT to be pinned):
   - statusBrief's coverage + lineage blocks → `readIfExistsOrNull(path)` then parse (the
     absent→undefined distinction the current code gets from readTsvRows is preserved via the
     null check — the inspection.tsv line directly above already uses this exact pattern).
@@ -131,3 +133,28 @@ Files on disk byte-identical; all output byte-identical.
 - The two callers of the memory store contain no parseMetricMd→policy preamble.
 - Gate green; dist rebuilt+committed; 0.5.20; files on disk byte-identical (proven by the
   existing artifact-content pins).
+
+## Amendments (made while implementing; the code is the source of truth)
+
+1. **"Behavior pinned by existing tests" was wrong for statusBrief.** The leader-row `[suspect:]`
+   and `[multi-change]` tags were pinned only at `buildStatusBrief` with hand-built maps — nothing
+   covered `statusBriefWith`'s sanity.tsv/lineage.tsv READ. The grilling-Q10 mutation check caught
+   it (a converted reader picking the wrong named field passed the whole suite), so this PR adds
+   one `statusBriefWith` test joining both files end-to-end; the mutation now fails.
+2. **Row types were already full**; only the parsing was partial. Reworded above.
+3. **The path helpers are applied at every site naming one of the five filenames**, not only at the
+   converted readers — otherwise "the filename stated once" would be false and the helper would be
+   a second source of truth. That extends to the score-time writers, `appendVerificationRow` /
+   `appendInspectionRow`, `autoresearchFinalize.ts`, and `autoresearchScore.ts:65-66` (a pure
+   `join(art, "x.tsv")` -> `xTsvPath(art)` substitution in each case).
+4. **`inspectionCount` (autoresearch.ts, liveInspectPlanDeps) was a fourth hand-parse** the problem
+   statement missed — it restated the `exp_id\t` header token to count rows. Converted to
+   `parseInspectionRows(...).length`, byte-identical including the absent-file 0.
+5. **`parseInspections` is re-expressed over `parseInspectionRows`, not `parseVerdicts`.** Both
+   re-expressions are trivially byte-identical (same guard, same key, same last-write-wins), and
+   routing inspection.tsv through the VERIFICATION parser would have left inspection's column
+   order stated in another artifact's module — failing this spec's own success criterion.
+6. **`results.tsv` is deliberately NOT in scope.** Its `exp_id\t` header token is still restated at
+   `autoresearch.ts:830` (ledger tail) and `autoresearchScore.ts:29`. It is a sixth artifact with
+   its own module (`autoresearchResult.ts`) and its own row type; folding it in is a separate
+   change, not this one.

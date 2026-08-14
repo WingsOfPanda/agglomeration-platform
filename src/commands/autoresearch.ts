@@ -39,8 +39,8 @@ import { frameMetric, defaultTimeBudget } from "../core/autoresearchArbiter.js";
 import { parseVerifyBlock, planVerify, checkVerify, recomputedFromOutput, verificationRow, verificationTsvPath, parseVerificationRows, VERIFICATION_TSV_HEADER, type VerifyManifest, type VerificationRow } from "../core/autoresearchVerify.js";
 import { classifyInspect, inspectionRow, inspectionTsvPath, parseInspections, parseInspectionRows, INSPECTION_TSV_HEADER, type InspectVerdict, type InspectionRow } from "../core/autoresearchInspect.js";
 import { parseVerdicts } from "../core/autoresearchInfeasible.js";
-import { metricFamilyOf, policyFromMetric } from "../core/autoresearchLessonMap.js";
-import { retrieveForDispatch, liveMemoryIo, type MemoryIo } from "../core/autoresearchMemoryStore.js";
+import { metricFamilyOf } from "../core/autoresearchLessonMap.js";
+import { retrieveForDispatch, resolveMemoryScope, liveMemoryIo, type MemoryIo } from "../core/autoresearchMemoryStore.js";
 import { buildCorpusDigest, leaderMetricOf, type CorpusEntry } from "../core/autoresearchCorpus.js";
 import { agentBinary, consultTimeout } from "../core/contracts.js";
 import { inboxWrite, inboxPath, outboxPath, outboxOffset, paneMetaRead, resolveModel, parseEvent } from "../core/ipc.js";
@@ -1945,20 +1945,20 @@ export async function memoryRetrieveWith(args: string[], deps: MemoryRetrieveDep
   const metricPath = join(art, "metric.md");
   if (!existsSync(metricPath)) return 0; // no metric.md yet -> nothing to retrieve against
 
-  const thresholds = parseMetricMd(readFileSync(metricPath, "utf8"));
-  const family = metricFamilyOf(thresholds.primaryMetric);
-  if (family === null) return 0; // out-of-taxonomy metric -> no lessons (never let scopeKey throw)
+  const scope = resolveMemoryScope(readFileSync(metricPath, "utf8"),
+    { storeRoot: deps.memoryStoreRoot, repoHash: deps.repoHash });
+  if (scope === null) return 0; // out-of-taxonomy metric -> no lessons (never let scopeKey throw)
 
   // Objective = the topic prose (richer relevance signal); fall back to the metric name.
-  const objective = readIfExists(join(art, "topic.txt")).trim() || thresholds.primaryMetric;
+  const objective = readIfExists(join(art, "topic.txt")).trim() || scope.thresholds.primaryMetric;
 
   const lessons = retrieveForDispatch(deps.memoryIo ?? liveMemoryIo, {
-    storeRoot: deps.memoryStoreRoot ?? join(globalRoot(), "autoresearch-memory"),
-    repoHash: deps.repoHash ?? repoHash(),
-    metricFamily: family,
+    storeRoot: scope.storeRoot,
+    repoHash: scope.repoHash,
+    metricFamily: scope.family,
     objective,
-    direction: thresholds.direction ?? "maximize",
-    policy: policyFromMetric(thresholds),
+    direction: scope.direction,
+    policy: scope.policy,
     now: deps.now(),
   });
   for (const line of lessons) out(line);

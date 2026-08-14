@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, renameSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,22 +8,10 @@ import { memoryRetrieveWith } from "../src/commands/autoresearch.js";
 import { autoresearchArtDir } from "../src/core/autoresearch.js";
 import { formatMetricBlock } from "../src/core/autoresearchMetric.js";
 import {
+  liveMemoryIo,
   writeLessonsAtFinalize,
-  type MemoryIo,
 } from "../src/core/autoresearchMemoryStore.js";
 import { type MemoryPolicy } from "../src/core/autoresearchMemory.js";
-
-// Real-fs io rooted at a temp store dir (no ~/.ap), mirroring the store test.
-const realIo: MemoryIo = {
-  exists: (p) => existsSync(p),
-  readFile: (p) => readFileSync(p, "utf8"),
-  mkdir: (p) => mkdirSync(p, { recursive: true }),
-  writeAtomic: (dest, content) => {
-    const tmp = `${dest}.tmp.${process.pid}.${Math.random().toString(16).slice(2)}`;
-    writeFileSync(tmp, content);
-    renameSync(tmp, dest);
-  },
-};
 
 const policy: MemoryPolicy = {
   halfLifeDays: 30,
@@ -68,7 +56,7 @@ const TOPIC = "mem-topic";
 
 /** Seed two corroborating accuracy drafts into a temp store. */
 function seedStore(): void {
-  writeLessonsAtFinalize(realIo, {
+  writeLessonsAtFinalize(liveMemoryIo, {
     storeRoot,
     repoHash: REPO,
     metricFamily: "accuracy",
@@ -91,7 +79,7 @@ function deps(extra: Partial<Parameters<typeof memoryRetrieveWith>[1]> = {}): Pa
   return {
     now: () => NOW,
     opts: { home, cwd: process.cwd() },
-    memoryIo: realIo,
+    memoryIo: liveMemoryIo,
     memoryStoreRoot: storeRoot,
     repoHash: REPO,
     ...extra,
@@ -151,7 +139,7 @@ describe("memoryRetrieveWith — Hub-invoked cross-run lessons retrieve", () => 
     // Seed a lesson whose claim mentions the metric name so the primaryMetric
     // fallback objective is relevant enough to surface it (proves the fallback
     // path is wired, not just that it tolerates the absence).
-    writeLessonsAtFinalize(realIo, {
+    writeLessonsAtFinalize(liveMemoryIo, {
       storeRoot,
       repoHash: REPO,
       metricFamily: "accuracy",

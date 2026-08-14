@@ -16,6 +16,9 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { atomicWrite } from "./atomic.js";
+import { globalRoot, repoHash } from "./paths.js";
+import { parseMetricMd, type MetricThresholds } from "./autoresearchMetric.js";
+import { metricFamilyOf, policyFromMetric } from "./autoresearchLessonMap.js";
 import {
   filterLesson,
   mergeLesson,
@@ -51,6 +54,42 @@ export const liveMemoryIo: MemoryIo = {
   mkdir: (p) => mkdirSync(p, { recursive: true }),
   writeAtomic: (dest, content) => atomicWrite(dest, content),
 };
+
+export interface MemoryScope {
+  storeRoot: string;
+  repoHash: string;
+  family: string;
+  direction: "maximize" | "minimize";
+  policy: MemoryPolicy;
+  thresholds: MetricThresholds;
+}
+
+/**
+ * "Which scope am I" from a metric.md body — the preamble both the finalize write and the
+ * dispatch retrieve need before they can call this module. Returns null on missing text or an
+ * out-of-taxonomy family (the callers' shared fail-closed guard: an unknown family must never
+ * reach scopeKey, which throws).
+ *
+ * Takes the TEXT, not a path: this module's filesystem surface stays MemoryIo-only, so each
+ * caller keeps its own one-line read and its own early-return.
+ */
+export function resolveMemoryScope(
+  metricMdText: string | null,
+  o: { storeRoot?: string; repoHash?: string } = {},
+): MemoryScope | null {
+  if (metricMdText === null) return null;
+  const thresholds = parseMetricMd(metricMdText);
+  const family = metricFamilyOf(thresholds.primaryMetric);
+  if (family === null) return null;
+  return {
+    storeRoot: o.storeRoot ?? join(globalRoot(), "autoresearch-memory"),
+    repoHash: o.repoHash ?? repoHash(),
+    family,
+    direction: thresholds.direction ?? "maximize",
+    policy: policyFromMetric(thresholds),
+    thresholds,
+  };
+}
 
 /** Absolute path to the lessons.jsonl for one (repo, family) scope. */
 function lessonsPath(storeRoot: string, repoHash: string, metricFamily: string): string {

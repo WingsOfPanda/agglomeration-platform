@@ -23224,6 +23224,20 @@ var init_autoresearchLessonMap = __esm({
 });
 
 // src/core/autoresearchMemoryStore.ts
+function resolveMemoryScope(metricMdText, o2 = {}) {
+  if (metricMdText === null) return null;
+  const thresholds = parseMetricMd(metricMdText);
+  const family = metricFamilyOf(thresholds.primaryMetric);
+  if (family === null) return null;
+  return {
+    storeRoot: o2.storeRoot ?? (0, import_node_path39.join)(globalRoot(), "autoresearch-memory"),
+    repoHash: o2.repoHash ?? repoHash(),
+    family,
+    direction: thresholds.direction ?? "maximize",
+    policy: policyFromMetric(thresholds),
+    thresholds
+  };
+}
 function lessonsPath(storeRoot, repoHash2, metricFamily) {
   return (0, import_node_path39.join)(storeRoot, scopeKey(repoHash2, metricFamily), "lessons.jsonl");
 }
@@ -23296,6 +23310,9 @@ var init_autoresearchMemoryStore = __esm({
     import_node_fs39 = require("node:fs");
     import_node_path39 = require("node:path");
     init_atomic();
+    init_paths();
+    init_autoresearchMetric();
+    init_autoresearchLessonMap();
     init_autoresearchMemory();
     liveMemoryIo = {
       exists: (p) => (0, import_node_fs39.existsSync)(p),
@@ -23476,10 +23493,11 @@ function computeAuditWarnings(art, agents, warningsPath) {
 }
 function writeFinalizeLessons(art, agents, deps) {
   try {
-    const thresholds = parseMetricMd(readOr((0, import_node_path40.join)(art, "metric.md")));
-    const family = metricFamilyOf(thresholds.primaryMetric);
-    if (!family) return;
-    const direction = thresholds.direction ?? "maximize";
+    const scope = resolveMemoryScope(
+      readOr((0, import_node_path40.join)(art, "metric.md")),
+      { storeRoot: deps.memoryStoreRoot, repoHash: deps.repoHash }
+    );
+    if (!scope) return;
     const a1 = parseVerdicts2(readOr(verificationTsvPath(art)));
     const c1 = parseInspections(readOr(inspectionTsvPath(art)));
     const now = deps.now();
@@ -23507,8 +23525,8 @@ function writeFinalizeLessons(art, agents, deps) {
           metricName: r.metric_name,
           metricValue: r.metric_value,
           parentMetric,
-          direction,
-          family,
+          direction: scope.direction,
+          family: scope.family,
           operator,
           runId: expId,
           // result.json has no run_id; the exp-id is the per-run identity
@@ -23521,12 +23539,12 @@ function writeFinalizeLessons(art, agents, deps) {
     }
     if (!drafts.length) return;
     writeLessonsAtFinalize(deps.memoryIo ?? liveMemoryIo, {
-      storeRoot: deps.memoryStoreRoot ?? (0, import_node_path40.join)(globalRoot(), "autoresearch-memory"),
-      repoHash: deps.repoHash ?? repoHash(),
-      metricFamily: family,
+      storeRoot: scope.storeRoot,
+      repoHash: scope.repoHash,
+      metricFamily: scope.family,
       drafts,
       verdicts,
-      policy: policyFromMetric(thresholds),
+      policy: scope.policy,
       now
     });
   } catch (e) {
@@ -23555,12 +23573,10 @@ var init_autoresearchFinalize = __esm({
     init_log();
     init_atomic();
     init_fsread();
-    init_paths();
     init_autoresearch();
     init_autoresearchExperiment();
     init_autoresearchResult();
     init_autoresearchState();
-    init_autoresearchMetric();
     init_autoresearchInfeasible();
     init_autoresearchInspect();
     init_autoresearchVerify();
@@ -26011,17 +26027,19 @@ async function memoryRetrieveWith(args, deps) {
   const art = autoresearchArtDir(topic, deps.opts);
   const metricPath = (0, import_node_path43.join)(art, "metric.md");
   if (!(0, import_node_fs41.existsSync)(metricPath)) return 0;
-  const thresholds = parseMetricMd((0, import_node_fs41.readFileSync)(metricPath, "utf8"));
-  const family = metricFamilyOf(thresholds.primaryMetric);
-  if (family === null) return 0;
-  const objective = readIfExists((0, import_node_path43.join)(art, "topic.txt")).trim() || thresholds.primaryMetric;
+  const scope = resolveMemoryScope(
+    (0, import_node_fs41.readFileSync)(metricPath, "utf8"),
+    { storeRoot: deps.memoryStoreRoot, repoHash: deps.repoHash }
+  );
+  if (scope === null) return 0;
+  const objective = readIfExists((0, import_node_path43.join)(art, "topic.txt")).trim() || scope.thresholds.primaryMetric;
   const lessons = retrieveForDispatch(deps.memoryIo ?? liveMemoryIo, {
-    storeRoot: deps.memoryStoreRoot ?? (0, import_node_path43.join)(globalRoot(), "autoresearch-memory"),
-    repoHash: deps.repoHash ?? repoHash(),
-    metricFamily: family,
+    storeRoot: scope.storeRoot,
+    repoHash: scope.repoHash,
+    metricFamily: scope.family,
     objective,
-    direction: thresholds.direction ?? "maximize",
-    policy: policyFromMetric(thresholds),
+    direction: scope.direction,
+    policy: scope.policy,
     now: deps.now()
   });
   for (const line of lessons) out(line);
