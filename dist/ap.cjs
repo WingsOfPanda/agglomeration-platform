@@ -18157,16 +18157,19 @@ function preSnapshot(r, command, topic) {
   }
   return { branch, baseSha: r.run("git", ["rev-parse", "HEAD"]).stdout.trim(), state: "wip-committed" };
 }
+function parkResult(outcome, sha) {
+  return { outcome, sha, entryExists: outcome !== "none" && outcome !== "failed" };
+}
 function stashPush(r, message) {
   const before = stashShaFor(r, message);
   const rc = r.run("git", ["stash", "push", "--include-untracked", "-m", message]).code;
   const entry2 = stashEntry(r, message);
-  if (!entry2) return { outcome: rc === 0 ? "none" : "failed", sha: "" };
+  if (!entry2) return parkResult(rc === 0 ? "none" : "failed", "");
   const sha = entry2.sha;
-  if (sha && sha === before) return { outcome: rc === 0 ? "none" : "failed", sha: "" };
-  if (rc !== 0 || !sha) return { outcome: "failed-with-entry", sha };
+  if (sha && sha === before) return parkResult(rc === 0 ? "none" : "failed", "");
+  if (rc !== 0 || !sha) return parkResult("failed-with-entry", sha);
   const stillDirty = classifyDirty(r.run("git", ["status", "--porcelain", "--untracked-files=all"]).stdout);
-  return { outcome: stillDirty ? "partial" : "parked", sha };
+  return parkResult(stillDirty ? "partial" : "parked", sha);
 }
 function findStashRef(list, message) {
   for (const line of list.split("\n")) {
@@ -18194,6 +18197,11 @@ function stashPopByMessage(r, message, expectSha) {
   if (!ref) return "not-found";
   if (!expectSha || r.run("git", ["rev-parse", ref]).stdout.trim() !== expectSha) return "identity-mismatch";
   return r.run("git", ["stash", "pop", ref]).code === 0 ? "popped" : "conflict-kept";
+}
+function stashPopOnBranch(r, message, expectSha, requiredBranch) {
+  const head = currentBranch(r);
+  if (head !== requiredBranch) return { outcome: "wrong-head", head };
+  return { outcome: stashPopByMessage(r, message, expectSha), head };
 }
 function createOrResumeBranch(r, name) {
   if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${name}`]).code === 0) {
@@ -19014,7 +19022,7 @@ async function branchWith(topic, target, r, stashWip = false) {
         log.warn(`quick branch: --stash-wip could not stash the tree; falling back to a WIP snapshot commit`);
         break;
     }
-    if (st.outcome !== "none" && st.outcome !== "failed") {
+    if (st.entryExists) {
       atomicWrite((0, import_node_path21.join)(exec, "stash-wip.txt"), `${st.sha}	${message}
 `);
     }
@@ -19162,13 +19170,13 @@ function restoreStashWip(topic, exec, r, startBranch) {
     runFlag("quick", topic, `stash-wip-kept: WIP still stashed as '${message}' in ${target}; restore: git checkout ${startBranch} then git stash pop`);
     return "stash-wip-kept\n";
   };
-  const on6 = currentBranch(r);
-  if (on6 !== startBranch) {
-    log.warn(`quick finish: HEAD is on '${on6 || "(detached)"}', not the start branch '${startBranch}' \u2014 NOT popping`);
+  const { outcome, head } = stashPopOnBranch(r, message, sha, startBranch);
+  if (outcome === "wrong-head") {
+    log.warn(`quick finish: HEAD is on '${head || "(detached)"}', not the start branch '${startBranch}' \u2014 NOT popping`);
     log.warn(`  the WIP stays stashed as '${message}': git checkout ${startBranch}  then  git stash pop <ref>`);
     return kept();
   }
-  switch (stashPopByMessage(r, message, sha)) {
+  switch (outcome) {
     case "popped":
       (0, import_node_fs27.rmSync)(marker, { force: true });
       log.ok(`quick finish: restored stashed WIP '${message}'`);
@@ -21006,7 +21014,7 @@ var init_implementTurn = __esm({
   }
 });
 
-// src/core/implementQuestions.ts
+// src/core/questionCodec.ts
 function percentDecode(s) {
   let out = s;
   out = out.split("%0A").join("\n");
@@ -21076,8 +21084,8 @@ ASKED_AT=${askedAt}
 `;
 }
 var KNOWN_KINDS;
-var init_implementQuestions = __esm({
-  "src/core/implementQuestions.ts"() {
+var init_questionCodec = __esm({
+  "src/core/questionCodec.ts"() {
     "use strict";
     KNOWN_KINDS = /* @__PURE__ */ new Set(["path", "git", "env", "cmd", "test"]);
   }
@@ -21814,7 +21822,7 @@ var init_implement2 = __esm({
     init_forensics();
     init_deps();
     init_implementTurn();
-    init_implementQuestions();
+    init_questionCodec();
     init_ipc();
     init_waitLive();
     init_turn();

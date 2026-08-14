@@ -3,12 +3,13 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { percentDecode, percentEncode, parseQuestionPayload, verifyClaim, formatReply, extractQuestionPayload, validateQuestionLine } from "../src/core/implementQuestions.js";
-import type { QuestionRunner, RunResult } from "../src/core/implementQuestions.js";
+import { percentDecode, percentEncode, parseQuestionPayload, extractQuestionPayload, validateQuestionLine } from "../src/core/questionCodec.js";
+import { verifyClaim, formatReply } from "../src/core/implementQuestions.js";
+import type { Runner, RunResult } from "../src/core/gitwork.js";
 
 function fakeRunner(replies: Record<string, RunResult>) {
   const calls: string[][] = [];
-  const r: QuestionRunner = {
+  const r: Runner = {
     run(cmd, args) { calls.push([cmd, ...args]); return replies[[cmd, ...args].join(" ")] ?? { code: 0, stdout: "" }; },
   };
   return { r, calls };

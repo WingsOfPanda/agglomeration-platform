@@ -52,7 +52,19 @@ export function preSnapshot(r: Runner, command: string, topic: string): Snapshot
 }
 
 export type StashPushOutcome = "parked" | "partial" | "none" | "failed-with-entry" | "failed";
-export interface StashPushResult { outcome: StashPushOutcome; sha: string; }
+export interface StashPushResult {
+  outcome: StashPushOutcome;
+  sha: string;
+  /** Whether this push left an entry for finish to restore — the proof-of-park rule, kept beside the
+   *  five-way decision it derives from so a sixth outcome cannot be misclassified by a caller. */
+  entryExists: boolean;
+}
+
+/** The one place `entryExists` is decided: `parked`/`partial`/`failed-with-entry` left work in the
+ *  stash (a `failed-with-entry` sha can be empty and still be a park), `none`/`failed` did not. */
+function parkResult(outcome: StashPushOutcome, sha: string): StashPushResult {
+  return { outcome, sha, entryExists: outcome !== "none" && outcome !== "failed" };
+}
 
 /** Park the whole tree (tracked + untracked) in a stash named `message`, then PROVE the park — an
  *  rc-0 `git stash push` is not evidence the work is parked. git exits 0 having stashed NOTHING
@@ -74,14 +86,14 @@ export function stashPush(r: Runner, message: string): StashPushResult {
   const before = stashShaFor(r, message);
   const rc = r.run("git", ["stash", "push", "--include-untracked", "-m", message]).code;
   const entry = stashEntry(r, message);
-  if (!entry) return { outcome: rc === 0 ? "none" : "failed", sha: "" };
+  if (!entry) return parkResult(rc === 0 ? "none" : "failed", "");
   const sha = entry.sha;
   // The match is the entry we already had: this push created nothing (git stashes nothing with rc 0
   // when only submodule content changed). Adopting it would hand finish a stash from another run.
-  if (sha && sha === before) return { outcome: rc === 0 ? "none" : "failed", sha: "" };
-  if (rc !== 0 || !sha) return { outcome: "failed-with-entry", sha };
+  if (sha && sha === before) return parkResult(rc === 0 ? "none" : "failed", "");
+  if (rc !== 0 || !sha) return parkResult("failed-with-entry", sha);
   const stillDirty = classifyDirty(r.run("git", ["status", "--porcelain", "--untracked-files=all"]).stdout);
-  return { outcome: stillDirty ? "partial" : "parked", sha };
+  return parkResult(stillDirty ? "partial" : "parked", sha);
 }
 
 /** The stash ref whose reflog subject carries `message`; "" when no entry matches. Lines are
@@ -136,6 +148,19 @@ export function stashPopByMessage(r: Runner, message: string, expectSha: string)
   if (!ref) return "not-found";
   if (!expectSha || r.run("git", ["rev-parse", ref]).stdout.trim() !== expectSha) return "identity-mismatch";
   return r.run("git", ["stash", "pop", ref]).code === 0 ? "popped" : "conflict-kept";
+}
+
+export interface StashPopOnBranchResult { outcome: StashPopOutcome | "wrong-head"; head: string; }
+
+/** `stashPopByMessage` under its HEAD precondition — the one mistake nothing can undo. A pop lands
+ *  on whatever HEAD is, so a caller that restores a park after a checkout it did not verify can
+ *  consume the stash on the wrong branch. HEAD is probed first and a mismatch is `wrong-head`, with
+ *  the stash untouched; the reported `head` is "" for a detached HEAD (symbolic-ref fails), which is
+ *  likewise not the required branch. Callers word their own warning from `head`. */
+export function stashPopOnBranch(r: Runner, message: string, expectSha: string, requiredBranch: string): StashPopOnBranchResult {
+  const head = currentBranch(r);
+  if (head !== requiredBranch) return { outcome: "wrong-head", head };
+  return { outcome: stashPopByMessage(r, message, expectSha), head };
 }
 
 /** Create feat/quick-<topic> from current HEAD, or resume it if it already exists. */
