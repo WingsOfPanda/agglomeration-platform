@@ -19784,6 +19784,29 @@ function skipDispatch(row, agent, stateFile, reason) {
   log.ok(`${row.cmd} ${row.phase}-send: ${agent} ${row.key}=skipped (${reason})`);
   return 0;
 }
+async function phaseSend(row, ctx, d, hooks) {
+  const { topic, agent, provider } = ctx;
+  const art = row.artDir(topic);
+  const stateFile = (0, import_node_path26.join)(art, `${row.phase}-${agent}.txt`);
+  if ((0, import_node_fs32.existsSync)(stateFile)) {
+    log.error(`${row.cmd} ${row.phase}-send: ${stateFile} ${row.retryNote ?? RETRY_NOTE}`);
+    return 1;
+  }
+  const io = {
+    art,
+    stateFile,
+    artifact: row.artifactFor(art, agent, provider, topic),
+    promptFile: (0, import_node_path26.join)(art, `${agent}_${row.phase}_prompt.md`)
+  };
+  const untriggered = hooks.preGuard?.(io);
+  if (untriggered) return skipDispatch(row, agent, stateFile, untriggered.skip);
+  if (await guardSkipped(row, art, agent, stateFile, guardLive(topic, provider, d))) return 0;
+  const prep = hooks.prepare(io);
+  if ("fail" in prep) return prep.fail;
+  if ("skip" in prep) return skipDispatch(row, agent, stateFile, prep.skip);
+  atomicWrite(io.promptFile, prep.prompt);
+  return dispatchPrompt(row, { topic, agent, provider, stateFile, promptFile: io.promptFile }, d);
+}
 async function dispatchPrompt(row, ctx, d) {
   const { topic, agent, provider, stateFile, promptFile } = ctx;
   const art = row.artDir(topic);
@@ -19862,7 +19885,40 @@ async function phaseWait(row, topic, agent, provider, d) {
   log.ok(`${label}: ${agent} ${row.key}=${state}`);
   return 0;
 }
-function waitGateVerb(label, art, phase, key) {
+function surveyPhaseArtifact(row, w, ctx) {
+  const { topic, label } = ctx;
+  const art = row.artDir(topic);
+  const stateText = readIfExists((0, import_node_path26.join)(art, `${row.phase}-${w.agent}.txt`));
+  const tag = lastTag(stateText, row.key);
+  const artifact = row.artifactFor(art, w.agent, w.provider, topic);
+  const text = readIfExists(artifact);
+  if (ctx.skipTag && tag === "skipped") return { skipped: true };
+  if (ctx.emptyIsComplete && !text.trim()) return { text, tag, verdict: "complete" };
+  return {
+    text,
+    tag,
+    verdict: artifactBackstop({
+      label,
+      command: row.cmd,
+      topic,
+      art,
+      agent: w.agent,
+      artifact,
+      text,
+      stateText,
+      key: row.key
+    })
+  };
+}
+function rowFor(cmd, stem) {
+  return (cmd === "explore" ? PHASES : DESIGN_PHASES).find((p) => p.phase === stem) ?? null;
+}
+function phaseStems(cmd) {
+  return (cmd === "explore" ? PHASES : DESIGN_PHASES).map((p) => p.phase).join("|");
+}
+function waitGateVerb(row, topic) {
+  const { cmd: label, phase, key } = row;
+  const art = row.artDir(topic);
   const listPath = (0, import_node_path26.join)(art, "list.txt");
   if (!(0, import_node_fs32.existsSync)(listPath)) {
     log.error(`${label} wait-gate: list.txt missing at ${art}`);
@@ -19896,7 +19952,7 @@ function triad(usageLabel, fn, deps) {
     return fn(topic, agent, provider, deps);
   };
 }
-var import_node_fs32, import_node_path26, PHASES, DESIGN_PHASES, EXPLORE_ROW_BY_KEY, liveSendDeps, liveWaitDeps;
+var import_node_fs32, import_node_path26, RETRY_NOTE, PHASES, DESIGN_PHASES, EXPLORE_ROW_BY_KEY, liveSendDeps, liveWaitDeps;
 var init_phaseTable = __esm({
   "src/core/phaseTable.ts"() {
     "use strict";
@@ -19917,6 +19973,7 @@ var init_phaseTable = __esm({
     init_waitLive();
     init_designTurn();
     init_send2();
+    RETRY_NOTE = "exists; rm to retry";
     PHASES = [
       {
         phase: "research",
@@ -19970,6 +20027,7 @@ var init_phaseTable = __esm({
         artifactFor: (art, agent) => (0, import_node_path26.join)(art, `rebuttal-${agent}.md`),
         stateFn: verifyState,
         skippable: true,
+        retryNote: "exists \u2014 one rebuttal round per worker (the one-turn cap)",
         guard: { kind: "latest", noun: "latest phase", chain: ["AS", "VS", "QS", "FS"] }
       },
       {
@@ -19992,6 +20050,7 @@ var init_phaseTable = __esm({
         artifactFor: (art, agent) => (0, import_node_path26.join)(art, `signoff-${agent}.md`),
         stateFn: verifyState,
         skippable: true,
+        retryNote: "exists \u2014 one sign-off turn per worker (the one-turn cap)",
         guard: { kind: "latest", noun: "latest phase", chain: ["GS", "RS", "AS", "VS", "QS", "FS"] }
       }
     ];
@@ -20211,12 +20270,10 @@ __export(design_exports, {
   initWith: () => initWith2,
   offsetResetRun: () => offsetResetRun,
   researchSendWith: () => researchSendWith,
-  researchWaitWith: () => researchWaitWith,
   run: () => run10,
   spawnAllWith: () => spawnAllWith,
   synthesizeRun: () => synthesizeRun,
   verifySendWith: () => verifySendWith,
-  verifyWaitWith: () => verifyWaitWith,
   waitGateRun: () => waitGateRun,
   walkApproveRun: () => walkApproveRun,
   walkStateRun: () => walkStateRun
@@ -20237,14 +20294,10 @@ async function run10(args) {
       return spawnAllRun(rest);
     case "research-send":
       return triad("design research-send", researchSendWith, liveSendDeps)(rest);
-    case "research-wait":
-      return triad("design research-wait", researchWaitWith, liveWaitDeps)(rest);
     case "diff":
       return diffRun(rest);
     case "verify-send":
       return triad("design verify-send", verifySendWith, liveSendDeps)(rest);
-    case "verify-wait":
-      return triad("design verify-wait", verifyWaitWith, liveWaitDeps)(rest);
     case "adjudicate":
       return adjudicateRun(rest);
     case "synthesize":
@@ -20267,8 +20320,11 @@ async function run10(args) {
       return archiveRun(rest);
     case "export-doc":
       return exportDocRun(rest);
-    default:
-      return usage2();
+    default: {
+      const row = verb?.endsWith("-wait") ? rowFor("design", verb.slice(0, -"-wait".length)) : null;
+      if (!row) return usage2();
+      return triad(`design ${row.phase}-wait`, (t, a2, p, d) => phaseWait(row, t, a2, p, d), liveWaitDeps)(rest);
+    }
   }
 }
 async function initRun2(tokens) {
@@ -20390,24 +20446,16 @@ async function spawnAllWith(topic, d) {
   return spawnAllBatch("design", topic, designArtDir(topic), d);
 }
 async function researchSendWith(topic, agent, provider, d) {
-  const art = designArtDir(topic);
-  const stateFile = (0, import_node_path28.join)(art, `research-${agent}.txt`);
-  if ((0, import_node_fs34.existsSync)(stateFile)) {
-    log.error(`design research-send: ${stateFile} exists; rm to retry`);
-    return 1;
-  }
-  const topicText = readIfExists((0, import_node_path28.join)(art, "topic.txt")).trim();
-  if (!topicText) {
-    log.error(`design research-send: topic.txt missing/empty at ${art} (run design init)`);
-    return 1;
-  }
-  const findingsPath = (0, import_node_path28.join)(workerDir(agent, provider, topic), "findings.md");
-  const promptFile = (0, import_node_path28.join)(art, `${agent}_research_prompt.md`);
-  atomicWrite(promptFile, skillHintAppend((0, import_node_path28.join)(art, "skill.txt"), composeResearchPrompt(topicText, findingsPath)));
-  return dispatchPrompt(RESEARCH, { topic, agent, provider, stateFile, promptFile }, d);
-}
-async function researchWaitWith(topic, agent, provider, d) {
-  return phaseWait(RESEARCH, topic, agent, provider, d);
+  return phaseSend(RESEARCH, { topic, agent, provider }, d, {
+    prepare: ({ art, artifact }) => {
+      const topicText = readIfExists((0, import_node_path28.join)(art, "topic.txt")).trim();
+      if (!topicText) {
+        log.error(`design research-send: topic.txt missing/empty at ${art} (run design init)`);
+        return { fail: 1 };
+      }
+      return { prompt: skillHintAppend((0, import_node_path28.join)(art, "skill.txt"), composeResearchPrompt(topicText, artifact)) };
+    }
+  });
 }
 async function diffRun(rest) {
   const topic = rest[0];
@@ -20436,22 +20484,15 @@ async function diffRun(rest) {
   }
   const workers = [];
   for (const r of rows) {
-    const f = (0, import_node_path28.join)(workerDir(r.agent, r.provider, topic), "findings.md");
+    const f = RESEARCH.artifactFor(art, r.agent, r.provider, topic);
     if (!(0, import_node_fs34.existsSync)(f)) {
       log.error(`design diff: ${r.agent} findings.md missing: ${f}`);
       return 1;
     }
-    const text = (0, import_node_fs34.readFileSync)(f, "utf8");
-    const verdict = artifactBackstop({
-      label: "design diff",
-      command: "design",
+    const { text, verdict } = surveyPhaseArtifact(RESEARCH, r, {
       topic,
-      art,
-      agent: r.agent,
-      artifact: f,
-      text,
-      stateText: readIfExists((0, import_node_path28.join)(art, `research-${r.agent}.txt`)),
-      key: "FS"
+      label: "design diff",
+      emptyIsComplete: false
     });
     if (verdict === "still-writing") return 1;
     workers.push({ name: r.agent, findings: verdict === "drop" ? "" : text });
@@ -20469,45 +20510,38 @@ async function verifySendWith(topic, agent, provider, d) {
     log.error(`design verify-send: ${art} not found`);
     return 1;
   }
-  const stateFile = (0, import_node_path28.join)(art, `verify-${agent}.txt`);
-  if ((0, import_node_fs34.existsSync)(stateFile)) {
-    log.error(`design verify-send: ${stateFile} exists; rm to retry`);
-    return 1;
-  }
-  const listPath = (0, import_node_path28.join)(art, "list.txt");
-  if (!(0, import_node_fs34.existsSync)(listPath)) {
-    log.error("design verify-send: list.txt missing \u2014 run design init first");
-    return 1;
-  }
-  const agents = parseListFile((0, import_node_fs34.readFileSync)(listPath, "utf8")).map((r) => r.agent);
-  if (agents.length < 2) {
-    log.error(`design verify-send: need >=2 workers, got ${agents.length}`);
-    return 1;
-  }
-  if (!agents.includes(agent)) {
-    log.error(`design verify-send: ${agent} not in list.txt`);
-    return 1;
-  }
-  const workers = [];
-  for (const f of verifyScopeFiles(agent, agents)) {
-    const p = (0, import_node_path28.join)(art, f);
-    if (!(0, import_node_fs34.existsSync)(p)) {
-      log.error(`design verify-send: expected bucket missing: ${p} (run design diff first)`);
-      return 1;
+  return phaseSend(VERIFY, { topic, agent, provider }, d, {
+    prepare: ({ art: art2, artifact }) => {
+      const listPath = (0, import_node_path28.join)(art2, "list.txt");
+      if (!(0, import_node_fs34.existsSync)(listPath)) {
+        log.error("design verify-send: list.txt missing \u2014 run design init first");
+        return { fail: 1 };
+      }
+      const agents = parseListFile((0, import_node_fs34.readFileSync)(listPath, "utf8")).map((r) => r.agent);
+      if (agents.length < 2) {
+        log.error(`design verify-send: need >=2 workers, got ${agents.length}`);
+        return { fail: 1 };
+      }
+      if (!agents.includes(agent)) {
+        log.error(`design verify-send: ${agent} not in list.txt`);
+        return { fail: 1 };
+      }
+      const workers = [];
+      for (const f of verifyScopeFiles(agent, agents)) {
+        const p = (0, import_node_path28.join)(art2, f);
+        if (!(0, import_node_fs34.existsSync)(p)) {
+          log.error(`design verify-send: expected bucket missing: ${p} (run design diff first)`);
+          return { fail: 1 };
+        }
+        const c3 = (0, import_node_fs34.readFileSync)(p, "utf8");
+        if (c3.split("\n").some((l) => l.length > 0)) workers.push(c3.replace(/\n+$/, ""));
+      }
+      const items = workers.join("\n");
+      atomicWrite((0, import_node_path28.join)(art2, `verify-claims-${agent}.txt`), items ? items + "\n" : "");
+      if (!items) return { skip: "no claims to verify" };
+      return { prompt: skillHintAppend((0, import_node_path28.join)(art2, "skill.txt"), composeVerifyPrompt(items, artifact)) };
     }
-    const c3 = (0, import_node_fs34.readFileSync)(p, "utf8");
-    if (c3.split("\n").some((l) => l.length > 0)) workers.push(c3.replace(/\n+$/, ""));
-  }
-  const items = workers.join("\n");
-  atomicWrite((0, import_node_path28.join)(art, `verify-claims-${agent}.txt`), items ? items + "\n" : "");
-  if (!items) return skipDispatch(VERIFY, agent, stateFile, "no claims to verify");
-  const verifyPath = (0, import_node_path28.join)(workerDir(agent, provider, topic), "verify.md");
-  const promptFile = (0, import_node_path28.join)(art, `${agent}_verify_prompt.md`);
-  atomicWrite(promptFile, skillHintAppend((0, import_node_path28.join)(art, "skill.txt"), composeVerifyPrompt(items, verifyPath)));
-  return dispatchPrompt(VERIFY, { topic, agent, provider, stateFile, promptFile }, d);
-}
-async function verifyWaitWith(topic, agent, provider, d) {
-  return phaseWait(VERIFY, topic, agent, provider, d);
+  });
 }
 async function adjudicateRun(rest) {
   const topic = rest[0];
@@ -20534,21 +20568,11 @@ async function adjudicateRun(rest) {
   const verify = {};
   const vs = {};
   for (const r of rows) {
-    const verifyPath = (0, import_node_path28.join)(workerDir(r.agent, r.provider, topic), "verify.md");
-    const text = readIfExists(verifyPath);
-    const stateText = readIfExists((0, import_node_path28.join)(art, `verify-${r.agent}.txt`));
-    const tag = lastTag(stateText, "VS");
-    const verdict = text.trim() ? artifactBackstop({
-      label: "design adjudicate",
-      command: "design",
+    const { text, tag, verdict } = surveyPhaseArtifact(VERIFY, r, {
       topic,
-      art,
-      agent: r.agent,
-      artifact: verifyPath,
-      text,
-      stateText,
-      key: "VS"
-    }) : "complete";
+      label: "design adjudicate",
+      emptyIsComplete: true
+    });
     if (verdict === "still-writing") return 1;
     verify[r.agent] = verdict === "drop" ? "" : text;
     vs[r.agent] = tag ?? "skipped";
@@ -20633,14 +20657,15 @@ async function walkStateRun(rest) {
 async function waitGateRun(rest) {
   const [topic, phase] = rest;
   if (!topic || !phase) {
-    log.error("usage: design wait-gate <topic> <research|verify>");
+    log.error(`usage: design wait-gate <topic> <${phaseStems("design")}>`);
     return 2;
   }
-  if (phase !== "research" && phase !== "verify") {
-    log.error(`design wait-gate: phase must be research|verify (got ${phase})`);
+  const row = rowFor("design", phase);
+  if (!row) {
+    log.error(`design wait-gate: phase must be ${phaseStems("design")} (got ${phase})`);
     return 2;
   }
-  return waitGateVerb("design", designArtDir(topic), phase, phase === "research" ? "FS" : "VS");
+  return waitGateVerb(row, topic);
 }
 async function drilldownRun(rest) {
   return drilldownWith(rest, { ...liveSendDeps, ...liveWaitDeps }, {});
@@ -20694,8 +20719,8 @@ async function offsetResetRun(rest) {
     log.error("usage: design offset-reset <topic> <agent> <phase> [--keep-findings]");
     return 2;
   }
-  if (phase !== "research" && phase !== "verify") {
-    log.error(`design offset-reset: phase must be research|verify (got ${phase})`);
+  if (!rowFor("design", phase)) {
+    log.error(`design offset-reset: phase must be ${phaseStems("design")} (got ${phase})`);
     return 2;
   }
   const art = designArtDir(topic);
@@ -27224,30 +27249,23 @@ var init_exploreContribution = __esm({
 var explore_exports = {};
 __export(explore_exports, {
   adversarySendWith: () => adversarySendWith,
-  adversaryWaitWith: () => adversaryWaitWith,
   annotateRun: () => annotateRun,
   classifyRun: () => classifyRun,
   confidenceRun: () => confidenceRun,
   contributionRun: () => contributionRun,
   crossverifySendWith: () => crossverifySendWith,
-  crossverifyWaitWith: () => crossverifyWaitWith,
   diffExploreRun: () => diffExploreRun,
   exploreWaitGateRun: () => exploreWaitGateRun,
   forensicsRun: () => forensicsRun5,
   gapSendWith: () => gapSendWith,
-  gapWaitWith: () => gapWaitWith,
   handoffExtractRun: () => handoffExtractRun,
   initWith: () => initWith5,
   openqCollateRun: () => openqCollateRun,
   openqSendWith: () => openqSendWith,
-  openqWaitWith: () => openqWaitWith,
   rebuttalSendWith: () => rebuttalSendWith,
-  rebuttalWaitWith: () => rebuttalWaitWith,
   researchSendWith: () => researchSendWith2,
-  researchWaitWith: () => researchWaitWith2,
   run: () => run14,
   signoffSendWith: () => signoffSendWith,
-  signoffWaitWith: () => signoffWaitWith,
   spawnAllWith: () => spawnAllWith3,
   survivorsRun: () => survivorsRun,
   synthFinalRun: () => synthFinalRun,
@@ -27271,34 +27289,22 @@ async function run14(args) {
       return spawnAllRun2(rest);
     case "research-send":
       return triad("explore research-send", researchSendWith2, liveSendDeps)(rest);
-    case "research-wait":
-      return triad("explore research-wait", researchWaitWith2, liveWaitDeps)(rest);
     case "survivors":
       return survivorsRun(rest);
     case "openq-collate":
       return openqCollateRun(rest);
     case "openq-send":
       return triad("explore openq-send", openqSendWith, liveSendDeps)(rest);
-    case "openq-wait":
-      return triad("explore openq-wait", openqWaitWith, liveWaitDeps)(rest);
     case "diff":
       return diffExploreRun(rest);
     case "crossverify-send":
       return triad("explore crossverify-send", crossverifySendWith, liveSendDeps)(rest);
-    case "crossverify-wait":
-      return triad("explore crossverify-wait", crossverifyWaitWith, liveWaitDeps)(rest);
     case "rebuttal-send":
       return triad("explore rebuttal-send", rebuttalSendWith, liveSendDeps)(rest);
-    case "rebuttal-wait":
-      return triad("explore rebuttal-wait", rebuttalWaitWith, liveWaitDeps)(rest);
     case "gap-send":
       return triad("explore gap-send", gapSendWith, liveSendDeps)(rest);
-    case "gap-wait":
-      return triad("explore gap-wait", gapWaitWith, liveWaitDeps)(rest);
     case "signoff-send":
       return triad("explore signoff-send", signoffSendWith, liveSendDeps)(rest);
-    case "signoff-wait":
-      return triad("explore signoff-wait", signoffWaitWith, liveWaitDeps)(rest);
     case "contribution":
       return contributionRun(rest);
     case "wait-gate":
@@ -27311,8 +27317,6 @@ async function run14(args) {
       return annotateRun(rest);
     case "adversary-send":
       return triad("explore adversary-send", adversarySendWith, liveSendDeps)(rest);
-    case "adversary-wait":
-      return triad("explore adversary-wait", adversaryWaitWith, liveWaitDeps)(rest);
     case "synth-final":
       return synthFinalRun(rest);
     case "verdict-tally":
@@ -27325,8 +27329,11 @@ async function run14(args) {
       return teardownRun(rest);
     case "handoff-extract":
       return handoffExtractRun(rest);
-    default:
-      return usage5();
+    default: {
+      const row = verb?.endsWith("-wait") ? rowFor("explore", verb.slice(0, -"-wait".length)) : null;
+      if (!row) return usage5();
+      return triad(`explore ${row.phase}-wait`, (t, a2, p, d) => phaseWait(row, t, a2, p, d), liveWaitDeps)(rest);
+    }
   }
 }
 async function initRun4(tokens) {
@@ -27408,25 +27415,17 @@ async function spawnAllWith3(topic, d) {
   return spawnAllBatch("explore", topic, exploreArtDir(topic), d);
 }
 async function researchSendWith2(topic, agent, provider, d) {
-  const art = exploreArtDir(topic);
-  const stateFile = (0, import_node_path41.join)(art, `research-${agent}.txt`);
-  if ((0, import_node_fs43.existsSync)(stateFile)) {
-    log.error(`explore research-send: ${stateFile} exists; rm to retry`);
-    return 1;
-  }
-  const topicText = readIfExists((0, import_node_path41.join)(art, "topic.txt")).trim();
-  if (!topicText) {
-    log.error(`explore research-send: topic.txt missing/empty at ${art} (run explore init)`);
-    return 1;
-  }
-  const track = readIfExists((0, import_node_path41.join)(art, "lit-track.txt")).startsWith("ON") ? "ON" : "OFF";
-  const findingsPath = (0, import_node_path41.join)(art, `findings-${agent}.md`);
-  const promptFile = (0, import_node_path41.join)(art, `${agent}_research_prompt.md`);
-  atomicWrite(promptFile, composeExploreResearchPrompt(topicText, findingsPath, litGuidance(track), researchLens(provider), (0, import_node_path41.join)(art, `selfassess-${agent}.md`)));
-  return dispatchPrompt(RESEARCH2, { topic, agent, provider, stateFile, promptFile }, d);
-}
-async function researchWaitWith2(topic, agent, provider, d) {
-  return phaseWait(RESEARCH2, topic, agent, provider, d);
+  return phaseSend(RESEARCH2, { topic, agent, provider }, d, {
+    prepare: ({ art, artifact }) => {
+      const topicText = readIfExists((0, import_node_path41.join)(art, "topic.txt")).trim();
+      if (!topicText) {
+        log.error(`explore research-send: topic.txt missing/empty at ${art} (run explore init)`);
+        return { fail: 1 };
+      }
+      const track = readIfExists((0, import_node_path41.join)(art, "lit-track.txt")).startsWith("ON") ? "ON" : "OFF";
+      return { prompt: composeExploreResearchPrompt(topicText, artifact, litGuidance(track), researchLens(provider), (0, import_node_path41.join)(art, `selfassess-${agent}.md`)) };
+    }
+  });
 }
 async function openqCollateRun(rest) {
   const topic = rest[0];
@@ -27446,19 +27445,11 @@ async function openqCollateRun(rest) {
   }
   const questionsByAgent = /* @__PURE__ */ new Map();
   for (const r of rows) {
-    const findings = (0, import_node_path41.join)(art, `findings-${r.agent}.md`);
-    const text = readIfExists(findings);
-    const verdict = text.trim() ? artifactBackstop({
-      label: "explore openq-collate",
-      command: "explore",
+    const { text, verdict } = surveyPhaseArtifact(RESEARCH2, r, {
       topic,
-      art,
-      agent: r.agent,
-      artifact: findings,
-      text,
-      stateText: readIfExists((0, import_node_path41.join)(art, `research-${r.agent}.txt`)),
-      key: "FS"
-    }) : "complete";
+      label: "explore openq-collate",
+      emptyIsComplete: true
+    });
     if (verdict === "still-writing") return 1;
     questionsByAgent.set(r.agent, parseOpenQuestions(verdict === "drop" ? "" : text));
   }
@@ -27483,22 +27474,13 @@ async function openqCollateRun(rest) {
   return 0;
 }
 async function openqSendWith(topic, agent, provider, d) {
-  const art = exploreArtDir(topic);
-  const stateFile = (0, import_node_path41.join)(art, `openq-${agent}.txt`);
-  if ((0, import_node_fs43.existsSync)(stateFile)) {
-    log.error(`explore openq-send: ${stateFile} exists; rm to retry`);
-    return 1;
-  }
-  if (await guardSkipped(OPENQ, art, agent, stateFile, guardLive(topic, provider, d))) return 0;
-  const claims = parseOpenqClaims(readIfExists((0, import_node_path41.join)(art, `openq-claims-${agent}.txt`)));
-  if (claims.length === 0) return skipDispatch(OPENQ, agent, stateFile, "no questions routed to it");
-  const answersPath = (0, import_node_path41.join)(art, `openq-${agent}.md`);
-  const promptFile = (0, import_node_path41.join)(art, `${agent}_openq_prompt.md`);
-  atomicWrite(promptFile, composeOpenqPrompt(claims, answersPath));
-  return dispatchPrompt(OPENQ, { topic, agent, provider, stateFile, promptFile }, d);
-}
-async function openqWaitWith(topic, agent, provider, d) {
-  return phaseWait(OPENQ, topic, agent, provider, d);
+  return phaseSend(OPENQ, { topic, agent, provider }, d, {
+    prepare: ({ art, artifact }) => {
+      const claims = parseOpenqClaims(readIfExists((0, import_node_path41.join)(art, `openq-claims-${agent}.txt`)));
+      if (claims.length === 0) return { skip: "no questions routed to it" };
+      return { prompt: composeOpenqPrompt(claims, artifact) };
+    }
+  });
 }
 async function diffExploreRun(rest) {
   const topic = rest[0];
@@ -27527,22 +27509,15 @@ async function diffExploreRun(rest) {
   }
   const workers = [];
   for (const r of rows) {
-    const f = (0, import_node_path41.join)(art, `findings-${r.agent}.md`);
+    const f = RESEARCH2.artifactFor(art, r.agent, r.provider, topic);
     if (!(0, import_node_fs43.existsSync)(f)) {
       log.error(`explore diff: ${r.agent} findings missing: ${f}`);
       return 1;
     }
-    const text = (0, import_node_fs43.readFileSync)(f, "utf8");
-    const verdict = artifactBackstop({
-      label: "explore diff",
-      command: "explore",
+    const { text, verdict } = surveyPhaseArtifact(RESEARCH2, r, {
       topic,
-      art,
-      agent: r.agent,
-      artifact: f,
-      text,
-      stateText: readIfExists((0, import_node_path41.join)(art, `research-${r.agent}.txt`)),
-      key: "FS"
+      label: "explore diff",
+      emptyIsComplete: false
     });
     if (verdict === "still-writing") return 1;
     workers.push({ name: r.agent, findings: verdict === "drop" ? "" : text });
@@ -27555,149 +27530,107 @@ async function diffExploreRun(rest) {
   return 0;
 }
 async function crossverifySendWith(topic, agent, provider, d) {
-  const art = exploreArtDir(topic);
-  const stateFile = (0, import_node_path41.join)(art, `crossverify-${agent}.txt`);
-  if ((0, import_node_fs43.existsSync)(stateFile)) {
-    log.error(`explore crossverify-send: ${stateFile} exists; rm to retry`);
-    return 1;
-  }
-  if (await guardSkipped(CROSSVERIFY, art, agent, stateFile, guardLive(topic, provider, d))) return 0;
-  const agents = parseListFile(readIfExists((0, import_node_path41.join)(art, "list.txt"))).map((r) => r.agent);
-  if (agents.length < 2) {
-    log.error(`explore crossverify-send: need >=2 workers in list.txt, got ${agents.length}`);
-    return 1;
-  }
-  if (!agents.includes(agent)) {
-    log.error(`explore crossverify-send: ${agent} not in list.txt`);
-    return 1;
-  }
-  const parts = [];
-  for (const f of verifyScopeFiles(agent, agents)) {
-    const p = (0, import_node_path41.join)(art, f);
-    if (!(0, import_node_fs43.existsSync)(p)) {
-      log.error(`explore crossverify-send: expected bucket missing: ${p} (run explore diff first)`);
-      return 1;
+  return phaseSend(CROSSVERIFY, { topic, agent, provider }, d, {
+    prepare: ({ art, artifact }) => {
+      const agents = parseListFile(readIfExists((0, import_node_path41.join)(art, "list.txt"))).map((r) => r.agent);
+      if (agents.length < 2) {
+        log.error(`explore crossverify-send: need >=2 workers in list.txt, got ${agents.length}`);
+        return { fail: 1 };
+      }
+      if (!agents.includes(agent)) {
+        log.error(`explore crossverify-send: ${agent} not in list.txt`);
+        return { fail: 1 };
+      }
+      const parts = [];
+      for (const f of verifyScopeFiles(agent, agents)) {
+        const p = (0, import_node_path41.join)(art, f);
+        if (!(0, import_node_fs43.existsSync)(p)) {
+          log.error(`explore crossverify-send: expected bucket missing: ${p} (run explore diff first)`);
+          return { fail: 1 };
+        }
+        const c3 = (0, import_node_fs43.readFileSync)(p, "utf8");
+        if (c3.split("\n").some((l) => l.length > 0)) parts.push(c3.replace(/\n+$/, ""));
+      }
+      const items = parts.join("\n");
+      atomicWrite((0, import_node_path41.join)(art, `crossverify-claims-${agent}.txt`), items ? items + "\n" : "");
+      if (!items) return { skip: "no peer claims to verify" };
+      return { prompt: composeVerifyPrompt(items, artifact) };
     }
-    const c3 = (0, import_node_fs43.readFileSync)(p, "utf8");
-    if (c3.split("\n").some((l) => l.length > 0)) parts.push(c3.replace(/\n+$/, ""));
-  }
-  const items = parts.join("\n");
-  atomicWrite((0, import_node_path41.join)(art, `crossverify-claims-${agent}.txt`), items ? items + "\n" : "");
-  if (!items) return skipDispatch(CROSSVERIFY, agent, stateFile, "no peer claims to verify");
-  const outPath = (0, import_node_path41.join)(art, `crossverify-${agent}.md`);
-  const promptFile = (0, import_node_path41.join)(art, `${agent}_crossverify_prompt.md`);
-  atomicWrite(promptFile, composeVerifyPrompt(items, outPath));
-  return dispatchPrompt(CROSSVERIFY, { topic, agent, provider, stateFile, promptFile }, d);
-}
-async function crossverifyWaitWith(topic, agent, provider, d) {
-  return phaseWait(CROSSVERIFY, topic, agent, provider, d);
+  });
 }
 async function rebuttalSendWith(topic, agent, provider, d) {
-  const art = exploreArtDir(topic);
-  const stateFile = (0, import_node_path41.join)(art, `rebuttal-${agent}.txt`);
-  if ((0, import_node_fs43.existsSync)(stateFile)) {
-    log.error(`explore rebuttal-send: ${stateFile} exists \u2014 one rebuttal round per worker (the one-turn cap)`);
-    return 1;
-  }
-  if (await guardSkipped(REBUTTAL, art, agent, stateFile, guardLive(topic, provider, d))) return 0;
-  const rows = parseListFile(readIfExists((0, import_node_path41.join)(art, "list.txt")));
-  if (!rows.some((r) => r.agent === agent)) {
-    log.error(`explore rebuttal-send: ${agent} not in list.txt at ${art}`);
-    return 1;
-  }
-  const buckets = /* @__PURE__ */ new Map();
-  for (const r of rows) buckets.set(r.agent, parseBucketLines(readIfExists((0, import_node_path41.join)(art, `${r.agent}_only_items.txt`))));
-  const critiques = [];
-  for (const r of rows) {
-    const stateText = readIfExists((0, import_node_path41.join)(art, `adversary-${r.agent}.txt`));
-    if (lastTag(stateText, "AS") === "skipped") continue;
-    const critique = (0, import_node_path41.join)(art, `adversary-${r.agent}.md`);
-    const text = readIfExists(critique);
-    if (!text.trim()) continue;
-    const verdict = artifactBackstop({
-      label: "explore rebuttal-send",
-      command: "explore",
-      topic,
-      art,
-      agent: r.agent,
-      artifact: critique,
-      text,
-      stateText,
-      key: "AS"
-    });
-    if (verdict === "still-writing") return 1;
-    if (verdict === "complete") critiques.push({ agent: r.agent, text });
-  }
-  const mine = selectRebuttalTargets(critiques, buckets).get(agent);
-  if (!mine || mine.findings.length === 0) {
-    return skipDispatch(REBUTTAL, agent, stateFile, "no needs-attention findings attributed to it");
-  }
-  const outPath = (0, import_node_path41.join)(art, `rebuttal-${agent}.md`);
-  const promptFile = (0, import_node_path41.join)(art, `${agent}_rebuttal_prompt.md`);
-  atomicWrite(promptFile, composeRebuttalPrompt(mine.claims, mine.findings, outPath));
-  return dispatchPrompt(REBUTTAL, { topic, agent, provider, stateFile, promptFile }, d);
-}
-async function rebuttalWaitWith(topic, agent, provider, d) {
-  return phaseWait(REBUTTAL, topic, agent, provider, d);
+  return phaseSend(REBUTTAL, { topic, agent, provider }, d, {
+    prepare: ({ art, artifact }) => {
+      const rows = parseListFile(readIfExists((0, import_node_path41.join)(art, "list.txt")));
+      if (!rows.some((r) => r.agent === agent)) {
+        log.error(`explore rebuttal-send: ${agent} not in list.txt at ${art}`);
+        return { fail: 1 };
+      }
+      const buckets = /* @__PURE__ */ new Map();
+      for (const r of rows) buckets.set(r.agent, parseBucketLines(readIfExists((0, import_node_path41.join)(art, `${r.agent}_only_items.txt`))));
+      const critiques = [];
+      for (const r of rows) {
+        const s = surveyPhaseArtifact(ADVERSARY, r, {
+          topic,
+          label: "explore rebuttal-send",
+          emptyIsComplete: true,
+          skipTag: true
+        });
+        if ("skipped" in s) continue;
+        if (!s.text.trim()) continue;
+        if (s.verdict === "still-writing") return { fail: 1 };
+        if (s.verdict === "complete") critiques.push({ agent: r.agent, text: s.text });
+      }
+      const mine = selectRebuttalTargets(critiques, buckets).get(agent);
+      if (!mine || mine.findings.length === 0) return { skip: "no needs-attention findings attributed to it" };
+      return { prompt: composeRebuttalPrompt(mine.claims, mine.findings, artifact) };
+    }
+  });
 }
 async function gapSendWith(topic, agent, provider, d) {
-  const art = exploreArtDir(topic);
-  const stateFile = (0, import_node_path41.join)(art, `gap-${agent}.txt`);
-  if ((0, import_node_fs43.existsSync)(stateFile)) {
-    log.error(`explore gap-send: ${stateFile} exists; rm to retry`);
-    return 1;
-  }
-  const signalsLine = readIfExists((0, import_node_path41.join)(art, "adversary-skip.txt")).split("\n").find((l) => l.startsWith("signals_passed:")) ?? "";
-  if (!/\bS1=false\b/.test(signalsLine) && !/\bS2=false\b/.test(signalsLine)) {
-    return skipDispatch(GAP, agent, stateFile, "no recorded S1/S2 failure \u2014 trigger not fired");
-  }
-  if (await guardSkipped(GAP, art, agent, stateFile, guardLive(topic, provider, d))) return 0;
-  const agents = parseListFile(readIfExists((0, import_node_path41.join)(art, "list.txt"))).map((r) => r.agent);
-  if (!agents.includes(agent)) {
-    log.error(`explore gap-send: ${agent} not in list.txt at ${art}`);
-    return 1;
-  }
-  const items = [];
-  for (const f of verifyScopeFiles(agent, agents)) {
-    for (const l of readIfExists((0, import_node_path41.join)(art, f)).split("\n")) if (l.length > 0) items.push(l);
-  }
-  if (items.length === 0) return skipDispatch(GAP, agent, stateFile, "no peer-only items to enrich");
-  const outPath = (0, import_node_path41.join)(art, `gap-${agent}.md`);
-  const promptFile = (0, import_node_path41.join)(art, `${agent}_gap_prompt.md`);
-  atomicWrite(promptFile, composeGapPrompt(items, outPath));
-  return dispatchPrompt(GAP, { topic, agent, provider, stateFile, promptFile }, d);
-}
-async function gapWaitWith(topic, agent, provider, d) {
-  return phaseWait(GAP, topic, agent, provider, d);
+  return phaseSend(GAP, { topic, agent, provider }, d, {
+    // Trigger: the Phase 5.5 record's signals_passed line — S1=false or S2=false fires the round.
+    // The record is READ ONLY here; the gate ran once and adversary-skip.txt is never rewritten.
+    // It precedes the dispatch guard, as the shipped verb did: an untriggered round must not probe.
+    preGuard: ({ art }) => {
+      const signalsLine = readIfExists((0, import_node_path41.join)(art, "adversary-skip.txt")).split("\n").find((l) => l.startsWith("signals_passed:")) ?? "";
+      if (/\bS1=false\b/.test(signalsLine) || /\bS2=false\b/.test(signalsLine)) return null;
+      return { skip: "no recorded S1/S2 failure \u2014 trigger not fired" };
+    },
+    prepare: ({ art, artifact }) => {
+      const agents = parseListFile(readIfExists((0, import_node_path41.join)(art, "list.txt"))).map((r) => r.agent);
+      if (!agents.includes(agent)) {
+        log.error(`explore gap-send: ${agent} not in list.txt at ${art}`);
+        return { fail: 1 };
+      }
+      const items = [];
+      for (const f of verifyScopeFiles(agent, agents)) {
+        for (const l of readIfExists((0, import_node_path41.join)(art, f)).split("\n")) if (l.length > 0) items.push(l);
+      }
+      if (items.length === 0) return { skip: "no peer-only items to enrich" };
+      return { prompt: composeGapPrompt(items, artifact) };
+    }
+  });
 }
 async function signoffSendWith(topic, agent, provider, d) {
-  const art = exploreArtDir(topic);
-  const stateFile = (0, import_node_path41.join)(art, `signoff-${agent}.txt`);
-  if ((0, import_node_fs43.existsSync)(stateFile)) {
-    log.error(`explore signoff-send: ${stateFile} exists \u2014 one sign-off turn per worker (the one-turn cap)`);
-    return 1;
-  }
-  if (await guardSkipped(SIGNOFF, art, agent, stateFile, guardLive(topic, provider, d))) return 0;
-  const rows = parseListFile(readIfExists((0, import_node_path41.join)(art, "list.txt")));
-  if (!rows.some((r) => r.agent === agent)) {
-    log.error(`explore signoff-send: ${agent} not in list.txt at ${art}`);
-    return 1;
-  }
-  const finalPath = finalLandscapePath(art);
-  const conclusion = finalPath ? sectionText(readIfExists(finalPath), ["Conclusion"]) : "";
-  if (!conclusion) {
-    log.error(`explore signoff-send: final landscape doc missing or has no ## Conclusion at ${art} \u2014 author it (Phase 8) first`);
-    return 1;
-  }
-  const soloBucketLines = readIfExists((0, import_node_path41.join)(art, `${agent}_only_items.txt`)).split("\n").filter((l) => l.length > 0);
-  const agreedText = sectionText(readIfExists((0, import_node_path41.join)(art, "diff.md")), ["Agreed", "Consensus"]);
-  const outPath = (0, import_node_path41.join)(art, `signoff-${agent}.md`);
-  const promptFile = (0, import_node_path41.join)(art, `${agent}_signoff_prompt.md`);
-  atomicWrite(promptFile, composeSignoffPrompt(conclusion, soloBucketLines, agreedText, outPath));
-  return dispatchPrompt(SIGNOFF, { topic, agent, provider, stateFile, promptFile }, d);
-}
-async function signoffWaitWith(topic, agent, provider, d) {
-  return phaseWait(SIGNOFF, topic, agent, provider, d);
+  return phaseSend(SIGNOFF, { topic, agent, provider }, d, {
+    prepare: ({ art, artifact }) => {
+      const rows = parseListFile(readIfExists((0, import_node_path41.join)(art, "list.txt")));
+      if (!rows.some((r) => r.agent === agent)) {
+        log.error(`explore signoff-send: ${agent} not in list.txt at ${art}`);
+        return { fail: 1 };
+      }
+      const finalPath = finalLandscapePath(art);
+      const conclusion = finalPath ? sectionText(readIfExists(finalPath), ["Conclusion"]) : "";
+      if (!conclusion) {
+        log.error(`explore signoff-send: final landscape doc missing or has no ## Conclusion at ${art} \u2014 author it (Phase 8) first`);
+        return { fail: 1 };
+      }
+      const soloBucketLines = readIfExists((0, import_node_path41.join)(art, `${agent}_only_items.txt`)).split("\n").filter((l) => l.length > 0);
+      const agreedText = sectionText(readIfExists((0, import_node_path41.join)(art, "diff.md")), ["Agreed", "Consensus"]);
+      return { prompt: composeSignoffPrompt(conclusion, soloBucketLines, agreedText, artifact) };
+    }
+  });
 }
 async function contributionRun(rest) {
   const topic = rest[0];
@@ -27757,15 +27690,10 @@ async function survivorsRun(rest) {
   let stillWriting = false;
   for (const r of rows) {
     if (missing.has(`findings-${r.agent}.md`)) continue;
-    const verdict = artifactBackstop({
-      label: "explore survivors",
-      command: "explore",
+    const { verdict } = surveyPhaseArtifact(RESEARCH2, r, {
       topic,
-      art,
-      agent: r.agent,
-      artifact: (0, import_node_path41.join)(art, `findings-${r.agent}.md`),
-      stateText: readIfExists((0, import_node_path41.join)(art, `research-${r.agent}.txt`)),
-      key: "FS"
+      label: "explore survivors",
+      emptyIsComplete: false
     });
     if (verdict === "still-writing") stillWriting = true;
     else if (verdict === "drop") missing.add(`findings-${r.agent}.md`);
@@ -27816,15 +27744,10 @@ async function synthPreliminaryRun(rest) {
   let stillWriting = false;
   for (const r of rows) {
     if (missing.includes(`findings-${r.agent}.md`)) continue;
-    const verdict = artifactBackstop({
-      label: "explore synth-preliminary",
-      command: "explore",
+    const { verdict } = surveyPhaseArtifact(RESEARCH2, r, {
       topic,
-      art,
-      agent: r.agent,
-      artifact: (0, import_node_path41.join)(art, `findings-${r.agent}.md`),
-      stateText: readIfExists((0, import_node_path41.join)(art, `research-${r.agent}.txt`)),
-      key: "FS"
+      label: "explore synth-preliminary",
+      emptyIsComplete: false
     });
     if (verdict === "still-writing") stillWriting = true;
     else if (verdict === "drop") missing.push(`findings-${r.agent}.md`);
@@ -27939,56 +27862,39 @@ async function adversarySendWith(topic, agent, provider, d) {
     log.error("explore adversary-send: landscape-draft.md missing or empty \u2014 run synth-preliminary first");
     return 1;
   }
-  const stateFile = (0, import_node_path41.join)(art, `adversary-${agent}.txt`);
-  if ((0, import_node_fs43.existsSync)(stateFile)) {
-    log.error(`explore adversary-send: ${stateFile} exists; rm to retry`);
-    return 1;
-  }
-  if (await guardSkipped(ADVERSARY, art, agent, stateFile, guardLive(topic, provider, d))) return 0;
-  const rows = parseListFile(readIfExists((0, import_node_path41.join)(art, "list.txt")));
-  const index = rows.findIndex((r) => r.agent === agent);
-  if (index < 0) {
-    log.error(`explore adversary-send: ${agent} not in list.txt at ${art}`);
-    return 1;
-  }
-  const peerFindingsPaths = rows.filter((r) => r.agent !== agent).map((r) => (0, import_node_path41.join)(art, `findings-${r.agent}.md`));
-  const lens = ADVERSARY_LENSES[index % ADVERSARY_LENSES.length];
-  const priorityTargets = soloTokensFromAnnotations(readIfExistsOrNull((0, import_node_path41.join)(art, "annotations.json")));
-  const lowConfidenceClaims = [];
-  for (const r of rows) {
-    for (const l of parseSelfAssessment(readIfExists((0, import_node_path41.join)(art, `selfassess-${r.agent}.md`))).leastSure) {
-      if (!lowConfidenceClaims.includes(l)) lowConfidenceClaims.push(l);
+  return phaseSend(ADVERSARY, { topic, agent, provider }, d, {
+    prepare: ({ art: art2, artifact }) => {
+      const rows = parseListFile(readIfExists((0, import_node_path41.join)(art2, "list.txt")));
+      const index = rows.findIndex((r) => r.agent === agent);
+      if (index < 0) {
+        log.error(`explore adversary-send: ${agent} not in list.txt at ${art2}`);
+        return { fail: 1 };
+      }
+      const peerFindingsPaths = rows.filter((r) => r.agent !== agent).map((r) => RESEARCH2.artifactFor(art2, r.agent, r.provider, topic));
+      const lens = ADVERSARY_LENSES[index % ADVERSARY_LENSES.length];
+      const priorityTargets = soloTokensFromAnnotations(readIfExistsOrNull((0, import_node_path41.join)(art2, "annotations.json")));
+      const lowConfidenceClaims = [];
+      for (const r of rows) {
+        for (const l of parseSelfAssessment(readIfExists((0, import_node_path41.join)(art2, `selfassess-${r.agent}.md`))).leastSure) {
+          if (!lowConfidenceClaims.includes(l)) lowConfidenceClaims.push(l);
+        }
+      }
+      return { prompt: composeAdversaryPrompt(draft, agent, artifact, { peerFindingsPaths, lens, priorityTargets, lowConfidenceClaims }) };
     }
-  }
-  const outPath = (0, import_node_path41.join)(art, `adversary-${agent}.md`);
-  const promptFile = (0, import_node_path41.join)(art, `${agent}_adversary_prompt.md`);
-  atomicWrite(promptFile, composeAdversaryPrompt(draft, agent, outPath, { peerFindingsPaths, lens, priorityTargets, lowConfidenceClaims }));
-  return dispatchPrompt(ADVERSARY, { topic, agent, provider, stateFile, promptFile }, d);
-}
-async function adversaryWaitWith(topic, agent, provider, d) {
-  return phaseWait(ADVERSARY, topic, agent, provider, d);
+  });
 }
 async function exploreWaitGateRun(rest) {
   const [topic, phase] = rest;
-  const KEYS = {
-    research: "FS",
-    openq: "QS",
-    crossverify: "VS",
-    adversary: "AS",
-    rebuttal: "RS",
-    gap: "GS",
-    signoff: "SS"
-  };
   if (!topic || !phase) {
-    log.error("usage: explore wait-gate <topic> <research|openq|crossverify|adversary|rebuttal|gap|signoff>");
+    log.error(`usage: explore wait-gate <topic> <${phaseStems("explore")}>`);
     return 2;
   }
-  const key = KEYS[phase];
-  if (!key) {
-    log.error(`explore wait-gate: phase must be research|openq|crossverify|adversary|rebuttal|gap|signoff (got ${phase})`);
+  const row = rowFor("explore", phase);
+  if (!row) {
+    log.error(`explore wait-gate: phase must be ${phaseStems("explore")} (got ${phase})`);
     return 2;
   }
-  return waitGateVerb("explore", exploreArtDir(topic), phase, key);
+  return waitGateVerb(row, topic);
 }
 async function synthFinalRun(rest) {
   const topic = rest[0];
@@ -28017,15 +27923,10 @@ async function synthFinalRun(rest) {
     let stillWriting = false;
     for (const r of active) {
       if (missing.includes(`adversary-${r.agent}.md`)) continue;
-      const verdict = artifactBackstop({
-        label: "explore synth-final",
-        command: "explore",
+      const { verdict } = surveyPhaseArtifact(ADVERSARY, r, {
         topic,
-        art,
-        agent: r.agent,
-        artifact: (0, import_node_path41.join)(art, `adversary-${r.agent}.md`),
-        stateText: readIfExists((0, import_node_path41.join)(art, `adversary-${r.agent}.txt`)),
-        key: "AS"
+        label: "explore synth-final",
+        emptyIsComplete: false
       });
       if (verdict === "still-writing") stillWriting = true;
       else if (verdict === "drop") missing.push(`adversary-${r.agent}.md`);
@@ -28062,26 +27963,18 @@ async function verdictTallyRun(rest) {
   const rows = parseListFile(listRaw);
   const verdictRows = [];
   for (const r of rows) {
-    const stateText = readIfExists((0, import_node_path41.join)(art, `adversary-${r.agent}.txt`));
-    if (lastTag(stateText, "AS") === "skipped") {
+    const s = surveyPhaseArtifact(ADVERSARY, r, {
+      topic,
+      label: "explore verdict-tally",
+      emptyIsComplete: true,
+      skipTag: true
+    });
+    if ("skipped" in s) {
       verdictRows.push({ agent: r.agent, verdict: "skipped" });
       continue;
     }
-    const critique = (0, import_node_path41.join)(art, `adversary-${r.agent}.md`);
-    const text = readIfExists(critique);
-    const verdict = text.trim() ? artifactBackstop({
-      label: "explore verdict-tally",
-      command: "explore",
-      topic,
-      art,
-      agent: r.agent,
-      artifact: critique,
-      text,
-      stateText,
-      key: "AS"
-    }) : "complete";
-    if (verdict === "still-writing") return 1;
-    verdictRows.push({ agent: r.agent, verdict: parseAdversaryVerdict(verdict === "drop" ? "" : text) });
+    if (s.verdict === "still-writing") return 1;
+    verdictRows.push({ agent: r.agent, verdict: parseAdversaryVerdict(s.verdict === "drop" ? "" : s.text) });
   }
   for (const v of verdictRows) process.stdout.write(`VERDICT=${v.agent}:${v.verdict}
 `);
@@ -28169,7 +28062,6 @@ var init_explore2 = __esm({
     init_explore();
     init_exploreHandoff();
     init_forensics();
-    init_artifact();
     init_tmux();
     init_roster();
     init_providers();

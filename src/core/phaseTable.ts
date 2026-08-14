@@ -5,8 +5,10 @@
 // as ~50 lines of hand-copied control flow per phase — nine copies of one send/wait skeleton — so
 // every wait-protocol change (the 0.5.5 liveness extension) had to be applied nine times, and the
 // 0.5.5 VS-gap bug was exactly one missed slot in one hand-written copy. Here each phase is one
-// PHASES row and the skeletons exist once: dispatchPrompt (the send tail), phaseWait (the whole
-// wait body), waitGateVerb (the gate read-out), triad (the 3-positional arg parse).
+// PHASES row and the skeletons exist once: phaseSend (the send head) and dispatchPrompt (its tail),
+// phaseWait (the whole wait body), surveyPhaseArtifact (the read every validator does before
+// consuming a phase artifact), waitGateVerb (the gate read-out), rowFor (the phase map every verb
+// that takes a phase as an argument resolves through), triad (the 3-positional arg parse).
 //
 // Byte-for-byte fidelity is the contract. Every log line, state-file write and rc below is the
 // literal text the copied bodies emitted; the only per-phase variation is a row slot. What is NOT
@@ -51,8 +53,8 @@ import {
 import { paneAlive } from "./tmux.js";
 import { recordHubFlag } from "./forensics.js";
 import {
-  ARTIFACT_ACCEPT_KEY, END_OF_ARTIFACT, WAIT_ACCEPTED, artifactGraceS, awaitArtifact,
-  clearArtifactStrikes, hasArtifactSentinel, realSleep, type WaitAccept,
+  ARTIFACT_ACCEPT_KEY, END_OF_ARTIFACT, WAIT_ACCEPTED, artifactBackstop, artifactGraceS, awaitArtifact,
+  clearArtifactStrikes, hasArtifactSentinel, realSleep, type ArtifactVerdict, type WaitAccept,
 } from "./artifact.js";
 import { liveOutboxWait } from "./waitLive.js";
 import {
@@ -98,8 +100,15 @@ export interface PhaseRow {
   /** Whether the wait honours a `<key>=skipped` fast-path. Research never skips — nothing precedes
    *  it — so its wait reads the offset unconditionally, exactly as its hand-written body did. */
   skippable: boolean;
+  /** The exists-precondition's tail, after `${stateFile} `. Seven phases say `rm to retry`; the two
+   *  one-turn-cap phases each name their own cap in their own words, so it is a string, not a flag. */
+  retryNote?: string;
   guard?: PhaseGuard;
 }
+
+/** The default exists-precondition tail: a state file already there means the phase ran, and the
+ *  documented recovery is to remove it. */
+const RETRY_NOTE = "exists; rm to retry";
 
 /** explore's seven worker phases in pipeline order. */
 export const PHASES: PhaseRow[] = [
@@ -125,6 +134,7 @@ export const PHASES: PhaseRow[] = [
   {
     phase: "rebuttal", key: "RS", cmd: "explore", artDir: exploreArtDir, timeoutKind: "rebuttal",
     artifactFor: (art, agent) => join(art, `rebuttal-${agent}.md`), stateFn: verifyState, skippable: true,
+    retryNote: "exists — one rebuttal round per worker (the one-turn cap)",
     guard: { kind: "latest", noun: "latest phase", chain: ["AS", "VS", "QS", "FS"] },
   },
   {
@@ -135,6 +145,7 @@ export const PHASES: PhaseRow[] = [
   {
     phase: "signoff", key: "SS", cmd: "explore", artDir: exploreArtDir, timeoutKind: "signoff",
     artifactFor: (art, agent) => join(art, `signoff-${agent}.md`), stateFn: verifyState, skippable: true,
+    retryNote: "exists — one sign-off turn per worker (the one-turn cap)",
     guard: { kind: "latest", noun: "latest phase", chain: ["GS", "RS", "AS", "VS", "QS", "FS"] },
   },
 ];
@@ -327,6 +338,63 @@ export const liveWaitDeps: WaitDeps = {
   sleep: realSleep,
 };
 
+/** The row-derived paths a phase's own preconditions and composer work from. Everything here is
+ *  `join`ed from the row and the ids — a send verb never spells a phase path itself. */
+export interface PhaseSendIO {
+  art: string;
+  stateFile: string;
+  artifact: string;
+  promptFile: string;
+}
+
+/** What a phase's preconditions decided: the composed prompt, a `<key>=skipped` no-op with its
+ *  reason, or a refusal whose rc the verb chose (its own log.error is already out). */
+export type PhasePrep = { prompt: string } | { skip: string } | { fail: number };
+
+/** The two per-verb slots of the send skeleton. `prepare` is the real work — this phase's own
+ *  preconditions, any side-effect write of its inputs, and its composer. `preGuard` exists for the
+ *  ONE phase (gap) whose trigger check precedes its dispatch guard: both paths end in `GS=skipped`
+ *  but they log different text, and the guard's evidence probes must not fire for a round that was
+ *  never triggered. A precondition that must precede even the exists-check (adversary's draft,
+ *  design verify's art dir) stays in the verb, ahead of its phaseSend call. */
+export interface PhaseSendHooks {
+  preGuard?(io: PhaseSendIO): { skip: string } | null;
+  prepare(io: PhaseSendIO): PhasePrep;
+}
+
+/** The send head every dispatching phase opens with, in the shipped order: art dir, state file, the
+ *  exists-precondition in the row's own words, the trigger check where a phase has one, the
+ *  dispatch guard (a no-op for rows without one), the phase's own preconditions + composer, the
+ *  prompt file, and dispatchPrompt's tail. Nine verbs hand-copied this; the only per-verb parts are
+ *  the two hooks. */
+export async function phaseSend(
+  row: PhaseRow,
+  ctx: { topic: string; agent: string; provider: string },
+  d: SendDeps,
+  hooks: PhaseSendHooks,
+): Promise<number> {
+  const { topic, agent, provider } = ctx;
+  const art = row.artDir(topic);
+  const stateFile = join(art, `${row.phase}-${agent}.txt`);
+  if (existsSync(stateFile)) {
+    log.error(`${row.cmd} ${row.phase}-send: ${stateFile} ${row.retryNote ?? RETRY_NOTE}`);
+    return 1;
+  }
+  const io: PhaseSendIO = {
+    art, stateFile,
+    artifact: row.artifactFor(art, agent, provider, topic),
+    promptFile: join(art, `${agent}_${row.phase}_prompt.md`),
+  };
+  const untriggered = hooks.preGuard?.(io);
+  if (untriggered) return skipDispatch(row, agent, stateFile, untriggered.skip);
+  if (await guardSkipped(row, art, agent, stateFile, guardLive(topic, provider, d))) return 0;
+  const prep = hooks.prepare(io);
+  if ("fail" in prep) return prep.fail;
+  if ("skip" in prep) return skipDispatch(row, agent, stateFile, prep.skip);
+  atomicWrite(io.promptFile, prep.prompt);
+  return dispatchPrompt(row, { topic, agent, provider, stateFile, promptFile: io.promptFile }, d);
+}
+
 /** The send tail every dispatching phase ends with. The outbox offset is captured BEFORE the send
  *  and written first, so a crash between write and send leaves a state file the retry can see — the
  *  "kept (rm to redo)" contract: a failed send never silently rearms, the operator removes the state
@@ -425,11 +493,93 @@ export async function phaseWait(
   return 0;
 }
 
+/** What one worker's phase artifact is worth to a validator: the bytes it may parse, the phase tag
+ *  that state file carries, and the backstop's verdict on it. */
+export interface PhaseArtifactSurvey {
+  text: string;
+  tag: string | null;
+  verdict: ArtifactVerdict;
+}
+
+/** A worker whose phase recorded `<key>=skipped`: nothing was dispatched, so there is nothing to
+ *  judge. It carries NO `verdict` and NO `text` on purpose — the only way to reach those is to
+ *  narrow this branch away (`if ("skipped" in s) …`), so a site that opts into `skipTag` cannot
+ *  quietly treat a skipped worker as a judged one. Its consumers genuinely differ: rebuttal omits
+ *  that worker, verdict-tally records `VERDICT=<agent>:skipped`. */
+export interface PhaseArtifactSkipped {
+  skipped: true;
+}
+
+/** The per-site slots; see `surveyPhaseArtifact`. `skipTag` is opt-in and changes the RETURN type. */
+interface SurveyCtx {
+  topic: string;
+  label: string;
+  emptyIsComplete: boolean;
+}
+
+/** The read every validator does before consuming one worker's phase artifact: derive the state file
+ *  and the artifact from the ROW, read both once, and run `artifactBackstop` over them. The bytes
+ *  judged are the bytes returned — a `mv` landing between check and use would otherwise hand the
+ *  caller exactly the half-written file the check just cleared.
+ *
+ *  Two per-site slots, both transcribed from the shipped validators:
+ *  - `emptyIsComplete` — an absent/empty artifact is that site's PRE-EXISTING no-op path (no questions
+ *    to route, VS=skipped, an empty critique), so it never reaches the backstop; the diff/survivor
+ *    sites have no such path and judge whatever is there.
+ *  - `skipTag` — a `<key>=skipped` phase (the dispatch guard's, or a zero-input skip) is reported as
+ *    `skipped` before anything is judged.
+ *
+ *  ONE worker per call, deliberately: `artifactBackstop` WRITES (strike logs, hub flags, STILL_WRITING
+ *  on stderr), and the callers differ in when they stop — six refuse the whole verb at the first
+ *  `still-writing` while three finish the roster — so surveying a worker the caller would never have
+ *  reached would record strikes the shipped code never recorded. The fan-out stays at the caller. */
+export function surveyPhaseArtifact(
+  row: PhaseRow, w: { agent: string; provider: string }, ctx: SurveyCtx & { skipTag: true },
+): PhaseArtifactSurvey | PhaseArtifactSkipped;
+export function surveyPhaseArtifact(
+  row: PhaseRow, w: { agent: string; provider: string }, ctx: SurveyCtx,
+): PhaseArtifactSurvey;
+export function surveyPhaseArtifact(
+  row: PhaseRow,
+  w: { agent: string; provider: string },
+  ctx: SurveyCtx & { skipTag?: boolean },
+): PhaseArtifactSurvey | PhaseArtifactSkipped {
+  const { topic, label } = ctx;
+  const art = row.artDir(topic);
+  const stateText = readIf(join(art, `${row.phase}-${w.agent}.txt`));
+  const tag = lastTag(stateText, row.key);
+  const artifact = row.artifactFor(art, w.agent, w.provider, topic);
+  const text = readIf(artifact);
+  if (ctx.skipTag && tag === "skipped") return { skipped: true };
+  if (ctx.emptyIsComplete && !text.trim()) return { text, tag, verdict: "complete" };
+  return {
+    text, tag,
+    verdict: artifactBackstop({
+      label, command: row.cmd, topic, art, agent: w.agent, artifact, text, stateText, key: row.key,
+    }),
+  };
+}
+
+/** The row a command's verb stem names — the phase map stated once, for the verbs that take a phase
+ *  as an ARGUMENT (both wait-gates, design's offset-reset) and for the table-driven `-wait` dispatch.
+ *  null is the caller's cue to print its own unknown-phase wording. */
+export function rowFor(cmd: "explore" | "design", stem: string): PhaseRow | null {
+  return (cmd === "explore" ? PHASES : DESIGN_PHASES).find((p) => p.phase === stem) ?? null;
+}
+
+/** Every phase stem of one command, in pipeline order — the `<research|openq|...>` alternation both
+ *  commands print in their usage and unknown-phase lines. */
+export function phaseStems(cmd: "explore" | "design"): string {
+  return (cmd === "explore" ? PHASES : DESIGN_PHASES).map((p) => p.phase).join("|");
+}
+
 /** The wait-gate read-out, shared by explore's and design's `wait-gate` verb: one `<agent>\t<status>`
  *  stdout line per worker, a stderr warning for each terminal-but-anomalous worker, rc 0 only when
- *  every worker is terminal. `label` is the command name — each verb keeps its own arg validation,
- *  whose usage/error wording differs per command. */
-export function waitGateVerb(label: string, art: string, phase: string, key: PhaseKey): number {
+ *  every worker is terminal. Everything it reads hangs off the row; each verb keeps its own arg
+ *  validation, whose usage/error wording differs per command. */
+export function waitGateVerb(row: PhaseRow, topic: string): number {
+  const { cmd: label, phase, key } = row;
+  const art = row.artDir(topic);
   const listPath = join(art, "list.txt");
   if (!existsSync(listPath)) { log.error(`${label} wait-gate: list.txt missing at ${art}`); return 2; }
   const rows = parseListFile(readFileSync(listPath, "utf8"));

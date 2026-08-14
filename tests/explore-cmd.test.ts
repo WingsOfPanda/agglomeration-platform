@@ -14,9 +14,9 @@ import { outboxPath, paneMetaPath, statusPath } from "../src/core/ipc.js";
 import { freshHome } from "./helpers/tmpHome.js";
 import { captureStdout } from "./helpers/captureStdout.js";
 import { sendDeps, waitDeps } from "./helpers/phaseDeps.js";
-import { initWith, classifyRun, spawnAllWith, researchSendWith, researchWaitWith, openqCollateRun, openqSendWith, openqWaitWith, crossverifySendWith, crossverifyWaitWith, rebuttalSendWith, rebuttalWaitWith, gapSendWith, gapWaitWith, signoffSendWith, signoffWaitWith, survivorsRun, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, adversaryWaitWith, synthFinalRun, verdictTallyRun, diffExploreRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, contributionRun, type ExploreInitDeps, type ExploreSpawnAllDeps } from "../src/commands/explore.js";
+import { initWith, classifyRun, spawnAllWith, researchSendWith, openqCollateRun, openqSendWith, crossverifySendWith, rebuttalSendWith, gapSendWith, signoffSendWith, survivorsRun, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, synthFinalRun, verdictTallyRun, diffExploreRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, contributionRun, type ExploreInitDeps, type ExploreSpawnAllDeps } from "../src/commands/explore.js";
 import { exploreArtDir } from "../src/core/explore.js";
-import { PHASES, type PhaseKey, type PhaseRow, type SendDeps, type WaitDeps } from "../src/core/phaseTable.js";
+import { PHASES, phaseWait, type PhaseKey, type PhaseRow, type SendDeps } from "../src/core/phaseTable.js";
 import { END_OF_ARTIFACT } from "../src/core/artifact.js";
 import { consultTimeout } from "../src/core/contracts.js";
 import { scaledTimeout } from "../src/core/designTurn.js";
@@ -193,7 +193,6 @@ type Seed = (art: string, agent: string) => void;
 interface Skeleton {
   phase: string;
   send: (topic: string, agent: string, provider: string, d: SendDeps) => Promise<number>;
-  wait: (topic: string, agent: string, provider: string, d: WaitDeps) => Promise<number>;
   /** Preconditions for a dispatch. Must NOT write the agent's own chain state files — the guard
    *  cases own those (a peer's state file is fine; the guard only reads the agent under test). */
   seed: Seed;
@@ -252,16 +251,16 @@ const seed: Record<string, Seed> = {
 
 const SKELETONS: Skeleton[] = [
   {
-    phase: "research", send: researchSendWith, wait: researchWaitWith, seed: seed.research,
+    phase: "research", send: researchSendWith, seed: seed.research,
     okArtifact: "## Claims\n1. [src/a.ts:1] x\n", emptyState: "empty",
   },
   {
-    phase: "openq", send: openqSendWith, wait: openqWaitWith, seed: seed.openq,
+    phase: "openq", send: openqSendWith, seed: seed.openq,
     starve: (art, agent) => rmSync(join(art, `openq-claims-${agent}.txt`), { force: true }),
     okArtifact: "## Q1 x\nanswer\n", emptyState: "missing",
   },
   {
-    phase: "crossverify", send: crossverifySendWith, wait: crossverifyWaitWith, seed: seed.crossverify,
+    phase: "crossverify", send: crossverifySendWith, seed: seed.crossverify,
     starve: (art) => {
       writeFileSync(join(art, "alpha_only_items.txt"), "");
       writeFileSync(join(art, "charlie_only_items.txt"), "");
@@ -269,21 +268,21 @@ const SKELETONS: Skeleton[] = [
     okArtifact: "# Verify\n## Verdicts\n1. AGREE ...\n", emptyState: "missing",
   },
   {
-    phase: "adversary", send: adversarySendWith, wait: adversaryWaitWith, seed: seed.adversary,
+    phase: "adversary", send: adversarySendWith, seed: seed.adversary,
     okArtifact: "## Verdict\naccept\n", emptyState: "missing",
   },
   {
-    phase: "rebuttal", send: rebuttalSendWith, wait: rebuttalWaitWith, seed: seed.rebuttal,
+    phase: "rebuttal", send: rebuttalSendWith, seed: seed.rebuttal,
     starve: (art) => writeFileSync(join(art, "adversary-charlie.md"), "## Verdict\naccept\n"),
     okArtifact: "# Rebuttal\n## Responses\n1. DEFEND ...\n", emptyState: "missing",
   },
   {
-    phase: "gap", send: gapSendWith, wait: gapWaitWith, seed: seed.gap,
+    phase: "gap", send: gapSendWith, seed: seed.gap,
     starve: (art) => writeFileSync(join(art, "charlie_only_items.txt"), ""),
     okArtifact: "# Gap enrichment\n## Answers\n1. CONFIRM ...\n", emptyState: "missing",
   },
   {
-    phase: "signoff", send: signoffSendWith, wait: signoffWaitWith, seed: seed.signoff,
+    phase: "signoff", send: signoffSendWith, seed: seed.signoff,
     okArtifact: "# Sign-off\nVERDICT: fair\n", emptyState: "missing",
   },
 ];
@@ -492,7 +491,7 @@ describe("explore phase send/wait skeleton (table-driven over PHASES)", () => {
             if (grace === null) delete process.env.AP_ARTIFACT_GRACE_S; else process.env.AP_ARTIFACT_GRACE_S = grace;
             writeFileSync(stateFile(agent), "OFFSET=0\n");
             if (artifact !== null) writeFileSync(row.artifactFor(art, agent, PROVIDER, TOPIC), artifact);
-            expect(await s.wait(TOPIC, agent, PROVIDER, waitDeps({ wait: ev }))).toBe(0);
+            expect(await phaseWait(row, TOPIC, agent, PROVIDER, waitDeps({ wait: ev }))).toBe(0);
             expect(readFileSync(stateFile(agent), "utf8")).toContain(`${KEY}=${expected}`);
             expect(existsSync(join(art, `${s.phase}-${agent}.done`))).toBe(true);
           }
@@ -505,7 +504,7 @@ describe("explore phase send/wait skeleton (table-driven over PHASES)", () => {
       it(`a question captures the payload and re-arms OFFSET (${KEY}=question)`, async () => {
         writeFileSync(stateFile(), "OFFSET=0\n");
         const ev = { event: "question", message: "which one?" };
-        expect(await s.wait(TOPIC, AGENT, PROVIDER, waitDeps({ wait: async () => ev as any }))).toBe(0);
+        expect(await phaseWait(row, TOPIC, AGENT, PROVIDER, waitDeps({ wait: async () => ev as any }))).toBe(0);
         const state = readFileSync(stateFile(), "utf8");
         expect(state).toContain(`${KEY}=question`);
         expect(state.match(/OFFSET=/g)!.length).toBe(2); // re-armed past the handled question
@@ -517,7 +516,7 @@ describe("explore phase send/wait skeleton (table-driven over PHASES)", () => {
         : `${KEY}=skipped → rc 1 (no fast-path: research always needs an OFFSET)`, async () => {
         writeFileSync(stateFile(), `${KEY}=skipped\n`);
         const wait = vi.fn(async () => null);
-        const rc = await s.wait(TOPIC, AGENT, PROVIDER, waitDeps({ wait }));
+        const rc = await phaseWait(row, TOPIC, AGENT, PROVIDER, waitDeps({ wait }));
         expect(wait).not.toHaveBeenCalled();
         expect(rc).toBe(row.skippable ? 0 : 1);
         expect(existsSync(join(art, `${s.phase}-${AGENT}.done`))).toBe(row.skippable);
@@ -526,14 +525,14 @@ describe("explore phase send/wait skeleton (table-driven over PHASES)", () => {
 
       it("rc 1 when the state file is missing (send not run)", async () => {
         const wait = vi.fn(async () => null);
-        expect(await s.wait(TOPIC, AGENT, PROVIDER, waitDeps({ wait }))).toBe(1);
+        expect(await phaseWait(row, TOPIC, AGENT, PROVIDER, waitDeps({ wait }))).toBe(1);
         expect(wait).not.toHaveBeenCalled();
       });
 
       it(`the wait budget is contracts' ${row.timeoutKind} timeout, provider-scaled`, async () => {
         writeFileSync(stateFile(), "OFFSET=0\n");
         let got = -1;
-        await s.wait(TOPIC, AGENT, PROVIDER, waitDeps({
+        await phaseWait(row, TOPIC, AGENT, PROVIDER, waitDeps({
           multiplier: () => "2",
           wait: async (_i, _m, _t, _off, _ev, to) => { got = to; return null; },
         }));

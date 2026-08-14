@@ -15,19 +15,25 @@ import { designArtDir } from "../src/core/design.js";
 import { statusPath } from "../src/core/ipc.js";
 import { workerDir } from "../src/core/paths.js";
 import {
-  researchSendWith, researchWaitWith, survivorsRun, synthPreliminaryRun, diffExploreRun, openqCollateRun,
+  researchSendWith, survivorsRun, synthPreliminaryRun, diffExploreRun, openqCollateRun,
   rebuttalSendWith, verdictTallyRun, synthFinalRun,
 } from "../src/commands/explore.js";
-import { anyPriorUnsafe } from "../src/core/phaseTable.js";
+import { PHASES, DESIGN_PHASES, anyPriorUnsafe, phaseWait, type WaitDeps } from "../src/core/phaseTable.js";
+
 import { lastTag } from "../src/core/roster.js";
 import {
-  researchSendWith as designResearchSendWith, researchWaitWith as designResearchWaitWith, diffRun as designDiffRun,
+  researchSendWith as designResearchSendWith, diffRun as designDiffRun,
   adjudicateRun,
 } from "../src/commands/design.js";
 import { composeExploreResearchPrompt, composeAdversaryPrompt, composeGapPrompt, composeSignoffPrompt, litGuidance, ADVERSARY_LENSES, researchLens } from "../src/core/exploreTurn.js";
 import { composeOpenqPrompt } from "../src/core/exploreOpenq.js";
 import { composeRebuttalPrompt } from "../src/core/exploreRebuttal.js";
 import { composeResearchPrompt, composeVerifyPrompt } from "../src/core/designTurn.js";
+/** Both commands' research waits — the shared skeleton bound to its row (no per-phase wrapper). */
+const researchWaitWith = (topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> =>
+  phaseWait(PHASES[0], topic, agent, provider, d);
+const designResearchWaitWith = (topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> =>
+  phaseWait(DESIGN_PHASES[0], topic, agent, provider, d);
 
 const TOPIC = "x";
 const complete = (body: string): string => `${body}\n${END_OF_ARTIFACT}\n`;
