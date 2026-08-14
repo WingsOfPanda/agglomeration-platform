@@ -168,15 +168,21 @@ describe("phaseSend: the prepare verdicts", () => {
 
   it("prompt → prompt file at <agent>_<phase>_prompt.md, then the dispatch tail", async () => {
     const art = artOf(row);
+    const promptFile = join(art, `${AGENT}_research_prompt.md`);
     let sent: string[] = [];
     let stateAtSend: string | null = null;
+    let promptAtSend: string | null = null;
     const rc = await send(row, { prepare: () => ({ prompt: "COMPOSED" }) }, sendDeps({
       offsetFor: () => 7,
-      send: async (a) => { sent = a; stateAtSend = readFileSync(stateFileOf(row), "utf8"); return 0; },
+      send: async (a) => {
+        sent = a;
+        stateAtSend = readFileSync(stateFileOf(row), "utf8");
+        promptAtSend = readFileSync(promptFile, "utf8"); // the worker is handed a file that exists
+        return 0;
+      },
     }));
-    const promptFile = join(art, `${AGENT}_research_prompt.md`);
     expect(rc).toBe(0);
-    expect(readFileSync(promptFile, "utf8")).toBe("COMPOSED");
+    expect(promptAtSend).toBe("COMPOSED");              // written BEFORE the dispatch, not after
     expect(stateAtSend).toBe("OFFSET=7\n");            // written before the send, as the tail promises
     expect(sent).toEqual(["--from", "hub", AGENT, TOPIC, `@${promptFile}`]);
   });
@@ -202,6 +208,8 @@ describe("phaseSend: the prepare verdicts", () => {
     expect(dispatch).not.toHaveBeenCalled();
     expect(existsSync(stateFileOf(row))).toBe(false);
     expect(existsSync(join(art, `${AGENT}_research_prompt.md`))).toBe(false);
+    // The rc is the VERB's, passed through — not a hard-coded 1 that happens to match.
+    expect(await send(row, { prepare: () => ({ fail: 2 }) }, sendDeps({ send: dispatch }))).toBe(2);
   });
 
   it("prepare is handed the row's own paths, never a hand-spelled one", async () => {

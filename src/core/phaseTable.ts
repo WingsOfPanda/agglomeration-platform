@@ -494,13 +494,27 @@ export async function phaseWait(
 }
 
 /** What one worker's phase artifact is worth to a validator: the bytes it may parse, the phase tag
- *  that state file carries, and the backstop's verdict on it. `skipped` is NOT a backstop verdict —
- *  it is the `skipTag` slot's answer, kept distinct because its consumers differ (rebuttal omits
- *  that worker, verdict-tally records it). */
+ *  that state file carries, and the backstop's verdict on it. */
 export interface PhaseArtifactSurvey {
   text: string;
   tag: string | null;
-  verdict: ArtifactVerdict | "skipped";
+  verdict: ArtifactVerdict;
+}
+
+/** A worker whose phase recorded `<key>=skipped`: nothing was dispatched, so there is nothing to
+ *  judge. It carries NO `verdict` and NO `text` on purpose — the only way to reach those is to
+ *  narrow this branch away (`if ("skipped" in s) …`), so a site that opts into `skipTag` cannot
+ *  quietly treat a skipped worker as a judged one. Its consumers genuinely differ: rebuttal omits
+ *  that worker, verdict-tally records `VERDICT=<agent>:skipped`. */
+export interface PhaseArtifactSkipped {
+  skipped: true;
+}
+
+/** The per-site slots; see `surveyPhaseArtifact`. `skipTag` is opt-in and changes the RETURN type. */
+interface SurveyCtx {
+  topic: string;
+  label: string;
+  emptyIsComplete: boolean;
 }
 
 /** The read every validator does before consuming one worker's phase artifact: derive the state file
@@ -520,17 +534,23 @@ export interface PhaseArtifactSurvey {
  *  `still-writing` while three finish the roster — so surveying a worker the caller would never have
  *  reached would record strikes the shipped code never recorded. The fan-out stays at the caller. */
 export function surveyPhaseArtifact(
+  row: PhaseRow, w: { agent: string; provider: string }, ctx: SurveyCtx & { skipTag: true },
+): PhaseArtifactSurvey | PhaseArtifactSkipped;
+export function surveyPhaseArtifact(
+  row: PhaseRow, w: { agent: string; provider: string }, ctx: SurveyCtx,
+): PhaseArtifactSurvey;
+export function surveyPhaseArtifact(
   row: PhaseRow,
   w: { agent: string; provider: string },
-  ctx: { topic: string; label: string; emptyIsComplete: boolean; skipTag?: boolean },
-): PhaseArtifactSurvey {
+  ctx: SurveyCtx & { skipTag?: boolean },
+): PhaseArtifactSurvey | PhaseArtifactSkipped {
   const { topic, label } = ctx;
   const art = row.artDir(topic);
   const stateText = readIf(join(art, `${row.phase}-${w.agent}.txt`));
   const tag = lastTag(stateText, row.key);
   const artifact = row.artifactFor(art, w.agent, w.provider, topic);
   const text = readIf(artifact);
-  if (ctx.skipTag && tag === "skipped") return { text, tag, verdict: "skipped" };
+  if (ctx.skipTag && tag === "skipped") return { skipped: true };
   if (ctx.emptyIsComplete && !text.trim()) return { text, tag, verdict: "complete" };
   return {
     text, tag,

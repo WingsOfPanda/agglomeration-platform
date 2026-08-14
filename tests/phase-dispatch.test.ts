@@ -1,10 +1,12 @@
-// tests/phase-dispatch.test.ts — the switch and the phase table must agree.
+// tests/phase-dispatch.test.ts — every phase row reaches its two verbs.
 //
 // Both commands dispatch their `-send` verbs from an explicit case and their `-wait` verbs off
-// PHASES/DESIGN_PHASES. Nothing else checks that the two halves stay in step: a new row whose
-// `-send` case nobody wrote, or a case for a phase that has no row, would both dispatch to `usage`
-// at runtime and be found by an operator rather than by the suite. Each verb is probed with NO
-// arguments — the arg-parse refusal names the verb, and no phase state is touched.
+// PHASES/DESIGN_PHASES, and each row's two verbs are also named in the command's hand-written usage
+// line. This file drives that ONE direction: table -> dispatch. A new row whose `-send` case (or
+// usage entry) nobody wrote fails here instead of dispatching to `usage` in front of an operator.
+// The other direction is NOT covered: an orphaned `-send` case whose row was deleted still compiles
+// and still dispatches, and nothing here notices. Each verb is probed with NO arguments — the
+// arg-parse refusal names the verb, and no phase state is touched.
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { freshHome } from "./helpers/tmpHome.js";
 import { PHASES, DESIGN_PHASES, type PhaseRow } from "../src/core/phaseTable.js";
@@ -78,6 +80,21 @@ describe("the phase-argument verbs name every phase, in pipeline order", () => {
       try { rc = await exploreRun(argv); } finally { err.restore(); }
       expect(rc).toBe(2);
       expect(err.text()).toBe(expected);
+    });
+  }
+
+  // Inherited Object members are NOT phases. The deleted KEYS object-literal lookup accepted them —
+  // `KEYS["constructor"]` is Object.prototype.constructor, truthy, so the verb ran with a function
+  // where a status key belongs; rowFor's array lookup refuses them like any other unknown stem.
+  for (const inherited of ["constructor", "toString", "__proto__", "hasOwnProperty", "valueOf"]) {
+    it(`explore wait-gate: '${inherited}' is not a phase`, async () => {
+      const err = captureStderr();
+      let rc: number;
+      try { rc = await exploreRun(["wait-gate", "t", inherited]); } finally { err.restore(); }
+      expect(rc).toBe(2);
+      expect(err.text()).toBe(
+        `[FAIL]  explore wait-gate: phase must be research|openq|crossverify|adversary|rebuttal|gap|signoff (got ${inherited})\n`,
+      );
     });
   }
 

@@ -41,8 +41,11 @@ function seed(row: PhaseRow, opts: { state?: string; artifact?: string }): { art
 /** The backstop's per-agent-per-artifact refusal log — present iff the backstop actually ran. */
 const strikeLog = (art: string, artifact: string): string => join(art, `stillwriting-${AGENT}-${basename(artifact)}.txt`);
 
-const survey = (row: PhaseRow, over: { emptyIsComplete?: boolean; skipTag?: boolean } = {}) =>
+const survey = (row: PhaseRow, over: { emptyIsComplete?: boolean } = {}) =>
   surveyPhaseArtifact(row, WORKER, { topic: TOPIC, label: "test survey", emptyIsComplete: false, ...over });
+/** The skipTag overload — a DIFFERENT return type, so it cannot share the binding above. */
+const surveySkip = (row: PhaseRow, over: { emptyIsComplete?: boolean } = {}) =>
+  surveyPhaseArtifact(row, WORKER, { topic: TOPIC, label: "test survey", emptyIsComplete: false, ...over, skipTag: true });
 
 /** One row per command/artifact shape: explore's art-dir-flat findings, explore's critique (a
  *  different key), and design's per-worker-dir verify.md. */
@@ -57,9 +60,7 @@ describe("surveyPhaseArtifact (table-driven over rows of both commands)", () => 
     const KEY = row.key;
     describe(`${row.cmd} ${row.phase}`, () => {
       it("reads the state file and the artifact the ROW names", () => {
-        const { art, artifact } = seed(row, { state: `OFFSET=0\nAC=sentinel\n${KEY}=ok\n`, artifact: BODY });
-        expect(existsSync(join(art, `${row.phase}-${AGENT}.txt`))).toBe(true);
-        expect(artifact).toBe(row.artifactFor(row.artDir(TOPIC), AGENT, PROVIDER, TOPIC));
+        seed(row, { state: `OFFSET=0\nAC=sentinel\n${KEY}=ok\n`, artifact: BODY });
         const s = survey(row);
         expect(s.text).toBe(BODY);   // the bytes judged are the bytes returned
         expect(s.tag).toBe("ok");
@@ -114,13 +115,12 @@ describe("surveyPhaseArtifact (table-driven over rows of both commands)", () => 
         expect(existsSync(strikeLog(art, artifact))).toBe(true);
       });
 
-      it(`skipTag: ${KEY}=skipped is reported as skipped WITHOUT judging the artifact`, () => {
+      it(`skipTag: ${KEY}=skipped returns the skipped branch WITHOUT judging the artifact`, () => {
         const { art, artifact } = seed(row, { state: `${KEY}=skipped\n`, artifact: BODY });
         const err = captureStderr();
         let s;
-        try { s = survey(row, { skipTag: true }); } finally { err.restore(); }
-        expect(s.verdict).toBe("skipped");
-        expect(s.tag).toBe("skipped");
+        try { s = surveySkip(row); } finally { err.restore(); }
+        expect(s).toEqual({ skipped: true }); // no verdict and no text: the caller MUST narrow first
         expect(err.text()).toBe("");
         expect(existsSync(strikeLog(art, artifact))).toBe(false);
       });
@@ -141,6 +141,19 @@ describe("surveyPhaseArtifact (table-driven over rows of both commands)", () => 
       });
     });
   }
+
+  it("skipTag's branch cannot be consumed without narrowing it away (compile-time)", () => {
+    // The slot is only safe because opting into it CHANGES the return type: a site that adds
+    // `skipTag` and then reads the verdict as before stops compiling, instead of silently treating
+    // every skipped worker as a judged one.
+    const row = ROWS[0];
+    seed(row, { state: `${row.key}=skipped\n`, artifact: BODY });
+    const s = surveySkip(row);
+    // @ts-expect-error — `verdict` does not exist on the skipped branch
+    const unguarded = s.verdict;
+    expect(unguarded).toBeUndefined();
+    expect("skipped" in s ? "narrowed" : s.verdict).toBe("narrowed");
+  });
 
   it("the label + command reach the backstop's refusal log (per-verb attribution)", () => {
     const row = ROWS[0];

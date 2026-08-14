@@ -20,11 +20,6 @@ import {
 } from "../src/commands/explore.js";
 import { PHASES, DESIGN_PHASES, anyPriorUnsafe, phaseWait, type WaitDeps } from "../src/core/phaseTable.js";
 
-/** Both commands' research waits — the shared skeleton bound to its row (no per-phase wrapper). */
-const researchWaitWith = (topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> =>
-  phaseWait(PHASES[0], topic, agent, provider, d);
-const designResearchWaitWith = (topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> =>
-  phaseWait(DESIGN_PHASES[0], topic, agent, provider, d);
 import { lastTag } from "../src/core/roster.js";
 import {
   researchSendWith as designResearchSendWith, diffRun as designDiffRun,
@@ -34,6 +29,11 @@ import { composeExploreResearchPrompt, composeAdversaryPrompt, composeGapPrompt,
 import { composeOpenqPrompt } from "../src/core/exploreOpenq.js";
 import { composeRebuttalPrompt } from "../src/core/exploreRebuttal.js";
 import { composeResearchPrompt, composeVerifyPrompt } from "../src/core/designTurn.js";
+/** Both commands' research waits — the shared skeleton bound to its row (no per-phase wrapper). */
+const researchWaitWith = (topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> =>
+  phaseWait(PHASES[0], topic, agent, provider, d);
+const designResearchWaitWith = (topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> =>
+  phaseWait(DESIGN_PHASES[0], topic, agent, provider, d);
 
 const TOPIC = "x";
 const complete = (body: string): string => `${body}\n${END_OF_ARTIFACT}\n`;

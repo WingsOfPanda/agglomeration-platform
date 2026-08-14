@@ -19892,7 +19892,7 @@ function surveyPhaseArtifact(row, w, ctx) {
   const tag = lastTag(stateText, row.key);
   const artifact = row.artifactFor(art, w.agent, w.provider, topic);
   const text = readIfExists(artifact);
-  if (ctx.skipTag && tag === "skipped") return { text, tag, verdict: "skipped" };
+  if (ctx.skipTag && tag === "skipped") return { skipped: true };
   if (ctx.emptyIsComplete && !text.trim()) return { text, tag, verdict: "complete" };
   return {
     text,
@@ -20511,8 +20511,8 @@ async function verifySendWith(topic, agent, provider, d) {
     return 1;
   }
   return phaseSend(VERIFY, { topic, agent, provider }, d, {
-    prepare: ({ artifact }) => {
-      const listPath = (0, import_node_path28.join)(art, "list.txt");
+    prepare: ({ art: art2, artifact }) => {
+      const listPath = (0, import_node_path28.join)(art2, "list.txt");
       if (!(0, import_node_fs34.existsSync)(listPath)) {
         log.error("design verify-send: list.txt missing \u2014 run design init first");
         return { fail: 1 };
@@ -20528,7 +20528,7 @@ async function verifySendWith(topic, agent, provider, d) {
       }
       const workers = [];
       for (const f of verifyScopeFiles(agent, agents)) {
-        const p = (0, import_node_path28.join)(art, f);
+        const p = (0, import_node_path28.join)(art2, f);
         if (!(0, import_node_fs34.existsSync)(p)) {
           log.error(`design verify-send: expected bucket missing: ${p} (run design diff first)`);
           return { fail: 1 };
@@ -20537,9 +20537,9 @@ async function verifySendWith(topic, agent, provider, d) {
         if (c3.split("\n").some((l) => l.length > 0)) workers.push(c3.replace(/\n+$/, ""));
       }
       const items = workers.join("\n");
-      atomicWrite((0, import_node_path28.join)(art, `verify-claims-${agent}.txt`), items ? items + "\n" : "");
+      atomicWrite((0, import_node_path28.join)(art2, `verify-claims-${agent}.txt`), items ? items + "\n" : "");
       if (!items) return { skip: "no claims to verify" };
-      return { prompt: skillHintAppend((0, import_node_path28.join)(art, "skill.txt"), composeVerifyPrompt(items, artifact)) };
+      return { prompt: skillHintAppend((0, import_node_path28.join)(art2, "skill.txt"), composeVerifyPrompt(items, artifact)) };
     }
   });
 }
@@ -27570,15 +27570,16 @@ async function rebuttalSendWith(topic, agent, provider, d) {
       for (const r of rows) buckets.set(r.agent, parseBucketLines(readIfExists((0, import_node_path41.join)(art, `${r.agent}_only_items.txt`))));
       const critiques = [];
       for (const r of rows) {
-        const { text, verdict } = surveyPhaseArtifact(ADVERSARY, r, {
+        const s = surveyPhaseArtifact(ADVERSARY, r, {
           topic,
           label: "explore rebuttal-send",
           emptyIsComplete: true,
           skipTag: true
         });
-        if (verdict === "skipped" || !text.trim()) continue;
-        if (verdict === "still-writing") return { fail: 1 };
-        if (verdict === "complete") critiques.push({ agent: r.agent, text });
+        if ("skipped" in s) continue;
+        if (!s.text.trim()) continue;
+        if (s.verdict === "still-writing") return { fail: 1 };
+        if (s.verdict === "complete") critiques.push({ agent: r.agent, text: s.text });
       }
       const mine = selectRebuttalTargets(critiques, buckets).get(agent);
       if (!mine || mine.findings.length === 0) return { skip: "no needs-attention findings attributed to it" };
@@ -27862,19 +27863,19 @@ async function adversarySendWith(topic, agent, provider, d) {
     return 1;
   }
   return phaseSend(ADVERSARY, { topic, agent, provider }, d, {
-    prepare: ({ artifact }) => {
-      const rows = parseListFile(readIfExists((0, import_node_path41.join)(art, "list.txt")));
+    prepare: ({ art: art2, artifact }) => {
+      const rows = parseListFile(readIfExists((0, import_node_path41.join)(art2, "list.txt")));
       const index = rows.findIndex((r) => r.agent === agent);
       if (index < 0) {
-        log.error(`explore adversary-send: ${agent} not in list.txt at ${art}`);
+        log.error(`explore adversary-send: ${agent} not in list.txt at ${art2}`);
         return { fail: 1 };
       }
-      const peerFindingsPaths = rows.filter((r) => r.agent !== agent).map((r) => RESEARCH2.artifactFor(art, r.agent, r.provider, topic));
+      const peerFindingsPaths = rows.filter((r) => r.agent !== agent).map((r) => RESEARCH2.artifactFor(art2, r.agent, r.provider, topic));
       const lens = ADVERSARY_LENSES[index % ADVERSARY_LENSES.length];
-      const priorityTargets = soloTokensFromAnnotations(readIfExistsOrNull((0, import_node_path41.join)(art, "annotations.json")));
+      const priorityTargets = soloTokensFromAnnotations(readIfExistsOrNull((0, import_node_path41.join)(art2, "annotations.json")));
       const lowConfidenceClaims = [];
       for (const r of rows) {
-        for (const l of parseSelfAssessment(readIfExists((0, import_node_path41.join)(art, `selfassess-${r.agent}.md`))).leastSure) {
+        for (const l of parseSelfAssessment(readIfExists((0, import_node_path41.join)(art2, `selfassess-${r.agent}.md`))).leastSure) {
           if (!lowConfidenceClaims.includes(l)) lowConfidenceClaims.push(l);
         }
       }
@@ -27962,18 +27963,18 @@ async function verdictTallyRun(rest) {
   const rows = parseListFile(listRaw);
   const verdictRows = [];
   for (const r of rows) {
-    const { text, verdict } = surveyPhaseArtifact(ADVERSARY, r, {
+    const s = surveyPhaseArtifact(ADVERSARY, r, {
       topic,
       label: "explore verdict-tally",
       emptyIsComplete: true,
       skipTag: true
     });
-    if (verdict === "skipped") {
+    if ("skipped" in s) {
       verdictRows.push({ agent: r.agent, verdict: "skipped" });
       continue;
     }
-    if (verdict === "still-writing") return 1;
-    verdictRows.push({ agent: r.agent, verdict: parseAdversaryVerdict(verdict === "drop" ? "" : text) });
+    if (s.verdict === "still-writing") return 1;
+    verdictRows.push({ agent: r.agent, verdict: parseAdversaryVerdict(s.verdict === "drop" ? "" : s.text) });
   }
   for (const v of verdictRows) process.stdout.write(`VERDICT=${v.agent}:${v.verdict}
 `);

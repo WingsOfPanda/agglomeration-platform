@@ -300,12 +300,13 @@ export async function rebuttalSendWith(topic: string, agent: string, provider: s
       // nothing.
       const critiques: CritiqueInput[] = [];
       for (const r of rows) {
-        const { text, verdict } = surveyPhaseArtifact(ADVERSARY, r, {
+        const s = surveyPhaseArtifact(ADVERSARY, r, {
           topic, label: "explore rebuttal-send", emptyIsComplete: true, skipTag: true,
         });
-        if (verdict === "skipped" || !text.trim()) continue; // an empty critique is omitted, never judged
-        if (verdict === "still-writing") return { fail: 1 };
-        if (verdict === "complete") critiques.push({ agent: r.agent, text });
+        if ("skipped" in s) continue;
+        if (!s.text.trim()) continue; // an empty critique is omitted, never judged
+        if (s.verdict === "still-writing") return { fail: 1 };
+        if (s.verdict === "complete") critiques.push({ agent: r.agent, text: s.text });
       }
 
       const mine = selectRebuttalTargets(critiques, buckets).get(agent);
@@ -558,7 +559,7 @@ export async function adversarySendWith(topic: string, agent: string, provider: 
   if (!draft.trim()) { log.error("explore adversary-send: landscape-draft.md missing or empty — run synth-preliminary first"); return 1; }
 
   return phaseSend(ADVERSARY, { topic, agent, provider }, d, {
-    prepare: ({ artifact }) => {
+    prepare: ({ art, artifact }) => {
       const rows = parseListFile(readIf(join(art, "list.txt")));
       const index = rows.findIndex((r) => r.agent === agent);
       if (index < 0) { log.error(`explore adversary-send: ${agent} not in list.txt at ${art}`); return { fail: 1 }; }
@@ -638,12 +639,12 @@ export async function verdictTallyRun(rest: string[]): Promise<number> {
   // a critique the wait never accepted tallies as if empty, which IS `unavailable`, but recorded.
   const verdictRows: Array<{ agent: string; verdict: string }> = [];
   for (const r of rows) {
-    const { text, verdict } = surveyPhaseArtifact(ADVERSARY, r, {
+    const s = surveyPhaseArtifact(ADVERSARY, r, {
       topic, label: "explore verdict-tally", emptyIsComplete: true, skipTag: true,
     });
-    if (verdict === "skipped") { verdictRows.push({ agent: r.agent, verdict: "skipped" }); continue; }
-    if (verdict === "still-writing") return 1;
-    verdictRows.push({ agent: r.agent, verdict: parseAdversaryVerdict(verdict === "drop" ? "" : text) });
+    if ("skipped" in s) { verdictRows.push({ agent: r.agent, verdict: "skipped" }); continue; }
+    if (s.verdict === "still-writing") return 1;
+    verdictRows.push({ agent: r.agent, verdict: parseAdversaryVerdict(s.verdict === "drop" ? "" : s.text) });
   }
   for (const v of verdictRows) process.stdout.write(`VERDICT=${v.agent}:${v.verdict}\n`);
   // Every worker's adversary round guarded away is a silent loss of the run's only challenge layer:

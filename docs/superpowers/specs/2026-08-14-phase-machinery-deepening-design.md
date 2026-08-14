@@ -150,6 +150,11 @@ Four places where the code was the truth and this spec was not; the shipped shap
    a per-worker `existsSync` refusal with the backstop, which no roster-shaped signature preserves.
    Per-worker keeps every side effect in its shipped order with the fan-out still at the caller. It
    also carries design's per-agent `provider` (the spec's `agents: string[]` could not).
+   SLOT REACHABILITY: at survivors / synth-preliminary / synth-final the `emptyIsComplete` branch is
+   unreachable — each filters its roster through `missingListArtifacts` first, whose predicate is
+   `readIfExists().trim()` over the SAME file the row names, so an empty artifact is dropped before
+   the survey runs. Both slot values are therefore correct there and no test can distinguish them;
+   what tests/phase-survey-sites.test.ts pins for those three is that unreachability itself.
 2. **Verdict `skipped` + the returned `tag`.** `skipTag` is not "omit": rebuttal omits that worker but
    verdict-tally RECORDS it as `VERDICT=<agent>:skipped`, so the slot reports and the caller decides.
    `tag` (the state file's last `<key>=`) is returned because design adjudicate needs it for `vs[]`
@@ -166,11 +171,34 @@ Four places where the code was the truth and this spec was not; the shipped shap
    generates the `<research|openq|...>` alternation that the usage and unknown-phase lines print
    (byte-identical, pinned literally in tests/phase-dispatch.test.ts).
 
+Two BEHAVIOR DELTAS the review found. Both are accepted as correct rather than reverted; neither is
+reachable from a healthy pipeline, and both are strictly safer than what they replace.
+
+5. **`explore wait-gate <topic> constructor` no longer runs.** The deleted KEYS object literal was
+   looked up with `KEYS[phase]`, which inherits from `Object.prototype`: `constructor`, `toString`,
+   `valueOf`, `hasOwnProperty` and `__proto__` all returned a truthy non-key and passed the
+   `if (!key)` guard, so the gate ran with a function (or `Object.prototype`) where a frozen status
+   key belongs. `rowFor`'s array lookup refuses them with the ordinary unknown-phase wording. The
+   refusal is pinned in tests/phase-dispatch.test.ts so the hole cannot come back with the next
+   lookup rewrite. design's two verbs never had the hole (explicit `!==` comparisons).
+6. **The two diff sites read their artifact through the collector's `readIfExists`, not
+   `readFileSync`.** Both still guard with `existsSync` first, so the only changed input is an
+   artifact deleted between that check and the read: it used to throw ENOENT out of the verb, and now
+   reads as empty and flows into the backstop (which refuses or drops it like any other unaccepted
+   artifact). Strictly more forgiving, unobservable outside that race window, disclosed not reverted.
+
 ## Success Criteria
 
-- Adding a hypothetical explore phase = one PHASES row + one -send body (demonstrated in a test
-  via a synthetic row, not shipped).
-- Nine send heads, nine backstop stacks, one KEYS literal, two validation pairs, nine wrappers:
-  all gone; `grep -n 'research-\${' src/commands` style hand-derivations of phase paths return
-  nothing the row does not own.
+- Adding a hypothetical explore phase = one PHASES row + one `-send` body + its `-send` switch case
+  + its two verbs in the command's hand-written `usage()` literal (the synthetic-row test shipped in
+  tests/phase-send.test.ts covers the row + body; tests/phase-dispatch.test.ts is what fails for a
+  missing case or usage entry). The `-wait` half needs nothing — it is generated from the table.
+- Nine send heads, nine backstop stacks, one KEYS literal, two validation pairs, nine wrappers: all
+  gone. Scope of the "no hand-derived phase paths" claim: the nine converted VALIDATOR sites and the
+  nine send heads. Four read-only consumers still derive phase paths by hand and are deliberately
+  out of scope, because each reads SEVERAL phases' artifacts at once rather than the one its row
+  names — `contribution` (explore.ts:379-388, six artifacts + two state tags for the scoreboard),
+  `confidence` (:494) and `annotate` (:527) (findings paths), and `synth-final`'s `active` filter
+  (:601, the `AS=` tag that decides who is in scope). The `*-claims-*.txt` side files are inputs the
+  send verbs write, not phase artifacts, and are likewise out of scope.
 - Gate green; dist rebuilt+committed; 0.5.19; all pre-existing assertions untouched.

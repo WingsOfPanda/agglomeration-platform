@@ -248,7 +248,7 @@ export async function verifySendWith(topic: string, agent: string, provider: str
   if (!existsSync(art)) { log.error(`design verify-send: ${art} not found`); return 1; }
 
   return phaseSend(VERIFY, { topic, agent, provider }, d, {
-    prepare: ({ artifact }) => {
+    prepare: ({ art, artifact }) => {
       const listPath = join(art, "list.txt");
       if (!existsSync(listPath)) { log.error("design verify-send: list.txt missing — run design init first"); return { fail: 1 }; }
       const agents = parseListFile(readFileSync(listPath, "utf8")).map((r) => r.agent);
