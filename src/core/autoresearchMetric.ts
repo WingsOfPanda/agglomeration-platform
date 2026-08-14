@@ -152,6 +152,23 @@ export function parseMetricMd(text: string): MetricThresholds {
   return { primaryMetric, direction, minOp, minVal, tgtOp, tgtVal, kRequired, plateauWindow, plateauThreshold, verifyEpsilon, ceiling, minRuntimeS, maxDebugAttempts, minFamilies, c1Epsilon, c1Budget, selectK, selectSignal, maxWorkers, memoryHalfLifeDays, memoryMaxAgeDays, memoryMinCorroboration, memoryScope, memoryWriteRateMax, marginalGainThreshold };
 }
 
+export interface ValidityThresholds {
+  /** A1 verify-by-re-execution tolerance. */
+  verifyEpsilon: number;
+  /** C1 round-trip tolerance — twice A1's unless metric.md pins it. */
+  c1Epsilon: number;
+  /** C1 inspections allowed per campaign. */
+  c1Budget: number;
+}
+
+/** The research-validity defaults resolved from a campaign's metric.md (null = no file, all
+ *  defaults). The verbs read these instead of restating the chains where they adjudicate. */
+export function resolveValidityThresholds(mdText: string | null): ValidityThresholds {
+  const t = mdText ? parseMetricMd(mdText) : null;
+  const verifyEpsilon = t?.verifyEpsilon ?? 0.01;
+  return { verifyEpsilon, c1Epsilon: t?.c1Epsilon ?? 2 * verifyEpsilon, c1Budget: t?.c1Budget ?? 2 };
+}
+
 export interface SotaInput {
   topic: string; metric: string; sweep_date: string; queries?: string;
   /** Each ref is "family|best|compliance|source|notes". Capped at 7. */
