@@ -15,9 +15,9 @@ import { deriveSlug } from "../core/quick.js";
 import { extractMetric, formatMetricBlock, formatSotaBlock, parseMetricMd } from "../core/autoresearchMetric.js";
 import { autoresearchArtDir, workersDir, workerStateDir, experimentsDir, experimentDir, seedLib, latestExpDir } from "../core/autoresearch.js";
 import { computeScore, type ScoreFs, type ScoreComputation } from "../core/autoresearchScore.js";
-import { sanityRow, SANITY_TSV_HEADER } from "../core/autoresearchSanity.js";
-import { coverageRow, COVERAGE_TSV_HEADER, type CoverageRow } from "../core/autoresearchCoverage.js";
-import { lineageRow, LINEAGE_TSV_HEADER } from "../core/autoresearchLineage.js";
+import { sanityRow, sanityTsvPath, parseSanityRows, SANITY_TSV_HEADER } from "../core/autoresearchSanity.js";
+import { coverageRow, coverageTsvPath, parseCoverageRows, COVERAGE_TSV_HEADER, type CoverageRow } from "../core/autoresearchCoverage.js";
+import { lineageRow, lineageTsvPath, parseLineageRows, LINEAGE_TSV_HEADER } from "../core/autoresearchLineage.js";
 import { parseState, mergeState, reconcileFromOutbox, reconcileFromOutboxSince, readHaltFlag } from "../core/autoresearchState.js";
 import { checkCompletion, checkTimeBudget } from "../core/autoresearchComplete.js";
 import { renderSessionSummary, type StatusRow, type EventRow } from "../core/autoresearchSummary.js";
@@ -36,8 +36,8 @@ import { runForensics, runFlag } from "../core/forensics.js";
 import { parseScoreboard, buildHandoffKv, type HandoffInput } from "../core/autoresearchHandoff.js";
 import { buildConsensus } from "../core/autoresearchConsensus.js";
 import { frameMetric, defaultTimeBudget } from "../core/autoresearchArbiter.js";
-import { parseVerifyBlock, planVerify, checkVerify, recomputedFromOutput, verificationRow, VERIFICATION_TSV_HEADER, type VerifyManifest, type VerificationRow } from "../core/autoresearchVerify.js";
-import { classifyInspect, inspectionRow, parseInspections, INSPECTION_TSV_HEADER, type InspectVerdict, type InspectionRow } from "../core/autoresearchInspect.js";
+import { parseVerifyBlock, planVerify, checkVerify, recomputedFromOutput, verificationRow, verificationTsvPath, parseVerificationRows, VERIFICATION_TSV_HEADER, type VerifyManifest, type VerificationRow } from "../core/autoresearchVerify.js";
+import { classifyInspect, inspectionRow, inspectionTsvPath, parseInspections, parseInspectionRows, INSPECTION_TSV_HEADER, type InspectVerdict, type InspectionRow } from "../core/autoresearchInspect.js";
 import { parseVerdicts } from "../core/autoresearchInfeasible.js";
 import { metricFamilyOf, policyFromMetric } from "../core/autoresearchLessonMap.js";
 import { retrieveForDispatch, liveMemoryIo, type MemoryIo } from "../core/autoresearchMemoryStore.js";
@@ -809,9 +809,9 @@ export async function scoreWith(args: string[], deps: AutoresearchScoreDeps): Pr
   for (const p of c.staleSidecars) deps.removeFile(p);
   for (const pc of c.phaseClears) deps.writeAtomic(pc.statePath, pc.merged);
   for (const m of c.manifests) deps.writeAtomic(m.path, m.body);
-  deps.writeAtomic(join(art, "sanity.tsv"), SANITY_TSV_HEADER + c.sanityRows.map(sanityRow).join(""));
-  deps.writeAtomic(join(art, "coverage.tsv"), COVERAGE_TSV_HEADER + c.coverageRows.map(coverageRow).join(""));
-  deps.writeAtomic(join(art, "lineage.tsv"), LINEAGE_TSV_HEADER + c.lineageRows.map(lineageRow).join(""));
+  deps.writeAtomic(sanityTsvPath(art), SANITY_TSV_HEADER + c.sanityRows.map(sanityRow).join(""));
+  deps.writeAtomic(coverageTsvPath(art), COVERAGE_TSV_HEADER + c.coverageRows.map(coverageRow).join(""));
+  deps.writeAtomic(lineageTsvPath(art), LINEAGE_TSV_HEADER + c.lineageRows.map(lineageRow).join(""));
   for (const w of c.warnings) log.warn(w);
 
   // Ledger tail (best-effort): record any completed experiment the ledger has not
@@ -1030,19 +1030,6 @@ function parseStatusBriefArgs(args: string[]): { topic: string; latestAgent?: st
   return { topic, latestAgent, latestExp };
 }
 
-/** Read a `.tsv` sidecar's data rows (each tab-split into cells), skipping blank lines and the
- *  header row (`<headerToken>...`). Returns undefined when the file is absent, so callers can tell
- *  "no file" apart from "file present but no data rows". */
-function readTsvRows(path: string, headerToken: string): string[][] | undefined {
-  if (!existsSync(path)) return undefined;
-  const rows: string[][] = [];
-  for (const line of readFileSync(path, "utf8").split("\n")) {
-    if (!line || line.startsWith(headerToken)) continue;
-    rows.push(line.split("\t"));
-  }
-  return rows;
-}
-
 export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (line: string) => void } = {}): Promise<number> {
   const out = v.stdout ?? stdoutLine;
   const p = parseStatusBriefArgs(args);
@@ -1096,32 +1083,34 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
 
   const { scoreboardMd, completion } = gatherCompletion(art);
 
-  const vraw = readIfExistsOrNull(join(art, "verification.tsv"));        // exp_id, agent, verdict, ...
-  const verdicts = vraw === null ? undefined : parseVerdicts(vraw);     // absent -> undefined; empty -> {} (last write wins)
+  // Each block: absent file -> undefined (the brief omits the section); present -> parsed rows,
+  // with the selection predicate kept here (the parsers only name columns).
+  const vraw = readIfExistsOrNull(verificationTsvPath(art));
+  const verdicts = vraw === null ? undefined : parseVerdicts(vraw);     // empty -> {} (last write wins)
 
-  const srows = readTsvRows(join(art, "sanity.tsv"), "exp_id\t");          // exp_id, agent, flag, ...
+  const sraw = readIfExistsOrNull(sanityTsvPath(art));
   let suspects: Record<string, string[]> | undefined;
-  if (srows) {
+  if (sraw !== null) {
     suspects = {};
-    for (const c of srows) if (c[0] && c[1] && c[2]) (suspects[`${c[1]}/${c[0]}`] ??= []).push(c[2]);
+    for (const r of parseSanityRows(sraw)) if (r.expId && r.agent && r.flag) (suspects[`${r.agent}/${r.expId}`] ??= []).push(r.flag);
   }
 
-  const crows = readTsvRows(join(art, "coverage.tsv"), "family\t");        // family, count, best, ts
+  const craw = readIfExistsOrNull(coverageTsvPath(art));
   let coverage: CoverageRow[] | undefined;
-  if (crows) {
+  if (craw !== null) {
     coverage = [];
-    for (const cells of crows) if (cells[0]) coverage.push({ family: cells[0], count: parseInt(cells[1] ?? "0", 10) || 0, best: cells[2] ?? "", ts: cells[3] ?? "" });
+    for (const r of parseCoverageRows(craw)) if (r.family) coverage.push(r);
   }
 
-  const lrows = readTsvRows(join(art, "lineage.tsv"), "exp_id\t");         // exp_id, agent, parent_id, knobs_changed, verdict, ts
+  const lraw = readIfExistsOrNull(lineageTsvPath(art));
   let multiChange: Record<string, boolean> | undefined;
-  if (lrows) {
+  if (lraw !== null) {
     multiChange = {};
-    for (const cells of lrows) if (cells[0] && cells[1] && cells[4] === "improve-multi") multiChange[`${cells[1]}/${cells[0]}`] = true;
+    for (const r of parseLineageRows(lraw)) if (r.expId && r.agent && r.verdict === "improve-multi") multiChange[`${r.agent}/${r.expId}`] = true;
   }
 
-  const iraw = readIfExistsOrNull(join(art, "inspection.tsv"));          // exp_id, agent, verdict, ...
-  const inspections = iraw === null ? undefined : parseInspections(iraw);  // absent -> undefined; empty -> {}
+  const iraw = readIfExistsOrNull(inspectionTsvPath(art));
+  const inspections = iraw === null ? undefined : parseInspections(iraw);  // empty -> {}
 
   const latest = p.latestAgent && p.latestExp ? { agent: p.latestAgent, exp: p.latestExp } : undefined;
   out(buildStatusBrief({ workers, scoreboardMd, completion, latest, verdicts, suspects, coverage, multiChange, inspections }));
@@ -1260,26 +1249,27 @@ export async function finalizeWith(args: string[], deps: AutoresearchFinalizeDep
 
   // Fold advisory research-validity tsv rows into warnings.txt: one appended block per source,
   // in this fixed order (part of the warnings.txt layout). rowToLine returns null to skip a row.
-  const foldWarnings = (tsv: string, rowToLine: (c: string[]) => string | null): void => {
+  const foldWarnings = <T>(rows: T[], rowToLine: (r: T) => string | null): void => {
     const lines: string[] = [];
-    for (const c of readTsvRows(join(art, tsv), "exp_id\t") ?? []) {
-      const l = rowToLine(c);
+    for (const r of rows) {
+      const l = rowToLine(r);
       if (l !== null) lines.push(l);
     }
     if (lines.length) appendFileSync(warningsPath, lines.join("\n") + "\n");
   };
+  const tsvText = (path: string): string => readIfExistsOrNull(path) ?? "";
   // A3: non-audit sanity flags (audit-knob-drift deduped — finalize's audit_warn already covers it).
-  foldWarnings("sanity.tsv", (c) =>            // exp_id, agent, flag, detail, ts
-    c[2] !== "audit-knob-drift" && c[0] && c[1] && c[2]
-      ? `sanity\t${c[1]}/${c[0]}\t${c[2]}\t${c[3] ?? ""}` : null);
+  foldWarnings(parseSanityRows(tsvText(sanityTsvPath(art))), (r) =>
+    r.flag !== "audit-knob-drift" && r.expId && r.agent && r.flag
+      ? `sanity\t${r.agent}/${r.expId}\t${r.flag}\t${r.detail}` : null);
   // B2: improve-multi lineage rows (advisory: delta not cleanly attributable).
-  foldWarnings("lineage.tsv", (c) =>           // exp_id, agent, parent_id, knobs_changed, verdict, ts
-    c[4] === "improve-multi" && c[0] && c[1]
-      ? `lineage\t${c[1]}/${c[0]}\timprove-multi\tparent=${c[2] ?? ""} knobs_changed=${c[3] ?? ""}` : null);
+  foldWarnings(parseLineageRows(tsvText(lineageTsvPath(art))), (r) =>
+    r.verdict === "improve-multi" && r.expId && r.agent
+      ? `lineage\t${r.agent}/${r.expId}\timprove-multi\tparent=${r.parentId} knobs_changed=${r.knobsChanged}` : null);
   // C1: not-reproduced inspections (advisory in the summary; computeScore already demotes to x<rank>).
-  foldWarnings("inspection.tsv", (c) =>        // exp_id, agent, verdict, reason, reimpl_metric, ts
-    c[2] === "not-reproduced" && c[0] && c[1]
-      ? `reimpl\t${c[1]}/${c[0]}\tnot-reproduced\t${c[3] ?? ""}` : null);
+  foldWarnings(parseInspectionRows(tsvText(inspectionTsvPath(art))), (r) =>
+    r.verdict === "not-reproduced" && r.expId && r.agent
+      ? `reimpl\t${r.agent}/${r.expId}\tnot-reproduced\t${r.reason}` : null);
 
   // 9. render session-summary.md (FULL re-render; wholesale atomic replace).
   const statusRows = gatherStatusRows(art, agents);
@@ -2033,8 +2023,8 @@ export async function corpusDigestWith(args: string[], deps: CorpusDigestDeps): 
       const mm = readIfExistsOrNull(join(dir, "metric.md"));
       const fam = mm ? metricFamilyOf(parseMetricMd(mm).primaryMetric) : null;
       if (fam === null) continue;
-      const verified = (readIfExistsOrNull(join(dir, "verification.tsv")) ?? "")
-        .split("\n").filter((l) => l && !l.startsWith("exp_id\t") && l.split("\t")[2] === "verified").length;
+      const verified = parseVerificationRows(readIfExistsOrNull(verificationTsvPath(dir)) ?? "")
+        .filter((r) => r.verdict === "verified").length;
       const halt = readHaltFlag(readIfExistsOrNull(join(dir, "halt.flag")));
       const haltReason = halt.format === "structured"
         ? (halt.fields?.reason ?? halt.fields?.halted_by ?? "halted")
@@ -2057,7 +2047,7 @@ export async function corpusDigestWith(args: string[], deps: CorpusDigestDeps): 
 const liveCorpusDigestDeps: CorpusDigestDeps = { now: () => isoUtc() };
 
 function appendVerificationRow(art: string, agent: string, expId: string, row: VerificationRow): void {
-  const tsv = join(art, "verification.tsv");
+  const tsv = verificationTsvPath(art);
   const prior = existsSync(tsv) ? readFileSync(tsv, "utf8") : VERIFICATION_TSV_HEADER;
   atomicWrite(tsv, prior + verificationRow(row));
   atomicWrite(join(experimentDir(art, agent, expId), "verification.txt"),
@@ -2081,7 +2071,7 @@ const liveVerifyCheckDeps: VerifyCheckDeps = {
 };
 
 function appendInspectionRow(art: string, agent: string, expId: string, row: InspectionRow): void {
-  const tsv = join(art, "inspection.tsv");
+  const tsv = inspectionTsvPath(art);
   const prior = existsSync(tsv) ? readFileSync(tsv, "utf8") : INSPECTION_TSV_HEADER;
   atomicWrite(tsv, prior + inspectionRow(row));
   atomicWrite(join(experimentDir(art, agent, expId), "inspection.txt"),
@@ -2090,7 +2080,7 @@ function appendInspectionRow(art: string, agent: string, expId: string, row: Ins
 const liveInspectPlanDeps: InspectPlanDeps = {
   readResult: liveVerifyPlanDeps.readResult,
   readMetricMd,
-  inspectionCount: (art) => { const p = join(art, "inspection.tsv"); if (!existsSync(p)) return 0; return readFileSync(p, "utf8").split("\n").filter((l) => l && !l.startsWith("exp_id\t")).length; },
+  inspectionCount: (art) => parseInspectionRows(readIfExistsOrNull(inspectionTsvPath(art)) ?? "").length,
   workerProvider: (_art, i, topic) => resolveModel(i, topic),
   writeRow: appendInspectionRow,
   now: () => isoUtc(),

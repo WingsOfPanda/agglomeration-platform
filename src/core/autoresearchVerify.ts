@@ -2,6 +2,9 @@
 // The harness re-runs the worker's declared scoring step OUTSIDE the worker's pane and adjudicates a
 // verdict. Pure: FS access is injected; the verbs apply the returned plan/rows.
 import { createHash } from "node:crypto";
+import { join } from "node:path";
+
+import { splitTsvRows } from "./tsv.js";
 
 export type Verdict = "verified" | "mismatch" | "unavailable" | "pending";
 
@@ -67,6 +70,15 @@ export interface VerificationRow {
 export const VERIFICATION_TSV_HEADER = "exp_id\tagent\tverdict\treason\trecomputed\tts\n";
 export function verificationRow(r: VerificationRow): string {
   return `${r.expId}\t${r.agent}\t${r.verdict}\t${r.reason}\t${r.recomputed}\t${r.ts}\n`;
+}
+export function verificationTsvPath(art: string): string { return join(art, "verification.tsv"); }
+/** verification.tsv text -> rows. The file is ours, so `verdict` is read back as the Verdict it was
+ *  written as; a foreign token would carry through unmapped. Missing trailing cells read as "". */
+export function parseVerificationRows(text: string): VerificationRow[] {
+  return splitTsvRows(text, "exp_id\t").map((c) => ({
+    expId: c[0] ?? "", agent: c[1] ?? "", verdict: (c[2] ?? "") as Verdict, reason: c[3] ?? "",
+    recomputed: c[4] ?? "", ts: c[5] ?? "",
+  }));
 }
 
 export interface VerifyManifest { command: string; hashes: Record<string, string>; }

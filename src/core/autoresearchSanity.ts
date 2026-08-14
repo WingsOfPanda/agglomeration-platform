@@ -2,7 +2,10 @@
 // Flags a VALID result as suspect; orthogonal to A1's verify verdict. Pure: FS injected; the score
 // pass applies the rows. A clean result returns no flags.
 
+import { join } from "node:path";
+
 import { knobsDiffer } from "./autoresearchLineage.js";
+import { splitTsvRows } from "./tsv.js";
 
 export interface SanityFlag { flag: string; detail: string; }
 
@@ -10,6 +13,14 @@ export interface SanityRow { expId: string; agent: string; flag: string; detail:
 export const SANITY_TSV_HEADER = "exp_id\tagent\tflag\tdetail\tts\n";
 export function sanityRow(r: SanityRow): string {
   return `${r.expId}\t${r.agent}\t${r.flag}\t${r.detail}\t${r.ts}\n`;
+}
+export function sanityTsvPath(art: string): string { return join(art, "sanity.tsv"); }
+/** sanity.tsv text -> rows. Missing trailing cells read as "". Selection (which flags matter) is
+ *  the caller's; this only names the columns. */
+export function parseSanityRows(text: string): SanityRow[] {
+  return splitTsvRows(text, "exp_id\t").map((c) => ({
+    expId: c[0] ?? "", agent: c[1] ?? "", flag: c[2] ?? "", detail: c[3] ?? "", ts: c[4] ?? "",
+  }));
 }
 
 const INTEGRITY_KEYS = ["split_before_fit", "no_train_test_overlap", "target_not_in_features", "trained_steps", "seed"] as const;

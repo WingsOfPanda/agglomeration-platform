@@ -16,7 +16,8 @@ import { normalizeResult, type ResultJson } from "./autoresearchResult.js";
 import { parseState } from "./autoresearchState.js";
 import { parseMetricMd } from "./autoresearchMetric.js";
 import { parseVerdicts } from "./autoresearchInfeasible.js";
-import { parseInspections } from "./autoresearchInspect.js";
+import { parseInspections, inspectionTsvPath } from "./autoresearchInspect.js";
+import { verificationTsvPath } from "./autoresearchVerify.js";
 import { metricFamilyOf, lessonVerdictOf, policyFromMetric, buildLessonDraft, type LessonDraft } from "./autoresearchLessonMap.js";
 import { writeLessonsAtFinalize, liveMemoryIo, type MemoryIo } from "./autoresearchMemoryStore.js";
 import { type LessonVerdict } from "./autoresearchMemory.js";
@@ -223,8 +224,8 @@ export function writeFinalizeLessons(art: string, agents: string[], deps: Autore
     if (!family) return; // unknown / outside taxonomy -> skip (fail-closed, no lessons)
 
     const direction: "maximize" | "minimize" = thresholds.direction ?? "maximize";
-    const a1 = parseVerdicts(readOr(join(art, "verification.tsv")));
-    const c1 = parseInspections(readOr(join(art, "inspection.tsv")));
+    const a1 = parseVerdicts(readOr(verificationTsvPath(art)));
+    const c1 = parseInspections(readOr(inspectionTsvPath(art)));
     const now = deps.now();
 
     const drafts: LessonDraft[] = [];
