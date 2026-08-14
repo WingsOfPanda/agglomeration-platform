@@ -11,7 +11,7 @@ import { runForensics, runFlag, recordHubFlag } from "../core/forensics.js";
 import { agentBinary } from "../core/contracts.js";
 import { haveCmd } from "../core/deps.js";
 import { pickRandomAgent } from "../core/agents.js";
-import { runnerAt, preSnapshot, createOrResumeBranch, finishBranch, classifyDirty, hasDistinctBranch, stashPush, stashPopOnBranch } from "../core/gitwork.js";
+import { runnerAt, preSnapshot, createOrResumeBranch, finishBranch, classifyDirty, currentBranch, hasDistinctBranch, stashPush, stashPopOnBranch } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
 import { outboxOffset, outboxPath, workerSendGate, type OutboxEvent } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
@@ -330,12 +330,17 @@ export async function finishWith(topic: string, r: Runner, hasGh: boolean): Prom
   // so a finish that trusts it pushes a ref that was never created and records `pr-failed-kept` — a PR
   // problem, when the truth is there was no branch to act on. Refuse loudly instead, and say so.
   if (!hasDistinctBranch(r, branch, startBranch)) {
-    log.error(`quick finish: no branch '${branch || "(unrecorded)"}' distinct from the start branch '${startBranch}' — NOTHING was pushed and no PR was opened`);
-    log.error("  recover: re-run the branch step in the target repo (git checkout -b <branch>), commit the work, then finish again");
+    const named = branch || "(unrecorded)";
+    log.warn(`quick finish: no branch '${named}' distinct from the start branch '${startBranch}' — NOTHING was pushed and no PR was opened`);
+    log.warn(`  recover: re-run the branch step in the target repo (git checkout -b ${branch || `feat/quick-${topic}`}), commit the work, then finish again`);
     r.run("git", ["checkout", "-q", startBranch]);
+    // Where the work actually sits is READ BACK, never assumed: this checkout is best-effort and a
+    // dirty tree blocks it silently, so a flag naming the start branch could send the user looking
+    // on a branch the run never reached.
+    const head = currentBranch(r) || "(detached)";
     const keptNoBranch = restoreStashWip(topic, exec, r, startBranch);
     atomicWrite(join(exec, "finish-result.txt"), "none\tno-branch\n" + keptNoBranch);
-    runFlag("quick", topic, `finish-no-branch: the recorded branch '${branch || "(unrecorded)"}' is missing or is the start branch '${startBranch}' — nothing was pushed, no PR opened; the work (if any) is on '${startBranch}'`);
+    runFlag("quick", topic, `finish-no-branch: the recorded branch '${named}' is missing or is the start branch '${startBranch}' — nothing was pushed, no PR opened; the work (if any) is on '${head}'`);
     return 0;
   }
   const brief = readIfExists(join(quickArtDir(topic), "task-brief.md"));

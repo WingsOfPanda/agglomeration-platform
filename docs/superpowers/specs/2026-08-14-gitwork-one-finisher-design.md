@@ -119,6 +119,10 @@ at the command level (quick.ts, so the refusal can write quick's record and flag
 never on the refusing one. Deduplicating it would mean either a guardless finisher or a command that
 cannot word its own refusal; the second probe is the cheaper price. The claim above should read: the
 only sequence change is the added `show-ref` on quick's path, which the collapse then issues twice.
+The interleaving is safe: if the ref vanishes BETWEEN the two probes, `finishWork` returns
+`no-branch` without performing its restore checkout, and quick's record reads `none  no-branch`
+while `restoreStashWip` — which proves HEAD rather than assuming it — sees `wrong-head`, keeps the
+stash, and flags it.
 
 **Wrappers** (the current three exports, byte-identical to callers):
 
@@ -194,9 +198,16 @@ the new `no-branch` refusal (what it means, how to recover: re-run `quick branch
   `finishWork` table covers the deep interface once (guard × arms × pr outcomes). *Amended at build:
   holds exactly as written for every finisher row; the one exception is commit 3's `entryExists`
   field on quick-gitwork.test.ts's `stashPush` rows — see that bullet.*
-- **Mutation rule** (program-wide, from grilling Q10): re-pointing any wrapper away from
-  `finishWork` (restoring a hand-rolled body) must fail at least one test; reviewers verify by
-  mutation.
+- **Mutation rule** (program-wide, from grilling Q10): a wrapper re-pointed at a body that
+  DIVERGES from `finishWork` — in `base`, `action`, `titlePrefix`, or arm order — must fail at
+  least one test; reviewers verify by mutation. *Amended at build (adversarial review): stated as
+  "restoring a hand-rolled body" this rule was unsatisfiable.* A hand-rolled body that is
+  byte-identical in behavior to what `finishWork` does is undetectable BY CONSTRUCTION for a
+  behavior-preserving collapse — no test can distinguish two implementations that issue the same
+  git calls and return the same strings — and that undetectability is the evidence FOR the
+  collapse, not a hole in the pins. What must be caught is DIVERGENCE, which is what the
+  divergence form above asks for and what the default-title rows added at build now cover
+  (`titlePrefix` mutations on quick's and bridge's wrappers each fail a test).
 - **entryExists**: pinned across all five outcomes; quick's marker tests unchanged. *Amended at
   build: this is the ONE place an existing assertion had to change.* `stashPush`'s nine rows in
   tests/quick-gitwork.test.ts assert the whole result with `toEqual({outcome, sha})`, and no new
@@ -217,8 +228,9 @@ the new `no-branch` refusal (what it means, how to recover: re-run `quick branch
 - Replaying the field shape (branch checkout failed at `quick branch`, finish=yes) through the
   built dist refuses with `none\tno-branch`, a flag, and zero pushes — no `pr-failed-kept` lie.
 - All pre-existing finisher/stash/question tests pass without assertion edits (*amended at build:*
-  except the additive `entryExists` field on `stashPush`'s rows — see Testing); the mutation
-  checks hold; outcome strings and git call sequences are byte-identical everywhere except the
-  sanctioned commit-1 path.
+  except the additive `entryExists` field on `stashPush`'s rows — see Testing); the DIVERGENCE
+  mutation checks hold (*amended at build:* identity mutations are undetectable by construction —
+  see the Mutation rule); outcome strings and git call sequences are byte-identical everywhere
+  except the sanctioned commit-1 path.
 - One finisher, one guard, one push+PR step, one Runner interface, one outcome vocabulary owner.
 - Gate green; dist rebuilt+committed; 0.5.18.

@@ -10,7 +10,7 @@ function fakeRunner(replies: Record<string, RunResult>) {
 }
 const REF = (b: string) => `git show-ref --verify --quiet refs/heads/${b}`;
 const EXISTS = { [REF("feat/x")]: { code: 0, stdout: "" } };
-const base = { branch: "feat/x", base: "main", hasGh: false, titlePrefix: "quick" };
+const base = { branch: "feat/x", base: "main", hasGh: false, titlePrefix: "quick" as const };
 const opts = (o: Partial<FinishWorkOpts> & { action: FinishWorkOpts["action"] }): FinishWorkOpts => ({ ...base, ...o });
 
 describe("finishWork guard", () => {

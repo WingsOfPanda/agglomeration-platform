@@ -18303,7 +18303,8 @@ function finishBranchAction(r, o2) {
 }
 function finishBranchPrMerge(r, o2) {
   const res = finishWork(r, { ...o2, action: "pr-merge", titlePrefix: "bridge" });
-  return { action: res.action, outcome: res.outcome };
+  const a2 = res.action;
+  return { action: a2 === "pr-merge" || a2 === "local-merge" || a2 === "push-only" ? a2 : "none", outcome: res.outcome };
 }
 var import_node_child_process9;
 var init_gitwork = __esm({
@@ -19213,12 +19214,14 @@ async function finishWith(topic, r, hasGh) {
     return 0;
   }
   if (!hasDistinctBranch(r, branch, startBranch)) {
-    log.error(`quick finish: no branch '${branch || "(unrecorded)"}' distinct from the start branch '${startBranch}' \u2014 NOTHING was pushed and no PR was opened`);
-    log.error("  recover: re-run the branch step in the target repo (git checkout -b <branch>), commit the work, then finish again");
+    const named = branch || "(unrecorded)";
+    log.warn(`quick finish: no branch '${named}' distinct from the start branch '${startBranch}' \u2014 NOTHING was pushed and no PR was opened`);
+    log.warn(`  recover: re-run the branch step in the target repo (git checkout -b ${branch || `feat/quick-${topic}`}), commit the work, then finish again`);
     r.run("git", ["checkout", "-q", startBranch]);
+    const head = currentBranch(r) || "(detached)";
     const keptNoBranch = restoreStashWip(topic, exec, r, startBranch);
     atomicWrite((0, import_node_path21.join)(exec, "finish-result.txt"), "none	no-branch\n" + keptNoBranch);
-    runFlag("quick", topic, `finish-no-branch: the recorded branch '${branch || "(unrecorded)"}' is missing or is the start branch '${startBranch}' \u2014 nothing was pushed, no PR opened; the work (if any) is on '${startBranch}'`);
+    runFlag("quick", topic, `finish-no-branch: the recorded branch '${named}' is missing or is the start branch '${startBranch}' \u2014 nothing was pushed, no PR opened; the work (if any) is on '${head}'`);
     return 0;
   }
   const brief = readIfExists((0, import_node_path21.join)(quickArtDir(topic), "task-brief.md"));

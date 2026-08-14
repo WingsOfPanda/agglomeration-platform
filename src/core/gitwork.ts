@@ -206,8 +206,9 @@ export interface FinishWorkOpts {
   originUrl?: string;
   title?: string;
   body?: string;
-  /** Branding for the default PR title/body: `quick` | `implement` | `bridge`. */
-  titlePrefix: string;
+  /** Branding for the default PR title/body. Closed: a finisher brands its PRs as one of the three
+   *  commands that own one, and a typo would ship as the PR's title. */
+  titlePrefix: "quick" | "implement" | "bridge";
 }
 export interface FinishWorkResult {
   action: "pr" | "keep" | "merge" | "discard" | "pr-merge" | "local-merge" | "push-only" | "none";
@@ -344,5 +345,6 @@ export interface PrMergeResult { action: "pr-merge" | "local-merge" | "push-only
 export function finishBranchPrMerge(r: Runner, o: PrMergeOpts): PrMergeResult {
   const res = finishWork(r, { ...o, action: "pr-merge", titlePrefix: "bridge" });
   // Narrowing only: the pr-merge arm returns exactly these four actions.
-  return { action: res.action as PrMergeResult["action"], outcome: res.outcome };
+  const a = res.action;
+  return { action: a === "pr-merge" || a === "local-merge" || a === "push-only" ? a : "none", outcome: res.outcome };
 }

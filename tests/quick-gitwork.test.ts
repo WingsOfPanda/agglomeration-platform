@@ -272,6 +272,16 @@ describe("finishBranch", () => {
     expect(calls.some((c) => c[0] === "gh" && c[1] === "pr" && c[2] === "create")).toBe(true);
     expect(calls).toContainEqual(["git", "checkout", "-q", "main"]);
   });
+  it("default title/body: quick branding, spelled out in full", () => {
+    const { r, calls } = fakeRunner({
+      "git remote": { code: 0, stdout: "origin\n" },
+      "git push -q -u origin feat/quick-auth": { code: 0, stdout: "" },
+      "git remote get-url origin": { code: 0, stdout: "git@example:me/r.git\n" },
+    });
+    finishBranch(r, { branch: "feat/quick-auth", startBranch: "main", hasGh: true });
+    expect(calls.find((c) => c[0] === "gh")).toEqual(["gh", "pr", "create", "--repo", "git@example:me/r.git", "--base", "main", "--head", "feat/quick-auth",
+      "--title", "quick: feat/quick-auth", "--body", "Automated quick branch. Review and merge into main."]);
+  });
   it("remote, push ok, gh absent → pr-pushed-no-gh", () => {
     const { r, calls } = fakeRunner({
       "git remote": { code: 0, stdout: "origin" },
