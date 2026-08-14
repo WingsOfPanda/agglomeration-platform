@@ -18204,18 +18204,16 @@ function createOrResumeBranch(r, name) {
 function shortstat(r, base) {
   return r.run("git", ["diff", "--shortstat", `${base}..HEAD`]).stdout.trim();
 }
-function finishBranch(r, o2) {
-  const action = finishAutoAction(r.run("git", ["remote"]).stdout);
-  if (action === "keep") {
-    r.run("git", ["checkout", "-q", o2.startBranch]);
-    return { action, outcome: "kept" };
-  }
+function hasDistinctBranch(r, branch, startBranch) {
+  return Boolean(branch) && branch !== startBranch && r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]).code === 0;
+}
+function pushAndPr(r, o2) {
   let outcome;
   if (r.run("git", ["push", "-q", "-u", "origin", o2.branch]).code === 0) {
     const url = o2.originUrl ?? r.run("git", ["remote", "get-url", "origin"]).stdout.trim();
-    const title = o2.title ?? `quick: ${o2.branch}`;
-    const body = o2.body ?? `Automated quick branch. Review and merge into ${o2.startBranch}.`;
-    if (o2.hasGh && r.run("gh", ["pr", "create", "--repo", url, "--base", o2.startBranch, "--head", o2.branch, "--title", title, "--body", body]).code === 0) {
+    const title = o2.title ?? `${o2.titlePrefix}: ${o2.branch}`;
+    const body = o2.body ?? `Automated ${o2.titlePrefix} branch. Review and merge into ${o2.base}.`;
+    if (o2.hasGh && r.run("gh", ["pr", "create", "--repo", url, "--base", o2.base, "--head", o2.branch, "--title", title, "--body", body]).code === 0) {
       outcome = "pr-opened";
     } else {
       outcome = "pr-pushed-no-gh";
@@ -18223,61 +18221,38 @@ function finishBranch(r, o2) {
   } else {
     outcome = "pr-failed-kept";
   }
-  r.run("git", ["checkout", "-q", o2.startBranch]);
-  return { action, outcome };
+  r.run("git", ["checkout", "-q", o2.base]);
+  return outcome;
 }
-function hasDistinctBranch(r, branch, startBranch) {
-  return Boolean(branch) && branch !== startBranch && r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]).code === 0;
-}
-function finishBranchAction(r, o2) {
-  if (!hasDistinctBranch(r, o2.branch, o2.startBranch)) return "no-branch";
-  switch (o2.action) {
+function finishWork(r, o2) {
+  if (!hasDistinctBranch(r, o2.branch, o2.base)) return { action: "none", outcome: "no-branch" };
+  let action = o2.action;
+  if (action === "auto") action = finishAutoAction(r.run("git", ["remote"]).stdout);
+  switch (action) {
     case "merge":
-      r.run("git", ["checkout", "-q", o2.startBranch]);
+      r.run("git", ["checkout", "-q", o2.base]);
       if (r.run("git", ["merge", "--no-edit", "-q", o2.branch]).code === 0) {
         r.run("git", ["branch", "-q", "-D", o2.branch]);
-        return "merged";
+        return { action: "merge", outcome: "merged" };
       }
       r.run("git", ["merge", "--abort"]);
-      return "merge-conflict-left";
+      return { action: "merge", outcome: "merge-conflict-left" };
     case "keep":
-      r.run("git", ["checkout", "-q", o2.startBranch]);
-      return "kept";
+      r.run("git", ["checkout", "-q", o2.base]);
+      return { action: "keep", outcome: "kept" };
     case "discard":
-      r.run("git", ["checkout", "-q", o2.startBranch]);
+      r.run("git", ["checkout", "-q", o2.base]);
       r.run("git", ["branch", "-q", "-D", o2.branch]);
-      return "discarded";
-    case "pr": {
-      let outcome;
-      if (r.run("git", ["push", "-q", "-u", "origin", o2.branch]).code === 0) {
-        const url = o2.originUrl ?? r.run("git", ["remote", "get-url", "origin"]).stdout.trim();
-        if (o2.hasGh && r.run("gh", [
-          "pr",
-          "create",
-          "--repo",
-          url,
-          "--base",
-          o2.startBranch,
-          "--head",
-          o2.branch,
-          "--title",
-          o2.title ?? `implement: ${o2.branch}`,
-          "--body",
-          o2.body ?? `Automated implement branch. Review and merge into ${o2.startBranch}.`
-        ]).code === 0) outcome = "pr-opened";
-        else outcome = "pr-pushed-no-gh";
-      } else outcome = "pr-failed-kept";
-      r.run("git", ["checkout", "-q", o2.startBranch]);
-      return outcome;
-    }
+      return { action: "discard", outcome: "discarded" };
+    case "pr":
+      return { action: "pr", outcome: pushAndPr(r, o2) };
+    case "pr-merge":
+      return prMerge(r, o2);
     default:
-      return "no-branch";
+      return { action: "none", outcome: "no-branch" };
   }
 }
-function finishBranchPrMerge(r, o2) {
-  if (!o2.branch || o2.branch === o2.base || r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${o2.branch}`]).code !== 0) {
-    return { action: "none", outcome: "no-branch" };
-  }
+function prMerge(r, o2) {
   if (finishAutoAction(r.run("git", ["remote"]).stdout) === "keep") {
     r.run("git", ["checkout", "-q", o2.base]);
     if (r.run("git", ["merge", "--no-edit", "-q", o2.branch]).code === 0) {
@@ -18296,8 +18271,8 @@ function finishBranchPrMerge(r, o2) {
     return { action: "push-only", outcome: "pushed-no-gh" };
   }
   const url = o2.originUrl ?? r.run("git", ["remote", "get-url", "origin"]).stdout.trim();
-  const title = o2.title ?? `bridge: ${o2.branch}`;
-  const body = o2.body ?? `Automated bridge branch. Merged into ${o2.base}.`;
+  const title = o2.title ?? `${o2.titlePrefix}: ${o2.branch}`;
+  const body = o2.body ?? `Automated ${o2.titlePrefix} branch. Merged into ${o2.base}.`;
   if (r.run("gh", ["pr", "create", "--repo", url, "--base", o2.base, "--head", o2.branch, "--title", title, "--body", body]).code !== 0 && r.run("gh", ["pr", "view", o2.branch, "--repo", url, "--json", "number"]).code !== 0) {
     r.run("git", ["checkout", "-q", o2.base]);
     return { action: "pr-merge", outcome: "pr-create-failed" };
@@ -18310,6 +18285,17 @@ function finishBranchPrMerge(r, o2) {
     return { action: "pr-merge", outcome: "pr-merged-pull-failed" };
   }
   return { action: "pr-merge", outcome: "pr-merged-pulled" };
+}
+function finishBranch(r, o2) {
+  const res = finishWork(r, { ...o2, base: o2.startBranch, action: "auto", titlePrefix: "quick" });
+  return { action: res.action === "pr" || res.action === "keep" ? res.action : "none", outcome: res.outcome };
+}
+function finishBranchAction(r, o2) {
+  return finishWork(r, { ...o2, base: o2.startBranch, titlePrefix: "implement" }).outcome;
+}
+function finishBranchPrMerge(r, o2) {
+  const res = finishWork(r, { ...o2, action: "pr-merge", titlePrefix: "bridge" });
+  return { action: res.action, outcome: res.outcome };
 }
 var import_node_child_process9;
 var init_gitwork = __esm({

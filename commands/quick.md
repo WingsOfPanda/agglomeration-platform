@@ -144,6 +144,11 @@ HEAD is probably still on `feat/quick-<SLUG>`, not the start branch. Give the br
    surface `quick finish`'s stash warning verbatim in your closing report — it names which case it
    was and the exact recovery for it. The same note is recorded as a hub flag, so `/ap:review`
    surfaces it after teardown.
+   If `finish-result.txt` reads **`none  no-branch`**, the recorded branch does not exist (the
+   `quick branch` checkout failed and only warned) or is the start branch itself: nothing was pushed
+   and no PR was opened, and the work — if any — is on the start branch. Recover by creating the
+   branch in `<TARGET>` by hand (`git checkout -b feat/quick-<SLUG>`), committing the work, then
+   re-running `$CS quick finish <SLUG>`. This refusal is flagged for `/ap:review` too.
 
 ## Stage 3 — Teardown + SUMMARY
 

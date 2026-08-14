@@ -150,29 +150,55 @@ export function shortstat(r: Runner, base: string): string {
   return r.run("git", ["diff", "--shortstat", `${base}..HEAD`]).stdout.trim();
 }
 
-export interface FinishOpts {
+/** Whether there is a real branch, distinct from the start branch, for a finish to act on. Every
+ *  finisher arm short-circuits to a no-op without one; implement's finish and quick's finish also
+ *  ask BEFORE calling, to tell a deliberate `--no-branch` run (or a checkout that never landed)
+ *  from the accident of having started on the feat branch, in their own command wording. */
+export function hasDistinctBranch(r: Runner, branch: string, startBranch: string): boolean {
+  return Boolean(branch) && branch !== startBranch &&
+    r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]).code === 0;
+}
+
+/** Every outcome a finisher returns. The commands write record-only strings of their own alongside
+ *  these — `same-branch` (implement's pre-classification), `branch-only (kept <branch>)` and
+ *  `stash-wip-kept` (quick's finish record), `in-place (commits on the current branch)` (bridge's
+ *  no-branch mode) — which never come from here; their meaning lives in the directives that write
+ *  them (commands/quick.md, implement.md, bridge.md). */
+export type FinishOutcome =
+  | "no-branch"
+  | "kept" | "merged" | "merge-conflict-left" | "discarded"
+  | "pr-opened" | "pr-pushed-no-gh" | "pr-failed-kept"
+  | "local-merged-no-remote" | "local-merge-conflict-left"
+  | "push-failed" | "pushed-no-gh"
+  | "pr-create-failed" | "pr-open-merge-blocked" | "pr-merged-pull-failed" | "pr-merged-pulled";
+
+export interface FinishWorkOpts {
   branch: string;
-  startBranch: string;
+  /** The branch to merge/PR into and to return to — the run's start branch. */
+  base: string;
+  action: "auto" | "merge" | "pr" | "keep" | "discard" | "pr-merge";
   hasGh: boolean;
   originUrl?: string;
   title?: string;
   body?: string;
+  /** Branding for the default PR title/body: `quick` | `implement` | `bridge`. */
+  titlePrefix: string;
 }
-export interface FinishResult { action: "pr" | "keep"; outcome: string; }
+export interface FinishWorkResult {
+  action: "pr" | "keep" | "merge" | "discard" | "pr-merge" | "local-merge" | "push-only" | "none";
+  outcome: FinishOutcome;
+}
 
-/** Auto finish: remote → push + gh PR; none → keep. Always restores the start-branch checkout. Best-effort. */
-export function finishBranch(r: Runner, o: FinishOpts): FinishResult {
-  const action = finishAutoAction(r.run("git", ["remote"]).stdout);
-  if (action === "keep") {
-    r.run("git", ["checkout", "-q", o.startBranch]);
-    return { action, outcome: "kept" };
-  }
-  let outcome: string;
+/** push → PR → restore, the step quick's auto finish and implement's `pr` action share. The
+ *  pr-merge flow does NOT come through here: its push-failure/no-gh/existing-PR outcomes are a
+ *  different vocabulary with a different meaning (it goes on to merge), so it spells its own. */
+function pushAndPr(r: Runner, o: FinishWorkOpts): FinishOutcome {
+  let outcome: FinishOutcome;
   if (r.run("git", ["push", "-q", "-u", "origin", o.branch]).code === 0) {
     const url = o.originUrl ?? r.run("git", ["remote", "get-url", "origin"]).stdout.trim();
-    const title = o.title ?? `quick: ${o.branch}`;
-    const body = o.body ?? `Automated quick branch. Review and merge into ${o.startBranch}.`;
-    if (o.hasGh && r.run("gh", ["pr", "create", "--repo", url, "--base", o.startBranch, "--head", o.branch, "--title", title, "--body", body]).code === 0) {
+    const title = o.title ?? `${o.titlePrefix}: ${o.branch}`;
+    const body = o.body ?? `Automated ${o.titlePrefix} branch. Review and merge into ${o.base}.`;
+    if (o.hasGh && r.run("gh", ["pr", "create", "--repo", url, "--base", o.base, "--head", o.branch, "--title", title, "--body", body]).code === 0) {
       outcome = "pr-opened";
     } else {
       outcome = "pr-pushed-no-gh";
@@ -180,66 +206,35 @@ export function finishBranch(r: Runner, o: FinishOpts): FinishResult {
   } else {
     outcome = "pr-failed-kept";
   }
-  r.run("git", ["checkout", "-q", o.startBranch]);
-  return { action, outcome };
+  r.run("git", ["checkout", "-q", o.base]);
+  return outcome;
 }
 
-export interface FinishActionOpts {
-  branch: string; startBranch: string; action: "merge" | "pr" | "keep" | "discard";
-  hasGh: boolean; originUrl?: string; title?: string; body?: string;
-}
-/** Whether there is a real branch, distinct from the start branch, for a finish to act on. The
- *  finishers short-circuit to a no-op without one; implement's finish also asks BEFORE calling, to
- *  tell a deliberate `--no-branch` run from the accident of having started on the feat branch. */
-export function hasDistinctBranch(r: Runner, branch: string, startBranch: string): boolean {
-  return Boolean(branch) && branch !== startBranch &&
-    r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]).code === 0;
-}
-
-/** Action-driven finisher (port of deploy_finish_branch @ deploy.sh:651). Restores startBranch
- *  (best-effort). New additive export; the auto finishBranch (used by quick) is unchanged. */
-export function finishBranchAction(r: Runner, o: FinishActionOpts): string {
-  if (!hasDistinctBranch(r, o.branch, o.startBranch)) return "no-branch";
-  switch (o.action) {
+/** The one finisher: guard the branch, act, restore the base checkout. Every arm is best-effort —
+ *  a finish that cannot do its job records what happened instead of failing the run. The three
+ *  exported finishers below are wrappers over this; each keeps its own return shape.
+ *  `auto` resolves to `pr` when a remote exists and `keep` when none does (quick's semantics). */
+export function finishWork(r: Runner, o: FinishWorkOpts): FinishWorkResult {
+  if (!hasDistinctBranch(r, o.branch, o.base)) return { action: "none", outcome: "no-branch" };
+  let action = o.action;
+  if (action === "auto") action = finishAutoAction(r.run("git", ["remote"]).stdout);
+  switch (action) {
     case "merge":
-      r.run("git", ["checkout", "-q", o.startBranch]);
-      if (r.run("git", ["merge", "--no-edit", "-q", o.branch]).code === 0) { r.run("git", ["branch", "-q", "-D", o.branch]); return "merged"; }
-      r.run("git", ["merge", "--abort"]); return "merge-conflict-left";
-    case "keep":    r.run("git", ["checkout", "-q", o.startBranch]); return "kept";
-    case "discard": r.run("git", ["checkout", "-q", o.startBranch]); r.run("git", ["branch", "-q", "-D", o.branch]); return "discarded";
-    case "pr": {
-      let outcome: string;
-      if (r.run("git", ["push", "-q", "-u", "origin", o.branch]).code === 0) {
-        const url = o.originUrl ?? r.run("git", ["remote", "get-url", "origin"]).stdout.trim();
-        if (o.hasGh && r.run("gh", ["pr", "create", "--repo", url, "--base", o.startBranch, "--head", o.branch,
-          "--title", o.title ?? `implement: ${o.branch}`,
-          "--body", o.body ?? `Automated implement branch. Review and merge into ${o.startBranch}.`]).code === 0) outcome = "pr-opened";
-        else outcome = "pr-pushed-no-gh";
-      } else outcome = "pr-failed-kept";
-      r.run("git", ["checkout", "-q", o.startBranch]); return outcome;
-    }
-    default: return "no-branch";
+      r.run("git", ["checkout", "-q", o.base]);
+      if (r.run("git", ["merge", "--no-edit", "-q", o.branch]).code === 0) { r.run("git", ["branch", "-q", "-D", o.branch]); return { action: "merge", outcome: "merged" }; }
+      r.run("git", ["merge", "--abort"]); return { action: "merge", outcome: "merge-conflict-left" };
+    case "keep":    r.run("git", ["checkout", "-q", o.base]); return { action: "keep", outcome: "kept" };
+    case "discard": r.run("git", ["checkout", "-q", o.base]); r.run("git", ["branch", "-q", "-D", o.branch]); return { action: "discard", outcome: "discarded" };
+    case "pr":      return { action: "pr", outcome: pushAndPr(r, o) };
+    case "pr-merge": return prMerge(r, o);
+    default: return { action: "none", outcome: "no-branch" };
   }
 }
 
-export interface PrMergeOpts {
-  branch: string;
-  base: string;
-  hasGh: boolean;
-  originUrl?: string;
-  title?: string;
-  body?: string;
-}
-export interface PrMergeResult { action: "pr-merge" | "local-merge" | "push-only" | "none"; outcome: string; }
-
-/** bridge's finisher: open a PR, merge it (a merge commit), and fast-forward local base — a SINGLE
+/** bridge's arm: open a PR, merge it (a merge commit), and fast-forward local base — a SINGLE
  *  integration point, so local base never diverges from the remote. Graceful fallbacks for
  *  no-remote / no-gh / merge-blocked / ff-fail. Ends checked out on `base` (best-effort). */
-export function finishBranchPrMerge(r: Runner, o: PrMergeOpts): PrMergeResult {
-  if (!o.branch || o.branch === o.base ||
-      r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${o.branch}`]).code !== 0) {
-    return { action: "none", outcome: "no-branch" };
-  }
+function prMerge(r: Runner, o: FinishWorkOpts): FinishWorkResult {
   // No remote → integrate locally (the PR path is impossible). Single merge into base.
   if (finishAutoAction(r.run("git", ["remote"]).stdout) === "keep") {
     r.run("git", ["checkout", "-q", o.base]);
@@ -260,8 +255,8 @@ export function finishBranchPrMerge(r: Runner, o: PrMergeOpts): PrMergeResult {
     return { action: "push-only", outcome: "pushed-no-gh" };
   }
   const url = o.originUrl ?? r.run("git", ["remote", "get-url", "origin"]).stdout.trim();
-  const title = o.title ?? `bridge: ${o.branch}`;
-  const body = o.body ?? `Automated bridge branch. Merged into ${o.base}.`;
+  const title = o.title ?? `${o.titlePrefix}: ${o.branch}`;
+  const body = o.body ?? `Automated ${o.titlePrefix} branch. Merged into ${o.base}.`;
   // gh pr create fails if a PR for this branch already exists — common in bridge, where the worker
   // often opens the PR itself. That is not a failure: only a create-failure with NO existing PR is
   // pr-create-failed; otherwise fall through and merge the open PR (the merge + ff-pull below is the
@@ -281,4 +276,48 @@ export function finishBranchPrMerge(r: Runner, o: PrMergeOpts): PrMergeResult {
     return { action: "pr-merge", outcome: "pr-merged-pull-failed" };
   }
   return { action: "pr-merge", outcome: "pr-merged-pulled" };
+}
+
+export interface FinishOpts {
+  branch: string;
+  startBranch: string;
+  hasGh: boolean;
+  originUrl?: string;
+  title?: string;
+  body?: string;
+}
+export interface FinishResult { action: "pr" | "keep" | "none"; outcome: string; }
+
+/** Auto finish: remote → push + gh PR; none → keep. Always restores the start-branch checkout. Best-effort. */
+export function finishBranch(r: Runner, o: FinishOpts): FinishResult {
+  const res = finishWork(r, { ...o, base: o.startBranch, action: "auto", titlePrefix: "quick" });
+  return { action: res.action === "pr" || res.action === "keep" ? res.action : "none", outcome: res.outcome };
+}
+
+export interface FinishActionOpts {
+  branch: string; startBranch: string; action: "merge" | "pr" | "keep" | "discard";
+  hasGh: boolean; originUrl?: string; title?: string; body?: string;
+}
+
+/** Action-driven finisher (port of deploy_finish_branch @ deploy.sh:651). Restores startBranch
+ *  (best-effort). New additive export; the auto finishBranch (used by quick) is unchanged. */
+export function finishBranchAction(r: Runner, o: FinishActionOpts): string {
+  return finishWork(r, { ...o, base: o.startBranch, titlePrefix: "implement" }).outcome;
+}
+
+export interface PrMergeOpts {
+  branch: string;
+  base: string;
+  hasGh: boolean;
+  originUrl?: string;
+  title?: string;
+  body?: string;
+}
+export interface PrMergeResult { action: "pr-merge" | "local-merge" | "push-only" | "none"; outcome: string; }
+
+/** bridge's finisher: the pr-merge arm, in bridge's own return shape. */
+export function finishBranchPrMerge(r: Runner, o: PrMergeOpts): PrMergeResult {
+  const res = finishWork(r, { ...o, action: "pr-merge", titlePrefix: "bridge" });
+  // Narrowing only: the pr-merge arm returns exactly these four actions.
+  return { action: res.action as PrMergeResult["action"], outcome: res.outcome };
 }
