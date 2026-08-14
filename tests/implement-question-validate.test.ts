@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validateQuestionLine } from "../src/core/implementQuestions.js";
+import { validateQuestionLine } from "../src/core/questionCodec.js";
 
 describe("validateQuestionLine (L8)", () => {
   it("accepts a plain ASCII question with no claim", () => {

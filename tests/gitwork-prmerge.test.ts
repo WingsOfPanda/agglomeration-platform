@@ -32,6 +32,13 @@ describe("finishBranchPrMerge", () => {
     expect(seq).toMatch(/git pull --ff-only origin main/);
   });
 
+  it("default title/body: bridge branding, spelled out in full", () => {
+    const log: string[] = [];
+    const r = fakeRunner({ ...BRANCH_EXISTS, "git remote": { stdout: "origin\n" }, "git remote get-url origin": { stdout: "u\n" } }, log);
+    finishBranchPrMerge(r, { branch: "feat/bridge-x", base: "main", hasGh: true });
+    expect(log).toContain("gh pr create --repo u --base main --head feat/bridge-x --title bridge: feat/bridge-x --body Automated bridge branch. Merged into main.");
+  });
+
   it("no remote → local merge into base, no gh/pr", () => {
     const log: string[] = [];
     const r = fakeRunner({ ...BRANCH_EXISTS, "git remote": { stdout: "" } }, log);

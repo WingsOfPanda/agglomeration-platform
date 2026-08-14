@@ -2,7 +2,7 @@
 import { describe, it, expect } from "vitest";
 import { classifyDirty, finishAutoAction } from "../src/core/gitwork.js";
 import { preSnapshot, createOrResumeBranch, shortstat } from "../src/core/gitwork.js";
-import { finishBranch, stashPush, stashPopByMessage, findStashRef } from "../src/core/gitwork.js";
+import { finishBranch, stashPush, stashPopByMessage, stashPopOnBranch, findStashRef } from "../src/core/gitwork.js";
 import type { Runner, RunResult } from "../src/core/gitwork.js";
 
 /** Fake runner: `replies` maps a "cmd arg arg" key to a scripted RunResult; default {code:0,stdout:""}. */
@@ -113,7 +113,7 @@ describe("stashPush / findStashRef / stashPopByMessage", () => {
 
   it("stashPush parked: a NEW entry exists and the tree came back clean", () => {
     const { r, calls } = fakeStash({ pre: EMPTY, post: ours("d00a77d") });
-    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "parked", sha: "d00a77d" });
+    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "parked", sha: "d00a77d", entryExists: true });
     expect(calls[0]).toEqual(["git", "stash", "list", "--format=%gd%x09%gs"]);   // pre-push identity
     expect(calls[1]).toEqual(["git", "stash", "push", "--include-untracked", "-m", "ap-quick-auth-wip"]);
     // Identity comes from the located entry, never from refs/stash (which is just whatever is on top).
@@ -121,39 +121,39 @@ describe("stashPush / findStashRef / stashPopByMessage", () => {
   });
   it("stashPush partial: rc 0 + a new entry, but the tree is STILL dirty (git could not stash some paths)", () => {
     const { r } = fakeStash({ pre: EMPTY, post: ours("d00a77d"), dirtyAfter: "?? nested-repo/\n" });
-    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "partial", sha: "d00a77d" });
+    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "partial", sha: "d00a77d", entryExists: true });
   });
   it("stashPush none: rc 0 but nothing was stashed ('No local changes to save')", () => {
     const { r, calls } = fakeStash({ pre: EMPTY, post: { list: "stash@{0}\tOn main: someone else\n", shas: {} } });
-    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "none", sha: "" });
+    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "none", sha: "", entryExists: false });
     expect(calls.some((c) => c[1] === "rev-parse")).toBe(false);
   });
   it("stashPush none: a LEFTOVER same-named entry from an aborted run is never adopted as ours", () => {
     // The side door: an abandoned ap-quick-<topic>-wip entry plus a push that creates nothing (only
     // submodule content dirty). The scan finds the old entry; the unchanged sha is what exposes it.
     const { r } = fakeStash({ pre: ours("olderrun"), post: ours("olderrun"), dirtyAfter: " M sub\n" });
-    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "none", sha: "" });
+    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "none", sha: "", entryExists: false });
     const failed = fakeStash({ pre: ours("olderrun"), post: ours("olderrun"), pushRc: 1 });
-    expect(stashPush(failed.r, "ap-quick-auth-wip")).toEqual({ outcome: "failed", sha: "" });
+    expect(stashPush(failed.r, "ap-quick-auth-wip")).toEqual({ outcome: "failed", sha: "", entryExists: false });
   });
   it("stashPush parked: a new entry created ALONGSIDE a same-named leftover records the NEW sha", () => {
     const { r } = fakeStash({
       pre: ours("olderrun"),
       post: { list: ENTRY + "stash@{1}\tOn main: ap-quick-auth-wip\n", shas: { "stash@{0}": "newone", "stash@{1}": "olderrun" } },
     });
-    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "parked", sha: "newone" });
+    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "parked", sha: "newone", entryExists: true });
   });
   it("stashPush failed-with-entry: rc != 0 but git had already created the entry", () => {
     const { r } = fakeStash({ pre: EMPTY, post: ours("d00a77d"), pushRc: 1 });
-    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "failed-with-entry", sha: "d00a77d" });
+    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "failed-with-entry", sha: "d00a77d", entryExists: true });
   });
   it("stashPush failed-with-entry: rc 0 + entry whose sha will not resolve → empty sha, never 'parked'", () => {
     const { r } = fakeStash({ pre: EMPTY, post: { list: ENTRY, shas: {} } });
-    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "failed-with-entry", sha: "" });
+    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "failed-with-entry", sha: "", entryExists: true });
   });
   it("stashPush failed: rc != 0 and no entry — nothing was stashed", () => {
     const { r, calls } = fakeStash({ pre: EMPTY, post: EMPTY, pushRc: 1 });
-    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "failed", sha: "" });
+    expect(stashPush(r, "ap-quick-auth-wip")).toEqual({ outcome: "failed", sha: "", entryExists: false });
     expect(calls.some((c) => c[1] === "rev-parse")).toBe(false);
   });
   it("findStashRef: matches the 'On <branch>: <msg>' subject git actually records, at any index", () => {
@@ -203,6 +203,35 @@ describe("stashPush / findStashRef / stashPopByMessage", () => {
     expect(stashPopByMessage(r, "ap-quick-auth-wip", "d00a77d")).toBe("list-failed");
     expect(calls.some((c) => c[2] === "pop")).toBe(false);
   });
+
+  describe("stashPopOnBranch (the HEAD precondition)", () => {
+    const HEAD = "git symbolic-ref --short HEAD";
+    const onMain = { [HEAD]: { code: 0, stdout: "main\n" }, [LIST]: { code: 0, stdout: ENTRY }, "git rev-parse stash@{0}": { code: 0, stdout: "d00a77d\n" } };
+
+    it("HEAD is another branch: wrong-head, the stash list is never even read", () => {
+      const { r, calls } = fakeRunner({ ...onMain, [HEAD]: { code: 0, stdout: "feat/quick-auth\n" } });
+      expect(stashPopOnBranch(r, "ap-quick-auth-wip", "d00a77d", "main")).toEqual({ outcome: "wrong-head", head: "feat/quick-auth" });
+      expect(calls.some((c) => c[1] === "stash")).toBe(false);
+    });
+    it("detached HEAD: wrong-head with an empty head (the caller words it)", () => {
+      const { r, calls } = fakeRunner({ ...onMain, [HEAD]: { code: 128, stdout: "" } });
+      expect(stashPopOnBranch(r, "ap-quick-auth-wip", "d00a77d", "main")).toEqual({ outcome: "wrong-head", head: "" });
+      expect(calls.some((c) => c[1] === "stash")).toBe(false);
+    });
+    it("HEAD is the required branch: passes every pop outcome through, with the head", () => {
+      const { r, calls } = fakeRunner(onMain);
+      expect(stashPopOnBranch(r, "ap-quick-auth-wip", "d00a77d", "main")).toEqual({ outcome: "popped", head: "main" });
+      expect(calls).toContainEqual(["git", "stash", "pop", "stash@{0}"]);
+      const conflict = fakeRunner({ ...onMain, "git stash pop stash@{0}": { code: 1, stdout: "" } });
+      expect(stashPopOnBranch(conflict.r, "ap-quick-auth-wip", "d00a77d", "main").outcome).toBe("conflict-kept");
+      const gone = fakeRunner({ ...onMain, [LIST]: { code: 0, stdout: "stash@{0}\tOn main: unrelated\n" } });
+      expect(stashPopOnBranch(gone.r, "ap-quick-auth-wip", "d00a77d", "main").outcome).toBe("not-found");
+      const unreadable = fakeRunner({ ...onMain, [LIST]: { code: 128, stdout: "" } });
+      expect(stashPopOnBranch(unreadable.r, "ap-quick-auth-wip", "d00a77d", "main").outcome).toBe("list-failed");
+      const foreign = fakeRunner({ ...onMain, "git rev-parse stash@{0}": { code: 0, stdout: "somebodyelse\n" } });
+      expect(stashPopOnBranch(foreign.r, "ap-quick-auth-wip", "d00a77d", "main").outcome).toBe("identity-mismatch");
+    });
+  });
 });
 
 describe("createOrResumeBranch", () => {
@@ -242,6 +271,16 @@ describe("finishBranch", () => {
     expect(res).toEqual({ action: "pr", outcome: "pr-opened" });
     expect(calls.some((c) => c[0] === "gh" && c[1] === "pr" && c[2] === "create")).toBe(true);
     expect(calls).toContainEqual(["git", "checkout", "-q", "main"]);
+  });
+  it("default title/body: quick branding, spelled out in full", () => {
+    const { r, calls } = fakeRunner({
+      "git remote": { code: 0, stdout: "origin\n" },
+      "git push -q -u origin feat/quick-auth": { code: 0, stdout: "" },
+      "git remote get-url origin": { code: 0, stdout: "git@example:me/r.git\n" },
+    });
+    finishBranch(r, { branch: "feat/quick-auth", startBranch: "main", hasGh: true });
+    expect(calls.find((c) => c[0] === "gh")).toEqual(["gh", "pr", "create", "--repo", "git@example:me/r.git", "--base", "main", "--head", "feat/quick-auth",
+      "--title", "quick: feat/quick-auth", "--body", "Automated quick branch. Review and merge into main."]);
   });
   it("remote, push ok, gh absent → pr-pushed-no-gh", () => {
     const { r, calls } = fakeRunner({

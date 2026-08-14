@@ -18,7 +18,7 @@ import { runnerAt, preSnapshot, createOrResumeBranch, shortstat, finishBranchAct
 import { runForensics, runFlag, recordHubFlag } from "../core/forensics.js";
 import { haveCmd } from "../core/deps.js";
 import { implementState, composeRound1Prompt, composeFixPrompt } from "../core/implementTurn.js";
-import { extractQuestionPayload, parseQuestionPayload } from "../core/implementQuestions.js";
+import { extractQuestionPayload, parseQuestionPayload } from "../core/questionCodec.js";
 import { outboxOffset, outboxPath, statusPath, workerSendGate, resolveModel, type OutboxEvent } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
 import { waitTurnConfirmed } from "../core/turn.js";

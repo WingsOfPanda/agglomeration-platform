@@ -11,7 +11,7 @@ import { runForensics, runFlag, recordHubFlag } from "../core/forensics.js";
 import { agentBinary } from "../core/contracts.js";
 import { haveCmd } from "../core/deps.js";
 import { pickRandomAgent } from "../core/agents.js";
-import { runnerAt, preSnapshot, createOrResumeBranch, finishBranch, classifyDirty, currentBranch, stashPush, stashPopByMessage } from "../core/gitwork.js";
+import { runnerAt, preSnapshot, createOrResumeBranch, finishBranch, classifyDirty, currentBranch, hasDistinctBranch, stashPush, stashPopOnBranch } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
 import { outboxOffset, outboxPath, workerSendGate, type OutboxEvent } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
@@ -149,8 +149,8 @@ export async function branchWith(topic: string, target: string, r: Runner, stash
     // The marker is written AFTER the logging: the log line is the user's only pointer if this write
     // fails, and a stash nobody knows about is the failure this whole path guards. Every outcome that
     // left an entry gets one — including `failed-with-entry`, whose sha can be empty, so the test is
-    // the outcome and NOT `st.sha`: an unresolvable ref still parked the user's work.
-    if (st.outcome !== "none" && st.outcome !== "failed") {
+    // `entryExists` and NOT `st.sha`: an unresolvable ref still parked the user's work.
+    if (st.entryExists) {
       atomicWrite(join(exec, "stash-wip.txt"), `${st.sha}\t${message}\n`);
     }
   }
@@ -281,17 +281,15 @@ function restoreStashWip(topic: string, exec: string, r: Runner, startBranch: st
     runFlag("quick", topic, `stash-wip-kept: WIP still stashed as '${message}' in ${target}; restore: git checkout ${startBranch} then git stash pop`);
     return "stash-wip-kept\n";
   };
-  // A pop lands on whatever HEAD is, and the start-branch checkout above can fail SILENTLY (a
-  // worker that left the tree dirty blocks it). Popping the park onto feat/quick-<topic> consumes
-  // the stash on the wrong branch — the one outcome nothing can undo. So HEAD is verified, never
-  // assumed; a detached HEAD fails symbolic-ref and is likewise not the start branch.
-  const on = currentBranch(r);
-  if (on !== startBranch) {
-    log.warn(`quick finish: HEAD is on '${on || "(detached)"}', not the start branch '${startBranch}' — NOT popping`);
+  // The start-branch checkout above can fail SILENTLY (a worker that left the tree dirty blocks it),
+  // so the pop goes through stashPopOnBranch, which proves HEAD before touching the stash.
+  const { outcome, head } = stashPopOnBranch(r, message, sha, startBranch);
+  if (outcome === "wrong-head") {
+    log.warn(`quick finish: HEAD is on '${head || "(detached)"}', not the start branch '${startBranch}' — NOT popping`);
     log.warn(`  the WIP stays stashed as '${message}': git checkout ${startBranch}  then  git stash pop <ref>`);
     return kept();
   }
-  switch (stashPopByMessage(r, message, sha)) {
+  switch (outcome) {
     case "popped":
       rmSync(marker, { force: true });
       log.ok(`quick finish: restored stashed WIP '${message}'`);
@@ -326,6 +324,23 @@ export async function finishWith(topic: string, r: Runner, hasGh: boolean): Prom
     const kept = restoreStashWip(topic, exec, r, startBranch);
     atomicWrite(join(exec, "finish-result.txt"), `none\tbranch-only (kept ${branch})\n` + kept);
     log.ok(`quick finish: branch-only — kept ${branch}, restored ${startBranch}`);
+    return 0;
+  }
+  // branch.txt carries the INTENDED name even when `quick branch`'s checkout failed (it only warns),
+  // so a finish that trusts it pushes a ref that was never created and records `pr-failed-kept` — a PR
+  // problem, when the truth is there was no branch to act on. Refuse loudly instead, and say so.
+  if (!hasDistinctBranch(r, branch, startBranch)) {
+    const named = branch || "(unrecorded)";
+    log.warn(`quick finish: no branch '${named}' distinct from the start branch '${startBranch}' — NOTHING was pushed and no PR was opened`);
+    log.warn(`  recover: re-run the branch step in the target repo (git checkout -b ${branch || `feat/quick-${topic}`}), commit the work, then finish again`);
+    r.run("git", ["checkout", "-q", startBranch]);
+    // Where the work actually sits is READ BACK, never assumed: this checkout is best-effort and a
+    // dirty tree blocks it silently, so a flag naming the start branch could send the user looking
+    // on a branch the run never reached.
+    const head = currentBranch(r) || "(detached)";
+    const keptNoBranch = restoreStashWip(topic, exec, r, startBranch);
+    atomicWrite(join(exec, "finish-result.txt"), "none\tno-branch\n" + keptNoBranch);
+    runFlag("quick", topic, `finish-no-branch: the recorded branch '${named}' is missing or is the start branch '${startBranch}' — nothing was pushed, no PR opened; the work (if any) is on '${head}'`);
     return 0;
   }
   const brief = readIfExists(join(quickArtDir(topic), "task-brief.md"));

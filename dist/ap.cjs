@@ -18157,16 +18157,19 @@ function preSnapshot(r, command, topic) {
   }
   return { branch, baseSha: r.run("git", ["rev-parse", "HEAD"]).stdout.trim(), state: "wip-committed" };
 }
+function parkResult(outcome, sha) {
+  return { outcome, sha, entryExists: outcome !== "none" && outcome !== "failed" };
+}
 function stashPush(r, message) {
   const before = stashShaFor(r, message);
   const rc = r.run("git", ["stash", "push", "--include-untracked", "-m", message]).code;
   const entry2 = stashEntry(r, message);
-  if (!entry2) return { outcome: rc === 0 ? "none" : "failed", sha: "" };
+  if (!entry2) return parkResult(rc === 0 ? "none" : "failed", "");
   const sha = entry2.sha;
-  if (sha && sha === before) return { outcome: rc === 0 ? "none" : "failed", sha: "" };
-  if (rc !== 0 || !sha) return { outcome: "failed-with-entry", sha };
+  if (sha && sha === before) return parkResult(rc === 0 ? "none" : "failed", "");
+  if (rc !== 0 || !sha) return parkResult("failed-with-entry", sha);
   const stillDirty = classifyDirty(r.run("git", ["status", "--porcelain", "--untracked-files=all"]).stdout);
-  return { outcome: stillDirty ? "partial" : "parked", sha };
+  return parkResult(stillDirty ? "partial" : "parked", sha);
 }
 function findStashRef(list, message) {
   for (const line of list.split("\n")) {
@@ -18195,6 +18198,11 @@ function stashPopByMessage(r, message, expectSha) {
   if (!expectSha || r.run("git", ["rev-parse", ref]).stdout.trim() !== expectSha) return "identity-mismatch";
   return r.run("git", ["stash", "pop", ref]).code === 0 ? "popped" : "conflict-kept";
 }
+function stashPopOnBranch(r, message, expectSha, requiredBranch) {
+  const head = currentBranch(r);
+  if (head !== requiredBranch) return { outcome: "wrong-head", head };
+  return { outcome: stashPopByMessage(r, message, expectSha), head };
+}
 function createOrResumeBranch(r, name) {
   if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${name}`]).code === 0) {
     return r.run("git", ["checkout", "-q", name]).code === 0;
@@ -18204,18 +18212,16 @@ function createOrResumeBranch(r, name) {
 function shortstat(r, base) {
   return r.run("git", ["diff", "--shortstat", `${base}..HEAD`]).stdout.trim();
 }
-function finishBranch(r, o2) {
-  const action = finishAutoAction(r.run("git", ["remote"]).stdout);
-  if (action === "keep") {
-    r.run("git", ["checkout", "-q", o2.startBranch]);
-    return { action, outcome: "kept" };
-  }
+function hasDistinctBranch(r, branch, startBranch) {
+  return Boolean(branch) && branch !== startBranch && r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]).code === 0;
+}
+function pushAndPr(r, o2) {
   let outcome;
   if (r.run("git", ["push", "-q", "-u", "origin", o2.branch]).code === 0) {
     const url = o2.originUrl ?? r.run("git", ["remote", "get-url", "origin"]).stdout.trim();
-    const title = o2.title ?? `quick: ${o2.branch}`;
-    const body = o2.body ?? `Automated quick branch. Review and merge into ${o2.startBranch}.`;
-    if (o2.hasGh && r.run("gh", ["pr", "create", "--repo", url, "--base", o2.startBranch, "--head", o2.branch, "--title", title, "--body", body]).code === 0) {
+    const title = o2.title ?? `${o2.titlePrefix}: ${o2.branch}`;
+    const body = o2.body ?? `Automated ${o2.titlePrefix} branch. Review and merge into ${o2.base}.`;
+    if (o2.hasGh && r.run("gh", ["pr", "create", "--repo", url, "--base", o2.base, "--head", o2.branch, "--title", title, "--body", body]).code === 0) {
       outcome = "pr-opened";
     } else {
       outcome = "pr-pushed-no-gh";
@@ -18223,61 +18229,38 @@ function finishBranch(r, o2) {
   } else {
     outcome = "pr-failed-kept";
   }
-  r.run("git", ["checkout", "-q", o2.startBranch]);
-  return { action, outcome };
+  r.run("git", ["checkout", "-q", o2.base]);
+  return outcome;
 }
-function hasDistinctBranch(r, branch, startBranch) {
-  return Boolean(branch) && branch !== startBranch && r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]).code === 0;
-}
-function finishBranchAction(r, o2) {
-  if (!hasDistinctBranch(r, o2.branch, o2.startBranch)) return "no-branch";
-  switch (o2.action) {
+function finishWork(r, o2) {
+  if (!hasDistinctBranch(r, o2.branch, o2.base)) return { action: "none", outcome: "no-branch" };
+  let action = o2.action;
+  if (action === "auto") action = finishAutoAction(r.run("git", ["remote"]).stdout);
+  switch (action) {
     case "merge":
-      r.run("git", ["checkout", "-q", o2.startBranch]);
+      r.run("git", ["checkout", "-q", o2.base]);
       if (r.run("git", ["merge", "--no-edit", "-q", o2.branch]).code === 0) {
         r.run("git", ["branch", "-q", "-D", o2.branch]);
-        return "merged";
+        return { action: "merge", outcome: "merged" };
       }
       r.run("git", ["merge", "--abort"]);
-      return "merge-conflict-left";
+      return { action: "merge", outcome: "merge-conflict-left" };
     case "keep":
-      r.run("git", ["checkout", "-q", o2.startBranch]);
-      return "kept";
+      r.run("git", ["checkout", "-q", o2.base]);
+      return { action: "keep", outcome: "kept" };
     case "discard":
-      r.run("git", ["checkout", "-q", o2.startBranch]);
+      r.run("git", ["checkout", "-q", o2.base]);
       r.run("git", ["branch", "-q", "-D", o2.branch]);
-      return "discarded";
-    case "pr": {
-      let outcome;
-      if (r.run("git", ["push", "-q", "-u", "origin", o2.branch]).code === 0) {
-        const url = o2.originUrl ?? r.run("git", ["remote", "get-url", "origin"]).stdout.trim();
-        if (o2.hasGh && r.run("gh", [
-          "pr",
-          "create",
-          "--repo",
-          url,
-          "--base",
-          o2.startBranch,
-          "--head",
-          o2.branch,
-          "--title",
-          o2.title ?? `implement: ${o2.branch}`,
-          "--body",
-          o2.body ?? `Automated implement branch. Review and merge into ${o2.startBranch}.`
-        ]).code === 0) outcome = "pr-opened";
-        else outcome = "pr-pushed-no-gh";
-      } else outcome = "pr-failed-kept";
-      r.run("git", ["checkout", "-q", o2.startBranch]);
-      return outcome;
-    }
+      return { action: "discard", outcome: "discarded" };
+    case "pr":
+      return { action: "pr", outcome: pushAndPr(r, o2) };
+    case "pr-merge":
+      return prMerge(r, o2);
     default:
-      return "no-branch";
+      return { action: "none", outcome: "no-branch" };
   }
 }
-function finishBranchPrMerge(r, o2) {
-  if (!o2.branch || o2.branch === o2.base || r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${o2.branch}`]).code !== 0) {
-    return { action: "none", outcome: "no-branch" };
-  }
+function prMerge(r, o2) {
   if (finishAutoAction(r.run("git", ["remote"]).stdout) === "keep") {
     r.run("git", ["checkout", "-q", o2.base]);
     if (r.run("git", ["merge", "--no-edit", "-q", o2.branch]).code === 0) {
@@ -18296,8 +18279,8 @@ function finishBranchPrMerge(r, o2) {
     return { action: "push-only", outcome: "pushed-no-gh" };
   }
   const url = o2.originUrl ?? r.run("git", ["remote", "get-url", "origin"]).stdout.trim();
-  const title = o2.title ?? `bridge: ${o2.branch}`;
-  const body = o2.body ?? `Automated bridge branch. Merged into ${o2.base}.`;
+  const title = o2.title ?? `${o2.titlePrefix}: ${o2.branch}`;
+  const body = o2.body ?? `Automated ${o2.titlePrefix} branch. Merged into ${o2.base}.`;
   if (r.run("gh", ["pr", "create", "--repo", url, "--base", o2.base, "--head", o2.branch, "--title", title, "--body", body]).code !== 0 && r.run("gh", ["pr", "view", o2.branch, "--repo", url, "--json", "number"]).code !== 0) {
     r.run("git", ["checkout", "-q", o2.base]);
     return { action: "pr-merge", outcome: "pr-create-failed" };
@@ -18310,6 +18293,18 @@ function finishBranchPrMerge(r, o2) {
     return { action: "pr-merge", outcome: "pr-merged-pull-failed" };
   }
   return { action: "pr-merge", outcome: "pr-merged-pulled" };
+}
+function finishBranch(r, o2) {
+  const res = finishWork(r, { ...o2, base: o2.startBranch, action: "auto", titlePrefix: "quick" });
+  return { action: res.action === "pr" || res.action === "keep" ? res.action : "none", outcome: res.outcome };
+}
+function finishBranchAction(r, o2) {
+  return finishWork(r, { ...o2, base: o2.startBranch, titlePrefix: "implement" }).outcome;
+}
+function finishBranchPrMerge(r, o2) {
+  const res = finishWork(r, { ...o2, action: "pr-merge", titlePrefix: "bridge" });
+  const a2 = res.action;
+  return { action: a2 === "pr-merge" || a2 === "local-merge" || a2 === "push-only" ? a2 : "none", outcome: res.outcome };
 }
 var import_node_child_process9;
 var init_gitwork = __esm({
@@ -19028,7 +19023,7 @@ async function branchWith(topic, target, r, stashWip = false) {
         log.warn(`quick branch: --stash-wip could not stash the tree; falling back to a WIP snapshot commit`);
         break;
     }
-    if (st.outcome !== "none" && st.outcome !== "failed") {
+    if (st.entryExists) {
       atomicWrite((0, import_node_path21.join)(exec, "stash-wip.txt"), `${st.sha}	${message}
 `);
     }
@@ -19176,13 +19171,13 @@ function restoreStashWip(topic, exec, r, startBranch) {
     runFlag("quick", topic, `stash-wip-kept: WIP still stashed as '${message}' in ${target}; restore: git checkout ${startBranch} then git stash pop`);
     return "stash-wip-kept\n";
   };
-  const on6 = currentBranch(r);
-  if (on6 !== startBranch) {
-    log.warn(`quick finish: HEAD is on '${on6 || "(detached)"}', not the start branch '${startBranch}' \u2014 NOT popping`);
+  const { outcome, head } = stashPopOnBranch(r, message, sha, startBranch);
+  if (outcome === "wrong-head") {
+    log.warn(`quick finish: HEAD is on '${head || "(detached)"}', not the start branch '${startBranch}' \u2014 NOT popping`);
     log.warn(`  the WIP stays stashed as '${message}': git checkout ${startBranch}  then  git stash pop <ref>`);
     return kept();
   }
-  switch (stashPopByMessage(r, message, sha)) {
+  switch (outcome) {
     case "popped":
       (0, import_node_fs27.rmSync)(marker, { force: true });
       log.ok(`quick finish: restored stashed WIP '${message}'`);
@@ -19216,6 +19211,17 @@ async function finishWith(topic, r, hasGh) {
     atomicWrite((0, import_node_path21.join)(exec, "finish-result.txt"), `none	branch-only (kept ${branch})
 ` + kept2);
     log.ok(`quick finish: branch-only \u2014 kept ${branch}, restored ${startBranch}`);
+    return 0;
+  }
+  if (!hasDistinctBranch(r, branch, startBranch)) {
+    const named = branch || "(unrecorded)";
+    log.warn(`quick finish: no branch '${named}' distinct from the start branch '${startBranch}' \u2014 NOTHING was pushed and no PR was opened`);
+    log.warn(`  recover: re-run the branch step in the target repo (git checkout -b ${branch || `feat/quick-${topic}`}), commit the work, then finish again`);
+    r.run("git", ["checkout", "-q", startBranch]);
+    const head = currentBranch(r) || "(detached)";
+    const keptNoBranch = restoreStashWip(topic, exec, r, startBranch);
+    atomicWrite((0, import_node_path21.join)(exec, "finish-result.txt"), "none	no-branch\n" + keptNoBranch);
+    runFlag("quick", topic, `finish-no-branch: the recorded branch '${named}' is missing or is the start branch '${startBranch}' \u2014 nothing was pushed, no PR opened; the work (if any) is on '${head}'`);
     return 0;
   }
   const brief = readIfExists((0, import_node_path21.join)(quickArtDir(topic), "task-brief.md"));
@@ -21011,7 +21017,7 @@ var init_implementTurn = __esm({
   }
 });
 
-// src/core/implementQuestions.ts
+// src/core/questionCodec.ts
 function percentDecode(s) {
   let out = s;
   out = out.split("%0A").join("\n");
@@ -21081,8 +21087,8 @@ ASKED_AT=${askedAt}
 `;
 }
 var KNOWN_KINDS;
-var init_implementQuestions = __esm({
-  "src/core/implementQuestions.ts"() {
+var init_questionCodec = __esm({
+  "src/core/questionCodec.ts"() {
     "use strict";
     KNOWN_KINDS = /* @__PURE__ */ new Set(["path", "git", "env", "cmd", "test"]);
   }
@@ -21819,7 +21825,7 @@ var init_implement2 = __esm({
     init_forensics();
     init_deps();
     init_implementTurn();
-    init_implementQuestions();
+    init_questionCodec();
     init_ipc();
     init_waitLive();
     init_turn();
