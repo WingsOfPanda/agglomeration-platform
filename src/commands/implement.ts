@@ -13,7 +13,7 @@ import {
   implementArtDir, iterTargets, assertImplementTopic, ImplementArgError,
 } from "../core/implement.js";
 import { isoUtc, archiveTopic } from "../core/archive.js";
-import { extractComponentsPaths, matchDiffAgainstComponents } from "../core/implementScope.js";
+import { extractComponentsPaths, lintComponentsPaths, matchDiffAgainstComponents } from "../core/implementScope.js";
 import { runnerAt, preSnapshot, createOrResumeBranch, shortstat, finishBranchAction, hasDistinctBranch, type Runner } from "../core/gitwork.js";
 import { runForensics, runFlag, recordHubFlag } from "../core/forensics.js";
 import { haveCmd } from "../core/deps.js";
@@ -81,6 +81,10 @@ async function auditRun(rest: string[]): Promise<number> {
   if (!existsSync(doc)) { log.error(`implement audit: doc unreadable: ${doc}`); return 2; }
   let text: string;
   try { text = readFileSync(doc, "utf8"); } catch { log.error(`implement audit: doc unreadable: ${doc}`); return 2; }
+  // Warn-only path lint (catches docs authored outside /ap:design); the audit below owns the verdict.
+  for (const p of lintComponentsPaths(text, repoRoot())) {
+    log.warn(`implement audit: Components path not found in this checkout: ${p} — mark it [on-box] if it is deliberately box-local, or fix the path`);
+  }
   const ad = auditDoc(text);
   if (ad.verdict === "FAIL") { for (const i of ad.issues) process.stderr.write(`ISSUE=${i}\n`); return 1; }
   log.ok(`implement audit: PASS ${doc}`);

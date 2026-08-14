@@ -181,6 +181,11 @@ walks the six sections with you interactively.
 - You get: `docs/ap/specs/<date>-<topic>-design.md` — exported into your repo as the primary,
   discoverable copy — plus the full research trail in the archived run dir.
 - Feed it an explore handoff for grounded research, or a raw topic for a fresh investigation.
+- Every path the doc's Components section cites must exist in the checkout: assembling the doc (and
+  `implement`'s later audit of it) warns on each one that does not, since a phantom path costs the
+  implementing worker a question round. Tag a line `[on-box]` for paths that deliberately live
+  elsewhere — a box-local config, a sibling repo — and that line is exempt. The warning never fails
+  the run; the deploy-audit gate alone decides pass/fail.
 
 ### `/ap:implement`
 

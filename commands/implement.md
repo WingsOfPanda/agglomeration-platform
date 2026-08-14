@@ -66,6 +66,11 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
        regenerate one) and stop.
    - **rc 0** — audit PASSED. Proceed to `init` normally.
 
+   At every rc, `audit` also emits a warn-only `[WARN] implement audit: Components path not found in
+   this checkout: <p>` line per declared Components path that does not exist here (a line tagged
+   `[on-box]` is exempt) — it never changes the rc. Relay those paths to the user: each one is a
+   question round the worker would otherwise burn asking about a file it cannot find.
+
    Init: `$CS implement init --args-file <args-path>`. On success it prints to stdout:
    ```
    ART=<abs path to the _implement art dir>
