@@ -1157,6 +1157,16 @@ describe("autoresearch verify-check", () => {
     const { d } = deps({});
     expect(await verifyCheckWith(["topic", "alpha", "exp-001"], d)).toBe(2);
   });
+  // Straddles 0.01 at |d|=0.0095 / 0.0105 against the reported 0.9, so any resolved default
+  // outside (0.0095, 0.0105] — a halving, a doubling, a re-inlined chain that drifted — flips one.
+  it("no metric.md -> the resolved 0.01 default decides", async () => {
+    const near = deps({ readMetricMd: () => null, readStdout: () => "VERIFY_METRIC=0.9095\n" });
+    await verifyCheckWith(["topic", "alpha", "exp-001", "--stdout-file", "/x"], near.d);
+    expect(near.rows[0].verdict).toBe("verified");
+    const far = deps({ readMetricMd: () => null, readStdout: () => "VERIFY_METRIC=0.9105\n" });
+    await verifyCheckWith(["topic", "alpha", "exp-001", "--stdout-file", "/x"], far.d);
+    expect(far.rows[0].verdict).toBe("mismatch");
+  });
 });
 
 import { inspectPlanWith, inspectCheckWith, liveInspectPlanDeps, type InspectPlanDeps, type InspectCheckDeps } from "../src/commands/autoresearch.js";
@@ -1230,6 +1240,15 @@ describe("autoresearch inspect-plan (C1)", () => {
     const { deps } = mkPlan({}, null);
     expect(await inspectPlanWith(["t", "golf", "exp-001", "--authorize-inspect"], deps)).toBe(1);
   });
+  // A metric.md without c1_budget resolves to 2: the second inspection dispatches, the third does not.
+  it("no c1_budget -> the resolved default of 2 decides", async () => {
+    const under = mkPlan({ inspectionCount: () => 1 });
+    expect(await inspectPlanWith(["t", "golf", "exp-001", "--authorize-inspect"], under.deps)).toBe(0);
+    expect(under.lines.join("\n")).toContain("INSPECT_CWD=");
+    const at = mkPlan({ inspectionCount: () => 2 });
+    await inspectPlanWith(["t", "golf", "exp-001", "--authorize-inspect"], at.deps);
+    expect(at.rows[0].reason).toBe("budget-exhausted");
+  });
 });
 
 describe("autoresearch inspect-check (C1)", () => {
@@ -1267,6 +1286,16 @@ describe("autoresearch inspect-check (C1)", () => {
     expect(await inspectCheckWith(["t", "golf", "exp-001", "--integrity-refuted"], deps)).toBe(0);
     expect(rows[0].verdict).toBe("not-reproduced");
     expect(rows[0].reason).toBe("integrity-refuted");
+  });
+  // verify_epsilon 0.2 with no c1_epsilon resolves to 0.4: 0.3 off reproduces, 0.6 off does not.
+  it("no c1_epsilon -> twice verify_epsilon decides", async () => {
+    const md = () => "**Primary metric:** accuracy\n**verify_epsilon:** 0.2\n";
+    const near = mkCheck({ readMetricMd: md, readStdout: () => "VERIFY_METRIC=1.2\n" });
+    await inspectCheckWith(["t", "golf", "exp-001", "--stdout-file", "/x"], near.deps);
+    expect(near.rows[0].verdict).toBe("reproduced");
+    const far = mkCheck({ readMetricMd: md, readStdout: () => "VERIFY_METRIC=1.5\n" });
+    await inspectCheckWith(["t", "golf", "exp-001", "--stdout-file", "/x"], far.deps);
+    expect(far.rows[0].verdict).toBe("not-reproduced");
   });
 });
 
