@@ -19218,6 +19218,15 @@ async function finishWith(topic, r, hasGh) {
     log.ok(`quick finish: branch-only \u2014 kept ${branch}, restored ${startBranch}`);
     return 0;
   }
+  if (!hasDistinctBranch(r, branch, startBranch)) {
+    log.error(`quick finish: no branch '${branch || "(unrecorded)"}' distinct from the start branch '${startBranch}' \u2014 NOTHING was pushed and no PR was opened`);
+    log.error("  recover: re-run the branch step in the target repo (git checkout -b <branch>), commit the work, then finish again");
+    r.run("git", ["checkout", "-q", startBranch]);
+    const keptNoBranch = restoreStashWip(topic, exec, r, startBranch);
+    atomicWrite((0, import_node_path21.join)(exec, "finish-result.txt"), "none	no-branch\n" + keptNoBranch);
+    runFlag("quick", topic, `finish-no-branch: the recorded branch '${branch || "(unrecorded)"}' is missing or is the start branch '${startBranch}' \u2014 nothing was pushed, no PR opened; the work (if any) is on '${startBranch}'`);
+    return 0;
+  }
   const brief = readIfExists((0, import_node_path21.join)(quickArtDir(topic), "task-brief.md"));
   const verify = readField((0, import_node_path21.join)(exec, "verify-result.txt"));
   const res = finishBranch(r, {

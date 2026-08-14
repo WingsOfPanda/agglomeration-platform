@@ -467,6 +467,72 @@ describe("quick finish (finishWith core)", () => {
   });
 });
 
+describe("quick finish: no-branch guard", () => {
+  let h: { home: string; cleanup: () => void };
+  beforeEach(() => { h = freshHome(); });
+  afterEach(() => { h.cleanup(); });
+
+  async function scaffold(branch: string, startBranch: string) {
+    const exec = quickExecDir("auth");
+    mkdirSync(exec, { recursive: true });
+    writeFileSync(join(exec, "target_cwd.txt"), "/proj\n");
+    writeFileSync(join(exec, "branch.txt"), branch + "\n");
+    writeFileSync(join(exec, "start-branch.txt"), startBranch + "\n");
+    writeFileSync(join(exec, "finish.txt"), "yes\n");
+    writeFileSync(join(quickArtDir("auth"), "task-brief.md"), "## Goal\nX");
+    writeFileSync(join(exec, "verify-result.txt"), "PASS (npm test)\n");
+    return exec;
+  }
+
+  /** `refRc` decides whether the recorded branch actually exists — `quick branch` writes branch.txt
+   *  with the intended name even when the checkout failed, so a missing ref is the field shape. */
+  function fakeGit(refRc: number): { r: Runner; calls: string[][] } {
+    const calls: string[][] = [];
+    const r: Runner = { run(cmd, args) {
+      calls.push([cmd, ...args]);
+      const k = [cmd, ...args].join(" ");
+      if (k === "git show-ref --verify --quiet refs/heads/feat/quick-auth") return { code: refRc, stdout: "" };
+      if (k === "git remote") return { code: 0, stdout: "origin\n" };
+      return { code: 0, stdout: "" };
+    } };
+    return { r, calls };
+  }
+
+  function hubFlags(): string[] {
+    const root = join(h.home, "forensics");
+    if (!existsSync(root)) return [];
+    return readdirSync(root).flatMap((d) => readdirSync(join(root, d)).map((f) => readFileSync(join(root, d, f), "utf8")));
+  }
+
+  it("recorded branch has no ref: refuses, pushes NOTHING, records none/no-branch + a hub flag", async () => {
+    const exec = await scaffold("feat/quick-auth", "main");
+    const { r, calls } = fakeGit(1);
+    expect(await finishWith("auth", r, true)).toBe(0);
+    expect(calls.some((c) => c[1] === "push")).toBe(false);
+    expect(calls.some((c) => c[0] === "gh")).toBe(false);
+    expect(readFileSync(join(exec, "finish-result.txt"), "utf8")).toBe("none\tno-branch\n");
+    expect(calls).toContainEqual(["git", "checkout", "-q", "main"]);
+    expect(hubFlags().join("")).toContain("finish-no-branch");
+  });
+
+  it("recorded branch IS the start branch: same refusal, no ref probe needed", async () => {
+    const exec = await scaffold("main", "main");
+    const { r, calls } = fakeGit(0);
+    expect(await finishWith("auth", r, true)).toBe(0);
+    expect(calls.some((c) => c[1] === "push")).toBe(false);
+    expect(calls.some((c) => c[0] === "gh")).toBe(false);
+    expect(readFileSync(join(exec, "finish-result.txt"), "utf8")).toBe("none\tno-branch\n");
+  });
+
+  it("healthy distinct branch: the guard passes and the finish proceeds", async () => {
+    const exec = await scaffold("feat/quick-auth", "main");
+    const { r, calls } = fakeGit(0);
+    expect(await finishWith("auth", r, true)).toBe(0);
+    expect(calls.some((c) => c.join(" ") === "git push -q -u origin feat/quick-auth")).toBe(true);
+    expect(readFileSync(join(exec, "finish-result.txt"), "utf8")).toBe("pr\tpr-opened\n");
+  });
+});
+
 describe("quick finish: --stash-wip restore", () => {
   let h: { home: string; cleanup: () => void };
   beforeEach(() => { h = freshHome(); });

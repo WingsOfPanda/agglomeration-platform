@@ -11,7 +11,7 @@ import { runForensics, runFlag, recordHubFlag } from "../core/forensics.js";
 import { agentBinary } from "../core/contracts.js";
 import { haveCmd } from "../core/deps.js";
 import { pickRandomAgent } from "../core/agents.js";
-import { runnerAt, preSnapshot, createOrResumeBranch, finishBranch, classifyDirty, currentBranch, stashPush, stashPopByMessage } from "../core/gitwork.js";
+import { runnerAt, preSnapshot, createOrResumeBranch, finishBranch, classifyDirty, currentBranch, hasDistinctBranch, stashPush, stashPopByMessage } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
 import { outboxOffset, outboxPath, workerSendGate, type OutboxEvent } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
@@ -326,6 +326,18 @@ export async function finishWith(topic: string, r: Runner, hasGh: boolean): Prom
     const kept = restoreStashWip(topic, exec, r, startBranch);
     atomicWrite(join(exec, "finish-result.txt"), `none\tbranch-only (kept ${branch})\n` + kept);
     log.ok(`quick finish: branch-only — kept ${branch}, restored ${startBranch}`);
+    return 0;
+  }
+  // branch.txt carries the INTENDED name even when `quick branch`'s checkout failed (it only warns),
+  // so a finish that trusts it pushes a ref that was never created and records `pr-failed-kept` — a PR
+  // problem, when the truth is there was no branch to act on. Refuse loudly instead, and say so.
+  if (!hasDistinctBranch(r, branch, startBranch)) {
+    log.error(`quick finish: no branch '${branch || "(unrecorded)"}' distinct from the start branch '${startBranch}' — NOTHING was pushed and no PR was opened`);
+    log.error("  recover: re-run the branch step in the target repo (git checkout -b <branch>), commit the work, then finish again");
+    r.run("git", ["checkout", "-q", startBranch]);
+    const keptNoBranch = restoreStashWip(topic, exec, r, startBranch);
+    atomicWrite(join(exec, "finish-result.txt"), "none\tno-branch\n" + keptNoBranch);
+    runFlag("quick", topic, `finish-no-branch: the recorded branch '${branch || "(unrecorded)"}' is missing or is the start branch '${startBranch}' — nothing was pushed, no PR opened; the work (if any) is on '${startBranch}'`);
     return 0;
   }
   const brief = readIfExists(join(quickArtDir(topic), "task-brief.md"));
