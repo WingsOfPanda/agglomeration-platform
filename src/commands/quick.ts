@@ -1,5 +1,5 @@
 // src/commands/quick.ts
-import { mkdirSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile } from "../args.js";
@@ -7,15 +7,15 @@ import { atomicWrite } from "../core/atomic.js";
 import { isoUtc } from "../core/archive.js";
 import { repoRoot } from "../core/paths.js";
 import { quickArtDir, quickExecDir, deriveSlug, parseQuickArgs, parseBranchArgs, detectTestCommand, renderSummary, renderResume, type SummaryFacts } from "../core/quick.js";
-import { runForensics, runFlag, recordHubFlag } from "../core/forensics.js";
+import { runForensics, runFlag } from "../core/forensics.js";
 import { agentBinary } from "../core/contracts.js";
 import { haveCmd } from "../core/deps.js";
 import { pickRandomAgent } from "../core/agents.js";
 import { runnerAt, preSnapshot, createOrResumeBranch, finishBranch, classifyDirty, currentBranch, hasDistinctBranch, stashPush, stashPopOnBranch } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
-import { outboxOffset, outboxPath, workerSendGate, type Clock } from "../core/ipc.js";
-import { composeRound1Prompt, composeFixPrompt, classifyTurn } from "../core/turn.js";
-import { awaitTurn, recordWaitOutcome, type WaitFn } from "../core/wait.js";
+import { outboxOffset, outboxPath } from "../core/ipc.js";
+import { composeRound1Prompt, composeFixPrompt } from "../core/turn.js";
+import { sendRound, waitRound, type RoundDescriptor, type RoundSendDeps, type RoundWaitDeps } from "../core/roundProtocol.js";
 import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
 import { run as sendRun } from "./send.js";
 import { readIfExists, readIfExistsOrNull, readField, kvField } from "../core/fsread.js";
@@ -165,10 +165,30 @@ export async function branchWith(topic: string, target: string, r: Runner, stash
   log.ok(`quick branch: ${branch} (snapshot=${snap.state}, base=${snap.baseSha.slice(0, 8)})`);
   return 0;
 }
-export interface TurnSendDeps {
-  offsetFor(agent: string, model: string, topic: string): number;
-  send(args: string[]): Promise<number>;
-}
+export type TurnSendDeps = RoundSendDeps;
+export type TurnWaitDeps = RoundWaitDeps;
+
+const QUICK_TURN_TIMEOUT = envNum("AP_QUICK_TURN_TIMEOUT", DEFAULT_TURN_BUDGET_S);
+
+/** quick's half of the shared send/wait skeleton (src/core/roundProtocol.ts). */
+const QUICK_ROUND: RoundDescriptor = {
+  command: "quick",
+  label: (verb) => `quick turn-${verb}`,
+  initHint: "run quick init",
+  gateNoun: "turn",
+  artDir: quickArtDir,
+  execDir: quickExecDir,
+  stateFile: (exec, round) => join(exec, `turn-${round}.txt`),
+  promptFile: (exec, round) => join(exec, `turn-prompt-${round}.md`),
+  bundle: (exec, round) => ({ path: join(exec, `fix-prompt-${round}.md`), missingWording: "fix bundle missing" }),
+  composeFirst: ({ art, exec, topic }) => composeRound1Prompt(
+    readIfExists(join(art, "task-brief.md")),
+    readField(join(exec, "branch.txt")) || `feat/quick-${topic}`,
+  ),
+  composeFollowup: composeFixPrompt,
+  timeoutS: () => QUICK_TURN_TIMEOUT,
+  questionFile: (exec, round) => join(exec, `question-${round}.txt`),
+};
 
 async function turnSendRun(rest: string[]): Promise<number> {
   const [topic, roundStr] = rest;
@@ -181,46 +201,8 @@ async function turnSendRun(rest: string[]): Promise<number> {
 }
 
 export async function turnSendWith(topic: string, round: number, d: TurnSendDeps): Promise<number> {
-  const art = quickArtDir(topic);
-  const exec = quickExecDir(topic);
-  const agent = readField(join(art, "agent.txt"));
-  const provider = readField(join(art, "selected-provider.txt"));
-  if (!agent || !provider) { log.error("quick turn-send: missing agent.txt/selected-provider.txt (run quick init)"); return 1; }
-
-  if (!workerSendGate(agent, provider, topic, "quick turn-send", "turn")) return 1;
-
-  const stateFile = join(exec, `turn-${round}.txt`);
-  if (existsSync(stateFile)) { log.error(`quick turn-send: ${stateFile} already exists; rm to retry`); return 1; }
-
-  let prompt: string;
-  if (round === 1) {
-    const brief = readIfExists(join(art, "task-brief.md"));
-    const branch = readField(join(exec, "branch.txt")) || `feat/quick-${topic}`;
-    prompt = composeRound1Prompt(brief, branch);
-  } else {
-    const bundle = join(exec, `fix-prompt-${round}.md`);
-    if (!existsSync(bundle)) { log.error(`quick turn-send: fix bundle missing: ${bundle} (the directive must write it first)`); return 1; }
-    prompt = composeFixPrompt(readFileSync(bundle, "utf8"), round);
-  }
-
-  const promptFile = join(exec, `turn-prompt-${round}.md`);
-  atomicWrite(promptFile, prompt);
-  const offset = d.offsetFor(agent, provider, topic);
-  atomicWrite(stateFile, `OFFSET=${offset}\n`);
-
-  const rc = await d.send([agent, topic, `@${promptFile}`]);
-  if (rc !== 0) { log.error(`quick turn-send: send failed (rc=${rc}); ${stateFile} kept for retry`); return 1; }
-  log.ok(`quick turn-send: round=${round} offset=${offset}`);
-  return 0;
+  return sendRound(QUICK_ROUND, topic, round, d);
 }
-
-export interface TurnWaitDeps {
-  /** Both left unset by the live verb: awaitTurn's defaults are the live wait on the real clock. */
-  wait?: WaitFn;
-  clock?: Clock;
-}
-
-const QUICK_TURN_TIMEOUT = envNum("AP_QUICK_TURN_TIMEOUT", DEFAULT_TURN_BUDGET_S);
 
 async function turnWaitRun(rest: string[]): Promise<number> {
   const [topic, roundStr] = rest;
@@ -230,29 +212,7 @@ async function turnWaitRun(rest: string[]): Promise<number> {
 }
 
 export async function turnWaitWith(topic: string, round: number, d: TurnWaitDeps): Promise<number> {
-  const art = quickArtDir(topic);
-  const exec = quickExecDir(topic);
-  const agent = readField(join(art, "agent.txt"));
-  const provider = readField(join(art, "selected-provider.txt"));
-  if (!agent || !provider) { log.error("quick turn-wait: missing agent.txt/selected-provider.txt"); return 1; }
-  const stateFile = join(exec, `turn-${round}.txt`);
-  if (!existsSync(stateFile)) { log.error(`quick turn-wait: ${stateFile} missing (run quick turn-send first)`); return 1; }
-
-  const r = await awaitTurn({
-    agent, model: provider, topic, stateFile, timeoutS: QUICK_TURN_TIMEOUT,
-    label: "quick turn-wait", policy: { confirm: true },
-  }, {
-    wait: d.wait, clock: d.clock,
-    onArmed: (offset) => { log.info(`quick turn-wait: round=${round} offset=${offset} timeout=${QUICK_TURN_TIMEOUT}s`); },
-    onFlag: (note) => { recordHubFlag({ command: "quick", topic, note }); },
-  });
-  if ("missingOffset" in r) { log.error(`quick turn-wait: OFFSET not set in ${stateFile}`); return 1; }
-  const ev = r.event;
-  const ts = classifyTurn(ev);
-  recordWaitOutcome(agent, provider, topic, stateFile, ts, "TS",
-    ev ? { file: join(exec, `question-${round}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
-  log.ok(`quick turn-wait: round=${round} TS=${ts}`);
-  return 0;
+  return waitRound(QUICK_ROUND, topic, round, d);
 }
 async function detectTestRun(rest: string[]): Promise<number> {
   const cwd = rest[0] || repoRoot();
