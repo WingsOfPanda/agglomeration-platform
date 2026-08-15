@@ -1,6 +1,6 @@
 // tests/bridge-cmd.test.ts
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, readFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { run as bridgeRun, initWith } from "../src/commands/bridge.js";
 import type { InitDeps } from "../src/commands/bridge.js";
@@ -260,5 +260,205 @@ describe("bridge summary", () => {
     expect(await bridgeRun(["summary", "t", "--aborted", "build", "spawn-failed", "died"])).toBe(0);
     expect(readFileSync(join(bridgeArtDir("t"), "SUMMARY.md"), "utf8")).toContain("- Mode: in-plce");
     expect(readFileSync(join(bridgeArtDir("t"), "RESUME.md"), "utf8")).toContain("(mode: in-plce)");
+  });
+});
+
+// capture process.stdout.write + process.stderr.write for the duration of fn() (the log module
+// writes to stderr, so the warn/ok wording is only observable here).
+async function capture(fn: () => Promise<number>): Promise<{ rc: number; err: string }> {
+  const err: string[] = [];
+  const se = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((s: string | Uint8Array) => { err.push(String(s)); return true; }) as typeof process.stderr.write;
+  try { const rc = await fn(); return { rc, err: err.join("") }; }
+  finally { process.stderr.write = se; }
+}
+
+describe("bridge branch: branch.txt records the branch the run ACTUALLY ended on", () => {
+  let h: { home: string; cleanup: () => void };
+  beforeEach(() => { h = freshHome(); mkdirSync(bridgeExecDir("t"), { recursive: true }); });
+  afterEach(() => h.cleanup());
+
+  /** A clean repo B on `head`. `refExists` seeds a leftover feat/bridge-t from an EARLIER run (the
+   *  shape that makes the finish guard's ref probe pass), `checkoutOk` whether THIS run's checkout
+   *  lands. An empty `head` is a detached HEAD. */
+  function fakeRepo(o: { refExists?: boolean; checkoutOk?: boolean; head?: string } = {}): { r: Runner; calls: string[][] } {
+    const calls: string[][] = [];
+    const head = o.head ?? "main";
+    const r: Runner = { run(cmd, args) {
+      calls.push([cmd, ...args]);
+      const k = [cmd, ...args].join(" ");
+      if (k === "git rev-parse --git-dir") return { code: 0, stdout: ".git" };
+      if (k === "git symbolic-ref --short HEAD") return head ? { code: 0, stdout: head } : { code: 128, stdout: "" };
+      if (k === "git rev-parse HEAD") return { code: 0, stdout: "base000" };
+      if (k === "git status --porcelain") return { code: 0, stdout: "" };
+      if (k === "git show-ref --verify --quiet refs/heads/feat/bridge-t") return { code: o.refExists ? 0 : 1, stdout: "" };
+      if (args[0] === "checkout" && args.includes("feat/bridge-t")) return { code: o.checkoutOk === false ? 1 : 0, stdout: "" };
+      if (k === "git remote") return { code: 0, stdout: "origin\n" };
+      if (k === "git remote get-url origin") return { code: 0, stdout: "git@x:y.git\n" };
+      return { code: 0, stdout: "" };
+    } };
+    return { r, calls };
+  }
+
+  const branchTxt = () => readFileSync(join(bridgeExecDir("t"), "branch.txt"), "utf8");
+
+  function seedFinish() {
+    const exec = bridgeExecDir("t");
+    writeFileSync(join(exec, "mode.txt"), "branch\n");
+    writeFileSync(join(exec, "verify-result.txt"), "PASS\n");
+    writeFileSync(join(bridgeArtDir("t"), "topic-text.txt"), "the task");
+  }
+
+  it("checkout landed: the intended name, as before", async () => {
+    const { r } = fakeRepo();
+    expect(await branchWith("t", "/abs/repoB", r)).toBe(0);
+    expect(branchTxt()).toBe("feat/bridge-t\n");
+  });
+
+  it("checkout failed: the START branch is recorded, and the warn line still names both", async () => {
+    const { r } = fakeRepo({ checkoutOk: false });
+    const { rc, err } = await capture(() => branchWith("t", "/abs/repoB", r));
+    expect(rc).toBe(0);
+    expect(branchTxt()).toBe("main\n");
+    expect(err).toContain("bridge branch: checkout feat/bridge-t failed; staying on main");
+  });
+
+  it("checkout failed from a detached HEAD: recorded as (detached), never as the intended name", async () => {
+    const { r } = fakeRepo({ checkoutOk: false, head: "" });
+    expect(await branchWith("t", "/abs/repoB", r)).toBe(0);
+    expect(branchTxt()).toBe("(detached)\n");
+  });
+
+  it("the ok line keeps naming the INTENDED branch even when the checkout failed", async () => {
+    const { r } = fakeRepo({ checkoutOk: false });
+    const { err } = await capture(() => branchWith("t", "/abs/repoB", r));
+    expect(err).toContain("bridge branch: feat/bridge-t (snapshot=clean");
+  });
+
+  it("STALE REF: a leftover feat/bridge-t + a failed checkout for THIS run → finish refuses, MERGES nothing", async () => {
+    // Where bridge's defect bites hardest: its finish MERGES the PR, so an intended-name record
+    // hands the leftover ref to finishBranchPrMerge and ships a merge containing none of this run's work.
+    const exec = bridgeExecDir("t");
+    const cut = fakeRepo({ refExists: true, checkoutOk: false });
+    expect(await branchWith("t", "/abs/repoB", cut.r)).toBe(0);
+    expect(branchTxt()).toBe("main\n");
+
+    seedFinish();
+    const fin = fakeRepo({ refExists: true });   // the leftover ref is still there at finish time
+    expect(await finishWith("t", fin.r, true)).toBe(0);
+    expect(fin.calls.some((c) => c[1] === "push")).toBe(false);
+    expect(fin.calls.some((c) => c[0] === "gh")).toBe(false);
+    expect(readFileSync(join(exec, "finish-result.txt"), "utf8")).toBe("none\tno-branch\n");
+    expect(hubFlags(h.home).join("")).toContain("finish-no-branch");
+  });
+
+  it("OVER-REFUSAL GUARD: a stale ref whose checkout SUCCEEDS is a resume — it still merges", async () => {
+    const exec = bridgeExecDir("t");
+    const cut = fakeRepo({ refExists: true });
+    expect(await branchWith("t", "/abs/repoB", cut.r)).toBe(0);
+    expect(branchTxt()).toBe("feat/bridge-t\n");
+
+    seedFinish();
+    const fin = fakeRepo({ refExists: true });
+    expect(await finishWith("t", fin.r, true)).toBe(0);
+    expect(fin.calls.some((c) => c.join(" ") === "git push -q -u origin feat/bridge-t")).toBe(true);
+    expect(readFileSync(join(exec, "finish-result.txt"), "utf8")).toBe("pr-merge\tpr-merged-pulled\n");
+    expect(hubFlags(h.home)).toEqual([]);
+  });
+
+  it("the round-1 brief names the REAL branch — the worker is never told it is somewhere it is not", async () => {
+    const { r } = fakeRepo({ checkoutOk: false });
+    expect(await branchWith("t", "/abs/repoB", r)).toBe(0);
+    const art = bridgeArtDir("t"), exec = bridgeExecDir("t");
+    writeFileSync(join(art, "agent.txt"), "alpha\n");
+    writeFileSync(join(art, "selected-provider.txt"), "codex\n");
+    writeFileSync(join(art, "topic-text.txt"), "implement X");
+    writeFileSync(join(exec, "target_cwd.txt"), "/abs/repoB\n");
+    const pd = workerDir("alpha", "codex", "t"); mkdirSync(pd, { recursive: true }); writeFileSync(join(pd, "outbox.jsonl"), "");
+    expect(await roundSendWith("t", 1, { offsetFor: () => 0, send: async () => 0 })).toBe(0);
+    const prompt = readFileSync(join(exec, "round-prompt-1.md"), "utf8");
+    expect(prompt).toContain("You are on the branch `main`");
+    expect(prompt).not.toContain("feat/bridge-t");   // BRANCH_DISCIPLINE tells it NOT to checkout
+  });
+
+  it("a failed checkout's record reaches SUMMARY and RESUME: both name the REAL branch", async () => {
+    const { r } = fakeRepo({ checkoutOk: false });
+    expect(await branchWith("t", "/abs/repoB", r)).toBe(0);
+    writeFileSync(join(bridgeExecDir("t"), "mode.txt"), "branch\n");
+    writeFileSync(join(bridgeArtDir("t"), "topic-text.txt"), "the task");
+    const { run: bridgeRun } = await import("../src/commands/bridge.js");
+    expect(await bridgeRun(["summary", "t", "--aborted", "round", "wait", "worker died"])).toBe(0);
+    expect(readFileSync(join(bridgeArtDir("t"), "SUMMARY.md"), "utf8")).toContain("- Branch: main");
+    expect(readFileSync(join(bridgeArtDir("t"), "RESUME.md"), "utf8")).toContain("the worker's work is on main");
+  });
+});
+
+/** Every hub flag written under this run's AP_HOME. */
+function hubFlags(home: string): string[] {
+  const root = join(home, "forensics");
+  if (!existsSync(root)) return [];
+  return readdirSync(root).flatMap((d) => readdirSync(join(root, d)).map((f) => readFileSync(join(root, d, f), "utf8")));
+}
+
+describe("bridge finish: the no-branch refusal is flagged for /ap:review", () => {
+  let h: { home: string; cleanup: () => void };
+  beforeEach(() => { h = freshHome(); });
+  afterEach(() => h.cleanup());
+
+  /** `refRc` decides whether the recorded branch still exists; `head` is where the run really is —
+   *  the refusal arm performs no checkout, so this is whatever the branch step left behind. */
+  function seed(branch: string, startBranch: string, refRc: number, head = "main"): { r: Runner; calls: string[][] } {
+    const exec = bridgeExecDir("t"); mkdirSync(exec, { recursive: true });
+    writeFileSync(join(exec, "mode.txt"), "branch\n");
+    if (branch) writeFileSync(join(exec, "branch.txt"), branch + "\n");
+    writeFileSync(join(exec, "start-branch.txt"), startBranch + "\n");
+    writeFileSync(join(exec, "verify-result.txt"), "PASS\n");
+    writeFileSync(join(bridgeArtDir("t"), "topic-text.txt"), "the task");
+    const calls: string[][] = [];
+    const r: Runner = { run(cmd, args) {
+      calls.push([cmd, ...args]);
+      const k = [cmd, ...args].join(" ");
+      if (k.startsWith("git show-ref")) return { code: refRc, stdout: "" };
+      if (k === "git symbolic-ref --short HEAD") return head ? { code: 0, stdout: head + "\n" } : { code: 128, stdout: "" };
+      if (k === "git remote") return { code: 0, stdout: "origin\n" };
+      if (k === "git remote get-url origin") return { code: 0, stdout: "git@x:y.git\n" };
+      return { code: 0, stdout: "" };
+    } };
+    return { r, calls };
+  }
+
+  it("the recorded branch's ref went away: flagged, naming both branches and the REAL head", async () => {
+    const { r } = seed("feat/bridge-t", "main", 1, "feat/bridge-t");
+    expect(await finishWith("t", r, true)).toBe(0);
+    expect(hubFlags(h.home).join("")).toContain(
+      "finish-no-branch: the recorded branch 'feat/bridge-t' is missing or is the start branch 'main' — nothing was pushed, no PR opened; the work (if any) is on 'feat/bridge-t'",
+    );
+  });
+
+  it("a detached HEAD is reported as (detached), never as the start branch", async () => {
+    const { r } = seed("feat/bridge-t", "main", 1, "");
+    expect(await finishWith("t", r, true)).toBe(0);
+    expect(hubFlags(h.home).join("")).toContain("the work (if any) is on '(detached)'");
+  });
+
+  it("nothing recorded at all: the flag says so rather than naming an empty branch", async () => {
+    const { r } = seed("", "main", 1);
+    expect(await finishWith("t", r, true)).toBe(0);
+    expect(hubFlags(h.home).join("")).toContain("'(unrecorded)'");
+  });
+
+  it("a healthy pr-merge finish writes NO flag — the refusal is the only flagged outcome", async () => {
+    const { r } = seed("feat/bridge-t", "main", 0);
+    expect(await finishWith("t", r, true)).toBe(0);
+    expect(readFileSync(join(bridgeExecDir("t"), "finish-result.txt"), "utf8")).toBe("pr-merge\tpr-merged-pulled\n");
+    expect(hubFlags(h.home)).toEqual([]);
+  });
+
+  it("an in-place finish writes NO flag — that arm never reaches the finisher", async () => {
+    const exec = bridgeExecDir("t"); mkdirSync(exec, { recursive: true });
+    writeFileSync(join(exec, "mode.txt"), "in-place\n");
+    const r: Runner = { run: () => ({ code: 0, stdout: "" }) };
+    expect(await finishWith("t", r, true)).toBe(0);
+    expect(hubFlags(h.home)).toEqual([]);
   });
 });

@@ -8,7 +8,7 @@ import { isoUtc } from "../core/archive.js";
 import { agentBinary } from "../core/contracts.js";
 import { haveCmd } from "../core/deps.js";
 import { pickRandomAgent } from "../core/agents.js";
-import { runnerAt, preSnapshot, createOrResumeBranch, finishBranchPrMerge, shortstat } from "../core/gitwork.js";
+import { runnerAt, preSnapshot, createOrResumeBranch, currentBranch, finishBranchPrMerge, shortstat } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
 import { readIfExists, readField, kvField } from "../core/fsread.js";
 import { branchNameFor, readBranchRecord } from "../core/branchRecord.js";
@@ -122,7 +122,11 @@ export async function branchWith(topic: string, target: string, r: Runner): Prom
   const exec = bridgeExecDir(topic);
   atomicWrite(join(exec, "start-branch.txt"), snap.branch + "\n");
   atomicWrite(join(exec, "branch-base.sha"), snap.baseSha + "\n");
-  atomicWrite(join(exec, "branch.txt"), branch + "\n");
+  // The branch the run is ACTUALLY on, the way quick records it: a failed checkout leaves HEAD on the
+  // start branch, and writing the intended name there is what lets a leftover feat/bridge-<topic> from
+  // an earlier run pass finish's guard — and bridge's finish MERGES, so that ships a PR containing none
+  // of this run's work. The worker's round-1 brief reads this file too.
+  atomicWrite(join(exec, "branch.txt"), (onBranch ? branch : snap.branch) + "\n");
   if (!onBranch) { log.warn(`bridge branch: checkout ${branch} failed; staying on ${snap.branch}`); }
   log.ok(`bridge branch: ${branch} (snapshot=${snap.state}, base=${snap.baseSha.slice(0, 8)})`);
   return 0;
@@ -234,6 +238,14 @@ export async function finishWith(topic: string, r: Runner, hasGh: boolean): Prom
     body: `${task}\n\nVerify: ${verify}\n\n(Automated bridge branch — merged into ${startBranch}.)`,
   });
   atomicWrite(join(exec, "finish-result.txt"), `${res.action}\t${res.outcome}\n`);
+  // The finisher's refusal — the branch is missing or IS the start branch, which is what a failed
+  // `bridge branch` checkout now records — is a silent `none` in the record, so it gets a flag of its
+  // own. Where the work actually sits is READ BACK, never assumed: this arm performs no checkout, so
+  // HEAD is still wherever the branch step left it.
+  if (res.outcome === "no-branch") {
+    const head = currentBranch(r) || "(detached)";
+    runFlag("bridge", topic, `finish-no-branch: the recorded branch '${branch || "(unrecorded)"}' is missing or is the start branch '${startBranch}' — nothing was pushed, no PR opened; the work (if any) is on '${head}'`);
+  }
   log.ok(`bridge finish: ${res.action} → ${res.outcome}`);
   return 0;
 }
