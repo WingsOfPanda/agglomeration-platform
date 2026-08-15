@@ -21,6 +21,7 @@ import { implementState, composeRound1Prompt, composeFixPrompt } from "../core/i
 import { extractQuestionPayload, parseQuestionPayload } from "../core/questionCodec.js";
 import { outboxOffset, outboxPath, statusPath, workerSendGate, resolveModel, type Clock } from "../core/ipc.js";
 import { kvField, readField, readIfExists, readIfExistsOrNull } from "../core/fsread.js";
+import { branchNameFor, readBranchRecord } from "../core/branchRecord.js";
 import { agentTimeoutMultiplier } from "../core/contracts.js";
 import { awaitTurn, scaledTimeout, lastKeyedNumber, recordWaitOutcome, type WaitFn } from "../core/wait.js";
 import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
@@ -238,11 +239,6 @@ async function resetStatusRun(rest: string[]): Promise<number> {
 }
 
 // ---- baseline tsv/map readers (port of deploy helpers) ----
-function branchMapField(map: string, slug: string): string {
-  if (!existsSync(map)) return "";
-  for (const line of readFileSync(map, "utf8").split("\n")) { const [s, b] = line.split("\t"); if (s === slug) return b ?? ""; }
-  return "";
-}
 function isDir(p: string): boolean { try { return statSync(p).isDirectory(); } catch { return false; } }
 
 // ---- pre-snapshot (deploy-pre-snapshot.sh) ----
@@ -279,7 +275,7 @@ async function branchRun(rest: string[]): Promise<number> {
 export async function branchWith(a: { topic: string; noBranch: boolean; branchName?: string }, opts: { home?: string; cwd?: string }, runnerFor: (cwd: string) => Runner): Promise<number> {
   const art = implementArtDir(a.topic, opts);
   if (!existsSync(art)) { log.error(`implement branch: art-dir missing: ${art} (run implement init first)`); return 1; }
-  const defaultBranch = a.branchName ?? `feat/implement-${a.topic}`;
+  const defaultBranch = a.branchName ?? branchNameFor("implement", a.topic);
   // Refuse BEFORE writing anything, on either baseline a finish cannot come back from: the feat
   // branch itself (the hub checked it out before pre-snapshot, so baseline and work branch are one
   // ref and every finish action is a no-op), or a detached HEAD (no branch to restore, and a merge
@@ -445,22 +441,16 @@ async function finishRun(rest: string[]): Promise<number> {
   if (!["merge", "pr", "keep", "discard"].includes(action)) { log.error(`implement finish: unknown action '${action}'`); return 2; }
   return finishWith(topic, action as "merge" | "pr" | "keep" | "discard", liveFinishDeps);
 }
-/** What `implement branch` recorded. An art dir written before the mode file existed reads as
- *  `branch`: that is the mode those runs used unless the hub passed --no-branch, and reading a
- *  legacy dir as no-branch is exactly the silent no-op this record exists to end. */
-function readBranchMode(art: string): "branch" | "no-branch" {
-  return readField(join(art, "branch-mode.txt")) === "no-branch" ? "no-branch" : "branch";
-}
-
 // Shared per-target finish body (deploy-finish.sh:1398-1419 / deploy.md:1398-1419). Resolves the
 // worker's feat branch + start branch, then delegates the branch action.
 function applyFinish(art: string, t: { slug: string; cwd: string }, action: "merge" | "pr" | "keep" | "discard", d: FinishDeps): string {
+  const rec = readBranchRecord("implement", { dir: art, slug: t.slug });
   // The recorded intent decides FIRST, in both directions: a --no-branch run must not act on a
   // branch it never created (a `feat/implement-<topic>` left behind by an earlier run is not this
   // run's to merge or delete), and a branch-mode run must not read a missing one as deliberate.
-  if (readBranchMode(art) === "no-branch") return "no-branch";
-  const branch = branchMapField(join(art, "implement-branches.tsv"), t.slug);
-  const startBranch = kvField(join(art, "baselines", `${t.slug}.tsv`), "branch");
+  if (rec.mode === "no-branch") return "no-branch";
+  const branch = rec.branch;
+  const startBranch = rec.startBranch;
   const r = d.runnerFor(t.cwd);
   // A detached baseline names no branch to restore, yet `branch !== startBranch` passes: a merge
   // would report success having integrated into whatever HEAD was. `branch` refuses this baseline

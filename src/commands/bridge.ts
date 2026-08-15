@@ -11,6 +11,7 @@ import { pickRandomAgent } from "../core/agents.js";
 import { runnerAt, preSnapshot, createOrResumeBranch, finishBranchPrMerge, shortstat } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
 import { readIfExists, readField, kvField } from "../core/fsread.js";
+import { branchNameFor, readBranchRecord } from "../core/branchRecord.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { detectTestCommand } from "../core/quick.js";
 import { repoRoot } from "../core/paths.js";
@@ -111,9 +112,9 @@ async function branchRun(rest: string[]): Promise<number> {
 export async function branchWith(topic: string, target: string, r: Runner): Promise<number> {
   const snap = preSnapshot(r, "bridge", topic);
   if (snap.state === "not-git") { log.error(`bridge branch: ${target} is not a git repository`); return 1; }
-  const branch = `feat/bridge-${topic}`;
+  const branch = branchNameFor("bridge", topic);
   // Single-occupancy: refuse if repo B is already on a DIFFERENT bridge branch from another live session.
-  if (snap.branch.startsWith("feat/bridge-") && snap.branch !== branch) {
+  if (snap.branch.startsWith(branchNameFor("bridge", "")) && snap.branch !== branch) {
     log.error(`bridge branch: ${target} is already on ${snap.branch} (another bridge session?) — refusing`);
     return 1;
   }
@@ -213,17 +214,16 @@ async function finishRun(rest: string[]): Promise<number> {
 
 export async function finishWith(topic: string, r: Runner, hasGh: boolean): Promise<number> {
   const exec = bridgeExecDir(topic);
-  const mode = readField(join(exec, "mode.txt")) || "branch";
-  if (mode === "in-place") {
+  const rec = readBranchRecord("bridge", { dir: exec });
+  if (rec.mode === "in-place") {
     atomicWrite(join(exec, "finish-result.txt"), "none\tin-place (commits on the current branch)\n");
     log.ok("bridge finish: in-place — commits left on the current branch");
     return 0;
   }
-  const branch = readField(join(exec, "branch.txt"));
-  const startBranch = readField(join(exec, "start-branch.txt")) || "main";
-  const base = readField(join(exec, "branch-base.sha"));
-  if (base) {
-    const ds = shortstat(r, base);
+  const branch = rec.branch;
+  const startBranch = rec.startBranch || "main";
+  if (rec.baseSha) {
+    const ds = shortstat(r, rec.baseSha);
     atomicWrite(join(exec, "diff-stats.txt"), (ds || "(no changes)") + "\n");
   }
   const task = readIfExists(join(bridgeArtDir(topic), "topic-text.txt"));
@@ -257,13 +257,14 @@ async function summaryRun(rest: string[]): Promise<number> {
   // overwrite an existing round-<n>.txt and the directive only ever advances the round by +1)
   let rounds = 0; while (existsSync(BRIDGE_ROUND.stateFile(exec, rounds + 1))) rounds++;
 
+  const rec = readBranchRecord("bridge", { dir: exec });
   const facts: BridgeSummaryFacts = {
     topic, status: aborted ? "aborted" : "ok", started, ended, duration,
     provider: readField(join(art, "selected-provider.txt")) || "unknown",
     agent: readField(join(art, "agent.txt")) || "unknown",
     repo: readField(join(exec, "target_cwd.txt")) || "<repo>",
-    mode: readField(join(exec, "mode.txt")) || "branch",
-    branch: readField(join(exec, "branch.txt")) || "(none)",
+    mode: rec.mode,
+    branch: rec.branch || "(none)",
     rounds,
     verify: readField(join(exec, "verify-result.txt")) || "unknown",
     diffStats: readField(join(exec, "diff-stats.txt")) || "unknown",

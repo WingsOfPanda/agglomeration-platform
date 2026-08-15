@@ -163,7 +163,8 @@ export function stashPopOnBranch(r: Runner, message: string, expectSha: string, 
   return { outcome: stashPopByMessage(r, message, expectSha), head };
 }
 
-/** Create feat/quick-<topic> from current HEAD, or resume it if it already exists. */
+/** Check out `name` — created from current HEAD, or resumed if the ref already exists. All three
+ *  callers (quick, implement, bridge) pass their own `branchNameFor` name. */
 export function createOrResumeBranch(r: Runner, name: string): boolean {
   if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${name}`]).code === 0) {
     return r.run("git", ["checkout", "-q", name]).code === 0;
