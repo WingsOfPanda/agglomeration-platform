@@ -18246,7 +18246,7 @@ function pushAndPr(r, o2) {
   return outcome;
 }
 function onBase(r, o2) {
-  return r.run("git", ["checkout", "-q", o2.base]).code === 0;
+  return r.run("git", ["checkout", "-q", o2.base]).code === 0 || currentBranch(r) === o2.base;
 }
 function finishWork(r, o2) {
   if (!hasDistinctBranch(r, o2.branch, o2.base)) return { action: "none", outcome: "no-branch" };
@@ -21963,7 +21963,7 @@ async function finishWith2(topic, action, d) {
     n2++;
   }
   if (stranded) runFlag("implement", topic, `finish ${action}: same-branch on ${stranded} target(s) \u2014 the work was left on the baseline branch (no distinct branch to act on), nothing merged, pushed, or discarded`);
-  if (baseBlocked) runFlag("implement", topic, `finish ${action}: base-checkout-failed on ${baseBlocked} target(s) \u2014 the checkout of the baseline branch was refused, so NOTHING was merged or discarded; the work is still on the feature branch`);
+  if (baseBlocked) runFlag("implement", topic, `finish ${action}: base-checkout-failed on ${baseBlocked} target(s) \u2014 the checkout of the baseline branch was refused (check the checkout's own error: e.g. a dirty tree, the baseline held by another worktree, or its ref gone), so NOTHING was merged or discarded; the work is still on the feature branch`);
   log.ok(`implement finish: ${n2} target(s) completed`);
   return 0;
 }
@@ -28799,7 +28799,8 @@ Verify: ${verify}
 `);
   if (res.outcome === "no-branch" || res.outcome === "base-checkout-failed") {
     const head = currentBranch(r) || "(detached)";
-    const why = res.outcome === "no-branch" ? `the recorded branch '${branch || "(unrecorded)"}' is missing or is the start branch '${startBranch}' \u2014 nothing was pushed, no PR opened` : `the checkout of the base branch '${startBranch}' was refused \u2014 nothing was merged and the local base was NOT updated; any PR that was opened is still open`;
+    const left = res.action === "local-merge" ? "this repo has no remote, so nothing was pushed and no PR exists" : "the branch WAS pushed and any PR opened for it is still open, unmerged";
+    const why = res.outcome === "no-branch" ? `the recorded branch '${branch || "(unrecorded)"}' is missing or is the start branch '${startBranch}' \u2014 nothing was pushed, no PR opened` : `the checkout of the base branch '${startBranch}' was refused (check the checkout's own error: e.g. a dirty tree, the base held by another worktree, or the base ref gone) \u2014 nothing was merged and the local base was NOT updated; ${left}`;
     runFlag("bridge", topic, `finish-${res.outcome}: ${why}; the work (if any) is on '${head}'`);
   }
   log.ok(`bridge finish: ${res.action} \u2192 ${res.outcome}`);

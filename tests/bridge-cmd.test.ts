@@ -457,8 +457,17 @@ describe("bridge finish: the finisher's refusals are flagged for /ap:review", ()
     expect(readFileSync(join(bridgeExecDir("t"), "finish-result.txt"), "utf8")).toBe("pr-merge\tbase-checkout-failed\n");
     expect(calls.some((c) => c.join(" ").startsWith("gh pr merge"))).toBe(false);
     expect(hubFlags(h.home).join("")).toContain(
-      "finish-base-checkout-failed: the checkout of the base branch 'main' was refused — nothing was merged and the local base was NOT updated; any PR that was opened is still open; the work (if any) is on 'feat/bridge-t'",
+      "finish-base-checkout-failed: the checkout of the base branch 'main' was refused (check the checkout's own error: e.g. a dirty tree, the base held by another worktree, or the base ref gone) — nothing was merged and the local base was NOT updated; the branch WAS pushed and any PR opened for it is still open, unmerged; the work (if any) is on 'feat/bridge-t'",
     );
+  });
+
+  // The other arm reaching the same outcome pushed NOTHING, so its flag must not claim a PR.
+  it("the base checkout is refused with no remote: the flag claims no push and no PR", async () => {
+    const { r: seeded } = seed("feat/bridge-t", "main", 0, "feat/bridge-t", 1);
+    const r: Runner = { run: (cmd, args) => [cmd, ...args].join(" ") === "git remote" ? { code: 0, stdout: "" } : seeded.run(cmd, args) };
+    expect(await finishWith("t", r, true)).toBe(0);
+    expect(readFileSync(join(bridgeExecDir("t"), "finish-result.txt"), "utf8")).toBe("local-merge\tbase-checkout-failed\n");
+    expect(hubFlags(h.home).join("")).toContain("this repo has no remote, so nothing was pushed and no PR exists");
   });
 
   it("a healthy pr-merge finish writes NO flag — the refusal is the only flagged outcome", async () => {

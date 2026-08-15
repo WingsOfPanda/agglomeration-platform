@@ -35,9 +35,17 @@ design); the RECORD becomes honest and the refusal reaches /ap:review.
 ## Architecture
 
 One new outcome string `base-checkout-failed` in the `FinishOutcome` union (gitwork.ts — not a
-frozen wire name). A helper `const onBase = () => r.run("git", ["checkout","-q",o.base]).code === 0;`
-and at each of the four sites, on failure return the arm's action with `outcome:
-"base-checkout-failed"` BEFORE any merge/branch-D/gh-merge/pull:
+frozen wire name). A helper `onBase(r, o)` and at each of the four sites, on failure return the arm's
+action with `outcome: "base-checkout-failed"` BEFORE any merge/branch-D/gh-merge/pull.
+
+**Amended in implementation (adversarial review, BLOCKER):** `onBase` must not equate a non-zero
+`git checkout` rc with "the switch did not happen". A post-checkout hook — git-lfs whose binary is
+missing, husky/lefthook — exits non-zero AFTER git has already switched, which the rc-only form reads
+as a refusal, stranding a healthy finish and breaking this PR's own "every currently-passing path is
+byte-identical" criterion; bridge runs in arbitrary foreign repos where that hook is common. So
+position is READ BACK, the same discipline as `stashPopOnBranch` and PR #126:
+`r.run("git",["checkout","-q",o.base]).code === 0 || currentBranch(r) === o.base`. Zero extra calls
+on the healthy path — the read-back only runs when the rc is non-zero.
 
 - merge arm → `{action:"merge", outcome:"base-checkout-failed"}` (nothing merged, branch untouched)
 - discard arm → `{action:"discard", …}` (never reach `branch -D` off-base)
@@ -58,11 +66,12 @@ Callers/directives learn it:
   recovery (clean/commit the tree or free the base branch, then re-run `implement finish`).
 - `src/commands/bridge.ts` finishWith — extend the `res.outcome === "no-branch"` flag condition to
   this outcome (same runFlag + `currentBranch(r)` read-back it already does). **Amended in
-  implementation:** the flag BODY is per-cause. The no-branch body is byte-identical (the prefix is
-  now `finish-${res.outcome}`), and the new one says nothing was merged and local base was NOT
-  updated with any opened PR still open — the remote arm refuses at a point where the branch IS
-  pushed and a PR may exist, so "nothing was pushed, no PR opened" would be a false record.
-  `commands/bridge.md` Stage 3 fallback list gains a row (the PR may be open, base NOT updated).
+  implementation:** the flag BODY is per-cause, and its consequence clause is keyed on `res.action`.
+  The no-branch body is byte-identical (the prefix is now `finish-${res.outcome}`). TWO arms reach
+  the new outcome: `pr-merge` refuses after the push with a PR possibly open, `local-merge` (no
+  remote) pushed nothing — so a single body claiming a PR either way would be the same false record
+  this PR exists to remove. `commands/bridge.md` Stage 3 fallback list gains a row (the PR is left
+  open and unmerged when there was a remote; base NOT updated).
 - `quick` — no change (auto never selects merge/discard/pr-merge arms).
 
 ## Components
@@ -79,7 +88,9 @@ Callers/directives learn it:
   returns `{code:1}` for `git checkout -q <base>`: the outcome becomes `base-checkout-failed` and the
   merge/delete/pull calls are NOT issued. Must fail against unmodified code. Plus two guards on the
   other side of the split under the same blocked checkout — `keep` still records `kept` and the `pr`
-  arm still records `pr-opened` — so the best-effort restores cannot be tightened by accident.
+  arm still records `pr-opened` — so the best-effort restores cannot be tightened by accident. And
+  the read-back's own red-green: `git checkout` rc 1 with `symbolic-ref` reporting the base (the
+  post-checkout-hook shape) still merges, while the healthy rc-0 path never probes HEAD.
 - Existing finisher tables pass unchanged (their fakeRunner defaults every unlisted call to rc 0, so
   the checkout succeeds and every current outcome is byte-identical).
 - implement/bridge: the new outcome is counted/flagged (a stranded run reaches runFlag; assert the

@@ -241,13 +241,17 @@ function pushAndPr(r: Runner, o: FinishWorkOpts): FinishOutcome {
 }
 
 /** Check out the base for a step that DECIDES an outcome AFTER it — a merge, a `branch -D`, a gh
- *  merge + pull. A refusal there (dirty tracked file, base held by another worktree) is not
- *  cosmetic: what follows runs on the feature branch and is recorded as success — `git merge` merges
- *  the branch into ITSELF and reads as "merged". So those four sites return `base-checkout-failed`
- *  and issue nothing. The five restore-only checkouts stay unchecked by design: their outcome is
- *  already decided and a failure leaves only HEAD wrong. */
+ *  merge + pull. A refusal there (e.g. a dirty tracked file, the base held by another worktree, the
+ *  base ref gone) is not cosmetic: what follows runs on the feature branch and is recorded as
+ *  success — `git merge` merges the branch into ITSELF and reads as "merged". So those four sites
+ *  return `base-checkout-failed` and issue nothing. The five restore-only checkouts stay unchecked
+ *  by design: their outcome is already decided and a failure leaves only HEAD wrong.
+ *  Whether the switch HAPPENED is read back rather than inferred from the exit code: a post-checkout
+ *  hook (git-lfs whose binary is missing, husky/lefthook) exits non-zero AFTER git has already
+ *  switched, and reading that as a refusal would strand a perfectly healthy finish — in the foreign
+ *  repos bridge runs in, that hook is common. The read-back costs a call only on the non-zero path. */
 function onBase(r: Runner, o: FinishWorkOpts): boolean {
-  return r.run("git", ["checkout", "-q", o.base]).code === 0;
+  return r.run("git", ["checkout", "-q", o.base]).code === 0 || currentBranch(r) === o.base;
 }
 
 /** The one finisher: guard the branch, act, restore the base checkout. Every arm is best-effort —

@@ -106,9 +106,10 @@ continue.
    remote → it merges into base locally; no `gh` → it pushes the branch and you open + merge the PR
    manually, then `git -C <TARGET> pull`; the PR merge being blocked (branch protection / CI / conflict)
    → it leaves the PR open for you to merge; base can't fast-forward → it reports and stops; the checkout
-   of the base branch being refused (dirty tree, or base held by another worktree) → `base-checkout-failed`,
-   nothing merged and the local base NOT updated, with the PR possibly open — tell the user to clean the
-   tree (or free the base branch) and re-run `bridge finish`; the branch
+   of the base branch being refused (read the checkout's own error — e.g. a dirty tree, base held by another
+   worktree, or the base ref gone) → `base-checkout-failed`, nothing merged and the local base NOT updated,
+   with the PR left open and unmerged if there was a remote to push to — tell the user to clear whatever the
+   error names and re-run `bridge finish`; the branch
    step never landed (`branch.txt` == the start branch) → it refuses: `none\tno-branch`, nothing pushed,
    no PR — tell the user the work (if any) is on repo B's start branch and that nothing was integrated.
    In **in-place mode** it leaves the commits on the current branch.

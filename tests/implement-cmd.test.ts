@@ -339,7 +339,7 @@ describe("implement finish", () => {
     expect(rc).toBe(0);
     expect(readFileSync(join(art, "finish-results.tsv"), "utf8")).toBe("main\tmerge\tbase-checkout-failed\n");
     expect(readFileSync(out.trim(), "utf8")).toContain(
-      "finish merge: base-checkout-failed on 1 target(s) — the checkout of the baseline branch was refused, so NOTHING was merged or discarded; the work is still on the feature branch",
+      "finish merge: base-checkout-failed on 1 target(s) — the checkout of the baseline branch was refused (check the checkout's own error: e.g. a dirty tree, the baseline held by another worktree, or its ref gone), so NOTHING was merged or discarded; the work is still on the feature branch",
     );
   });
 

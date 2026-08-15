@@ -92,6 +92,20 @@ describe("finishWork: a refused base checkout fails closed", () => {
     const { r } = fakeRunner({ ...BLOCKED, "git remote get-url origin": { code: 0, stdout: "u\n" } });
     expect(finishWork(r, opts({ action: "pr", hasGh: true })).outcome).toBe("pr-opened");
   });
+
+  // rc != 0 is not the same as "the switch did not happen": a post-checkout hook (git-lfs with no
+  // binary, husky) fails AFTER git has switched. Position is read back, so a healthy finish that
+  // merely tripped a hook still merges.
+  it("a post-checkout hook failing after the switch is NOT a refusal — the merge still happens", () => {
+    const { r, calls } = fakeRunner({ ...BLOCKED, "git symbolic-ref --short HEAD": { code: 0, stdout: "main\n" } });
+    expect(finishWork(r, opts({ action: "merge" }))).toEqual({ action: "merge", outcome: "merged" });
+    expect(calls).toContainEqual(["git", "merge", "--no-edit", "-q", "feat/x"]);
+  });
+  it("the read-back costs nothing on the healthy path — rc 0 never probes HEAD", () => {
+    const { r, calls } = fakeRunner({ ...EXISTS });
+    expect(finishWork(r, opts({ action: "merge" })).outcome).toBe("merged");
+    expect(calls.some((c) => c[1] === "symbolic-ref")).toBe(false);
+  });
 });
 
 describe("finishWork pr arm (pushAndPr)", () => {

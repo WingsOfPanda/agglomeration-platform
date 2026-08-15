@@ -486,7 +486,7 @@ export async function finishWith(topic: string, action: "merge" | "pr" | "keep" 
   if (stranded) runFlag("implement", topic, `finish ${action}: same-branch on ${stranded} target(s) — the work was left on the baseline branch (no distinct branch to act on), nothing merged, pushed, or discarded`);
   // Same reason, different cause — and a different recovery, so it is counted and worded apart: the
   // branch exists and holds the work, the finisher just could not get onto the base to act.
-  if (baseBlocked) runFlag("implement", topic, `finish ${action}: base-checkout-failed on ${baseBlocked} target(s) — the checkout of the baseline branch was refused, so NOTHING was merged or discarded; the work is still on the feature branch`);
+  if (baseBlocked) runFlag("implement", topic, `finish ${action}: base-checkout-failed on ${baseBlocked} target(s) — the checkout of the baseline branch was refused (check the checkout's own error: e.g. a dirty tree, the baseline held by another worktree, or its ref gone), so NOTHING was merged or discarded; the work is still on the feature branch`);
   log.ok(`implement finish: ${n} target(s) completed`); return 0;
 }
 
