@@ -19,7 +19,10 @@ import { sanityRow, sanityTsvPath, parseSanityRows, SANITY_TSV_HEADER } from "..
 import { coverageRow, coverageTsvPath, parseCoverageRows, COVERAGE_TSV_HEADER, type CoverageRow } from "../core/autoresearchCoverage.js";
 import { lineageRow, lineageTsvPath, parseLineageRows, LINEAGE_TSV_HEADER } from "../core/autoresearchLineage.js";
 import { parseState, readHaltFlag } from "../core/autoresearchState.js";
-import { lanePath, readLane, applyTransition, reconcileLaneAtFinalize, reconcileLaneAtResume } from "../core/autoresearchLane.js";
+import {
+  lanePath, readLane, applyTransition, applyTransitionStrict, applyTransitionFrom,
+  reconcileLaneAtFinalize, reconcileLaneAtResume,
+} from "../core/autoresearchLane.js";
 import { checkCompletion, checkTimeBudget } from "../core/autoresearchComplete.js";
 import { renderSessionSummary, type StatusRow, type EventRow } from "../core/autoresearchSummary.js";
 import {
@@ -1560,7 +1563,7 @@ export async function freshWorkerWith(args: string[], deps: AutoresearchFreshWor
   if (rc !== 0) { log.error(`spawn failed for ${agent} on ${topic}`); return 1; }
 
   // Reset runtime state AFTER a successful spawn, preserving exp_counter (+ all other keys).
-  applyTransition(art, agent, {
+  applyTransitionStrict(art, agent, {
     last_event: "fresh-worker-respawn",
     last_event_ts: deps.now(),
     phase: "idle",
@@ -1706,12 +1709,13 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
       else { try { alive = await deps.paneAlive(pane); } catch { alive = false; } }
     }
 
-    const st = readLane(art, agent);
+    const raw = readOr(stateTxt);
+    const st = parseState(raw);
     let phase = st.phase ?? "";
     if (!alive && phase === "working") {
       const workingExp = st.current_exp_id ?? "";
       ledgerAdd({ gen, ts: deps.now(), kind: "interrupted", agent, ...(workingExp ? { exp_id: workingExp } : {}) });
-      applyTransition(art, agent, {
+      applyTransitionFrom(art, agent, raw, {
         phase: "idle", current_exp_id: "", last_event: "interrupted", last_event_ts: deps.now(),
       });
       if (workingExp) redispatch.add(`${agent}:${workingExp}`);

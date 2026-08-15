@@ -23775,6 +23775,13 @@ function applyTransition(art, agent, updates) {
   const p = lanePath(art, agent);
   atomicWrite(p, mergeState(readOr(p), updates));
 }
+function applyTransitionStrict(art, agent, updates) {
+  const p = lanePath(art, agent);
+  atomicWrite(p, mergeState((0, import_node_fs41.readFileSync)(p, "utf8"), updates));
+}
+function applyTransitionFrom(art, agent, existing, updates) {
+  atomicWrite(lanePath(art, agent), mergeState(existing, updates));
+}
 function reconcileLaneAtFinalize(art, agent, topic) {
   const stateTxt = lanePath(art, agent);
   if (!(0, import_node_fs41.existsSync)(stateTxt)) return;
@@ -25817,7 +25824,7 @@ async function freshWorkerWith(args, deps) {
     log.error(`spawn failed for ${agent} on ${topic}`);
     return 1;
   }
-  applyTransition(art, agent, {
+  applyTransitionStrict(art, agent, {
     last_event: "fresh-worker-respawn",
     last_event_ts: deps.now(),
     phase: "idle",
@@ -25945,12 +25952,13 @@ async function resumeWith(args, deps) {
         }
       }
     }
-    const st = readLane(art, agent);
+    const raw = readOr(stateTxt);
+    const st = parseState(raw);
     let phase = st.phase ?? "";
     if (!alive && phase === "working") {
       const workingExp = st.current_exp_id ?? "";
       ledgerAdd({ gen, ts: deps.now(), kind: "interrupted", agent, ...workingExp ? { exp_id: workingExp } : {} });
-      applyTransition(art, agent, {
+      applyTransitionFrom(art, agent, raw, {
         phase: "idle",
         current_exp_id: "",
         last_event: "interrupted",

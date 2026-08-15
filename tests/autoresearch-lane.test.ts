@@ -1,10 +1,13 @@
 // tests/autoresearch-lane.test.ts — the worker lane: path, read, transition, and the two
 // deliberately-divergent reconcile flavors.
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
-import { lanePath, readLane, applyTransition, reconcileLaneAtFinalize, reconcileLaneAtResume } from "../src/core/autoresearchLane.js";
+import {
+  lanePath, readLane, applyTransition, applyTransitionStrict, applyTransitionFrom,
+  reconcileLaneAtFinalize, reconcileLaneAtResume,
+} from "../src/core/autoresearchLane.js";
 import { autoresearchArtDir, workerStateDir, experimentDir } from "../src/core/autoresearch.js";
 import { mergeState } from "../src/core/autoresearchState.js";
 import { workerDir } from "../src/core/paths.js";
@@ -88,6 +91,44 @@ describe("applyTransition", () => {
     const { art } = scaffold(h);
     applyTransition(art, INST, { phase: "idle" });
     expect(readFileSync(lanePath(art, INST), "utf8")).toBe(mergeState(null, { phase: "idle" }));
+  });
+});
+
+// ---- the three read disciplines ----
+// Each transition differs ONLY in how it reads the lane before merging, and each shipped site
+// depends on its own flavor. Swapping any one of them is a silent behavior change, so all three
+// are pinned against the same scenario.
+
+describe("read disciplines", () => {
+  it("TOLERANT: applyTransition merges onto nothing when the lane is gone", () => {
+    const h = home();
+    const { art } = scaffold(h, { state: "phase=working\n" });
+    rmSync(lanePath(art, INST));
+    expect(() => applyTransition(art, INST, { phase: "idle" })).not.toThrow();
+    expect(readLane(art, INST)).toEqual({ phase: "idle" });
+  });
+
+  it("STRICT: applyTransitionStrict THROWS when the lane is gone, leaving nothing behind", () => {
+    const h = home();
+    const { art } = scaffold(h, { state: "phase=working\n" });
+    rmSync(lanePath(art, INST));
+    expect(() => applyTransitionStrict(art, INST, { phase: "idle" })).toThrow();
+    expect(existsSync(lanePath(art, INST))).toBe(false);
+  });
+
+  it("SNAPSHOT: applyTransitionFrom overwrites a write that landed after the caller's read; TOLERANT keeps it", () => {
+    const h = home();
+    const { art } = scaffold(h, { state: "phase=working\n" });
+    const snapshot = readFileSync(lanePath(art, INST), "utf8");
+    // A concurrent writer lands between the caller's read and its write.
+    applyTransition(art, INST, { external_key: "1" });
+
+    applyTransitionFrom(art, INST, snapshot, { phase: "idle" });
+    expect(readLane(art, INST)).toEqual({ phase: "idle" });          // external_key dropped
+
+    applyTransition(art, INST, { external_key: "1" });
+    applyTransition(art, INST, { phase: "interrupted" });
+    expect(readLane(art, INST)).toEqual({ phase: "interrupted", external_key: "1" });
   });
 });
 
@@ -196,8 +237,8 @@ describe("finalize-vs-resume divergence (offset past EOF)", () => {
 describe("command file delegates to the lane module", () => {
   const src = readFileSync(join(process.cwd(), "src", "commands", "autoresearch.ts"), "utf8");
 
-  it("spells no read-modify-write of its own (applyTransition owns it)", () => {
-    expect(src).not.toMatch(/mergeState\s*\(/);
+  it("spells no read-modify-write of its own (the applyTransition* family owns it)", () => {
+    expect(src).not.toMatch(/atomicWrite\s*\([^)]*mergeState/);
   });
 
   it("reconstructs no state.txt path of its own (lanePath owns it)", () => {

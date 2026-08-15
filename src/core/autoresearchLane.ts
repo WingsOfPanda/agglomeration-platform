@@ -1,7 +1,21 @@
 // The per-worker LANE for /ap:autoresearch: one home for <art>/workers/<agent>/state.txt — the
-// path, the read, the read-modify-write transition, and the two reconcile flavors. The KV codec
+// path, the read, the read-modify-write transitions, and the two reconcile flavors. The KV codec
 // (parse/render/merge + the reconcile primitives) stays pure in autoresearchState.ts; this file
 // owns the disk.
+//
+// THREE read disciplines, because the shipped sites genuinely differ in how they read the lane
+// before merging. Each transition names its own; picking the wrong one is a silent behavior change:
+//   - applyTransition       TOLERANT (readOr) — a missing/unreadable lane merges onto nothing.
+//                           Both reconcile flavors below and resume's pass-2 hazard-1 repair: 5
+//                           sites, each of which already proved the lane exists a few lines up.
+//   - applyTransitionStrict STRICT (readFileSync) — a vanished/unreadable lane THROWS. Only
+//                           fresh-worker's post-spawn reset (1 site): that write lands on the far
+//                           side of a teardown+respawn window, so a lane that disappeared during
+//                           it must fail loudly, not be recreated from the six keys being written.
+//   - applyTransitionFrom   SNAPSHOT (the caller's earlier read) — merges onto what the caller
+//                           already held, ignoring anything written since. Only resume's pass-3
+//                           interrupt (1 site), which reads the lane before its ledger append and
+//                           writes after it.
 //
 // The phase vocabulary these transitions write is CONSUMED elsewhere — pointers only, nothing
 // moves: autoresearchFinalize.ts's finalizePhase case-map (wind-down normalization),
@@ -27,11 +41,30 @@ export function readLane(art: string, agent: string): Record<string, string> {
   return parseState(readOr(lanePath(art, agent)));
 }
 
-/** The lane transition: merge `updates` over what is on disk and rewrite atomically. Touched keys
- *  overwrite; every other key survives. */
+/** The lane transition, TOLERANT read: merge `updates` over what is on disk and rewrite atomically.
+ *  Touched keys overwrite; every other key survives. A missing/unreadable lane merges onto nothing
+ *  (see applyTransitionStrict for the site that must not tolerate that). */
 export function applyTransition(art: string, agent: string, updates: Record<string, string>): void {
   const p = lanePath(art, agent);
   atomicWrite(p, mergeState(readOr(p), updates));
+}
+
+/** The lane transition, STRICT read: identical to applyTransition except a missing or unreadable
+ *  state.txt THROWS instead of merging onto nothing. fresh-worker's post-spawn reset uses this —
+ *  it writes after tearing the pane down and respawning, and a lane that vanished inside that
+ *  window is a real failure, not something to paper over by recreating it from the keys at hand. */
+export function applyTransitionStrict(art: string, agent: string, updates: Record<string, string>): void {
+  const p = lanePath(art, agent);
+  atomicWrite(p, mergeState(readFileSync(p, "utf8"), updates));
+}
+
+/** The lane transition, SNAPSHOT read: merge `updates` over the `existing` text the CALLER read
+ *  earlier rather than re-reading at write time, so anything written to the lane in between is
+ *  overwritten rather than preserved. resume's pass-3 interrupt uses this — it reads the lane,
+ *  appends its ledger event, then writes, and the shipped semantics are last-writer-wins from the
+ *  pre-append snapshot. */
+export function applyTransitionFrom(art: string, agent: string, existing: string | null, updates: Record<string, string>): void {
+  atomicWrite(lanePath(art, agent), mergeState(existing, updates));
 }
 
 /** finalize's reconcile: replay the PANE outbox tail past the persisted liveness cursor, then apply
@@ -68,7 +101,9 @@ export function reconcileLaneAtFinalize(art: string, agent: string, topic: strin
  *  the outbox, so the whole file is re-read from byte 0 (finalize's hand-rolled slice yields an
  *  empty tail instead). `expId` is the experiment whose result.json decides a `done`: resume's
  *  pass 1 passes the lane's own current_exp_id, pass 2 the unresolved intent's — hence a parameter
- *  rather than the internal derivation finalize does. */
+ *  rather than the internal derivation finalize does. The `!!expId` short-circuit is a defensive
+ *  no-op for the two shipped callers — pass 1's current_exp_id can legitimately be empty; pass 2's
+ *  ledger intent never is (replayLedger only records intents with a truthy exp_id). */
 export function reconcileLaneAtResume(art: string, agent: string, outboxText: string, offset: number, expId: string): void {
   const doneResultExists = !!expId && existsSync(join(experimentDir(art, agent, expId), "result.json"));
   const recon = reconcileFromOutboxSince(outboxText, offset, doneResultExists);

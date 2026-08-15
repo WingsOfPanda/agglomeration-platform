@@ -13,10 +13,22 @@ lane module. The lane MACHINERY lives in the callers:
 
 - `join(workerStateDir(art, agent), "state.txt")` reconstructed at 10 command-file sites
   (autoresearch.ts:560, 631, 881, 1036, 1121, 1152, 1568, 1673, 1702, 1733 as shipped at 0.5.21).
-- `atomicWrite(stateTxt, mergeState(readOr(stateTxt), {...}))` — the read-modify-write — spelled
-  at 7 command-file sites (:1137, :1143, :1591, :1680, :1712, :1718, :1749) plus
-  computeScore's plan entry; only `buildDispatchState` (autoresearchExperiment.ts) ever got a
-  core home.
+- The read-modify-write — spelled at 7 command-file sites (:1137, :1143, :1591, :1680, :1712,
+  :1718, :1749) plus computeScore's plan entry; only `buildDispatchState`
+  (autoresearchExperiment.ts) ever got a core home. **The seven do NOT share one read discipline,
+  and this spec originally claimed they did** — the correction that follows is load-bearing,
+  because a single tolerant base silently changes two of them:
+  - 5 sites read TOLERANTLY, `atomicWrite(stateTxt, mergeState(readOr(stateTxt), {...}))`
+    (:1137, :1143, :1680, :1712, :1718) — a missing lane merges onto nothing.
+  - :1591 (fresh-worker's post-spawn reset) reads STRICTLY, `mergeState(readFileSync(stateTxt,
+    "utf8"), ...)`, and THROWS if the lane vanished or became unreadable during the teardown +
+    respawn window it just crossed. Recreating the lane from the six keys being written would
+    report `[ OK ] respawned` over a broken campaign, and inside resume's pass 3 would turn an
+    aborted verb into a "lane healthy" row.
+  - :1749 (resume's pass-3 interrupt) merges over a SNAPSHOT: `raw` is read before the
+    `ledgerAdd`, and the write is `mergeState(raw, ...)` — anything written to the lane in
+    between is overwritten, not preserved.
+  The lane module must preserve each site's discipline, not unify them.
 - The finalize reconcile (autoresearch.ts:1114-1145) hand-rolls its pane-outbox tail slice with a
   comment explaining it is deliberately NOT `reconcileFromOutboxSince` (no shrink guard —
   finalize runs once at wind-down); resume uses the shrink-guarded helper. The divergence is
@@ -38,7 +50,16 @@ the pure codec, unchanged):
 - `readLane(art, agent): Record<string, string>` — `parseState(readOr(lanePath(...)))`.
 - `applyTransition(art, agent, updates: Record<string, string>): void` — the atomic
   read-modify-write. Every current site's WRITE CONTENT must be byte-identical (same keys, same
-  merge semantics — it delegates to mergeState).
+  merge semantics — it delegates to mergeState). **Amendment (adversarial review):** one
+  transition is not enough, because the seven sites use three different read disciplines (see
+  Problem above). The module ships all three, each naming its site in a doc comment, which is the
+  honest "one home" outcome — it makes a discipline that was previously incidental at each call
+  site explicit and checkable:
+  - `applyTransition` — TOLERANT (`readOr`), 5 sites.
+  - `applyTransitionStrict(art, agent, updates)` — STRICT (`readFileSync`, throws), 1 site:
+    fresh-worker's post-spawn reset.
+  - `applyTransitionFrom(art, agent, existing, updates)` — SNAPSHOT (the caller's earlier read),
+    1 site: resume's pass-3 interrupt, which keeps its `raw` capture.
 - `reconcileLaneAtFinalize(...)` and `reconcileLaneAtResume(...)` — the two flavors, moved with
   their exact current semantics: finalize's = cursor-offset subarray of the PANE outbox with NO
   shrink guard + `reconcileFromOutbox` + conditional phase transition; resume's = the
@@ -93,8 +114,13 @@ fully-rendered string, not an updates map, so it stays as-is (its path build doe
   the two reconcile flavors must fail the divergence pin. The re-inlining half needs a STRUCTURAL
   pin — a re-inlined `atomicWrite(stateTxt, mergeState(readOr(stateTxt), …))` is byte-identical by
   construction, so no behavioral test can catch it. The lane suite therefore greps the shipped
-  `src/commands/autoresearch.ts` for a `mergeState(` call and for a `, "state.txt")` path build and
-  asserts both are absent (same idiom as `tests/stale-tokens.test.ts`).
+  `src/commands/autoresearch.ts` for the read-modify-write SHAPE (`atomicWrite(...mergeState...)`)
+  and for a `, "state.txt")` path build and asserts both are absent (same idiom as
+  `tests/stale-tokens.test.ts`). The pin is the shape and not the bare `mergeState(` symbol:
+  banning the symbol outright would also fire on a legitimate non-lane use of the
+  `buildDispatchState` composition.
+- Read disciplines: one pin each — tolerant merges over a missing lane, strict throws on it, and
+  snapshot overwrites a write that landed after the caller's read while tolerant keeps it.
 - Full gate green; dist rebuilt and committed.
 
 ## Success Criteria
