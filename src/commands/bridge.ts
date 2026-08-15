@@ -18,7 +18,7 @@ import { parseBridgeArgs, deriveSlug, bridgeArtDir, bridgeExecDir, renderBridgeS
 import type { BridgeSummaryFacts } from "../core/bridge.js";
 import { composeBridgeBrief, composeBridgeFollowup } from "../core/bridgeTurn.js";
 import { classifyTurn, waitTurnConfirmed } from "../core/turn.js";
-import { parseLatestOffset, recordWaitOutcome } from "../core/designTurn.js";
+import { parseLatestOffset, recordWaitOutcome } from "../core/wait.js";
 import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
 import { outboxOffset, outboxPath, workerSendGate } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";

@@ -1,6 +1,6 @@
 // src/core/turn.ts
 import { outboxEventsSince, outboxOffset, outboxPath, TERMINAL_EVENTS, type OutboxEvent } from "./ipc.js";
-import { realSleep } from "./artifact.js";
+import { realSleep } from "./wait.js";
 
 export const BRANCH_DISCIPLINE =
   "BRANCH DISCIPLINE (hard rule):\n" +

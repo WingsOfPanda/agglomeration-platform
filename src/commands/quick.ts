@@ -16,7 +16,7 @@ import type { Runner } from "../core/gitwork.js";
 import { outboxOffset, outboxPath, workerSendGate, type OutboxEvent } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
 import { composeRound1Prompt, composeFixPrompt, classifyTurn, waitTurnConfirmed } from "../core/turn.js";
-import { parseLatestOffset, recordWaitOutcome } from "../core/designTurn.js";
+import { parseLatestOffset, recordWaitOutcome } from "../core/wait.js";
 import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
 import { run as sendRun } from "./send.js";
 import { readIfExists, readIfExistsOrNull, readField, kvField } from "../core/fsread.js";

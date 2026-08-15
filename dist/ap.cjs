@@ -18343,128 +18343,42 @@ var init_waitLive = __esm({
   }
 });
 
-// src/core/artifact.ts
-function artifactGraceS() {
-  const raw = process.env.AP_ARTIFACT_GRACE_S;
-  const n2 = raw === void 0 || raw.trim() === "" ? 60 : Number(raw);
-  if (!Number.isFinite(n2)) return 60;
-  if (n2 <= 0) return 0;
-  return Math.min(300, Math.max(MIN_GRACE_S, n2));
+// src/core/wait.ts
+function lastKeyedNumber(text, key) {
+  const ms = [...text.matchAll(new RegExp(`^${key}=(\\d+)\\s*$`, "gm"))];
+  return ms.length ? Number(ms[ms.length - 1][1]) : null;
 }
-function hasArtifactSentinel(text) {
-  if (text === null) return false;
-  const lines = text.split("\n").map((l) => l.trim()).filter((l) => l !== "");
-  return lines.length > 1 && lines[lines.length - 1] === END_OF_ARTIFACT;
+function parseLatestOffset(stateText) {
+  return lastKeyedNumber(stateText, "OFFSET");
 }
-function artifactContract(finalPath, alsoPaths = []) {
-  return [
-    "Artifact completeness contract \u2014 the Hub reads this file only once it is COMPLETE:",
-    `  1. Write your output to ${finalPath}.tmp (same directory), never straight to the final path.`,
-    `  2. Make the LAST line of that file the literal sentinel: ${END_OF_ARTIFACT}`,
-    `  3. Rename it into place: mv ${finalPath}.tmp ${finalPath}`,
-    ...alsoPaths.map((p) => `  3b. Same three steps for ${p}: write ${p}.tmp with ${END_OF_ARTIFACT} as its last line, then mv ${p}.tmp ${p}`),
-    "  4. ONLY THEN append your terminal event to your outbox.",
-    `A file whose last line is not ${END_OF_ARTIFACT} is treated as still being written: the Hub`,
-    "waits out a short grace period, and if the file is still empty or still changing at the end of",
-    "it, that phase's output is discarded."
-  ].join("\n");
-}
-function probe(path6) {
-  const text = readIfExistsOrNull(path6);
-  return { complete: hasArtifactSentinel(text), size: text === null ? 0 : Buffer.byteLength(text) };
-}
-async function awaitArtifact(path6, graceS, sleep5) {
-  const first = probe(path6);
-  if (first.complete) return "sentinel";
-  let last = first.size;
-  let stable = 0;
-  for (let waited = 0; waited < graceS; waited += ARTIFACT_POLL_S) {
-    await sleep5(ARTIFACT_POLL_S * 1e3);
-    const now = probe(path6);
-    if (now.complete) return "sentinel";
-    stable = now.size > 0 && now.size === last ? stable + 1 : 0;
-    last = now.size;
-    if (stable >= QUIESCENT_POLLS) return "quiescent";
-  }
-  return "expired";
-}
-function strikePrefix(agent) {
-  return `stillwriting-${agent}-`;
-}
-function strikePath(art, agent, artifact) {
-  return (0, import_node_path20.join)(art, `${strikePrefix(agent)}${(0, import_node_path20.basename)(artifact).replace(/[^A-Za-z0-9._-]/g, "_")}.txt`);
-}
-function recordStillWriting(art, agent, artifact, size) {
-  const path6 = strikePath(art, agent, artifact);
-  const prev = readIfExists(path6).split("\n").filter((l) => l.length > 0).map((l) => Number(l.split(/\s+/)[1]));
-  const sizes = [...prev, size];
-  atomicWrite(path6, sizes.map((s) => `${agent} ${s}`).join("\n") + "\n");
-  let strikes = 1;
-  let high = sizes[0];
-  for (let i2 = 1; i2 < sizes.length; i2++) {
-    strikes = sizes[i2] > high ? 1 : strikes + 1;
-    high = Math.max(high, sizes[i2]);
-  }
-  return { strikes, total: sizes.length };
-}
-function clearArtifactStrikes(art, agent, artifact) {
-  (0, import_node_fs25.rmSync)(strikePath(art, agent, artifact), { force: true });
-}
-function clearAgentStrikes(art, agent) {
-  let names;
-  try {
-    names = (0, import_node_fs25.readdirSync)(art);
-  } catch {
-    return;
-  }
-  for (const n2 of names) if (n2.startsWith(strikePrefix(agent))) (0, import_node_fs25.rmSync)((0, import_node_path20.join)(art, n2), { force: true });
-}
-function artifactBackstop(opts) {
-  const text = opts.text ?? readIfExists(opts.artifact);
-  const accept = lastTag(opts.stateText, ARTIFACT_ACCEPT_KEY);
-  if (hasArtifactSentinel(text) || accept === "unchecked" || WAIT_ACCEPTED.has(accept ?? "")) {
-    clearArtifactStrikes(opts.art, opts.agent, opts.artifact);
-    return "complete";
-  }
-  if (accept === "expired" || lastTag(opts.stateText, opts.key) === "failed") return "drop";
-  const { strikes, total } = recordStillWriting(opts.art, opts.agent, opts.artifact, Buffer.byteLength(text));
-  if (strikes >= NO_GROWTH_STRIKES || total >= MAX_REFUSALS) {
-    const reason = strikes >= NO_GROWTH_STRIKES ? `${strikes} refusals with no growth` : `${total} refusals (cap ${MAX_REFUSALS})`;
-    log.warn(`${opts.label}: ${opts.agent} still has no ${END_OF_ARTIFACT} after ${reason} \u2014 dropping as empty`);
-    recordHubFlag({
-      command: opts.command,
-      topic: opts.topic,
-      note: `artifact-incomplete: ${opts.agent} ${opts.artifact} dropped as empty after ${reason}`
-    });
-    return "drop";
-  }
-  process.stderr.write(`STILL_WRITING=${opts.agent}
+function recordWaitOutcome(agent, model, topic, stateFile, state, key, question, lead) {
+  const head = lead ? `${lead}
+` : "";
+  if (state === "question" && question) {
+    atomicWrite(question.file, question.body);
+    const bumped = outboxOffset(outboxPath(agent, model, topic));
+    (0, import_node_fs25.appendFileSync)(stateFile, `${head}OFFSET=${bumped}
+${key}=question
+${question.extraLines ?? ""}`);
+  } else {
+    (0, import_node_fs25.appendFileSync)(stateFile, `${head}${key}=${state}
 `);
-  log.error(`${opts.label}: ${opts.agent} ${opts.artifact} has no ${END_OF_ARTIFACT} and no ${ARTIFACT_ACCEPT_KEY}= verdict (still writing; strike ${strikes}/${NO_GROWTH_STRIKES}, refusal ${total}/${MAX_REFUSALS}) \u2014 run that phase's wait verb, then retry`);
-  return "still-writing";
+  }
 }
-var import_node_fs25, import_node_path20, END_OF_ARTIFACT, ARTIFACT_ACCEPT_KEY, ARTIFACT_POLL_S, QUIESCENT_POLLS, MIN_GRACE_S, NO_GROWTH_STRIKES, MAX_REFUSALS, realSleep, WAIT_ACCEPTED;
-var init_artifact = __esm({
-  "src/core/artifact.ts"() {
+function scaledTimeout(baseSec, multiplier) {
+  const m = Number(multiplier);
+  return Math.floor(baseSec * (Number.isFinite(m) && m > 0 ? m : 1) + 0.5);
+}
+var import_node_fs25, realSleep;
+var init_wait = __esm({
+  "src/core/wait.ts"() {
     "use strict";
     import_node_fs25 = require("node:fs");
-    import_node_path20 = require("node:path");
-    init_log();
+    init_ipc();
     init_atomic();
-    init_fsread();
-    init_roster();
-    init_forensics();
-    END_OF_ARTIFACT = "END_OF_ARTIFACT";
-    ARTIFACT_ACCEPT_KEY = "AC";
-    ARTIFACT_POLL_S = 2;
-    QUIESCENT_POLLS = 5;
-    MIN_GRACE_S = QUIESCENT_POLLS * ARTIFACT_POLL_S;
-    NO_GROWTH_STRIKES = 3;
-    MAX_REFUSALS = 6;
     realSleep = (ms) => new Promise((r) => {
       setTimeout(r, ms);
     });
-    WAIT_ACCEPTED = /* @__PURE__ */ new Set(["sentinel", "quiescent"]);
   }
 });
 
@@ -18568,314 +18482,12 @@ var init_turn = __esm({
   "src/core/turn.ts"() {
     "use strict";
     init_ipc();
-    init_artifact();
+    init_wait();
     BRANCH_DISCIPLINE = 'BRANCH DISCIPLINE (hard rule):\n- You are already on the correct branch. Do NOT run `git checkout`, `git switch`,\n  or `git branch`, and do NOT create new branches.\n- If the work genuinely needs a different branch, do NOT switch; instead emit\n  {"event":"error","reason":"branch-discipline: needed a different branch"} and stop.\n';
     BLOCKERS = 'IF YOU ARE BLOCKED:\n- If a path, file, command, or assumption is wrong or missing, do NOT guess or invent a\n  workaround. Append a question event to your outbox and stop:\n  {"event":"question","message":"<what you need and why>","ts":"<iso>"}\n  The conductor will reply via your inbox, then re-engage you.\n';
     TURN_CONFIRM_DEFAULT_S = 20;
     MAX_VETOES = 2;
     REARM_FLOOR_WINDOWS = 3;
-  }
-});
-
-// src/core/designDiff.ts
-function parseClaims(findings, headings = ["Claims"]) {
-  const out = [];
-  let inClaims = false;
-  for (const line of findings.split("\n")) {
-    if (headings.some((h2) => line.startsWith(`## ${h2}`))) {
-      inClaims = true;
-      continue;
-    }
-    if (/^## /.test(line)) {
-      inClaims = false;
-      continue;
-    }
-    if (inClaims && /^[0-9]+\. \[[^\]]+\] /.test(line)) {
-      const m = line.match(/\[[^\]]+\]/);
-      if (!m || m.index === void 0) continue;
-      const cite = m[0].slice(1, -1);
-      const text = line.slice(m.index + m[0].length).replace(/^[ \t]+/, "");
-      out.push({ cite, text });
-    }
-  }
-  return out;
-}
-function citationOverlaps(aRaw, bRaw) {
-  const a2 = aRaw.replace(/^\.\//, "");
-  const b = bRaw.replace(/^\.\//, "");
-  if (a2.startsWith("http") || b.startsWith("http")) return a2 === b;
-  if (a2.startsWith("runtime:") || b.startsWith("runtime:")) return a2 === b;
-  if (a2.startsWith("paper:") || b.startsWith("paper:")) return a2 === b;
-  const aPath = a2.split(":")[0];
-  const bPath = b.split(":")[0];
-  if (aPath !== bPath) return false;
-  const aLines = a2.includes(":") ? a2.slice(a2.indexOf(":") + 1) : "";
-  const bLines = b.includes(":") ? b.slice(b.indexOf(":") + 1) : "";
-  if (aLines === "" || bLines === "") return true;
-  const split = (s) => s.includes("-") ? [s.slice(0, s.indexOf("-")), s.slice(s.indexOf("-") + 1)] : [s, s];
-  const [a1s, a2s] = split(aLines);
-  const [b1s, b2s] = split(bLines);
-  if (![a1s, a2s, b1s, b2s].every((x) => /^[0-9]+$/.test(x))) return false;
-  const a1 = parseInt(a1s, 10), a22 = parseInt(a2s, 10), b1 = parseInt(b1s, 10), b2 = parseInt(b2s, 10);
-  return a1 <= b2 && b1 <= a22;
-}
-function mdSection(header, lines) {
-  return header + "\n" + (lines && lines.length ? lines.map((l) => `- ${l}`).join("\n") + "\n" : "");
-}
-function diffFindings(workers, headings) {
-  const n2 = workers.length;
-  if (n2 < 2) throw new Error(`diffFindings: need >=2 workers, got ${n2}`);
-  const names = workers.map((p) => p.name);
-  const owner = [], cite = [], text = [], flag = [];
-  const start = [], end = [];
-  for (let idx = 0; idx < n2; idx++) {
-    start[idx] = owner.length;
-    for (const c3 of parseClaims(workers[idx].findings, headings)) {
-      owner.push(idx);
-      cite.push(c3.cite);
-      text.push(c3.text);
-      flag.push(false);
-    }
-    end[idx] = owner.length;
-  }
-  const buckets = /* @__PURE__ */ new Map();
-  const add = (key, line) => {
-    if (!buckets.has(key)) buckets.set(key, []);
-    buckets.get(key).push(line);
-  };
-  for (let i2 = 0; i2 < n2; i2++) {
-    for (let j = start[i2]; j < end[i2]; j++) {
-      if (flag[j]) continue;
-      let memberKeys = names[i2];
-      const firstCite = cite[j];
-      let combined = text[j];
-      flag[j] = true;
-      for (let k = i2 + 1; k < n2; k++) {
-        for (let m = start[k]; m < end[k]; m++) {
-          if (flag[m]) continue;
-          if (citationOverlaps(firstCite, cite[m])) {
-            memberKeys += `,${names[k]}`;
-            combined += ` | ${text[m]}`;
-            flag[m] = true;
-            break;
-          }
-        }
-      }
-      add(memberKeys, `[${firstCite}] ${combined}`);
-    }
-  }
-  const allKey = names.join(",");
-  const files = [];
-  let diffMd = "";
-  if (n2 === 2) {
-    for (const name of names) files.push({ filename: `${name}_only_items.txt`, content: fileBody(buckets.get(name)) });
-    diffMd = mdSection("## Agreed", buckets.get(allKey)) + "\n" + mdSection(`## ${titlecase(names[0])}-only`, buckets.get(names[0])) + "\n" + mdSection(`## ${titlecase(names[1])}-only`, buckets.get(names[1]));
-  } else {
-    files.push({ filename: "consensus.txt", content: fileBody(buckets.get(allKey)) });
-    const pairKeys = [];
-    for (let i2 = 0; i2 < n2; i2++) for (let j = i2 + 1; j < n2; j++) pairKeys.push(`${names[i2]},${names[j]}`);
-    for (const key of pairKeys) {
-      const [a2, b] = key.split(",");
-      files.push({ filename: `${a2}+${b}_only.txt`, content: fileBody(buckets.get(key)) });
-    }
-    for (const name of names) files.push({ filename: `${name}_only_items.txt`, content: fileBody(buckets.get(name)) });
-    let md = mdSection("## Consensus", buckets.get(allKey));
-    for (const key of pairKeys) {
-      const [a2, b] = key.split(",");
-      md += "\n" + mdSection(`## ${titlecase(a2)}+${titlecase(b)} only`, buckets.get(key));
-    }
-    for (const name of names) md += "\n" + mdSection(`## ${titlecase(name)}-only`, buckets.get(name));
-    diffMd = md;
-  }
-  return { files, diffMd };
-}
-var titlecase, fileBody;
-var init_designDiff = __esm({
-  "src/core/designDiff.ts"() {
-    "use strict";
-    titlecase = (s) => s.length ? s[0].toUpperCase() + s.slice(1) : s;
-    fileBody = (lines) => lines && lines.length ? lines.join("\n") + "\n" : "";
-  }
-});
-
-// src/core/designTurn.ts
-function findingsStatus(text) {
-  if (text === null) return "missing";
-  if (parseClaims(text).length > 0) return "ok";
-  let inClaims = false;
-  let count2 = 0;
-  for (const line of text.split("\n")) {
-    if (/^## Claims/.test(line)) {
-      inClaims = true;
-      continue;
-    }
-    if (/^## /.test(line)) {
-      inClaims = false;
-    }
-    if (inClaims && line.trim() !== "") count2++;
-  }
-  return count2 > 0 ? "malformed" : "empty";
-}
-function researchState(ev, findingsText) {
-  if (!ev) return "timeout";
-  if (ev.event === "question") return "question";
-  if (ev.event === "done") return findingsStatus(findingsText);
-  return "failed";
-}
-function lastKeyedNumber(text, key) {
-  const ms = [...text.matchAll(new RegExp(`^${key}=(\\d+)\\s*$`, "gm"))];
-  return ms.length ? Number(ms[ms.length - 1][1]) : null;
-}
-function parseLatestOffset(stateText) {
-  return lastKeyedNumber(stateText, "OFFSET");
-}
-function lastKeyedValue(text, key) {
-  const matches = text.split("\n").filter((l) => l.startsWith(`${key}=`));
-  return matches.length ? matches[matches.length - 1].slice(key.length + 1).trim() : null;
-}
-function recordWaitOutcome(agent, model, topic, stateFile, state, key, question, lead) {
-  const head = lead ? `${lead}
-` : "";
-  if (state === "question" && question) {
-    atomicWrite(question.file, question.body);
-    const bumped = outboxOffset(outboxPath(agent, model, topic));
-    (0, import_node_fs26.appendFileSync)(stateFile, `${head}OFFSET=${bumped}
-${key}=question
-${question.extraLines ?? ""}`);
-  } else {
-    (0, import_node_fs26.appendFileSync)(stateFile, `${head}${key}=${state}
-`);
-  }
-}
-function scaledTimeout(baseSec, multiplier) {
-  const m = Number(multiplier);
-  return Math.floor(baseSec * (Number.isFinite(m) && m > 0 ? m : 1) + 0.5);
-}
-function composeResearchPrompt(topicText, findingsPath) {
-  const topic = topicText.trim();
-  return [
-    "Investigate the following topic and produce structured findings.",
-    "",
-    `Topic: ${topic}`,
-    "",
-    `Output requirements \u2014 write to ${findingsPath} with this EXACT structure:`,
-    "",
-    `  # Findings: ${topic}`,
-    "",
-    "  ## Summary",
-    "  <2-3 sentence overview, free-form prose>",
-    "",
-    "  ## Claims",
-    "  1. [<source citation>] <one-sentence claim>",
-    "  2. [<source citation>] <one-sentence claim>",
-    "  ...",
-    "",
-    "  ## Notes",
-    "  <any free-form additions; not parsed>",
-    "",
-    "Citation format options:",
-    "  - <file path>:<line>          e.g. src/auth/store.py:42",
-    "  - <file path>:<line-range>    e.g. src/auth/refresh.py:15-30",
-    "  - <URL>                       e.g. https://datatracker.ietf.org/doc/html/rfc6749",
-    "  - runtime: <command>          e.g. runtime: pytest tests/test_auth.py",
-    "",
-    "Each claim must have a citation in [brackets]. Claims without citations will be silently",
-    "dropped \u2014 and if NO claim has a citation, your findings will be flagged as malformed.",
-    "",
-    "Research methods: use any tool available in your environment. When local repository evidence is",
-    "insufficient or the topic references external knowledge (RFCs, standards, library docs, vendor",
-    "APIs, recent CVEs, design patterns), you SHOULD use web search / fetch to find authoritative",
-    "sources and cite them as URL citations. Prefer primary sources over blog posts. If a tool is",
-    "unavailable, fall back to local-only investigation and note the gap as an [unverified] claim.",
-    "",
-    RESEARCH_BLOCKERS,
-    artifactContract(findingsPath)
-  ].join("\n");
-}
-function verifyState(ev, verifyText) {
-  if (!ev) return "timeout";
-  if (ev.event === "question") return "question";
-  if (ev.event === "done") return verifyText !== null && verifyText.length > 0 ? "ok" : "missing";
-  return "failed";
-}
-function gateState(workers, key) {
-  return workers.map((p) => {
-    const last = lastKeyedValue(p.stateText ?? "", key);
-    const status = last === "question" ? "question" : p.doneExists && last !== null ? "terminal" : "pending";
-    return { agent: p.agent, status };
-  });
-}
-function gateAnomalies(workers, key) {
-  const out = [];
-  for (const p of workers) {
-    if (!p.doneExists) continue;
-    const last = lastKeyedValue(p.stateText ?? "", key);
-    if (last === "timeout" || last === "failed" || last === "missing") out.push({ agent: p.agent, value: last });
-  }
-  return out;
-}
-function composeVerifyPrompt(itemsText, verifyPath) {
-  const items = itemsText.split("\n").filter((l) => l.length > 0).map((l, i2) => `${i2 + 1}. ${l}`).join("\n");
-  return [
-    "You researched a topic in your previous turn. Below are claims the OTHER researchers raised that",
-    "you did not. For EACH item, do ONE of:",
-    "",
-    "  AGREE     \u2014 confirm with your own evidence (cite a file/line/source)",
-    "  DISPUTE   \u2014 explain why it's wrong, with counter-evidence",
-    "  UNCERTAIN \u2014 you cannot tell from available evidence; say so",
-    "",
-    "Items to verify:",
-    items,
-    "",
-    `Write your verdicts to ${verifyPath} in this exact format:`,
-    "",
-    "  # Verify",
-    "  ## Verdicts",
-    "  1. <TAG> <original [citation] and text>",
-    "     <one-line evidence>",
-    "  2. ...",
-    "",
-    "Where <TAG> is one of: AGREE / DISPUTE / UNCERTAIN.",
-    "",
-    "Verification methods: use any tool in your environment. WebSearch / fetch are authorized when an",
-    "item cites a URL, references external standards/docs, or makes a claim local repo evidence cannot",
-    "resolve. For URL-cited items, fetching the source is the default. For file-cited items prefer the",
-    "local file. If a tool is unavailable, mark the item UNCERTAIN and note the gap \u2014 never fabricate.",
-    "",
-    RESEARCH_BLOCKERS,
-    artifactContract(verifyPath)
-  ].join("\n");
-}
-function drilldownState(ev, fileText) {
-  if (!ev) return "timeout";
-  return fileText !== null && fileText.length > 0 ? "ok" : "missing";
-}
-function composeDrilldownPrompt(opts) {
-  const focus = opts.focus.trim() || `Provide more depth, citations, and concrete trade-offs for the ${opts.section} section.`;
-  return [
-    `You are drilling deeper into the **${opts.section}** section of a design doc derived from the`,
-    "investigation you just completed.",
-    "",
-    `Read the design doc you produced: ${opts.designDocPath}`,
-    "",
-    `Focus: ${focus}`,
-    "",
-    "Write your expanded notes (with [citation] anchors) to:",
-    `  ${opts.outPath}`,
-    "",
-    artifactContract(opts.outPath)
-  ].join("\n");
-}
-var import_node_fs26, RESEARCH_BLOCKERS;
-var init_designTurn = __esm({
-  "src/core/designTurn.ts"() {
-    "use strict";
-    import_node_fs26 = require("node:fs");
-    init_ipc();
-    init_atomic();
-    init_designDiff();
-    init_artifact();
-    RESEARCH_BLOCKERS = 'IF YOU ARE BLOCKED:\n- If a referenced path, file, command, env var, or assumption is wrong or missing, do NOT guess\n  or silently work around it. Append a question event to your outbox and stop:\n  {"event":"question","message":"<what you need and why>","ts":"<iso>"}\n  The Hub will reply via your inbox, then re-engage you.\n';
   }
 });
 
@@ -18948,7 +18560,7 @@ async function initWith(tokens, d) {
     return 3;
   }
   const art = quickArtDir(slug);
-  if ((0, import_node_fs27.existsSync)(art)) {
+  if ((0, import_node_fs26.existsSync)(art)) {
     log.error(`quick init: topic already in flight: ${art}`);
     log.error("  run /ap:stop or pick a different topic");
     return 2;
@@ -18959,16 +18571,16 @@ async function initWith(tokens, d) {
     return 1;
   }
   const exec = quickExecDir(slug);
-  (0, import_node_fs27.mkdirSync)(exec, { recursive: true });
-  atomicWrite((0, import_node_path21.join)(art, "topic.txt"), slug + "\n");
-  atomicWrite((0, import_node_path21.join)(art, "topic-text.txt"), topicText);
-  atomicWrite((0, import_node_path21.join)(art, "selected-provider.txt"), provider + "\n");
-  atomicWrite((0, import_node_path21.join)(art, "agent.txt"), agent + "\n");
-  atomicWrite((0, import_node_path21.join)(art, "timing.txt"), `started=${isoUtc()}
+  (0, import_node_fs26.mkdirSync)(exec, { recursive: true });
+  atomicWrite((0, import_node_path20.join)(art, "topic.txt"), slug + "\n");
+  atomicWrite((0, import_node_path20.join)(art, "topic-text.txt"), topicText);
+  atomicWrite((0, import_node_path20.join)(art, "selected-provider.txt"), provider + "\n");
+  atomicWrite((0, import_node_path20.join)(art, "agent.txt"), agent + "\n");
+  atomicWrite((0, import_node_path20.join)(art, "timing.txt"), `started=${isoUtc()}
 `);
-  atomicWrite((0, import_node_path21.join)(exec, "provider.txt"), provider + "\n");
-  atomicWrite((0, import_node_path21.join)(exec, "finish.txt"), (finish ? "yes" : "no") + "\n");
-  atomicWrite((0, import_node_path21.join)(exec, "stash-wip-requested.txt"), (stashWip ? "yes" : "no") + "\n");
+  atomicWrite((0, import_node_path20.join)(exec, "provider.txt"), provider + "\n");
+  atomicWrite((0, import_node_path20.join)(exec, "finish.txt"), (finish ? "yes" : "no") + "\n");
+  atomicWrite((0, import_node_path20.join)(exec, "stash-wip-requested.txt"), (stashWip ? "yes" : "no") + "\n");
   const target = repoRoot();
   log.ok(`quick init: topic=${slug} agent=${agent} provider=${provider} finish=${finish ? "yes" : "no"} stash-wip=${stashWip ? "yes" : "no"}`);
   process.stdout.write(`SLUG=${slug}
@@ -18993,14 +18605,14 @@ function stashWipMessage(topic) {
   return `ap-quick-${topic}-wip`;
 }
 function readStashMarker(exec, topic) {
-  const raw = readIfExistsOrNull((0, import_node_path21.join)(exec, "stash-wip.txt"));
+  const raw = readIfExistsOrNull((0, import_node_path20.join)(exec, "stash-wip.txt"));
   if (raw === null) return null;
   const [sha, name] = raw.split("\n")[0].trim().split("	");
   return { sha: sha ?? "", message: name || stashWipMessage(topic) };
 }
 async function branchWith(topic, target, r, stashWip = false) {
   const exec = quickExecDir(topic);
-  (0, import_node_fs27.mkdirSync)(exec, { recursive: true });
+  (0, import_node_fs26.mkdirSync)(exec, { recursive: true });
   if (stashWip && classifyDirty(r.run("git", ["status", "--porcelain", "--untracked-files=all"]).stdout)) {
     const message = stashWipMessage(topic);
     const st = stashPush(r, message);
@@ -19024,7 +18636,7 @@ async function branchWith(topic, target, r, stashWip = false) {
         break;
     }
     if (st.entryExists) {
-      atomicWrite((0, import_node_path21.join)(exec, "stash-wip.txt"), `${st.sha}	${message}
+      atomicWrite((0, import_node_path20.join)(exec, "stash-wip.txt"), `${st.sha}	${message}
 `);
     }
   }
@@ -19035,10 +18647,10 @@ async function branchWith(topic, target, r, stashWip = false) {
   }
   const branch = `feat/quick-${topic}`;
   const onBranch = createOrResumeBranch(r, branch);
-  atomicWrite((0, import_node_path21.join)(exec, "target_cwd.txt"), target + "\n");
-  atomicWrite((0, import_node_path21.join)(exec, "start-branch.txt"), snap.branch + "\n");
-  atomicWrite((0, import_node_path21.join)(exec, "branch-base.sha"), snap.baseSha + "\n");
-  atomicWrite((0, import_node_path21.join)(exec, "branch.txt"), branch + "\n");
+  atomicWrite((0, import_node_path20.join)(exec, "target_cwd.txt"), target + "\n");
+  atomicWrite((0, import_node_path20.join)(exec, "start-branch.txt"), snap.branch + "\n");
+  atomicWrite((0, import_node_path20.join)(exec, "branch-base.sha"), snap.baseSha + "\n");
+  atomicWrite((0, import_node_path20.join)(exec, "branch.txt"), branch + "\n");
   if (!onBranch) {
     log.warn(`quick branch: checkout ${branch} failed; staying on ${snap.branch}`);
   }
@@ -19060,32 +18672,32 @@ async function turnSendRun(rest) {
 async function turnSendWith(topic, round, d) {
   const art = quickArtDir(topic);
   const exec = quickExecDir(topic);
-  const agent = readField((0, import_node_path21.join)(art, "agent.txt"));
-  const provider = readField((0, import_node_path21.join)(art, "selected-provider.txt"));
+  const agent = readField((0, import_node_path20.join)(art, "agent.txt"));
+  const provider = readField((0, import_node_path20.join)(art, "selected-provider.txt"));
   if (!agent || !provider) {
     log.error("quick turn-send: missing agent.txt/selected-provider.txt (run quick init)");
     return 1;
   }
   if (!workerSendGate(agent, provider, topic, "quick turn-send", "turn")) return 1;
-  const stateFile = (0, import_node_path21.join)(exec, `turn-${round}.txt`);
-  if ((0, import_node_fs27.existsSync)(stateFile)) {
+  const stateFile = (0, import_node_path20.join)(exec, `turn-${round}.txt`);
+  if ((0, import_node_fs26.existsSync)(stateFile)) {
     log.error(`quick turn-send: ${stateFile} already exists; rm to retry`);
     return 1;
   }
   let prompt;
   if (round === 1) {
-    const brief = readIfExists((0, import_node_path21.join)(art, "task-brief.md"));
-    const branch = readField((0, import_node_path21.join)(exec, "branch.txt")) || `feat/quick-${topic}`;
+    const brief = readIfExists((0, import_node_path20.join)(art, "task-brief.md"));
+    const branch = readField((0, import_node_path20.join)(exec, "branch.txt")) || `feat/quick-${topic}`;
     prompt = composeRound1Prompt(brief, branch);
   } else {
-    const bundle = (0, import_node_path21.join)(exec, `fix-prompt-${round}.md`);
-    if (!(0, import_node_fs27.existsSync)(bundle)) {
+    const bundle = (0, import_node_path20.join)(exec, `fix-prompt-${round}.md`);
+    if (!(0, import_node_fs26.existsSync)(bundle)) {
       log.error(`quick turn-send: fix bundle missing: ${bundle} (the directive must write it first)`);
       return 1;
     }
-    prompt = composeFixPrompt((0, import_node_fs27.readFileSync)(bundle, "utf8"), round);
+    prompt = composeFixPrompt((0, import_node_fs26.readFileSync)(bundle, "utf8"), round);
   }
-  const promptFile = (0, import_node_path21.join)(exec, `turn-prompt-${round}.md`);
+  const promptFile = (0, import_node_path20.join)(exec, `turn-prompt-${round}.md`);
   atomicWrite(promptFile, prompt);
   const offset = d.offsetFor(agent, provider, topic);
   atomicWrite(stateFile, `OFFSET=${offset}
@@ -19110,18 +18722,18 @@ async function turnWaitRun(rest) {
 async function turnWaitWith(topic, round, d) {
   const art = quickArtDir(topic);
   const exec = quickExecDir(topic);
-  const agent = readField((0, import_node_path21.join)(art, "agent.txt"));
-  const provider = readField((0, import_node_path21.join)(art, "selected-provider.txt"));
+  const agent = readField((0, import_node_path20.join)(art, "agent.txt"));
+  const provider = readField((0, import_node_path20.join)(art, "selected-provider.txt"));
   if (!agent || !provider) {
     log.error("quick turn-wait: missing agent.txt/selected-provider.txt");
     return 1;
   }
-  const stateFile = (0, import_node_path21.join)(exec, `turn-${round}.txt`);
-  if (!(0, import_node_fs27.existsSync)(stateFile)) {
+  const stateFile = (0, import_node_path20.join)(exec, `turn-${round}.txt`);
+  if (!(0, import_node_fs26.existsSync)(stateFile)) {
     log.error(`quick turn-wait: ${stateFile} missing (run quick turn-send first)`);
     return 1;
   }
-  const offset = parseLatestOffset((0, import_node_fs27.readFileSync)(stateFile, "utf8"));
+  const offset = parseLatestOffset((0, import_node_fs26.readFileSync)(stateFile, "utf8"));
   if (offset === null) {
     log.error(`quick turn-wait: OFFSET not set in ${stateFile}`);
     return 1;
@@ -19142,7 +18754,7 @@ async function turnWaitWith(topic, round, d) {
     stateFile,
     ts,
     "TS",
-    ev ? { file: (0, import_node_path21.join)(exec, `question-${round}.txt`), body: JSON.stringify(ev) + "\n" } : void 0
+    ev ? { file: (0, import_node_path20.join)(exec, `question-${round}.txt`), body: JSON.stringify(ev) + "\n" } : void 0
   );
   log.ok(`quick turn-wait: round=${round} TS=${ts}`);
   return 0;
@@ -19158,16 +18770,16 @@ async function finishRun(rest) {
     log.error("usage: quick finish <topic>");
     return 2;
   }
-  const target = readField((0, import_node_path21.join)(quickExecDir(topic), "target_cwd.txt")) || repoRoot();
+  const target = readField((0, import_node_path20.join)(quickExecDir(topic), "target_cwd.txt")) || repoRoot();
   return finishWith(topic, runnerAt(target), haveCmd("gh"));
 }
 function restoreStashWip(topic, exec, r, startBranch) {
   const parked = readStashMarker(exec, topic);
   if (!parked) return "";
   const { sha, message } = parked;
-  const marker = (0, import_node_path21.join)(exec, "stash-wip.txt");
+  const marker = (0, import_node_path20.join)(exec, "stash-wip.txt");
   const kept = () => {
-    const target = readField((0, import_node_path21.join)(exec, "target_cwd.txt")) || "<target>";
+    const target = readField((0, import_node_path20.join)(exec, "target_cwd.txt")) || "<target>";
     runFlag("quick", topic, `stash-wip-kept: WIP still stashed as '${message}' in ${target}; restore: git checkout ${startBranch} then git stash pop`);
     return "stash-wip-kept\n";
   };
@@ -19179,11 +18791,11 @@ function restoreStashWip(topic, exec, r, startBranch) {
   }
   switch (outcome) {
     case "popped":
-      (0, import_node_fs27.rmSync)(marker, { force: true });
+      (0, import_node_fs26.rmSync)(marker, { force: true });
       log.ok(`quick finish: restored stashed WIP '${message}'`);
       return "";
     case "not-found":
-      (0, import_node_fs27.rmSync)(marker, { force: true });
+      (0, import_node_fs26.rmSync)(marker, { force: true });
       log.warn(`quick finish: no stash entry named '${message}' (popped already?); nothing to restore`);
       return "";
     case "list-failed":
@@ -19202,13 +18814,13 @@ function restoreStashWip(topic, exec, r, startBranch) {
 }
 async function finishWith(topic, r, hasGh) {
   const exec = quickExecDir(topic);
-  const branch = readField((0, import_node_path21.join)(exec, "branch.txt"));
-  const startBranch = readField((0, import_node_path21.join)(exec, "start-branch.txt")) || "main";
-  const doFinish = readField((0, import_node_path21.join)(exec, "finish.txt")) === "yes";
+  const branch = readField((0, import_node_path20.join)(exec, "branch.txt"));
+  const startBranch = readField((0, import_node_path20.join)(exec, "start-branch.txt")) || "main";
+  const doFinish = readField((0, import_node_path20.join)(exec, "finish.txt")) === "yes";
   if (!doFinish) {
     r.run("git", ["checkout", "-q", startBranch]);
     const kept2 = restoreStashWip(topic, exec, r, startBranch);
-    atomicWrite((0, import_node_path21.join)(exec, "finish-result.txt"), `none	branch-only (kept ${branch})
+    atomicWrite((0, import_node_path20.join)(exec, "finish-result.txt"), `none	branch-only (kept ${branch})
 ` + kept2);
     log.ok(`quick finish: branch-only \u2014 kept ${branch}, restored ${startBranch}`);
     return 0;
@@ -19220,12 +18832,12 @@ async function finishWith(topic, r, hasGh) {
     r.run("git", ["checkout", "-q", startBranch]);
     const head = currentBranch(r) || "(detached)";
     const keptNoBranch = restoreStashWip(topic, exec, r, startBranch);
-    atomicWrite((0, import_node_path21.join)(exec, "finish-result.txt"), "none	no-branch\n" + keptNoBranch);
+    atomicWrite((0, import_node_path20.join)(exec, "finish-result.txt"), "none	no-branch\n" + keptNoBranch);
     runFlag("quick", topic, `finish-no-branch: the recorded branch '${named}' is missing or is the start branch '${startBranch}' \u2014 nothing was pushed, no PR opened; the work (if any) is on '${head}'`);
     return 0;
   }
-  const brief = readIfExists((0, import_node_path21.join)(quickArtDir(topic), "task-brief.md"));
-  const verify = readField((0, import_node_path21.join)(exec, "verify-result.txt"));
+  const brief = readIfExists((0, import_node_path20.join)(quickArtDir(topic), "task-brief.md"));
+  const verify = readField((0, import_node_path20.join)(exec, "verify-result.txt"));
   const res = finishBranch(r, {
     branch,
     startBranch,
@@ -19238,7 +18850,7 @@ Verify: ${verify}
 (Automated quick branch \u2014 review and merge into ${startBranch}.)`
   });
   const kept = restoreStashWip(topic, exec, r, startBranch);
-  atomicWrite((0, import_node_path21.join)(exec, "finish-result.txt"), `${res.action}	${res.outcome}
+  atomicWrite((0, import_node_path20.join)(exec, "finish-result.txt"), `${res.action}	${res.outcome}
 ` + kept);
   log.ok(`quick finish: ${res.action} \u2192 ${res.outcome}`);
   return 0;
@@ -19251,7 +18863,7 @@ async function summaryRun(rest) {
   }
   const art = quickArtDir(topic);
   const exec = quickExecDir(topic);
-  const started = kvField((0, import_node_path21.join)(art, "timing.txt"), "started") || "unknown";
+  const started = kvField((0, import_node_path20.join)(art, "timing.txt"), "started") || "unknown";
   let ended;
   let duration;
   const i2 = rest.indexOf("--aborted");
@@ -19260,7 +18872,7 @@ async function summaryRun(rest) {
     ended = isoUtc();
     const s = Date.parse(started), e = Date.parse(ended);
     duration = Number.isFinite(s) && Number.isFinite(e) ? Math.round((e - s) / 1e3) : 0;
-    atomicWrite((0, import_node_path21.join)(art, "timing.txt"), `started=${started}
+    atomicWrite((0, import_node_path20.join)(art, "timing.txt"), `started=${started}
 ended=${ended}
 duration=${duration}
 `);
@@ -19271,23 +18883,23 @@ duration=${duration}
     started,
     ended,
     duration,
-    provider: readField((0, import_node_path21.join)(art, "selected-provider.txt")) || "unknown",
-    agent: readField((0, import_node_path21.join)(art, "agent.txt")) || "unknown",
-    branch: readField((0, import_node_path21.join)(exec, "branch.txt")) || "unknown",
-    verify: readField((0, import_node_path21.join)(exec, "verify-result.txt")) || "unknown",
-    diffStats: readField((0, import_node_path21.join)(exec, "diff-stats.txt")) || "unknown",
-    archived: readField((0, import_node_path21.join)(art, "archived-path.txt")) || "(not archived)",
-    targetCwd: readField((0, import_node_path21.join)(exec, "target_cwd.txt")) || "<target>",
-    branchBase: readField((0, import_node_path21.join)(exec, "branch-base.sha")) || "<base>",
+    provider: readField((0, import_node_path20.join)(art, "selected-provider.txt")) || "unknown",
+    agent: readField((0, import_node_path20.join)(art, "agent.txt")) || "unknown",
+    branch: readField((0, import_node_path20.join)(exec, "branch.txt")) || "unknown",
+    verify: readField((0, import_node_path20.join)(exec, "verify-result.txt")) || "unknown",
+    diffStats: readField((0, import_node_path20.join)(exec, "diff-stats.txt")) || "unknown",
+    archived: readField((0, import_node_path20.join)(art, "archived-path.txt")) || "(not archived)",
+    targetCwd: readField((0, import_node_path20.join)(exec, "target_cwd.txt")) || "<target>",
+    branchBase: readField((0, import_node_path20.join)(exec, "branch-base.sha")) || "<base>",
     abortedPhase: aborted2 ? rest[i2 + 1] : void 0,
     abortedGate: aborted2 ? rest[i2 + 2] : void 0,
     abortedReason: aborted2 ? rest.slice(i2 + 3).join(" ") || "unknown" : void 0
   };
-  atomicWrite((0, import_node_path21.join)(art, "SUMMARY.md"), renderSummary(facts));
+  atomicWrite((0, import_node_path20.join)(art, "SUMMARY.md"), renderSummary(facts));
   if (aborted2) {
     const stashName = readStashMarker(exec, topic)?.message ?? "";
-    const startBranch = readField((0, import_node_path21.join)(exec, "start-branch.txt")) || "<start-branch>";
-    atomicWrite((0, import_node_path21.join)(art, "RESUME.md"), renderResume({
+    const startBranch = readField((0, import_node_path20.join)(exec, "start-branch.txt")) || "<start-branch>";
+    atomicWrite((0, import_node_path20.join)(art, "RESUME.md"), renderResume({
       topic,
       branch: facts.branch,
       artDir: art,
@@ -19296,15 +18908,15 @@ duration=${duration}
       stashNote: stashName ? `Pre-existing WIP is parked in stash '${stashName}' \u2014 restore with: git -C ${facts.targetCwd} checkout ${startBranch}  then  git stash pop <ref>` : void 0
     }));
   }
-  log.ok(`quick summary: wrote ${(0, import_node_path21.join)(art, "SUMMARY.md")}`);
+  log.ok(`quick summary: wrote ${(0, import_node_path20.join)(art, "SUMMARY.md")}`);
   return 0;
 }
-var import_node_fs27, import_node_path21, liveInitDeps, QUICK_TURN_TIMEOUT;
+var import_node_fs26, import_node_path20, liveInitDeps, QUICK_TURN_TIMEOUT;
 var init_quick2 = __esm({
   "src/commands/quick.ts"() {
     "use strict";
-    import_node_fs27 = require("node:fs");
-    import_node_path21 = require("node:path");
+    import_node_fs26 = require("node:fs");
+    import_node_path20 = require("node:path");
     init_log();
     init_args();
     init_atomic();
@@ -19319,7 +18931,7 @@ var init_quick2 = __esm({
     init_ipc();
     init_waitLive();
     init_turn();
-    init_designTurn();
+    init_wait();
     init_env();
     init_send2();
     init_fsread();
@@ -19357,23 +18969,23 @@ function parseWalkVerdict(text) {
 function walkSectionState(dir, opts) {
   let files;
   try {
-    files = (0, import_node_fs28.readdirSync)(dir).filter((f) => f.endsWith(".state"));
+    files = (0, import_node_fs27.readdirSync)(dir).filter((f) => f.endsWith(".state"));
   } catch {
     return [];
   }
   const settled = [];
   for (const f of files.sort()) {
-    const status = parseWalkVerdict((0, import_node_fs28.readFileSync)((0, import_node_path22.join)(dir, f), "utf8"));
+    const status = parseWalkVerdict((0, import_node_fs27.readFileSync)((0, import_node_path21.join)(dir, f), "utf8"));
     if (status) settled.push({ name: f.replace(/\.state$/, ""), status });
   }
   return opts?.withStatus ? settled : settled.map((s) => s.name);
 }
-var import_node_fs28, import_node_path22, WALK_DIRNAME, WALK_VERDICTS;
+var import_node_fs27, import_node_path21, WALK_DIRNAME, WALK_VERDICTS;
 var init_designWalk = __esm({
   "src/core/designWalk.ts"() {
     "use strict";
-    import_node_fs28 = require("node:fs");
-    import_node_path22 = require("node:path");
+    import_node_fs27 = require("node:fs");
+    import_node_path21 = require("node:path");
     WALK_DIRNAME = ".walk";
     WALK_VERDICTS = ["approved", "skipped"];
   }
@@ -19381,13 +18993,13 @@ var init_designWalk = __esm({
 
 // src/core/design.ts
 function designArtDir(topic, opts) {
-  return (0, import_node_path23.join)(topicDir(topic, opts), "_design");
+  return (0, import_node_path22.join)(topicDir(topic, opts), "_design");
 }
 function designDraftDir(topic, opts) {
-  return (0, import_node_path23.join)(designArtDir(topic, opts), "design-doc", ".draft");
+  return (0, import_node_path22.join)(designArtDir(topic, opts), "design-doc", ".draft");
 }
 function designWalkDir(topic, opts) {
-  return (0, import_node_path23.join)(designArtDir(topic, opts), "design-doc", WALK_DIRNAME);
+  return (0, import_node_path22.join)(designArtDir(topic, opts), "design-doc", WALK_DIRNAME);
 }
 function parseDesignArgs(tokens) {
   let ensemble = false;
@@ -19403,7 +19015,7 @@ function parseDesignArgs(tokens) {
   return { topicText: rest.join(" "), ensemble };
 }
 function designDocPath(topic, dateUtc, opts) {
-  return (0, import_node_path23.join)(designArtDir(topic, opts), "design-doc", `${dateUtc}-${topic}-design.md`);
+  return (0, import_node_path22.join)(designArtDir(topic, opts), "design-doc", `${dateUtc}-${topic}-design.md`);
 }
 function cascadeTargets(phase, keepFindings) {
   const workerFile = phase === "research" ? "findings.md" : "verify.md";
@@ -19416,32 +19028,32 @@ function resolveDrilldownPath(scratchDir, section, agent) {
   const base = `drilldown-${slug}-${agent}`;
   let cand = base;
   let n2 = 2;
-  while ((0, import_node_fs29.existsSync)((0, import_node_path23.join)(scratchDir, `${cand}.md`))) {
+  while ((0, import_node_fs28.existsSync)((0, import_node_path22.join)(scratchDir, `${cand}.md`))) {
     cand = `${cand.replace(/-[0-9]+$/, "")}-${n2}`;
     if (++n2 > 100) throw new Error("resolveDrilldownPath: too many same-section drilldown collisions");
   }
-  return (0, import_node_path23.join)(scratchDir, `${cand}.md`);
+  return (0, import_node_path22.join)(scratchDir, `${cand}.md`);
 }
 function designExportDocPath(repoRoot2, basename5) {
-  return (0, import_node_path23.join)(repoRoot2, "docs", "ap", "specs", basename5);
+  return (0, import_node_path22.join)(repoRoot2, "docs", "ap", "specs", basename5);
 }
 function exportDocTo(topic, destRoot, opts) {
-  const ddir = (0, import_node_path23.join)(designArtDir(topic, opts), "design-doc");
-  if (!(0, import_node_fs29.existsSync)(ddir)) return null;
-  const hits = (0, import_node_fs29.readdirSync)(ddir).filter((f) => f.endsWith(`-${topic}-design.md`)).sort();
+  const ddir = (0, import_node_path22.join)(designArtDir(topic, opts), "design-doc");
+  if (!(0, import_node_fs28.existsSync)(ddir)) return null;
+  const hits = (0, import_node_fs28.readdirSync)(ddir).filter((f) => f.endsWith(`-${topic}-design.md`)).sort();
   if (hits.length === 0) return null;
   const basename5 = hits[hits.length - 1];
   const dest = designExportDocPath(destRoot, basename5);
-  (0, import_node_fs29.mkdirSync)((0, import_node_path23.join)(destRoot, "docs", "ap", "specs"), { recursive: true });
-  atomicWrite(dest, (0, import_node_fs29.readFileSync)((0, import_node_path23.join)(ddir, basename5), "utf8"));
+  (0, import_node_fs28.mkdirSync)((0, import_node_path22.join)(destRoot, "docs", "ap", "specs"), { recursive: true });
+  atomicWrite(dest, (0, import_node_fs28.readFileSync)((0, import_node_path22.join)(ddir, basename5), "utf8"));
   return dest;
 }
-var import_node_path23, import_node_fs29;
+var import_node_path22, import_node_fs28;
 var init_design = __esm({
   "src/core/design.ts"() {
     "use strict";
-    import_node_path23 = require("node:path");
-    import_node_fs29 = require("node:fs");
+    import_node_path22 = require("node:path");
+    import_node_fs28 = require("node:fs");
     init_atomic();
     init_paths();
     init_designWalk();
@@ -19617,7 +19229,7 @@ function lintComponentsPaths(docText, root) {
   const out = [];
   for (const rec of componentsPathsByLine(docText)) {
     if (rec.line.includes(ON_BOX_TAG)) continue;
-    for (const p of rec.paths) if (!(0, import_node_fs30.existsSync)((0, import_node_path24.isAbsolute)(p) ? p : (0, import_node_path24.join)(root, p))) out.push(p);
+    for (const p of rec.paths) if (!(0, import_node_fs29.existsSync)((0, import_node_path23.isAbsolute)(p) ? p : (0, import_node_path23.join)(root, p))) out.push(p);
   }
   return out;
 }
@@ -19661,12 +19273,12 @@ function matchDiffAgainstComponents(diffPaths, compPaths) {
   }
   return out;
 }
-var import_node_fs30, import_node_path24, COMPONENTS_HEADER, OTHER_H2, ANY_COMPONENTS_PREFIX, TABLE_ROW, SEPARATOR_ROW, BULLET_MARKER, HEADER_CELL, HAS_SLASH, ENDS_WITH_EXT, ON_BOX_TAG;
+var import_node_fs29, import_node_path23, COMPONENTS_HEADER, OTHER_H2, ANY_COMPONENTS_PREFIX, TABLE_ROW, SEPARATOR_ROW, BULLET_MARKER, HEADER_CELL, HAS_SLASH, ENDS_WITH_EXT, ON_BOX_TAG;
 var init_implementScope = __esm({
   "src/core/implementScope.ts"() {
     "use strict";
-    import_node_fs30 = require("node:fs");
-    import_node_path24 = require("node:path");
+    import_node_fs29 = require("node:fs");
+    import_node_path23 = require("node:path");
     COMPONENTS_HEADER = /^## Components[ \t]*$/;
     OTHER_H2 = /^## [^ ]/;
     ANY_COMPONENTS_PREFIX = /^## Components/;
@@ -19677,6 +19289,402 @@ var init_implementScope = __esm({
     HAS_SLASH = /\//;
     ENDS_WITH_EXT = /\.[a-zA-Z]+$/;
     ON_BOX_TAG = "[on-box]";
+  }
+});
+
+// src/core/designDiff.ts
+function parseClaims(findings, headings = ["Claims"]) {
+  const out = [];
+  let inClaims = false;
+  for (const line of findings.split("\n")) {
+    if (headings.some((h2) => line.startsWith(`## ${h2}`))) {
+      inClaims = true;
+      continue;
+    }
+    if (/^## /.test(line)) {
+      inClaims = false;
+      continue;
+    }
+    if (inClaims && /^[0-9]+\. \[[^\]]+\] /.test(line)) {
+      const m = line.match(/\[[^\]]+\]/);
+      if (!m || m.index === void 0) continue;
+      const cite = m[0].slice(1, -1);
+      const text = line.slice(m.index + m[0].length).replace(/^[ \t]+/, "");
+      out.push({ cite, text });
+    }
+  }
+  return out;
+}
+function citationOverlaps(aRaw, bRaw) {
+  const a2 = aRaw.replace(/^\.\//, "");
+  const b = bRaw.replace(/^\.\//, "");
+  if (a2.startsWith("http") || b.startsWith("http")) return a2 === b;
+  if (a2.startsWith("runtime:") || b.startsWith("runtime:")) return a2 === b;
+  if (a2.startsWith("paper:") || b.startsWith("paper:")) return a2 === b;
+  const aPath = a2.split(":")[0];
+  const bPath = b.split(":")[0];
+  if (aPath !== bPath) return false;
+  const aLines = a2.includes(":") ? a2.slice(a2.indexOf(":") + 1) : "";
+  const bLines = b.includes(":") ? b.slice(b.indexOf(":") + 1) : "";
+  if (aLines === "" || bLines === "") return true;
+  const split = (s) => s.includes("-") ? [s.slice(0, s.indexOf("-")), s.slice(s.indexOf("-") + 1)] : [s, s];
+  const [a1s, a2s] = split(aLines);
+  const [b1s, b2s] = split(bLines);
+  if (![a1s, a2s, b1s, b2s].every((x) => /^[0-9]+$/.test(x))) return false;
+  const a1 = parseInt(a1s, 10), a22 = parseInt(a2s, 10), b1 = parseInt(b1s, 10), b2 = parseInt(b2s, 10);
+  return a1 <= b2 && b1 <= a22;
+}
+function mdSection(header, lines) {
+  return header + "\n" + (lines && lines.length ? lines.map((l) => `- ${l}`).join("\n") + "\n" : "");
+}
+function diffFindings(workers, headings) {
+  const n2 = workers.length;
+  if (n2 < 2) throw new Error(`diffFindings: need >=2 workers, got ${n2}`);
+  const names = workers.map((p) => p.name);
+  const owner = [], cite = [], text = [], flag = [];
+  const start = [], end = [];
+  for (let idx = 0; idx < n2; idx++) {
+    start[idx] = owner.length;
+    for (const c3 of parseClaims(workers[idx].findings, headings)) {
+      owner.push(idx);
+      cite.push(c3.cite);
+      text.push(c3.text);
+      flag.push(false);
+    }
+    end[idx] = owner.length;
+  }
+  const buckets = /* @__PURE__ */ new Map();
+  const add = (key, line) => {
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(line);
+  };
+  for (let i2 = 0; i2 < n2; i2++) {
+    for (let j = start[i2]; j < end[i2]; j++) {
+      if (flag[j]) continue;
+      let memberKeys = names[i2];
+      const firstCite = cite[j];
+      let combined = text[j];
+      flag[j] = true;
+      for (let k = i2 + 1; k < n2; k++) {
+        for (let m = start[k]; m < end[k]; m++) {
+          if (flag[m]) continue;
+          if (citationOverlaps(firstCite, cite[m])) {
+            memberKeys += `,${names[k]}`;
+            combined += ` | ${text[m]}`;
+            flag[m] = true;
+            break;
+          }
+        }
+      }
+      add(memberKeys, `[${firstCite}] ${combined}`);
+    }
+  }
+  const allKey = names.join(",");
+  const files = [];
+  let diffMd = "";
+  if (n2 === 2) {
+    for (const name of names) files.push({ filename: `${name}_only_items.txt`, content: fileBody(buckets.get(name)) });
+    diffMd = mdSection("## Agreed", buckets.get(allKey)) + "\n" + mdSection(`## ${titlecase(names[0])}-only`, buckets.get(names[0])) + "\n" + mdSection(`## ${titlecase(names[1])}-only`, buckets.get(names[1]));
+  } else {
+    files.push({ filename: "consensus.txt", content: fileBody(buckets.get(allKey)) });
+    const pairKeys = [];
+    for (let i2 = 0; i2 < n2; i2++) for (let j = i2 + 1; j < n2; j++) pairKeys.push(`${names[i2]},${names[j]}`);
+    for (const key of pairKeys) {
+      const [a2, b] = key.split(",");
+      files.push({ filename: `${a2}+${b}_only.txt`, content: fileBody(buckets.get(key)) });
+    }
+    for (const name of names) files.push({ filename: `${name}_only_items.txt`, content: fileBody(buckets.get(name)) });
+    let md = mdSection("## Consensus", buckets.get(allKey));
+    for (const key of pairKeys) {
+      const [a2, b] = key.split(",");
+      md += "\n" + mdSection(`## ${titlecase(a2)}+${titlecase(b)} only`, buckets.get(key));
+    }
+    for (const name of names) md += "\n" + mdSection(`## ${titlecase(name)}-only`, buckets.get(name));
+    diffMd = md;
+  }
+  return { files, diffMd };
+}
+var titlecase, fileBody;
+var init_designDiff = __esm({
+  "src/core/designDiff.ts"() {
+    "use strict";
+    titlecase = (s) => s.length ? s[0].toUpperCase() + s.slice(1) : s;
+    fileBody = (lines) => lines && lines.length ? lines.join("\n") + "\n" : "";
+  }
+});
+
+// src/core/artifact.ts
+function artifactGraceS() {
+  const raw = process.env.AP_ARTIFACT_GRACE_S;
+  const n2 = raw === void 0 || raw.trim() === "" ? 60 : Number(raw);
+  if (!Number.isFinite(n2)) return 60;
+  if (n2 <= 0) return 0;
+  return Math.min(300, Math.max(MIN_GRACE_S, n2));
+}
+function hasArtifactSentinel(text) {
+  if (text === null) return false;
+  const lines = text.split("\n").map((l) => l.trim()).filter((l) => l !== "");
+  return lines.length > 1 && lines[lines.length - 1] === END_OF_ARTIFACT;
+}
+function artifactContract(finalPath, alsoPaths = []) {
+  return [
+    "Artifact completeness contract \u2014 the Hub reads this file only once it is COMPLETE:",
+    `  1. Write your output to ${finalPath}.tmp (same directory), never straight to the final path.`,
+    `  2. Make the LAST line of that file the literal sentinel: ${END_OF_ARTIFACT}`,
+    `  3. Rename it into place: mv ${finalPath}.tmp ${finalPath}`,
+    ...alsoPaths.map((p) => `  3b. Same three steps for ${p}: write ${p}.tmp with ${END_OF_ARTIFACT} as its last line, then mv ${p}.tmp ${p}`),
+    "  4. ONLY THEN append your terminal event to your outbox.",
+    `A file whose last line is not ${END_OF_ARTIFACT} is treated as still being written: the Hub`,
+    "waits out a short grace period, and if the file is still empty or still changing at the end of",
+    "it, that phase's output is discarded."
+  ].join("\n");
+}
+function probe(path6) {
+  const text = readIfExistsOrNull(path6);
+  return { complete: hasArtifactSentinel(text), size: text === null ? 0 : Buffer.byteLength(text) };
+}
+async function awaitArtifact(path6, graceS, sleep5) {
+  const first = probe(path6);
+  if (first.complete) return "sentinel";
+  let last = first.size;
+  let stable = 0;
+  for (let waited = 0; waited < graceS; waited += ARTIFACT_POLL_S) {
+    await sleep5(ARTIFACT_POLL_S * 1e3);
+    const now = probe(path6);
+    if (now.complete) return "sentinel";
+    stable = now.size > 0 && now.size === last ? stable + 1 : 0;
+    last = now.size;
+    if (stable >= QUIESCENT_POLLS) return "quiescent";
+  }
+  return "expired";
+}
+function strikePrefix(agent) {
+  return `stillwriting-${agent}-`;
+}
+function strikePath(art, agent, artifact) {
+  return (0, import_node_path24.join)(art, `${strikePrefix(agent)}${(0, import_node_path24.basename)(artifact).replace(/[^A-Za-z0-9._-]/g, "_")}.txt`);
+}
+function recordStillWriting(art, agent, artifact, size) {
+  const path6 = strikePath(art, agent, artifact);
+  const prev = readIfExists(path6).split("\n").filter((l) => l.length > 0).map((l) => Number(l.split(/\s+/)[1]));
+  const sizes = [...prev, size];
+  atomicWrite(path6, sizes.map((s) => `${agent} ${s}`).join("\n") + "\n");
+  let strikes = 1;
+  let high = sizes[0];
+  for (let i2 = 1; i2 < sizes.length; i2++) {
+    strikes = sizes[i2] > high ? 1 : strikes + 1;
+    high = Math.max(high, sizes[i2]);
+  }
+  return { strikes, total: sizes.length };
+}
+function clearArtifactStrikes(art, agent, artifact) {
+  (0, import_node_fs30.rmSync)(strikePath(art, agent, artifact), { force: true });
+}
+function clearAgentStrikes(art, agent) {
+  let names;
+  try {
+    names = (0, import_node_fs30.readdirSync)(art);
+  } catch {
+    return;
+  }
+  for (const n2 of names) if (n2.startsWith(strikePrefix(agent))) (0, import_node_fs30.rmSync)((0, import_node_path24.join)(art, n2), { force: true });
+}
+function artifactBackstop(opts) {
+  const text = opts.text ?? readIfExists(opts.artifact);
+  const accept = lastTag(opts.stateText, ARTIFACT_ACCEPT_KEY);
+  if (hasArtifactSentinel(text) || accept === "unchecked" || WAIT_ACCEPTED.has(accept ?? "")) {
+    clearArtifactStrikes(opts.art, opts.agent, opts.artifact);
+    return "complete";
+  }
+  if (accept === "expired" || lastTag(opts.stateText, opts.key) === "failed") return "drop";
+  const { strikes, total } = recordStillWriting(opts.art, opts.agent, opts.artifact, Buffer.byteLength(text));
+  if (strikes >= NO_GROWTH_STRIKES || total >= MAX_REFUSALS) {
+    const reason = strikes >= NO_GROWTH_STRIKES ? `${strikes} refusals with no growth` : `${total} refusals (cap ${MAX_REFUSALS})`;
+    log.warn(`${opts.label}: ${opts.agent} still has no ${END_OF_ARTIFACT} after ${reason} \u2014 dropping as empty`);
+    recordHubFlag({
+      command: opts.command,
+      topic: opts.topic,
+      note: `artifact-incomplete: ${opts.agent} ${opts.artifact} dropped as empty after ${reason}`
+    });
+    return "drop";
+  }
+  process.stderr.write(`STILL_WRITING=${opts.agent}
+`);
+  log.error(`${opts.label}: ${opts.agent} ${opts.artifact} has no ${END_OF_ARTIFACT} and no ${ARTIFACT_ACCEPT_KEY}= verdict (still writing; strike ${strikes}/${NO_GROWTH_STRIKES}, refusal ${total}/${MAX_REFUSALS}) \u2014 run that phase's wait verb, then retry`);
+  return "still-writing";
+}
+var import_node_fs30, import_node_path24, END_OF_ARTIFACT, ARTIFACT_ACCEPT_KEY, ARTIFACT_POLL_S, QUIESCENT_POLLS, MIN_GRACE_S, NO_GROWTH_STRIKES, MAX_REFUSALS, WAIT_ACCEPTED;
+var init_artifact = __esm({
+  "src/core/artifact.ts"() {
+    "use strict";
+    import_node_fs30 = require("node:fs");
+    import_node_path24 = require("node:path");
+    init_log();
+    init_atomic();
+    init_fsread();
+    init_roster();
+    init_forensics();
+    END_OF_ARTIFACT = "END_OF_ARTIFACT";
+    ARTIFACT_ACCEPT_KEY = "AC";
+    ARTIFACT_POLL_S = 2;
+    QUIESCENT_POLLS = 5;
+    MIN_GRACE_S = QUIESCENT_POLLS * ARTIFACT_POLL_S;
+    NO_GROWTH_STRIKES = 3;
+    MAX_REFUSALS = 6;
+    WAIT_ACCEPTED = /* @__PURE__ */ new Set(["sentinel", "quiescent"]);
+  }
+});
+
+// src/core/designTurn.ts
+function findingsStatus(text) {
+  if (text === null) return "missing";
+  if (parseClaims(text).length > 0) return "ok";
+  let inClaims = false;
+  let count2 = 0;
+  for (const line of text.split("\n")) {
+    if (/^## Claims/.test(line)) {
+      inClaims = true;
+      continue;
+    }
+    if (/^## /.test(line)) {
+      inClaims = false;
+    }
+    if (inClaims && line.trim() !== "") count2++;
+  }
+  return count2 > 0 ? "malformed" : "empty";
+}
+function researchState(ev, findingsText) {
+  if (!ev) return "timeout";
+  if (ev.event === "question") return "question";
+  if (ev.event === "done") return findingsStatus(findingsText);
+  return "failed";
+}
+function lastKeyedValue(text, key) {
+  const matches = text.split("\n").filter((l) => l.startsWith(`${key}=`));
+  return matches.length ? matches[matches.length - 1].slice(key.length + 1).trim() : null;
+}
+function composeResearchPrompt(topicText, findingsPath) {
+  const topic = topicText.trim();
+  return [
+    "Investigate the following topic and produce structured findings.",
+    "",
+    `Topic: ${topic}`,
+    "",
+    `Output requirements \u2014 write to ${findingsPath} with this EXACT structure:`,
+    "",
+    `  # Findings: ${topic}`,
+    "",
+    "  ## Summary",
+    "  <2-3 sentence overview, free-form prose>",
+    "",
+    "  ## Claims",
+    "  1. [<source citation>] <one-sentence claim>",
+    "  2. [<source citation>] <one-sentence claim>",
+    "  ...",
+    "",
+    "  ## Notes",
+    "  <any free-form additions; not parsed>",
+    "",
+    "Citation format options:",
+    "  - <file path>:<line>          e.g. src/auth/store.py:42",
+    "  - <file path>:<line-range>    e.g. src/auth/refresh.py:15-30",
+    "  - <URL>                       e.g. https://datatracker.ietf.org/doc/html/rfc6749",
+    "  - runtime: <command>          e.g. runtime: pytest tests/test_auth.py",
+    "",
+    "Each claim must have a citation in [brackets]. Claims without citations will be silently",
+    "dropped \u2014 and if NO claim has a citation, your findings will be flagged as malformed.",
+    "",
+    "Research methods: use any tool available in your environment. When local repository evidence is",
+    "insufficient or the topic references external knowledge (RFCs, standards, library docs, vendor",
+    "APIs, recent CVEs, design patterns), you SHOULD use web search / fetch to find authoritative",
+    "sources and cite them as URL citations. Prefer primary sources over blog posts. If a tool is",
+    "unavailable, fall back to local-only investigation and note the gap as an [unverified] claim.",
+    "",
+    RESEARCH_BLOCKERS,
+    artifactContract(findingsPath)
+  ].join("\n");
+}
+function verifyState(ev, verifyText) {
+  if (!ev) return "timeout";
+  if (ev.event === "question") return "question";
+  if (ev.event === "done") return verifyText !== null && verifyText.length > 0 ? "ok" : "missing";
+  return "failed";
+}
+function gateState(workers, key) {
+  return workers.map((p) => {
+    const last = lastKeyedValue(p.stateText ?? "", key);
+    const status = last === "question" ? "question" : p.doneExists && last !== null ? "terminal" : "pending";
+    return { agent: p.agent, status };
+  });
+}
+function gateAnomalies(workers, key) {
+  const out = [];
+  for (const p of workers) {
+    if (!p.doneExists) continue;
+    const last = lastKeyedValue(p.stateText ?? "", key);
+    if (last === "timeout" || last === "failed" || last === "missing") out.push({ agent: p.agent, value: last });
+  }
+  return out;
+}
+function composeVerifyPrompt(itemsText, verifyPath) {
+  const items = itemsText.split("\n").filter((l) => l.length > 0).map((l, i2) => `${i2 + 1}. ${l}`).join("\n");
+  return [
+    "You researched a topic in your previous turn. Below are claims the OTHER researchers raised that",
+    "you did not. For EACH item, do ONE of:",
+    "",
+    "  AGREE     \u2014 confirm with your own evidence (cite a file/line/source)",
+    "  DISPUTE   \u2014 explain why it's wrong, with counter-evidence",
+    "  UNCERTAIN \u2014 you cannot tell from available evidence; say so",
+    "",
+    "Items to verify:",
+    items,
+    "",
+    `Write your verdicts to ${verifyPath} in this exact format:`,
+    "",
+    "  # Verify",
+    "  ## Verdicts",
+    "  1. <TAG> <original [citation] and text>",
+    "     <one-line evidence>",
+    "  2. ...",
+    "",
+    "Where <TAG> is one of: AGREE / DISPUTE / UNCERTAIN.",
+    "",
+    "Verification methods: use any tool in your environment. WebSearch / fetch are authorized when an",
+    "item cites a URL, references external standards/docs, or makes a claim local repo evidence cannot",
+    "resolve. For URL-cited items, fetching the source is the default. For file-cited items prefer the",
+    "local file. If a tool is unavailable, mark the item UNCERTAIN and note the gap \u2014 never fabricate.",
+    "",
+    RESEARCH_BLOCKERS,
+    artifactContract(verifyPath)
+  ].join("\n");
+}
+function drilldownState(ev, fileText) {
+  if (!ev) return "timeout";
+  return fileText !== null && fileText.length > 0 ? "ok" : "missing";
+}
+function composeDrilldownPrompt(opts) {
+  const focus = opts.focus.trim() || `Provide more depth, citations, and concrete trade-offs for the ${opts.section} section.`;
+  return [
+    `You are drilling deeper into the **${opts.section}** section of a design doc derived from the`,
+    "investigation you just completed.",
+    "",
+    `Read the design doc you produced: ${opts.designDocPath}`,
+    "",
+    `Focus: ${focus}`,
+    "",
+    "Write your expanded notes (with [citation] anchors) to:",
+    `  ${opts.outPath}`,
+    "",
+    artifactContract(opts.outPath)
+  ].join("\n");
+}
+var RESEARCH_BLOCKERS;
+var init_designTurn = __esm({
+  "src/core/designTurn.ts"() {
+    "use strict";
+    init_designDiff();
+    init_artifact();
+    RESEARCH_BLOCKERS = 'IF YOU ARE BLOCKED:\n- If a referenced path, file, command, env var, or assumption is wrong or missing, do NOT guess\n  or silently work around it. Append a question event to your outbox and stop:\n  {"event":"question","message":"<what you need and why>","ts":"<iso>"}\n  The Hub will reply via your inbox, then re-engage you.\n';
   }
 });
 
@@ -19972,6 +19980,7 @@ var init_phaseTable = __esm({
     init_artifact();
     init_waitLive();
     init_designTurn();
+    init_wait();
     init_send2();
     RETRY_NOTE = "exists; rm to retry";
     PHASES = [
@@ -20786,6 +20795,7 @@ var init_design2 = __esm({
     init_agents();
     init_contracts();
     init_designTurn();
+    init_wait();
     init_phaseTable();
     init_ipc();
     init_env();
@@ -21856,7 +21866,7 @@ var init_implement2 = __esm({
     init_turn();
     init_fsread();
     init_contracts();
-    init_designTurn();
+    init_wait();
     init_env();
     init_send2();
     init_quick();
@@ -28788,7 +28798,7 @@ var init_bridge2 = __esm({
     init_bridge();
     init_bridgeTurn();
     init_turn();
-    init_designTurn();
+    init_wait();
     init_env();
     init_ipc();
     init_waitLive();

@@ -1,9 +1,8 @@
 // src/core/designTurn.ts — multi-worker research-phase turn helpers for design.
 // Built on the ipc primitives + the classifyTurn *semantics* from turn.ts
-// (reused, not bent).
-import { appendFileSync } from "node:fs";
-import { outboxOffset, outboxPath, type OutboxEvent } from "./ipc.js";
-import { atomicWrite } from "./atomic.js";
+// (reused, not bent). The wait machinery every command shares — the `OFFSET=`/`<KEY>=` micro-
+// protocol and the provider timeout scaling — lives in core/wait.ts; what is left here is design's.
+import { type OutboxEvent } from "./ipc.js";
 import { parseClaims } from "./designDiff.js";
 import { artifactContract } from "./artifact.js";
 import type { PhaseKey } from "./phaseTable.js";
@@ -36,58 +35,12 @@ export function researchState(ev: OutboxEvent | null, findingsText: string | nul
   return "failed";
 }
 
-/** The LAST `<KEY>=<n>` integer line in a state file's contents (latest-line-wins). The question
- *  re-arm appends a second keyed line (bumped past the question event), so the re-armed read must
- *  resume from the latest. null if absent/unparseable. */
-export function lastKeyedNumber(text: string, key: string): number | null {
-  const ms = [...text.matchAll(new RegExp(`^${key}=(\\d+)\\s*$`, "gm"))];
-  return ms.length ? Number(ms[ms.length - 1][1]) : null;
-}
-
-/** The LAST `OFFSET=<n>` line — the re-armed wait resumes from the latest. */
-export function parseLatestOffset(stateText: string): number | null {
-  return lastKeyedNumber(stateText, "OFFSET");
-}
-
 /** The LAST `<key>=<value>` line in a state file's contents, trimmed (latest-line-wins); null if
- *  absent. Unlike lastKeyedNumber this accepts any value text — the gate readers key off words
- *  (`ok`/`question`/`timeout`/`failed`), not integers. */
+ *  absent. Unlike wait.ts's lastKeyedNumber this accepts any value text — the gate readers key off
+ *  words (`ok`/`question`/`timeout`/`failed`), not integers. */
 export function lastKeyedValue(text: string, key: string): string | null {
   const matches = text.split("\n").filter((l) => l.startsWith(`${key}=`));
   return matches.length ? matches[matches.length - 1].slice(key.length + 1).trim() : null;
-}
-
-/** Shared wait-verb tail — the single WRITER of the `OFFSET=` / `<KEY>=` state-file micro-protocol
- *  (parseLatestOffset / lastKeyedNumber / gateState are its readers). A captured question writes
- *  the question payload file, then re-arms the state file with the outbox offset bumped PAST the
- *  handled question event (plus any caller extra lines, e.g. implement's `OBJECTIONS=` counter) so
- *  a same-round re-arm does not re-read it. Every other outcome appends the terminal
- *  `<key>=<state>` line (latest-line-wins). Callers add their own `.done` marker / logging.
- *
- *  `lead` is one extra `<KEY>=<value>` line written AHEAD of the terminal line in the same append
- *  (phaseWait's `AC=` artifact verdict). Ahead, so the phase key stays the file's LAST line — the
- *  directives' `grep '^FS=' | tail -1` idiom and the "last line shows FS=question" prose both hold. */
-export function recordWaitOutcome(
-  agent: string, model: string, topic: string, stateFile: string,
-  state: string, key: string,
-  question?: { file: string; body: string; extraLines?: string },
-  lead?: string,
-): void {
-  const head = lead ? `${lead}\n` : "";
-  if (state === "question" && question) {
-    atomicWrite(question.file, question.body);
-    const bumped = outboxOffset(outboxPath(agent, model, topic));
-    appendFileSync(stateFile, `${head}OFFSET=${bumped}\n${key}=question\n${question.extraLines ?? ""}`);
-  } else {
-    appendFileSync(stateFile, `${head}${key}=${state}\n`);
-  }
-}
-
-/** Apply a provider's timeout_multiplier to a base timeout, ported from the consult_wait loop's
- *  `printf "%d", b*m + 0.5` (round-half-up to an integer second). Bad/<=0 multiplier -> identity. */
-export function scaledTimeout(baseSec: number, multiplier: string): number {
-  const m = Number(multiplier);
-  return Math.floor(baseSec * (Number.isFinite(m) && m > 0 ? m : 1) + 0.5);
 }
 
 const RESEARCH_BLOCKERS =

@@ -5,7 +5,7 @@ import { join, dirname } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { implementArtDir } from "../src/core/implement.js";
 import { composeRound1Prompt } from "../src/core/implementTurn.js";
-import { parseLatestOffset } from "../src/core/designTurn.js";
+import { parseLatestOffset } from "../src/core/wait.js";
 import { outboxPath } from "../src/core/ipc.js";
 import {
   turnSendWith, turnWaitWith,

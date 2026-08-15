@@ -54,12 +54,11 @@ import { paneAlive } from "./tmux.js";
 import { recordHubFlag } from "./forensics.js";
 import {
   ARTIFACT_ACCEPT_KEY, END_OF_ARTIFACT, WAIT_ACCEPTED, artifactBackstop, artifactGraceS, awaitArtifact,
-  clearArtifactStrikes, hasArtifactSentinel, realSleep, type ArtifactVerdict, type WaitAccept,
+  clearArtifactStrikes, hasArtifactSentinel, type ArtifactVerdict, type WaitAccept,
 } from "./artifact.js";
 import { liveOutboxWait } from "./waitLive.js";
-import {
-  parseLatestOffset, scaledTimeout, researchState, verifyState, gateState, gateAnomalies, recordWaitOutcome,
-} from "./designTurn.js";
+import { researchState, verifyState, gateState, gateAnomalies } from "./designTurn.js";
+import { parseLatestOffset, realSleep, recordWaitOutcome, scaledTimeout } from "./wait.js";
 import { run as sendRun } from "../commands/send.js";
 
 /** The frozen state-file status keys, declared ONCE (designTurn's gate signatures import it):

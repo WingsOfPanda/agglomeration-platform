@@ -24,7 +24,7 @@ import { liveOutboxWait } from "../core/waitLive.js";
 import { waitTurnConfirmed } from "../core/turn.js";
 import { kvField, readField, readIfExists, readIfExistsOrNull } from "../core/fsread.js";
 import { agentTimeoutMultiplier } from "../core/contracts.js";
-import { scaledTimeout, parseLatestOffset, lastKeyedNumber, recordWaitOutcome } from "../core/designTurn.js";
+import { scaledTimeout, parseLatestOffset, lastKeyedNumber, recordWaitOutcome } from "../core/wait.js";
 import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
 import { run as sendRun } from "./send.js";
 import { detectTestCommand } from "../core/quick.js";
