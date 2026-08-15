@@ -37,8 +37,9 @@ instead of an intent record is this spec's one deliberate divergence from the gr
    still renders "Review the work: `git -C <target> checkout feat/quick-<topic>`" for a branch that
    does not exist. `SummaryFacts` carries no finish outcome, though bridge's summary already reads
    `finish-result.txt`.
-4. **The branch name is spelled in five code sites and two directives**; the READ side is four
-   different shapes (`readField` triples for quick/bridge, `branchMapField` over
+4. **The branch name is spelled in six code sites and two directives** (this spec said five and
+   missed quick's finish recover line, `git checkout -b ${branch || \`feat/quick-${topic}\`}`); the
+   READ side is four different shapes (`readField` triples for quick/bridge, `branchMapField` over
    `implement-branches.tsv`, `kvField` over `baselines/<slug>.tsv`), so every consumer needs its own
    parser.
 
@@ -57,14 +58,26 @@ So:
 
 - **`src/core/branchRecord.ts`** (new):
   - `branchNameFor(command: "quick" | "implement" | "bridge", topic: string): string` — the one
-    place `feat/<command>-<topic>` is spelled. Every current spelling (quick.ts's `branch` and its
-    fallback in turn-send, bridge.ts's branch + its `feat/bridge-` occupancy prefix, implement's
-    `defaultBranch`) calls it.
+    place `feat/<command>-<topic>` is spelled. All six current spellings (quick.ts's `branch`, its
+    fallback in turn-send and its finish recover line, bridge.ts's branch + its `feat/bridge-`
+    occupancy prefix — the prefix is `branchNameFor("bridge", "")` — and implement's `defaultBranch`)
+    call it.
   - `readBranchRecord(command, ctx): { startBranch: string; baseSha: string; branch: string; mode:
     "branch" | "no-branch" | "in-place" }` — ONE reader with a thin per-command source map
     (quick/bridge: the three `execute/` files + bridge's `mode.txt`; implement: `branchMapField` +
-    `kvField` + `branch-base.sha` + `branch-mode.txt`). Consumers (finish, summary, scope-check) ask
-    it instead of re-deriving. `branchMapField`/`kvField` stay where they are as its private inputs.
+    `kvField` + `branch-base.sha` + `branch-mode.txt`). Every field is the raw record, "" when
+    absent: consumers keep wording their own defaults (`"main"`, `"unknown"`, `"(none)"`).
+    **`ctx` is `{ dir, slug? }`, not `{ topic }`** — implement's art dir is opts-dependent
+    (`implementArtDir(topic, opts)`) and its record is per-slug, while `applyFinish` holds an `art`
+    path rather than the topic, so the caller passes the state dir it already has; TS overloads make
+    `slug` required for implement. That also keeps `core/branchRecord.ts` importing nothing from
+    `commands/*`, which is why **`branchMapField` moves into it** (it was private to implement.ts and
+    has no other caller once `applyFinish` asks the record) and `readBranchMode` folds into `mode`.
+    `kvField` stays in `core/fsread.ts`.
+    Consumers are the three finishes and the three summaries. **`implement scope-check` is NOT one**:
+    it holds no slug (it reads art-level `target_cwd.txt` + `branch-base.sha`) and needs `existsSync`
+    on both for its own error path, so its single `readField(branch-base.sha)` — already exactly what
+    the record would return — stays.
 - **`quick branch` records the ACTUAL branch** (the behavior change): write `branch.txt` with the
   branch the run ended on — the created/resumed `feat/quick-<topic>` on success, the current branch
   when `createOrResumeBranch` returns false — mirroring implement's `recorded`. The existing warn
@@ -72,7 +85,16 @@ So:
   - a failed checkout now makes `branch === startBranch`, so A1's finish guard refuses with
     `none\tno-branch` + its flag instead of pushing a stale ref;
   - round-1's prompt names the branch the worker is really on;
-  - `quick summary`'s Branch line reports reality.
+  - `quick summary`'s Branch line reports reality;
+  - that refusal's recover line follows it: it names a branch to CREATE, so a record that IS the
+    start branch falls back to the topic-derived name (`git checkout -b main` while on main is a dead
+    end). Not in the original draft; added because this change is what routes runs into that line.
+  - `quick branch`'s trailing `log.ok` still names the INTENDED branch on a failed checkout — the
+    warn line immediately above it already names both, and changing it is a third user-visible change.
+- **`bridge branch` keeps the same lie, deliberately.** It also writes the intended name when
+  `createOrResumeBranch` fails, and its finish reaches the same `hasDistinctBranch` guard through
+  `finishBranchPrMerge`, so it carries the same stale-ref exposure. Fixing it would be a third
+  behavior change, outside the program's declared perimeter — follow-up, not this PR.
 - **`quick summary` consumes the finish record**: `SummaryFacts` gains `finishResult` (read from
   `execute/finish-result.txt` exactly as bridge does), and the "Review the work: checkout <branch>"
   hint is suppressed/replaced when the outcome is `no-branch`. Renderer change only; no new file.
@@ -97,17 +119,22 @@ So:
   failed checkout for THIS run → refusal, not `pr-opened` (the exact A1-review reproduction).
 - Round-1 prompt names the recorded branch; `quick summary` after a `no-branch` finish omits the
   checkout hint and reports the real branch.
-- `branchNameFor`: every call site returns byte-identical names to today (pin all five).
+- `branchNameFor`: every call site returns byte-identical names to today (pin all six, plus the
+  empty-topic prefix bridge's single-occupancy check matches on).
 - `readBranchRecord`: the three commands' shapes, including implement's per-slug rows, a missing
   file, and `(detached)`.
 - ALL existing quick/bridge/implement suites pass; assertions may change ONLY where they pin the old
   intended-name-on-failure behavior — list every such edit in the report.
-- Full gate green; dist rebuilt+committed; E2E through the built dist replaying the stale-ref shape.
+- Full gate green; dist rebuilt+committed. The E2E replaying the stale-ref shape through the built
+  dist is a MANUAL verification, not a committed test — this suite spawns no real git repos, and
+  `tests/dist-fresh.test.ts` already pins `dist/ap.cjs` to a fresh build of `src`.
 
 ## Success Criteria
 
 - A quick run whose checkout failed can no longer produce a PR that contains none of its work — the
   A1 guard is now sufficient because the record it reads is honest.
-- `grep -rn 'feat/quick-\|feat/implement-\|feat/bridge-' src/` shows the literal only inside
-  `branchNameFor`.
+- `grep -rn 'feat/quick-\|feat/implement-\|feat/bridge-' src/` returns no CODE spelling — only three
+  prose comments (quick.ts's and implement.ts's explanations of the leftover-branch shape, plus
+  implement.ts's rebrand lineage note), left as prose. `branchNameFor` does not match the grep either:
+  it composes `feat/${command}-${topic}`.
 - Gate green; 0.5.25; the program's declared perimeter closes at exactly two behavior changes.
