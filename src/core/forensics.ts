@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, mkdirSync, existsSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { globalRoot, repoHash, workerDir } from "./paths.js";
+import { assertSlug } from "./slug.js";
 import { atomicWrite } from "./atomic.js";
 import { isoUtc } from "./archive.js";
 import { log } from "./log.js";
@@ -219,7 +220,7 @@ export function captureSpawnFailure(opts: {
   agent: string; model: string; topic: string;
   reason: string; detail: string; failureReportPath?: string; now?: Date;
 }): string {
-  try {
+  try { // NOTE: swallows everything — a topic/path validation must run in the CALLER, outside this catch
     const ctx = `worker=${opts.agent}-${opts.model}`;
     const findings: Finding[] = [
       { source: "spawn_failure", key: `reason=${opts.reason} ${opts.detail}`.replace(/\s+/g, " ").trim(), context: ctx },
@@ -238,7 +239,7 @@ export function captureSpawnFailure(opts: {
  *  renderArtForensics so /ap:review consumes it unchanged. Teardown-independent (lands even on
  *  abort/handoff). Best-effort: returns the written path, or "" on empty note / any error. Never throws. */
 export function recordHubFlag(opts: { command: string; topic: string; note: string; now?: Date }): string {
-  try {
+  try { // NOTE: swallows everything — a topic/path validation must run in the CALLER, outside this catch
     const note = opts.note.trim();
     if (!note) return "";
     const finding: Finding = { source: "hub_flag", key: note, context: `from=hub command=${opts.command}` };
@@ -254,6 +255,11 @@ export function recordHubFlag(opts: { command: string; topic: string; note: stri
  *  topic/empty note, else rc 0 (best-effort; mirrors runForensics). Feeds /ap:review. */
 export function runFlag(command: string, topic: string | undefined, note: string): number {
   if (!topic || !note.trim()) { log.error(`usage: ${command} flag <topic> <observation>`); return 2; }
+  // The feed name spells the topic into globalRoot()/forensics/<date>/ and the artDir is the literal
+  // "(hub-flag)", so no art-dir helper runs and the topicDir/workerDir choke point never sees this
+  // topic. Gate it HERE and not in recordHubFlag: that body is inside a catch-all that would swallow
+  // the refusal and report success. The four internal callers pass an already-gated topic.
+  assertSlug("topic", topic);
   const path = recordHubFlag({ command, topic, note });
   if (path) { log.ok(`${command} flag: recorded ${path}`); process.stdout.write(path + "\n"); }
   else log.info(`${command} flag: nothing recorded`);

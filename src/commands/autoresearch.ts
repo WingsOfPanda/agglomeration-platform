@@ -381,6 +381,7 @@ export async function verifyPlanWith(args: string[], deps: VerifyPlanDeps): Prom
   if (pos.length !== 3) { log.error("autoresearch verify-plan: usage: <topic> <agent> <exp-id> [--authorize-rerun]"); return 2; }
   const [topic, agent, expId] = pos;
   assertSlug("agent", agent); // <art>/workers/<agent>/... — the lane path, never a workerDir join
+  if (!EXP_ID_RE.test(expId)) { log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`); return 2; } // the next segment down
   const art = autoresearchArtDir(topic, deps.opts);
   const result = deps.readResult(art, agent, expId);
   if (result === null) { log.error(`autoresearch verify-plan: result.json missing for ${agent}/${expId}`); return 1; }
@@ -415,6 +416,7 @@ export async function verifyCheckWith(args: string[], deps: VerifyCheckDeps): Pr
   if (!runFailed && stdoutFile === undefined) { log.error("autoresearch verify-check: need --stdout-file <path> or --run-failed"); return 2; }
   const [topic, agent, expId] = pos;
   assertSlug("agent", agent); // <art>/workers/<agent>/... — the lane path, never a workerDir join
+  if (!EXP_ID_RE.test(expId)) { log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`); return 2; } // the next segment down
   const art = autoresearchArtDir(topic, deps.opts);
   const result = deps.readResult(art, agent, expId);
   if (result === null) { log.error(`autoresearch verify-check: result.json missing for ${agent}/${expId}`); return 1; }
@@ -447,6 +449,7 @@ export async function inspectPlanWith(args: string[], deps: InspectPlanDeps): Pr
   if (pos.length !== 3) { log.error("autoresearch inspect-plan: usage: <topic> <agent> <exp-id> [--authorize-inspect]"); return 2; }
   const [topic, agent, expId] = pos;
   assertSlug("agent", agent); // <art>/workers/<agent>/... — the lane path, never a workerDir join
+  if (!EXP_ID_RE.test(expId)) { log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`); return 2; } // the next segment down
   const art = autoresearchArtDir(topic, deps.opts);
   const result = deps.readResult(art, agent, expId);
   if (result === null) { log.error(`autoresearch inspect-plan: result.json missing for ${agent}/${expId}`); return 1; }
@@ -489,6 +492,7 @@ export async function inspectCheckWith(args: string[], deps: InspectCheckDeps): 
   if (!runFailed && !integrityRefuted && stdoutFile === undefined) { log.error("autoresearch inspect-check: need --stdout-file <path> or --run-failed or --integrity-refuted"); return 2; }
   const [topic, agent, expId] = pos;
   assertSlug("agent", agent); // <art>/workers/<agent>/... — the lane path, never a workerDir join
+  if (!EXP_ID_RE.test(expId)) { log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`); return 2; } // the next segment down
   const art = autoresearchArtDir(topic, deps.opts);
   const result = deps.readResult(art, agent, expId);
   if (result === null) { log.error(`autoresearch inspect-check: result.json missing for ${agent}/${expId}`); return 1; }

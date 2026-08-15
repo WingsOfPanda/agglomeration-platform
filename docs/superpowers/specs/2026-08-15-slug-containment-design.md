@@ -44,20 +44,23 @@ is byte-identical.
 2. **core/paths.ts** — `topicDir()` gates its topic through `assertSlug("topic", topic)`;
    `workerDir()` gates its agent through `assertSlug("agent", agent)` (the `${agent}-${model}` seg).
    This single edit covers every art dir (design/explore/implement/quick/bridge/autoresearch),
-   archiveTopic/stateArchive, stop, preflight, ipc, agents — all ~90 verbs at once.
+   archiveTopic/stateArchive, stop, ipc, agents — all ~90 verbs at once. `preflight` keeps an
+   explicit call (its `--art-dir` form never reaches `topicDir`, and its topic also lands in the
+   pane's tmux sentinel command) but loses its PRIVATE `SLUG` copy, whose `<= 64` bound had been
+   silently disagreeing with the choke point's `<= 32`: one validator, one bound.
 3. **core/dispatch.ts** — catch `SlugError` alongside the existing `KvError` so it renders as a
    clean stderr line + rc 2 instead of an rc-1 stack.
-4. **The agent-as-filename sites** — where `agent` is interpolated into a path inside an already-
-   resolved art dir (so `workerDir` never sees it). Add `assertSlug("agent", agent)` after each
-   verb's own arg validation. Enumerated from the shipped source (the verifier's candidate list was
-   a map, not gospel; corrected on both sides):
+4. **The sites the choke point cannot see** — where a segment is interpolated into a path the two
+   gated helpers never build. Add the gate after each verb's own arg validation. Enumerated from the
+   shipped source (the verifier's candidate list was a map, not gospel; corrected on both sides):
 
    | Site | Why it needs its own gate |
    |---|---|
+   | `runFlag` (`core/forensics.ts`), i.e. `<command> flag <topic>` for all six commands | the ONLY non-art-dir site: `recordHubFlag` → `writeForensicsFeed` names `globalRoot()/forensics/<date>/<time>-<command>-flag-<topic>.md` and passes the literal `"(hub-flag)"` as its art dir, so no art-dir helper ever runs. The gate must sit in `runFlag`, NOT in `recordHubFlag`/`captureSpawnFailure` — both wrap their bodies in a catch-all that returns `""`, which would swallow the refusal and report success |
    | `design offset-reset` (`commands/design.ts`) | `rmSync(join(art, \`${phase}-${agent}.txt\`))`, `.done`, `question-<agent>.txt`, `clearAgentStrikes` — the arbitrary-file delete |
    | `triad()` (`core/phaseTable.ts`) | the shared arg parser for EVERY design/explore `<phase>-send` and `<phase>-wait`; `phaseSend`/`phaseWait` spell `<phase>-<agent>.txt`, `<agent>_<phase>_prompt.md`, `question-<agent>.txt` in the art dir BEFORE the first `workerDir` read |
    | `autoresearch monitor` | `mkdirSync(workerStateDir(art, agent))` + the lane cursor writes |
-   | `autoresearch verify-plan` / `verify-check` / `inspect-plan` / `inspect-check` | `experimentDir(art, agent, expId)` — the read and the verdict sidecar write |
+   | `autoresearch verify-plan` / `verify-check` / `inspect-plan` / `inspect-check` | `experimentDir(art, agent, expId)` — the read and the verdict sidecar write. BOTH segments: `assertSlug("agent", …)` and, on the next line, the `EXP_ID_RE` test these four verbs skipped though `refine`/`experiment-send` already run it |
 
    Rejected as already covered, and deliberately NOT double-gated: `implement reset-status` (agent
    goes only through `resolveModel`'s readdir prefix match — dir names carry no separator — and
@@ -68,8 +71,7 @@ is byte-identical.
    `list.txt` / readdir (roster-derived, not operator args).
 
    Out of scope, recorded not fixed: the `model` segment of `${agent}-${model}` (contracts-derived,
-   and `spawn` never validated it either), `exp-id` in `experimentDir` (its own charset gate exists
-   as `EXP_ID_RE` but these four verbs skip it), and `AP_IMPLEMENT_ART_DIR_OVERRIDE`, which bypasses
+   and `spawn` never validated it either) and `AP_IMPLEMENT_ART_DIR_OVERRIDE`, which bypasses
    `topicDir` by design.
 
 ## Components
@@ -77,16 +79,17 @@ is byte-identical.
 - `src/core/slug.ts` — `SlugError` + `assertSlug`.
 - `src/core/paths.ts` — the two choke-point gates.
 - `src/core/dispatch.ts` — `SlugError` → rc 2.
-- `src/commands/design.ts`, `src/core/phaseTable.ts`, `src/commands/autoresearch.ts` — the agent gate
-  at the enumerated sites.
+- `src/commands/design.ts`, `src/core/phaseTable.ts`, `src/commands/autoresearch.ts`,
+  `src/core/forensics.ts`, `src/commands/preflight.ts` — the gate at the enumerated sites.
 - `tests/` — see Testing. Version 0.5.26 → 0.5.27 (three manifests) + rebuilt committed dist.
 
 ## Testing
 
 - Traversal regression per destructive verb (`tests/slug-containment.test.ts`): `design archive`,
   `design offset-reset` (topic AND agent), `design <phase>-send`/`-wait`, `stop`, `implement
-  reset-status`, `autoresearch drop-worker` / `monitor` / `verify-*` / `inspect-*` with a `../`
-  topic or agent → rc 2, one stderr line, and a planted canary OUTSIDE a temp state root UNTOUCHED.
+  reset-status`, `autoresearch drop-worker` / `monitor` / `verify-*` / `inspect-*` (agent AND
+  exp-id), `<command> flag` for all six commands, and `preflight`, each with a `../` segment → rc 2,
+  one stderr line, and a planted canary OUTSIDE a temp state root UNTOUCHED.
   Each case first PINS the reach it refuses (`resolve(art, <the interpolated name>)` equals the
   canary path), so a mis-counted `../` fails the test instead of passing vacuously. One exception,
   by the enumeration above: `implement reset-status` with a traversal AGENT is rc **1** (no worker

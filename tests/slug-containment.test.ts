@@ -7,16 +7,22 @@ import { describe, it, expect, afterEach } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
+import { captureStdout } from "./helpers/captureStdout.js";
 import { assertSlug, SlugError, validateSlug } from "../src/core/slug.js";
 import { dispatch } from "../src/core/dispatch.js";
 import { repoStateDir, topicDir, workerDir } from "../src/core/paths.js";
 import { designArtDir } from "../src/core/design.js";
 import { autoresearchArtDir } from "../src/core/autoresearch.js";
 import { statusPath } from "../src/core/ipc.js";
+import { globalRoot } from "../src/core/paths.js";
 import { run as designRun } from "../src/commands/design.js";
 import { run as implementRun } from "../src/commands/implement.js";
 import { run as autoresearchRun } from "../src/commands/autoresearch.js";
 import { run as stopRun } from "../src/commands/stop.js";
+import { run as exploreRun } from "../src/commands/explore.js";
+import { run as quickRun } from "../src/commands/quick.js";
+import { run as bridgeRun } from "../src/commands/bridge.js";
+import { run as preflightRun } from "../src/commands/preflight.js";
 
 const CANARY = "DO NOT TOUCH\n";
 const boxes: string[] = [];
@@ -47,13 +53,16 @@ function captureStderr() {
 }
 
 /** rc 2 + exactly one stderr line naming the refused segment, and nothing written outside. */
-async function expectRefusal(fn: () => Promise<number>, box: string, canary: string): Promise<string> {
+async function expectRefusal(
+  fn: () => Promise<number>, box: string, canary: string,
+  msg: RegExp = /must match \[a-z0-9-\]\+ and be <= 32 chars/,
+): Promise<string> {
   const err = captureStderr();
   try {
     expect(await fn()).toBe(2);
   } finally { err.restore(); }
   expect(err.text().trimEnd().split("\n")).toHaveLength(1);
-  expect(err.text()).toMatch(/must match \[a-z0-9-\]\+ and be <= 32 chars/);
+  expect(err.text()).toMatch(msg);
   outsideUntouched(box, canary);
   return err.text();
 }
@@ -138,6 +147,22 @@ describe("traversal regressions — topic segment", () => {
     const { box, canary } = sandbox();
     await expectRefusal(() => dispatch(autoresearchRun, ["drop-worker", "../../../victim", "alpha"]), box, canary);
   });
+  // `flag` writes to globalRoot()/forensics/<date>/<time>-<command>-flag-<topic>.md with the literal
+  // "(hub-flag)" as its art dir — no art-dir helper runs, so the topicDir choke point never sees it.
+  it("<command> flag: all six verbs refuse instead of naming a file under globalRoot()", async () => {
+    const { box, canary } = sandbox();
+    const feedDir = join(globalRoot(), "forensics", "2026-01-01");
+    const bad = gluedAgent(feedDir, box);                       // same glue as `<phase>-<agent>`
+    expect(resolve(feedDir, `00-00-00-quick-flag-${bad}.md`)).toBe(join(box, "canary.md"));
+    for (const cmd of [designRun, exploreRun, implementRun, quickRun, bridgeRun, autoresearchRun])
+      await expectRefusal(() => dispatch(cmd, ["flag", bad, "an observation"]), box, canary);
+  });
+  it("preflight: refuses at the shared gate (its private <=64 regex is gone)", async () => {
+    const { box, canary } = sandbox();
+    await expectRefusal(() => dispatch(preflightRun, ["../../../victim", "2", "--list", "alpha:codex,bravo:codex"]), box, canary);
+    // the bound is now the choke point's 32, not preflight's old 64
+    await expectRefusal(() => dispatch(preflightRun, ["x".repeat(33), "2", "--list", "alpha:codex,bravo:codex"]), box, canary);
+  });
 });
 
 describe("traversal regressions — agent segment", () => {
@@ -175,6 +200,20 @@ describe("traversal regressions — agent segment", () => {
       ["inspect-check", "t", bad, "exp-001", "--run-failed"],
     ]) await expectRefusal(() => dispatch(autoresearchRun, args), box, canary);
   });
+  it("autoresearch verify-*/inspect-*: refuse a traversal exp-id (the segment below the agent)", async () => {
+    const { box, canary } = sandbox();
+    const art = autoresearchArtDir("t");
+    const expDir = join(art, "workers", "alpha", "experiments");
+    mkdirSync(expDir, { recursive: true });
+    const badExp = `${"../".repeat(upsTo(expDir, box))}canary`;
+    expect(resolve(expDir, badExp)).toBe(join(box, "canary"));  // where the verdict sidecar would land
+    for (const args of [
+      ["verify-plan", "t", "alpha", badExp],
+      ["verify-check", "t", "alpha", badExp, "--run-failed"],
+      ["inspect-plan", "t", "alpha", badExp],
+      ["inspect-check", "t", "alpha", badExp, "--run-failed"],
+    ]) await expectRefusal(() => dispatch(autoresearchRun, args), box, canary, /exp-id must match/);
+  });
   // implement reset-status is NOT gated on its agent: resolveModel matches it against real dir names
   // (which contain no separator), so a traversal agent finds no worker and the verb exits before its
   // one write — and that write goes through statusPath -> workerDir, which the choke point covers.
@@ -202,6 +241,17 @@ describe("happy path — valid slugs behave exactly as before", () => {
     writeFileSync(join(art, "workers.txt"), "alpha\nbravo\n");
     expect(await dispatch(autoresearchRun, ["drop-worker", "t", "alpha"])).toBe(0);
     expect(readFileSync(join(art, "workers.txt"), "utf8")).toBe("bravo\n");
+    outsideUntouched(box, canary);
+  });
+  it("<command> flag records the observation under globalRoot() (rc 0)", async () => {
+    const { box, canary } = sandbox();
+    const out = captureStdout();
+    let rc: number;
+    try { rc = await dispatch(quickRun, ["flag", "t", "an observation"]); } finally { out.restore(); }
+    expect(rc).toBe(0);
+    const path = out.text().trim();
+    expect(path.startsWith(join(globalRoot(), "forensics"))).toBe(true);
+    expect(readFileSync(path, "utf8")).toContain("an observation");
     outsideUntouched(box, canary);
   });
   it("implement reset-status forces the worker back to idle (rc 0)", async () => {

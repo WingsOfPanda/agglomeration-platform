@@ -17118,6 +17118,7 @@ function runFlag(command, topic, note) {
     log.error(`usage: ${command} flag <topic> <observation>`);
     return 2;
   }
+  assertSlug("topic", topic);
   const path6 = recordHubFlag({ command, topic, note });
   if (path6) {
     log.ok(`${command} flag: recorded ${path6}`);
@@ -17132,6 +17133,7 @@ var init_forensics = __esm({
     import_node_fs17 = require("node:fs");
     import_node_path13 = require("node:path");
     init_paths();
+    init_slug();
     init_atomic();
     init_archive();
     init_log();
@@ -17937,10 +17939,7 @@ async function run7(args) {
       i2 += r.shift - 1;
     }
   }
-  if (!SLUG2.test(topic) || topic.length > 64) {
-    log.error(`topic must match [a-z0-9-]+ and be <= 64 chars; got: '${topic}'`);
-    return 2;
-  }
+  assertSlug("topic", topic);
   if (!Number.isInteger(n2) || n2 < 2 || n2 > 4) {
     log.error(`N must be 2..4; got: '${args[1]}'`);
     return 2;
@@ -17967,7 +17966,7 @@ async function run7(args) {
     return 1;
   }
 }
-var import_node_fs23, import_node_path18, SLUG2;
+var import_node_fs23, import_node_path18;
 var init_preflight = __esm({
   "src/commands/preflight.ts"() {
     "use strict";
@@ -17976,9 +17975,9 @@ var init_preflight = __esm({
     init_args();
     init_log();
     init_paths();
+    init_slug();
     init_atomic();
     init_tmux();
-    SLUG2 = /^[a-z0-9-]+$/;
   }
 });
 
@@ -24993,6 +24992,10 @@ async function verifyPlanWith(args, deps) {
   }
   const [topic, agent, expId] = pos;
   assertSlug("agent", agent);
+  if (!EXP_ID_RE.test(expId)) {
+    log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`);
+    return 2;
+  }
   const art = autoresearchArtDir(topic, deps.opts);
   const result = deps.readResult(art, agent, expId);
   if (result === null) {
@@ -25033,6 +25036,10 @@ async function verifyCheckWith(args, deps) {
   }
   const [topic, agent, expId] = pos;
   assertSlug("agent", agent);
+  if (!EXP_ID_RE.test(expId)) {
+    log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`);
+    return 2;
+  }
   const art = autoresearchArtDir(topic, deps.opts);
   const result = deps.readResult(art, agent, expId);
   if (result === null) {
@@ -25063,6 +25070,10 @@ async function inspectPlanWith(args, deps) {
   }
   const [topic, agent, expId] = pos;
   assertSlug("agent", agent);
+  if (!EXP_ID_RE.test(expId)) {
+    log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`);
+    return 2;
+  }
   const art = autoresearchArtDir(topic, deps.opts);
   const result = deps.readResult(art, agent, expId);
   if (result === null) {
@@ -25112,6 +25123,10 @@ async function inspectCheckWith(args, deps) {
   }
   const [topic, agent, expId] = pos;
   assertSlug("agent", agent);
+  if (!EXP_ID_RE.test(expId)) {
+    log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`);
+    return 2;
+  }
   const art = autoresearchArtDir(topic, deps.opts);
   const result = deps.readResult(art, agent, expId);
   if (result === null) {
