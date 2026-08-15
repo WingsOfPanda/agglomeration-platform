@@ -7,8 +7,8 @@
 // filename/wording, and the other row's filenames must be absent), moving the offset capture after
 // the send (the send dep reads the state file at dispatch time), and dropping the gate (a busy
 // worker must refuse without sending).
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { noSleepClock } from "./helpers/clock.js";
@@ -43,14 +43,26 @@ interface Row {
   sendLabel: string;
   waitLabel: string;
   initHint: string;
+  gateNoun: string;
   missingBundle: string;
+  /** The branch `seedIdentity` records (deliberately NOT the fallback), and the fallback the
+   *  round-1 composer substitutes when branch.txt is gone. */
+  seededBranch: string;
+  branchFallback: string;
+  /** This command's own turn-budget knob, and the value the timeout pin sets it to. */
+  timeoutEnv: string;
+  timeoutValue: number;
+  /** The wait binding re-imported after `vi.resetModules()`, so the module-level `envNum` budget is
+   *  read again. A literal import path per row keeps it statically analyzable. */
+  loadWait(): Promise<(topic: string, round: number, d: RoundWaitDeps) => Promise<number>>;
   state(round: number): string;
   prompt(round: number): string;
   bundle(round: number): string;
   question(round: number): string;
-  /** A literal only THIS command's composers emit (round 1 / round >= 2). */
+  /** A literal only THIS command's composers emit (round 1 / round >= 2, the latter carrying the
+   *  round number so a follow-up composed for the wrong round fails). */
   firstMark: string;
-  followupMark: string;
+  followupMark(round: number): string;
   /** The other descriptor's state + prompt files, which this row must never write. */
   foreign(round: number): string[];
 }
@@ -64,18 +76,24 @@ const QUICK: Row = {
   exec: quickExecDir,
   seedIdentity: () => {
     writeFileSync(join(quickArtDir(T), "task-brief.md"), `## Goal\n${MARK}`);
-    writeFileSync(join(quickExecDir(T), "branch.txt"), `feat/quick-${T}\n`);
+    writeFileSync(join(quickExecDir(T), "branch.txt"), "feat/quick-SEEDED\n");
   },
   sendLabel: "quick turn-send",
   waitLabel: "quick turn-wait",
   initHint: "run quick init",
+  gateNoun: "turn",
   missingBundle: "fix bundle missing",
+  seededBranch: "feat/quick-SEEDED",
+  branchFallback: `feat/quick-${T}`,
+  timeoutEnv: "AP_QUICK_TURN_TIMEOUT",
+  timeoutValue: 111,
+  loadWait: async () => (await import("../src/commands/quick.js")).turnWaitWith,
   state: (r) => join(quickExecDir(T), `turn-${r}.txt`),
   prompt: (r) => join(quickExecDir(T), `turn-prompt-${r}.md`),
   bundle: (r) => join(quickExecDir(T), `fix-prompt-${r}.md`),
   question: (r) => join(quickExecDir(T), `question-${r}.txt`),
   firstMark: "This is one autonomous turn",
-  followupMark: "of /ap:quick (fix loop)",
+  followupMark: (r) => `ROUND ${r} of /ap:quick (fix loop)`,
   foreign: (r) => [join(quickExecDir(T), `round-${r}.txt`), join(quickExecDir(T), `round-prompt-${r}.md`)],
 };
 
@@ -89,18 +107,24 @@ const BRIDGE: Row = {
   seedIdentity: () => {
     writeFileSync(join(bridgeArtDir(T), "topic-text.txt"), MARK);
     writeFileSync(join(bridgeExecDir(T), "target_cwd.txt"), "/abs/repoB\n");
-    writeFileSync(join(bridgeExecDir(T), "branch.txt"), `feat/bridge-${T}\n`);
+    writeFileSync(join(bridgeExecDir(T), "branch.txt"), "feat/bridge-SEEDED\n");
   },
   sendLabel: "bridge round-send",
   waitLabel: "bridge round-wait",
   initHint: "run bridge init",
+  gateNoun: "round",
   missingBundle: "follow-up bundle missing",
+  seededBranch: "feat/bridge-SEEDED",
+  branchFallback: "the current branch",
+  timeoutEnv: "AP_DUET_TURN_TIMEOUT",
+  timeoutValue: 222,
+  loadWait: async () => (await import("../src/commands/bridge.js")).roundWaitWith,
   state: (r) => join(bridgeExecDir(T), `round-${r}.txt`),
   prompt: (r) => join(bridgeExecDir(T), `round-prompt-${r}.md`),
   bundle: (r) => join(bridgeExecDir(T), `followup-${r}.md`),
   question: (r) => join(bridgeExecDir(T), `question-${r}.txt`),
   firstMark: "You are collaborating with a conductor",
-  followupMark: "You are continuing the collaboration",
+  followupMark: (r) => `round ${r}, still on the same branch`,
   foreign: (r) => [join(bridgeExecDir(T), `turn-${r}.txt`), join(bridgeExecDir(T), `turn-prompt-${r}.md`)],
 };
 
@@ -140,7 +164,9 @@ describe.each([QUICK, BRIDGE])("round protocol via $name", (row) => {
     expect(rc).toBe(1);
     expect(d.sent).toEqual([]);
     expect(existsSync(row.state(1))).toBe(false);
-    expect(err).toContain(`${row.sendLabel}: worker not idle`);
+    // The whole line, not just the label: the unit is the `gateNoun` slot, and a swapped one
+    // survives every other assertion in the suite.
+    expect(err).toContain(`${row.sendLabel}: worker not idle (state=working); previous ${row.gateNoun} still in flight`);
   });
 
   it("an existing state file refuses the round and leaves it untouched", async () => {
@@ -158,10 +184,19 @@ describe.each([QUICK, BRIDGE])("round protocol via $name", (row) => {
     expect(await row.send(T, 1, d)).toBe(0);
     expect(readFileSync(row.state(1), "utf8")).toBe("OFFSET=42\n");
     const prompt = readFileSync(row.prompt(1), "utf8");
-    expect(prompt).toContain(MARK);          // composeFirst read this command's own round-1 input
-    expect(prompt).toContain(row.firstMark); // ...through this command's own composer
+    expect(prompt).toContain(MARK);              // composeFirst read this command's own round-1 input
+    expect(prompt).toContain(row.firstMark);     // ...through this command's own composer
+    expect(prompt).toContain(row.seededBranch);  // ...and the branch recorded by its branch step
     expect(d.sent).toEqual([[row.agent, T, `@${row.prompt(1)}`]]);
     for (const f of row.foreign(1)) expect(existsSync(f)).toBe(false);
+  });
+
+  it("round 1 without branch.txt: this command's own branch fallback", async () => {
+    rmSync(join(row.exec(T), "branch.txt"));
+    expect(await row.send(T, 1, sendDeps())).toBe(0);
+    const prompt = readFileSync(row.prompt(1), "utf8");
+    expect(prompt).toContain(row.branchFallback);
+    expect(prompt).not.toContain(row.seededBranch);
   });
 
   it("round 2 without its bundle: rc 1, in this command's own wording", async () => {
@@ -172,12 +207,12 @@ describe.each([QUICK, BRIDGE])("round protocol via $name", (row) => {
     expect(err).toContain(`${row.sendLabel}: ${row.missingBundle}: ${row.bundle(2)} (the directive must write it first)`);
   });
 
-  it("round 2 with its bundle: the follow-up composer wraps it", async () => {
-    writeFileSync(row.bundle(2), MARK);
-    expect(await row.send(T, 2, sendDeps())).toBe(0);
-    const prompt = readFileSync(row.prompt(2), "utf8");
+  it("a later round with its bundle: the follow-up composer wraps it, for THAT round", async () => {
+    writeFileSync(row.bundle(3), MARK);
+    expect(await row.send(T, 3, sendDeps())).toBe(0);
+    const prompt = readFileSync(row.prompt(3), "utf8");
     expect(prompt).toContain(MARK);
-    expect(prompt).toContain(row.followupMark);
+    expect(prompt).toContain(row.followupMark(3));  // the round argument is threaded, not fixed at 2
   });
 
   it("the offset is captured and written BEFORE the send", async () => {
@@ -217,6 +252,27 @@ describe.each([QUICK, BRIDGE])("round protocol via $name", (row) => {
     expect(readFileSync(row.state(1), "utf8")).toBe("OFFSET=0\nTS=ok\n");
     expect(err).toContain(`${row.waitLabel}: round=1 offset=0 timeout=14400s`);
     expect(err).toContain(`${row.waitLabel}: round=1 TS=ok`);
+  });
+
+  it("wait: the budget comes from this command's OWN knob", async () => {
+    // Both knobs default to DEFAULT_TURN_BUDGET_S, so only the NAME distinguishes the two slots:
+    // set both to different values and each row must log its own. envNum runs at module load, hence
+    // the reset + re-import (the setup file clears both knobs for every other test in the suite).
+    writeFileSync(row.state(1), "OFFSET=0\n");
+    process.env.AP_QUICK_TURN_TIMEOUT = "111";
+    process.env.AP_DUET_TURN_TIMEOUT = "222";
+    try {
+      vi.resetModules();
+      const waitFor = await row.loadWait();
+      const { rc, err } = await withStderr(() =>
+        waitFor(T, 1, { wait: async () => ({ event: "done", summary: "ok" }), clock: noSleepClock }));
+      expect(rc).toBe(0);
+      expect(err).toContain(`${row.waitLabel}: round=1 offset=0 timeout=${row.timeoutValue}s`);
+    } finally {
+      delete process.env.AP_QUICK_TURN_TIMEOUT;
+      delete process.env.AP_DUET_TURN_TIMEOUT;
+      vi.resetModules();
+    }
   });
 
   it("wait: a question writes this command's question file and bumps OFFSET for the re-arm", async () => {

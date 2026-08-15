@@ -192,7 +192,7 @@ async function relayRun(rest: string[]): Promise<number> {
   // NOTE: round-wait already bumped OFFSET past the question; relay only sends + records.
   const rc = await sendRun(["--from", "hub", agent, topic, answer]);
   if (rc !== 0) { log.error(`bridge relay: send failed (rc=${rc})`); return 1; }
-  appendFileSync(join(bridgeExecDir(topic), `question-${round}.txt`), `RELAYED=${answer}\n`);
+  appendFileSync(BRIDGE_ROUND.questionFile(bridgeExecDir(topic), round), `RELAYED=${answer}\n`);
   log.ok(`bridge relay: round=${round} answered`);
   return 0;
 }
@@ -255,7 +255,7 @@ async function summaryRun(rest: string[]): Promise<number> {
   }
   // count rounds = highest round-<n>.txt present (files are contiguous 1..K: round-send refuses to
   // overwrite an existing round-<n>.txt and the directive only ever advances the round by +1)
-  let rounds = 0; while (existsSync(join(exec, `round-${rounds + 1}.txt`))) rounds++;
+  let rounds = 0; while (existsSync(BRIDGE_ROUND.stateFile(exec, rounds + 1))) rounds++;
 
   const facts: BridgeSummaryFacts = {
     topic, status: aborted ? "aborted" : "ok", started, ended, duration,

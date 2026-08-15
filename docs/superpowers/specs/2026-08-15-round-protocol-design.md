@@ -41,8 +41,18 @@ Two corrections from the implementation's own enumeration (2026-08-15):
 - The wait's missing-state error names the **send** verb (`... missing (run quick turn-send first)`),
   so both verbs come out of the one `label(verb)` slot — the wait body is not label-uniform.
 - The question filename is **identical** in both commands (`question-<round>.txt`); it stays a
-  descriptor slot so every frozen state filename lives in one place, but it is a degenerate slot and
-  the swapped-slot mutation pin cannot reach it.
+  descriptor slot so every frozen state filename lives in one place, but it is a degenerate slot: no
+  swap of it is observable, so no test can pin it.
+
+**Slot coverage (three-lens review of the first implementation).** A descriptor puts the two
+commands' values side by side as one-line literals, which is exactly what makes an unpinned slot
+easy to get wrong and impossible to notice. Four slots survived a quick<->bridge swap of the whole
+2179-test suite as first shipped: `gateNoun` (the assertion stopped one token short of the unit),
+`timeoutS` (both knobs default to `DEFAULT_TURN_BUDGET_S`, so only the knob NAME differs),
+`composeFirst`'s branch fallback (`feat/quick-<topic>` vs `the current branch`), and the degenerate
+`questionFile`. The first three are now pinned by named cases in `tests/round-protocol.test.ts`; the
+fourth cannot be. Any slot added later needs a per-row assertion in that suite, or it is unpinned by
+default.
 
 The cost is not hypothetical: 0.5.15 had to wire the identical `onVeto` lambda and the same
 `sleep?` field into three files — the exact per-copy edit the PHASES table was built to end — and
@@ -63,7 +73,7 @@ export interface RoundDescriptor {
   command: "quick" | "bridge";
   label(verb: "send" | "wait"): string;      // "quick turn-send" | "bridge round-wait"
   initHint: string;                          // "run quick init"
-  gateNoun: string;                          // "turn" | "round"
+  gateNoun: "turn" | "round";                // as narrow as workerSendGate's own parameter
   artDir(topic: string): string;
   execDir(topic: string): string;
   stateFile(exec: string, round: number): string;
@@ -94,18 +104,26 @@ uniform shape where two sites differed.)
 ## Components
 
 - `src/core/roundProtocol.ts` (new) · `src/commands/quick.ts` + `src/commands/bridge.ts` (descriptors
-  + thin bindings). `implement.ts` untouched.
+  + thin bindings; bridge's `relay` and its summary round-counter read their filenames off the
+  descriptor too, so "every frozen filename lives in the descriptor" is literally true).
+  `implement.ts` untouched.
 - `tests/` — see Testing. Version 0.5.23 → 0.5.24 (three manifests) + rebuilt committed dist.
 
 ## Testing
 
 - ALL existing quick/bridge suites pass with ZERO assertion edits (they pin the frozen filenames and
   log lines); permitted: import/wiring only.
-- New skeleton suite over both descriptors: gate refusal, state-file idempotency refusal, missing
-  bundle (each command's exact wording), offset-captured-before-send (pinned by capturing state at
-  send time), send-failure keeps the state file, question re-arm's OFFSET bump.
-- Mutation: swapping two descriptor slot values must fail a test; moving the offset capture after
-  the send must fail; dropping the gate must fail.
+- New skeleton suite over both descriptors: gate refusal (the WHOLE line, `gateNoun` included),
+  state-file idempotency refusal, missing bundle (each command's exact wording), round-1 branch from
+  `branch.txt` AND each command's own fallback when it is absent, the follow-up composer's round
+  argument, offset-captured-before-send (pinned by capturing state at send time), send-failure keeps
+  the state file, each command's own timeout knob, question re-arm's OFFSET bump.
+- Mutation: swapping ANY pinnable descriptor slot must fail a test (`gateNoun`, `timeoutS` and the
+  branch fallback each have a named case); moving the offset capture after the send must fail;
+  dropping the gate must fail.
+- `AP_QUICK_TURN_TIMEOUT` / `AP_DUET_TURN_TIMEOUT` are read at module load, so a `setupFiles` entry
+  (`tests/helpers/setupEnv.ts`) clears both before any test file imports — otherwise an operator who
+  exports either knob fails the suite. The timeout pin sets them itself and re-imports.
 - Full gate green; dist rebuilt+committed.
 
 ## Success Criteria

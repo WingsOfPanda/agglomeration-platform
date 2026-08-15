@@ -28670,7 +28670,7 @@ async function relayRun(rest) {
     log.error(`bridge relay: send failed (rc=${rc})`);
     return 1;
   }
-  (0, import_node_fs47.appendFileSync)((0, import_node_path51.join)(bridgeExecDir(topic), `question-${round}.txt`), `RELAYED=${answer}
+  (0, import_node_fs47.appendFileSync)(BRIDGE_ROUND.questionFile(bridgeExecDir(topic), round), `RELAYED=${answer}
 `);
   log.ok(`bridge relay: round=${round} answered`);
   return 0;
@@ -28748,7 +28748,7 @@ duration=${duration}
 `);
   }
   let rounds = 0;
-  while ((0, import_node_fs47.existsSync)((0, import_node_path51.join)(exec, `round-${rounds + 1}.txt`))) rounds++;
+  while ((0, import_node_fs47.existsSync)(BRIDGE_ROUND.stateFile(exec, rounds + 1))) rounds++;
   const facts = {
     topic,
     status: aborted2 ? "aborted" : "ok",
