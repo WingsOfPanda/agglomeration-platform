@@ -18,11 +18,15 @@ import { computeScore, type ScoreFs, type ScoreComputation } from "../core/autor
 import { sanityRow, sanityTsvPath, parseSanityRows, SANITY_TSV_HEADER } from "../core/autoresearchSanity.js";
 import { coverageRow, coverageTsvPath, parseCoverageRows, COVERAGE_TSV_HEADER, type CoverageRow } from "../core/autoresearchCoverage.js";
 import { lineageRow, lineageTsvPath, parseLineageRows, LINEAGE_TSV_HEADER } from "../core/autoresearchLineage.js";
-import { parseState, mergeState, reconcileFromOutbox, reconcileFromOutboxSince, readHaltFlag } from "../core/autoresearchState.js";
+import { parseState, readHaltFlag } from "../core/autoresearchState.js";
+import {
+  lanePath, readLane, applyTransition, applyTransitionStrict, applyTransitionFrom,
+  reconcileLaneAtFinalize, reconcileLaneAtResume,
+} from "../core/autoresearchLane.js";
 import { checkCompletion, checkTimeBudget } from "../core/autoresearchComplete.js";
 import { renderSessionSummary, type StatusRow, type EventRow } from "../core/autoresearchSummary.js";
 import {
-  finalizePhase, listExpDirs, normalizeResults, pruneIntermediate, linkPaneArtifacts, computeSizeWarnings,
+  listExpDirs, normalizeResults, pruneIntermediate, linkPaneArtifacts, computeSizeWarnings,
   computeAuditWarnings, writeFinalizeLessons, renderWarningLines, GIB,
   type AutoresearchFinalizeDeps,
 } from "../core/autoresearchFinalize.js";
@@ -557,7 +561,7 @@ function gatherPeers(art: string, self: string): PeerRow[] {
     const peerDir = workerStateDir(art, peer);
     if (!existsSync(peerDir)) continue;
     let phase = "", currentExp = "";
-    const statePath = join(peerDir, "state.txt");
+    const statePath = lanePath(art, peer);
     if (existsSync(statePath)) {
       const kv = parseState(readFileSync(statePath, "utf8"));
       phase = kv.phase ?? "";
@@ -627,8 +631,7 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   if (!existsSync(art)) return fail(`topic state dir missing: ${art} (was autoresearch init run?)`, 1);
   const metricMd = join(art, "metric.md");
   if (!existsSync(metricMd)) return fail(`metric.md missing at ${metricMd}`, 1);
-  const stateDir = workerStateDir(art, agent);
-  const stateTxt = join(stateDir, "state.txt");
+  const stateTxt = lanePath(art, agent);
   if (!existsSync(stateTxt)) return fail(`worker state.txt missing: ${stateTxt}`, 1);
 
   // Fenced dispatch: a writer holding a stale controller generation refuses LOUDLY
@@ -878,7 +881,7 @@ export async function monitorRun(args: string[], opts?: { home?: string; cwd?: s
   mkdirSync(stateDir, { recursive: true });
   const cursorFile = join(stateDir, "liveness-cursor.txt");
   const rescanFile = join(stateDir, "liveness-rescan-emitted.txt");
-  const stateTxt = join(stateDir, "state.txt");
+  const stateTxt = lanePath(art, agent);
 
   const thresholds = {
     probeS: Number(process.env.AP_PROBE_S ?? 900),
@@ -1033,7 +1036,7 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
     const agents = splitNonCommentLines(readFileSync(workersFile, "utf8"));
     for (const agent of agents) {
       let phase = "?", currentOrLast = "—";
-      const stateTxt = join(workerStateDir(art, agent), "state.txt");
+      const stateTxt = lanePath(art, agent);
       let curExp = "";
       if (existsSync(stateTxt)) {
         const kv = parseState(readFileSync(stateTxt, "utf8"));
@@ -1111,37 +1114,10 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
 // The steps themselves live in core/autoresearchFinalize.ts; what stays here is the
 // sequencing plus the two per-worker FS gathers the summary render needs.
 
-/** Step 2: per-worker reconcile + phase normalization. (a) replays the PANE outbox tail past the
- *  liveness cursor, then (b) applies the finalize phase case-map. NOTE the tail slice is hand-rolled
- *  here and NOT reconcileFromOutboxSince — that helper additionally guards a SHRUNK outbox. finalize
- *  runs once at wind-down; the divergence is known and deliberately left as-is. */
+/** Step 2: per-worker reconcile + phase normalization — the lane module's finalize flavor (which
+ *  documents why its tail slice diverges from resume's shrink-guarded one). */
 function reconcileWorkerPhases(art: string, agents: string[], topic: string): void {
-  for (const agent of agents) {
-    const stateDir = workerStateDir(art, agent);
-    const stateTxt = join(stateDir, "state.txt");
-    if (!existsSync(stateTxt)) continue;
-
-    // (a) reconcile: replay the PANE outbox tail past the liveness cursor.
-    const cursorRaw = readOr(join(stateDir, "liveness-cursor.txt"));
-    const offset = Number.parseInt(cursorRaw.trim(), 10) || 0;
-    const model = resolveModel(agent, topic);
-    const ob = model ? outboxPath(agent, model, topic) : "";
-    let tail = "";
-    if (ob && existsSync(ob)) {
-      try { tail = readFileSync(ob).subarray(offset).toString("utf8"); } catch { tail = ""; }
-    }
-    const curExp = parseState(readOr(stateTxt)).current_exp_id ?? "";
-    const doneResultExists = !!curExp && existsSync(join(experimentDir(art, agent, curExp), "result.json"));
-    const recon = reconcileFromOutbox(tail, doneResultExists);
-    if (recon === "failed" || recon === "idle") {
-      atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: recon }));
-    }
-
-    // (b) phase case-map.
-    const phase = parseState(readOr(stateTxt)).phase ?? "";
-    const np = finalizePhase(phase);
-    if (np) atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: np }));
-  }
+  for (const agent of agents) reconcileLaneAtFinalize(art, agent, topic);
 }
 
 /** Step 9 (gather): one StatusRow per worker off its state.txt; a worker with no state file still
@@ -1149,9 +1125,8 @@ function reconcileWorkerPhases(art: string, agents: string[], topic: string): vo
 function gatherStatusRows(art: string, agents: string[]): StatusRow[] {
   const statusRows: StatusRow[] = [];
   for (const agent of agents) {
-    const stateTxt = join(workerStateDir(art, agent), "state.txt");
-    if (existsSync(stateTxt)) {
-      const kv = parseState(readOr(stateTxt));
+    if (existsSync(lanePath(art, agent))) {
+      const kv = readLane(art, agent);
       statusRows.push({
         agent,
         phase: kv.phase ?? "?",
@@ -1565,7 +1540,7 @@ export async function freshWorkerWith(args: string[], deps: AutoresearchFreshWor
   if (!AGENT_RE.test(agent)) { log.error(`agent must match [a-z][a-z0-9-]*; got '${agent}'`); return 2; }
 
   const art = autoresearchArtDir(topic, deps.opts);
-  const stateTxt = join(workerStateDir(art, agent), "state.txt");
+  const stateTxt = lanePath(art, agent);
   if (!existsSync(stateTxt)) { log.error(`worker state.txt missing: ${stateTxt}`); return 1; }
 
   const prev = parseState(readFileSync(stateTxt, "utf8"));
@@ -1588,14 +1563,14 @@ export async function freshWorkerWith(args: string[], deps: AutoresearchFreshWor
   if (rc !== 0) { log.error(`spawn failed for ${agent} on ${topic}`); return 1; }
 
   // Reset runtime state AFTER a successful spawn, preserving exp_counter (+ all other keys).
-  atomicWrite(stateTxt, mergeState(readFileSync(stateTxt, "utf8"), {
+  applyTransitionStrict(art, agent, {
     last_event: "fresh-worker-respawn",
     last_event_ts: deps.now(),
     phase: "idle",
     current_exp_id: "",
     exp_counter: prevCounter,
     probe_sent_ts: "",
-  }));
+  });
 
   log.ok(`[fresh-worker] ${agent} respawned on ${topic}; state preserved (exp_counter=${prevCounter})`);
   return 0;
@@ -1670,14 +1645,10 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
   // 2. Pass 1 — per-worker reconcile from the recorded delivery offset + result backfill.
   let replay = replayLedger(readFileSync(lp, "utf8"));
   for (const agent of agents) {
-    const stateTxt = join(workerStateDir(art, agent), "state.txt");
-    if (!existsSync(stateTxt)) continue;
+    if (!existsSync(lanePath(art, agent))) continue;
     const obText = readOutbox(agent).toString("utf8");
     const offset = replay.lastDeliveredOffset.get(agent) ?? 0;
-    const curExp = parseState(readOr(stateTxt)).current_exp_id ?? "";
-    const doneResultExists = !!curExp && existsSync(join(experimentDir(art, agent, curExp), "result.json"));
-    const recon = reconcileFromOutboxSince(obText, offset, doneResultExists);
-    if (recon === "failed" || recon === "idle") atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: recon }));
+    reconcileLaneAtResume(art, agent, obText, offset, readLane(art, agent).current_exp_id ?? "");
 
     const seen = new Set(replay.completionOrder);
     for (const expId of listExpDirs(experimentsDir(art, agent))) {
@@ -1699,26 +1670,24 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
       const o = parseEvent(line.trim());
       if (o && (o.event === "ack" || o.event === "done")) { accepted = true; break; }
     }
-    const stateTxt = join(workerStateDir(art, agent), "state.txt");
+    const stateTxt = lanePath(art, agent);
     if (accepted) {
       // Hazard-1 window (inbox written, state bump lost): treat as delivered with the
       // reconstructed offset, repair the state to the dispatch-equivalent, then re-run
       // the offset-scoped reconcile so a finished-while-dead experiment settles too.
       ledgerAdd({ gen, ts: deps.now(), kind: "dispatch-delivered", agent, exp_id: expId, data: { outboxOffset: reconstructed, reconstructed: true } });
       if (existsSync(stateTxt)) {
-        const st = parseState(readOr(stateTxt));
+        const st = readLane(art, agent);
         const stateN = /^[0-9]+$/.test((st.exp_counter ?? "").trim()) ? parseInt(st.exp_counter, 10) : 0;
         const intentN = parseInt(expId.slice("exp-".length), 10) || 0;
-        atomicWrite(stateTxt, mergeState(readOr(stateTxt), {
+        applyTransition(art, agent, {
           phase: "working", current_exp_id: expId, exp_counter: String(Math.max(stateN, intentN)),
           last_event: "dispatched", last_event_ts: deps.now(),
-        }));
-        const resultExists = existsSync(join(experimentDir(art, agent, expId), "result.json"));
-        const recon = reconcileFromOutboxSince(obBuf.toString("utf8"), reconstructed, resultExists);
-        if (recon === "failed" || recon === "idle") atomicWrite(stateTxt, mergeState(readOr(stateTxt), { phase: recon }));
+        });
+        reconcileLaneAtResume(art, agent, obBuf.toString("utf8"), reconstructed, expId);
       }
     } else {
-      const phase = existsSync(stateTxt) ? (parseState(readOr(stateTxt)).phase ?? "") : "";
+      const phase = existsSync(stateTxt) ? (readLane(art, agent).phase ?? "") : "";
       if (phase !== "working") redispatch.add(`${agent}:${expId}`);
     }
   }
@@ -1730,7 +1699,7 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
   const rows: string[] = [];
   const monitors: string[] = [];
   for (const agent of agents) {
-    const stateTxt = join(workerStateDir(art, agent), "state.txt");
+    const stateTxt = lanePath(art, agent);
     if (!existsSync(stateTxt)) { rows.push(`WORKER=${agent}:?:no`); continue; }
     const model = resolveModel(agent, topic);
     const pane = model ? paneMetaRead(agent, model, topic) : null;
@@ -1746,9 +1715,9 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
     if (!alive && phase === "working") {
       const workingExp = st.current_exp_id ?? "";
       ledgerAdd({ gen, ts: deps.now(), kind: "interrupted", agent, ...(workingExp ? { exp_id: workingExp } : {}) });
-      atomicWrite(stateTxt, mergeState(raw, {
+      applyTransitionFrom(art, agent, raw, {
         phase: "idle", current_exp_id: "", last_event: "interrupted", last_event_ts: deps.now(),
-      }));
+      });
       if (workingExp) redispatch.add(`${agent}:${workingExp}`);
       phase = "idle";
     }
@@ -1758,7 +1727,7 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
       else log.warn(`autoresearch resume: fresh-worker failed for ${agent} (rc ${rc}); lane left as-is`);
     }
 
-    phase = parseState(readOr(stateTxt)).phase ?? "";
+    phase = readLane(art, agent).phase ?? "";
     rows.push(`WORKER=${agent}:${phase}:${alive ? "yes" : "no"}`);
     if (alive) monitors.push(`MONITOR=${agent}`);
   }
