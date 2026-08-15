@@ -311,7 +311,8 @@ export function skipDispatch(row: PhaseRow, agent: string, stateFile: string, re
 export interface SendDeps {
   offsetFor(agent: string, model: string, topic: string): number;
   send(args: string[]): Promise<number>;
-  /** The worker's non-idle status.json state, or null when idle/absent/unreadable. Optional: the
+  /** The worker's non-idle status.json state, or null when idle/absent (an EXISTING but empty or
+   *  unreadable file fails closed as `STATUS_UNREADABLE`, i.e. busy). Optional: the
    *  live `workerBusyState` (the frozen regex read) is the default, injected only by tests. Shared
    *  seam: the send verbs hand it to `guardSkipped` too, so the guard's evidence probe and this
    *  module's rc-3 busy-gate can never answer differently. */
