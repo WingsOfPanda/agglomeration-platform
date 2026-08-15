@@ -693,7 +693,7 @@ describe("autoresearch experiment-send", () => {
     const h = home();
     const { sd } = scaffold(h);
     const rc = await experimentSendWith([TOPIC, INST, "exp-006", "x", "y"],
-      deps(h, { dryRun: false, paneSend: async () => { throw new Error("tmux down"); } }));
+      deps(h, { dryRun: false, paneOwned: async () => true, paneSend: async () => { throw new Error("tmux down"); } }));
     expect(rc).toBe(0);
     expect(readFileSync(inboxPath(INST, MODEL, TOPIC), "utf8")).toContain("END_OF_INSTRUCTION");
     expect(readFileSync(join(sd, "state.txt"), "utf8")).toContain("phase=working");

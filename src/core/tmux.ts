@@ -152,22 +152,35 @@ export async function livePaneNonces(): Promise<Map<string, string>> {
   // unforgeable (a pane option can carry a newline; a pane_id cannot), so it is what decides WHICH
   // panes exist — see parsePaneNonces. A pane appearing/vanishing between the two only ever drops a
   // row, which reads as "not ours", the fail-closed direction.
-  const [ids, pairs] = await Promise.all([
-    execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}"]),
-    execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}\t#{@ap_nonce}"]),
-  ]);
-  return parsePaneNonces(pairs.stdout, new Set(ids.stdout.split("\n").filter(Boolean)));
+  //
+  // NEVER throws (matching ensurePaneBorders/ensureWindowBorderStatus above): no tmux server
+  // running, tmux not installed, and a server with no panes are indistinguishable here and all mean
+  // the same thing — ap cannot prove it owns anything. The empty map answers every ownership
+  // question with "not ours", so nothing is killed, nudged, or called alive. Callers reach this from
+  // paths that must survive a tmux-less machine (a headless box, a container, CI).
+  try {
+    const [ids, pairs] = await Promise.all([
+      execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}"]),
+      execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}\t#{@ap_nonce}"]),
+    ]);
+    return parsePaneNonces(pairs.stdout, new Set(ids.stdout.split("\n").filter(Boolean)));
+  } catch { return new Map(); }
 }
 
 /** Is `pane` live and ours (its live @ap_nonce is the one we recorded)? The single-pane form of
- *  ownsPane; an empty recorded nonce short-circuits without a tmux call. */
+ *  ownsPane; an unverifiable recorded nonce short-circuits without a tmux call. Never throws — a
+ *  tmux-less machine answers `false` (not ours), never an exception in the caller's face. */
 export async function paneOwned(pane: string, nonce: string): Promise<boolean> {
   if (!NONCE_RE.test(nonce)) return false;   // unverifiable: no tmux call can settle it
   return ownsPane(await livePaneNonces(), pane, nonce);
 }
 
-export async function paneNonceSet(pane: string, nonce: string): Promise<void> {
-  await execa("tmux", paneNonceSetArgs(pane, nonce));
+/** Stamp the pane's ownership nonce; false on any tmux error (never throws). The boolean is
+ *  load-bearing, unlike the cosmetic label/border setters: a pane that did not take the stamp can
+ *  never be proven ours again, so the CALLER must fail closed rather than record a nonce the pane
+ *  does not carry. */
+export async function paneNonceSet(pane: string, nonce: string): Promise<boolean> {
+  try { await execa("tmux", paneNonceSetArgs(pane, nonce)); return true; } catch { return false; }
 }
 
 export async function paneSend(pane: string, line: string): Promise<void> {
@@ -252,7 +265,9 @@ export async function preflightLayout(topic: string, list: PreflightEntry[], opt
       // it much later), so its ids need the same proof pane.json's do. spawn re-stamps the same
       // nonce when it respawns this pane into a worker, so one nonce follows the pane end to end.
       const nonce = randomUUID();
-      await execa("tmux", paneNonceSetArgs(pane, nonce));
+      // Fail the whole preflight rather than record a pane whose ownership can never be proven:
+      // the catch below kills every pane created so far, so nothing unownable is left behind.
+      if (!(await paneNonceSet(pane, nonce))) throw new Error(`could not stamp @ap_nonce on ${pane}`);
       await paneLabelSet(pane, e.agent, e.model, topic);
       out.push({ agent: e.agent, pane, nonce });
       prev = pane;

@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import * as T from "../src/core/tmux.js";
 
 describe("tmux arg builders", () => {
@@ -131,5 +134,49 @@ describe("pane ownership nonce", () => {
   it("paneOwned short-circuits an empty recorded nonce without touching tmux", async () => {
     // No tmux server is reachable in the suite: reaching execa would reject, not return false.
     await expect(T.paneOwned("%1", "")).resolves.toBe(false);
+  });
+});
+
+// CI (and any headless box, container, or user who has not started tmux) has NO tmux server. The
+// probes must ANSWER there, not throw: an unguarded `tmux list-panes` rejection propagated out of
+// paneOwned and failed a test that never meant to touch tmux at all.
+// A PATH shim is what makes this testable without a server — and without ever contacting the real
+// one: `tmux` resolves to a stub that fails exactly as a serverless tmux does.
+describe("no tmux server / no tmux at all", () => {
+  const withFakeTmux = async <R>(body: string | null, fn: () => Promise<R>): Promise<R> => {
+    const dir = mkdtempSync(join(tmpdir(), "ap-notmux-"));
+    if (body !== null) writeFileSync(join(dir, "tmux"), body, { mode: 0o755 });
+    const orig = process.env.PATH;
+    process.env.PATH = dir;   // ONLY the stub (or nothing) is reachable
+    try { return await fn(); } finally { process.env.PATH = orig; }
+  };
+  // What tmux really prints with no server running, and its exit code.
+  const NO_SERVER = "#!/bin/sh\necho 'error connecting to /tmp/tmux-1001/default (No such file or directory)' >&2\nexit 1\n";
+
+  it("no server: livePaneNonces resolves to an EMPTY map, never rejects", async () => {
+    await withFakeTmux(NO_SERVER, async () => {
+      await expect(T.livePaneNonces()).resolves.toEqual(new Map());
+    });
+  });
+  it("tmux not installed at all: same answer (ENOENT is not an exception either)", async () => {
+    await withFakeTmux(null, async () => {
+      await expect(T.livePaneNonces()).resolves.toEqual(new Map());
+    });
+  });
+  it("paneOwned resolves FALSE (not ours) rather than rejecting — the CI failure", async () => {
+    await withFakeTmux(NO_SERVER, async () => {
+      await expect(T.paneOwned("%1", "11111111-1111-4111-8111-111111111111")).resolves.toBe(false);
+    });
+  });
+  it("an empty snapshot stays fail-closed: it means NOT ours, never assume-ours", async () => {
+    expect(T.ownsPane(new Map(), "%1", "11111111-1111-4111-8111-111111111111")).toBe(false);
+  });
+  it("paneNonceSet reports failure instead of throwing (the caller fails closed on it)", async () => {
+    await withFakeTmux(NO_SERVER, async () => {
+      await expect(T.paneNonceSet("%1", "11111111-1111-4111-8111-111111111111")).resolves.toBe(false);
+    });
+    await withFakeTmux("#!/bin/sh\nexit 0\n", async () => {
+      await expect(T.paneNonceSet("%1", "11111111-1111-4111-8111-111111111111")).resolves.toBe(true);
+    });
   });
 });

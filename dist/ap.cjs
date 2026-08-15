@@ -16725,18 +16725,27 @@ async function ensureWindowBorderStatus(target) {
   }
 }
 async function livePaneNonces() {
-  const [ids, pairs] = await Promise.all([
-    execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}"]),
-    execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}	#{@ap_nonce}"])
-  ]);
-  return parsePaneNonces(pairs.stdout, new Set(ids.stdout.split("\n").filter(Boolean)));
+  try {
+    const [ids, pairs] = await Promise.all([
+      execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}"]),
+      execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}	#{@ap_nonce}"])
+    ]);
+    return parsePaneNonces(pairs.stdout, new Set(ids.stdout.split("\n").filter(Boolean)));
+  } catch {
+    return /* @__PURE__ */ new Map();
+  }
 }
 async function paneOwned(pane, nonce) {
   if (!NONCE_RE.test(nonce)) return false;
   return ownsPane(await livePaneNonces(), pane, nonce);
 }
 async function paneNonceSet(pane, nonce) {
-  await execa("tmux", paneNonceSetArgs(pane, nonce));
+  try {
+    await execa("tmux", paneNonceSetArgs(pane, nonce));
+    return true;
+  } catch {
+    return false;
+  }
 }
 async function paneSend(pane, line) {
   await execa("tmux", sendKeysLiteralArgs(pane, line));
@@ -16811,7 +16820,7 @@ async function preflightLayout(topic, list, opts) {
       const pane = stdout.trim();
       created.push(pane);
       const nonce = (0, import_node_crypto3.randomUUID)();
-      await execa("tmux", paneNonceSetArgs(pane, nonce));
+      if (!await paneNonceSet(pane, nonce)) throw new Error(`could not stamp @ap_nonce on ${pane}`);
       await paneLabelSet(pane, e.agent, e.model, topic);
       out.push({ agent: e.agent, pane, nonce });
       prev = pane;
@@ -17202,6 +17211,13 @@ __export(spawn_exports, {
 function resolveMode(explicit, dflt) {
   return explicit || dflt || "full";
 }
+async function stampOrFail(pane, nonce, agent, model, topic) {
+  if (await paneNonceSet(pane, nonce)) return true;
+  captureSpawnFailure({ agent, model, topic, reason: "pane_failed", detail: `could not stamp @ap_nonce on ${pane}` });
+  await killNow(pane);
+  log.error(`could not stamp the ownership nonce on ${pane} (tmux unreachable?); the pane was torn down rather than left unownable \u2014 check for a stray pane with: tmux list-panes -a`);
+  return false;
+}
 function prepareWorkerState(agent, model, topic) {
   stateInit(agent, model, topic);
   identityWrite(agent, model, topic);
@@ -17323,7 +17339,7 @@ async function run2(args) {
       }
       nonce = recorded;
       pane = await respawn(targetPane, launch, startDir);
-      await paneNonceSet(pane, nonce);
+      if (!await stampOrFail(pane, nonce, agent, model, topic)) return 1;
       await paneLabelSet(pane, agent, model, topic);
     } else {
       const lastFile = (0, import_node_path14.join)(topicDir(topic), ".last_pane");
@@ -17331,7 +17347,7 @@ async function run2(args) {
       nonce = (0, import_node_crypto4.randomUUID)();
       if (prior && await paneOwned(prior.paneId, prior.nonce)) pane = await splitDown(launch, prior.paneId, startDir);
       else pane = await splitRight(launch, void 0, startDir);
-      await paneNonceSet(pane, nonce);
+      if (!await stampOrFail(pane, nonce, agent, model, topic)) return 1;
       await paneLabelSet(pane, agent, model, topic);
       (0, import_node_fs18.mkdirSync)(topicDir(topic), { recursive: true });
       atomicWrite(lastFile, formatLastPane(pane, nonce));

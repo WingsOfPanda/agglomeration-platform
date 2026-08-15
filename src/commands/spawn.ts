@@ -23,6 +23,18 @@ export function resolveMode(explicit: string | undefined, dflt: string | undefin
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Stamp the fresh pane's ownership nonce, or tear it back down. A pane that did not take the stamp
+ *  can never be proven ap's again: recording the nonce anyway would leave a worker no teardown could
+ *  ever kill, so the pane goes now (best-effort — the same tmux failure may well defeat the kill,
+ *  and the message says so). Returns false when the caller must abort the spawn. */
+async function stampOrFail(pane: string, nonce: string, agent: string, model: string, topic: string): Promise<boolean> {
+  if (await paneNonceSet(pane, nonce)) return true;
+  captureSpawnFailure({ agent, model, topic, reason: "pane_failed", detail: `could not stamp @ap_nonce on ${pane}` });
+  await killNow(pane);
+  log.error(`could not stamp the ownership nonce on ${pane} (tmux unreachable?); the pane was torn down rather than left unownable — check for a stray pane with: tmux list-panes -a`);
+  return false;
+}
+
 /** The three pre-tmux state writes every spawn path crosses: a fresh state dir, the identity file,
  *  and a seeded status.json. Extracted so this wiring is unit-testable without spawning a pane. */
 export function prepareWorkerState(agent: string, model: string, topic: string): void {
@@ -101,7 +113,10 @@ export async function run(args: string[]): Promise<number> {
       // preflight-orphan sweep still recognizes a pane that became a worker.
       nonce = recorded;
       pane = await respawn(targetPane, launch, startDir);
-      await paneNonceSet(pane, nonce);   // respawn preserves pane options; re-stamp so ownership never rests on that
+      // respawn preserves pane options, so the stamp is a re-assertion — but if it FAILS, tmux is
+      // unreachable and nothing here can be trusted; fail closed rather than record a nonce we
+      // could not put on the pane. (stampOrFail kills the pane it just took over.)
+      if (!(await stampOrFail(pane, nonce, agent, model, topic))) return 1;
       await paneLabelSet(pane, agent, model, topic);
     } else {
       const lastFile = join(topicDir(topic), ".last_pane");
@@ -113,7 +128,7 @@ export async function run(args: string[]): Promise<number> {
       nonce = randomUUID();
       if (prior && await paneOwned(prior.paneId, prior.nonce)) pane = await splitDown(launch, prior.paneId, startDir);
       else pane = await splitRight(launch, undefined, startDir);
-      await paneNonceSet(pane, nonce);
+      if (!(await stampOrFail(pane, nonce, agent, model, topic))) return 1;
       await paneLabelSet(pane, agent, model, topic);
       mkdirSync(topicDir(topic), { recursive: true });
       atomicWrite(lastFile, formatLastPane(pane, nonce));   // atomic: a torn .last_pane would break the next split-target

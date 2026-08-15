@@ -152,6 +152,18 @@ two of its prescriptions were wrong in detail. What shipped, and why:
    instead of letting a later row overwrite the server's answer. `ownsPane` additionally honours only
    a platform-minted UUID. Forging still needs a pane on the same server AND the victim's recorded
    nonce, so this is hardening, not a trust boundary.
-8. **Testing note:** spawn's two branches stay unit-untested (they need real panes, which the repo
+8. **The probes must ANSWER on a machine with no tmux server** (CI, round 3): `livePaneNonces` issues
+   real `execa` calls, and an unguarded rejection propagated out of `paneOwned` into call sites that
+   the predecessor primitives had reached only through catch-tolerant paths — CI (no server) failed
+   on a test that never meant to touch tmux. The contract is now explicit and matches this file's
+   existing `ensurePaneBorders`/`ensureWindowBorderStatus` convention: **no probe throws.**
+   `livePaneNonces` returns an EMPTY map on any tmux failure — no server, tmux absent, and a server
+   with no panes are indistinguishable and all mean "ap cannot prove it owns anything", so every
+   ownership question answers "not ours" (nothing killed, nudged, or called alive: the fail-closed
+   direction, never assume-ours). `paneNonceSet` returns a boolean instead — the stamp is
+   load-bearing, not cosmetic, so its CALLERS fail closed on false: spawn tears the fresh pane back
+   down rather than record a nonce the pane does not carry (a worker no teardown could ever kill),
+   and `preflightLayout` aborts into its existing rollback.
+9. **Testing note:** spawn's two branches stay unit-untested (they need real panes, which the repo
    forbids); their contract is covered by the arg-builder/codec/`paneNonceFor` tests plus the now
    REQUIRED `nonce` parameter on `paneMetaWrite`, which no spawn path can omit.
