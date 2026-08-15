@@ -105,8 +105,10 @@ continue.
    merge on record and no local/remote divergence. Fallbacks (each recorded in `finish-result.txt`): no
    remote → it merges into base locally; no `gh` → it pushes the branch and you open + merge the PR
    manually, then `git -C <TARGET> pull`; the PR merge being blocked (branch protection / CI / conflict)
-   → it leaves the PR open for you to merge; base can't fast-forward → it reports and stops. In
-   **in-place mode** it leaves the commits on the current branch.
+   → it leaves the PR open for you to merge; base can't fast-forward → it reports and stops; the branch
+   step never landed (`branch.txt` == the start branch) → it refuses: `none\tno-branch`, nothing pushed,
+   no PR — tell the user the work (if any) is on repo B's start branch and that nothing was integrated.
+   In **in-place mode** it leaves the commits on the current branch.
 
 ## Stage 4 — Teardown + SUMMARY
 

@@ -38,9 +38,10 @@ because it reads the same record.
    `atomicWrite(join(exec, "branch.txt"), (onBranch ? branch : snap.branch) + "\n")`.
    The warn line stays byte-identical. The trailing `log.ok` keeps naming the INTENDED branch —
    the same deliberate decision #125 made for quick (not an extra user-visible change); pin it.
-   A failed checkout from a detached HEAD records `(detached)` (what `preSnapshot` returns),
-   which `finishBranchPrMerge`'s guard also refuses (no such ref). The single-occupancy check is
-   untouched (it reads `snap`, not the record).
+   A failed checkout from a detached HEAD records `(detached)` (what `preSnapshot` returns) — and
+   so does `start-branch.txt`, so the guard refuses it on the `branch === base` arm, both sides
+   being the literal string; the ref probe never runs. The single-occupancy check is untouched
+   (it reads `snap`, not the record).
 
 2. **Surface the refusal** — in `finishWith` (branch mode), after the finisher returns: when
    `res.outcome === "no-branch"`, `runFlag("bridge", topic, "finish-no-branch: ...")` with
@@ -81,6 +82,19 @@ because it reads the same record.
   intended-name-on-failure behavior — list every such edit in the report.
 - Full gate green; dist rebuilt+committed; E2E through the built dist replaying the stale-ref
   shape against a real bare origin (zero refs pushed).
+
+## Adjudicated decisions (review of the shipped PR)
+
+- **The flag keeps quick's or-ed wording and its single `finish-no-branch:` cluster key.** It names
+  the three refusal shapes as one ("is missing or is the start branch"), so it also fires on the
+  allowed same-branch-resume shape — a run that STARTED on `feat/bridge-<topic>`. That is accurate
+  (nothing was pushed, nothing was integrated) and consistent with quick's reviewed decision, and
+  one key keeps /ap:review's clustering intact. Splitting the causes into distinct keys is a future
+  option for BOTH commands together, not a bridge-only divergence.
+- **No `finish-head.txt` / summary-line parity with quick.** #125's follow-up (cdd9b3d) persists
+  finish's read-back HEAD for quick's summary; bridge's summary renders `finish-result.txt` raw and
+  gets no equivalent here. Deliberately scoped out — it is a summary-rendering change, not part of
+  the record, and belongs to its own spec if wanted.
 
 ## Success Criteria
 

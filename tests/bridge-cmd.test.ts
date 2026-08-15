@@ -263,8 +263,8 @@ describe("bridge summary", () => {
   });
 });
 
-// capture process.stdout.write + process.stderr.write for the duration of fn() (the log module
-// writes to stderr, so the warn/ok wording is only observable here).
+// capture process.stderr.write for the duration of fn() — the log module writes there, so the
+// warn/ok wording is only observable this way (stdout has its own helper, captureStdout).
 async function capture(fn: () => Promise<number>): Promise<{ rc: number; err: string }> {
   const err: string[] = [];
   const se = process.stderr.write.bind(process.stderr);
