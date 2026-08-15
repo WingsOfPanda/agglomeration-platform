@@ -20,7 +20,7 @@ const opts = (h: { home: string }) => ({ home: h.home, cwd: process.cwd() });
 
 /** Scaffold a ledgered campaign: art dir + metric.md + workers.txt + worker state +
  *  live worker dir (pane.json + outbox.jsonl) + campaign-init ledger + controller.gen. */
-function scaffold(h: { home: string }, over: { phase?: string; expCounter?: string; currentExp?: string } = {}) {
+function scaffold(h: { home: string }, over: { phase?: string; expCounter?: string; currentExp?: string; legacyPane?: boolean } = {}) {
   const o = opts(h);
   const art = autoresearchArtDir(TOPIC, o);
   mkdirSync(art, { recursive: true });
@@ -33,7 +33,10 @@ function scaffold(h: { home: string }, over: { phase?: string; expCounter?: stri
     `phase=${over.phase ?? "idle"}\nexp_counter=${over.expCounter ?? "0"}\ncurrent_exp_id=${over.currentExp ?? ""}\n`);
   const pd = workerDir(INST, MODEL, TOPIC, o);
   mkdirSync(pd, { recursive: true });
-  writeFileSync(join(pd, "pane.json"), JSON.stringify({ pane_id: "%9", agent: INST, model: MODEL, spawned_at: "t" }));
+  writeFileSync(join(pd, "pane.json"), JSON.stringify({
+    pane_id: "%9", ...(over.legacyPane ? {} : { pane_nonce: "99999999-9999-4999-8999-999999999999" }),
+    agent: INST, model: MODEL, spawned_at: "t",
+  }));
   writeFileSync(join(pd, "outbox.jsonl"), "");
   writeFileSync(ledgerPath(art), appendEvent("", { gen: 1, ts: "T", kind: "campaign-init" }));
   writeFileSync(controllerGenPath(art), renderGen(1, "T", "init"));
@@ -47,7 +50,7 @@ function evs(art: string) { return parseLedger(readFileSync(ledgerPath(art), "ut
 function state(sd: string) { return parseState(readFileSync(join(sd, "state.txt"), "utf8")); }
 
 function deps(h: { home: string }, over: Partial<AutoresearchResumeDeps> = {}): AutoresearchResumeDeps {
-  return { now: () => "T2", paneAlive: async () => true, freshWorker: vi.fn(async () => 0), opts: opts(h), ...over };
+  return { now: () => "T2", paneOwned: async () => true, freshWorker: vi.fn(async () => 0), opts: opts(h), ...over };
 }
 async function run(h: { home: string }, d: AutoresearchResumeDeps) {
   const out: string[] = [];
@@ -171,7 +174,7 @@ describe("resume: crash matrix", () => {
     const { art, sd } = scaffold(h, { phase: "working", expCounter: "1", currentExp: "exp-001" });
     ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-intent", agent: INST, exp_id: "exp-001" });
     const fresh = vi.fn(async () => 0);
-    const { rc, out } = await run(h, deps(h, { paneAlive: async () => false, freshWorker: fresh }));
+    const { rc, out } = await run(h, deps(h, { paneOwned: async () => false, freshWorker: fresh }));
     expect(rc).toBe(0);
     expect(evs(art).some((e) => e.kind === "interrupted" && e.exp_id === "exp-001")).toBe(true);
     const st = state(sd);
@@ -312,5 +315,52 @@ describe("resume: report shape", () => {
     expect(out).toContain("WORKER=bravo:idle:yes");
     expect(out).toContain("MONITOR=bravo");
     expect(out[out.length - 1]).toMatch(/^LAST_SEQ=\d+$/);
+  });
+});
+
+// A pane.json with no nonce is UNKNOWN, not dead. Reading the ownership probe's `false` as a death
+// verdict voided a LIVE pre-0.5.30 worker's experiment and respawned a second codex onto the same
+// agent (the respawn's `stop --pairs` refuses to kill the unverifiable pane but archives the worker
+// dir, so the original writes on into paths that moved).
+describe("resume: a legacy (nonce-less) pane.json is unknown, never dead", () => {
+  it("phase=working + legacy pane.json -> no interrupt, no REDISPATCH, no respawn, state untouched", async () => {
+    const h = home();
+    const { art, sd } = scaffold(h, { phase: "working", expCounter: "1", currentExp: "exp-001", legacyPane: true });
+    ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-intent", agent: INST, exp_id: "exp-001" });
+    ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-delivered", agent: INST, exp_id: "exp-001" });
+    const fresh = vi.fn(async () => 0);
+    // The probe answers false for an unverifiable record — the point is that nobody acts on it.
+    const { rc, out } = await run(h, deps(h, { paneOwned: async () => false, freshWorker: fresh }));
+    expect(rc).toBe(0);
+    expect(fresh).not.toHaveBeenCalled();
+    expect(evs(art).some((e) => e.kind === "interrupted")).toBe(false);
+    expect(evs(art).some((e) => e.kind === "fresh-worker-respawn")).toBe(false);
+    expect(state(sd).phase).toBe("working");                 // lane left exactly as it was
+    expect(state(sd).current_exp_id).toBe("exp-001");
+    expect(out.some((l) => l.startsWith("REDISPATCH="))).toBe(false);
+    expect(out).toContain("WORKER=bravo:working:yes");        // kept, and kept watched
+    expect(out).toContain("MONITOR=bravo");
+  });
+  it("phase=idle + legacy pane.json -> not respawned either (a live legacy worker is not replaced)", async () => {
+    const h = home();
+    scaffold(h, { phase: "idle", legacyPane: true });
+    const fresh = vi.fn(async () => 0);
+    const { rc, out } = await run(h, deps(h, { paneOwned: async () => false, freshWorker: fresh }));
+    expect(rc).toBe(0);
+    expect(fresh).not.toHaveBeenCalled();
+    expect(out).toContain("WORKER=bravo:idle:yes");
+  });
+  it("the snapshot path agrees with the per-pane path (no interrupt, no respawn)", async () => {
+    const h = home();
+    const { sd } = scaffold(h, { phase: "working", currentExp: "exp-001", legacyPane: true });
+    const fresh = vi.fn(async () => 0);
+    // %9 is live but carries somebody else's nonce — still UNKNOWN, because OUR record has none.
+    const { rc } = await run(h, deps(h, {
+      livePaneNonces: async () => new Map([["%9", "22222222-2222-4222-8222-222222222222"]]),
+      freshWorker: fresh,
+    }));
+    expect(rc).toBe(0);
+    expect(fresh).not.toHaveBeenCalled();
+    expect(state(sd).phase).toBe("working");
   });
 });

@@ -222,7 +222,9 @@ export const realClock: Clock = {
  *  budget. When supplied, the loop polls the pane every `everyS` seconds and, once the pane is
  *  confirmed gone on TWO consecutive polls (a transient probe blip must not false-kill a live turn),
  *  returns a synthetic `error` event so the turn fails fast. `paneAlive` is injected so the wait
- *  stays testable and ipc.ts stays free of the tmux/execa dependency. */
+ *  stays testable and ipc.ts stays free of the tmux/execa dependency — which is also why the
+ *  OWNERSHIP check lives in the binder (waitLive.ts closes the worker's recorded nonce into this
+ *  probe) and not here: a reused pane id must not read as "the worker is alive". */
 export interface WaitLivenessOpts {
   paneAlive: (pane: string) => Promise<boolean>;
   paneId: string | null;   // the worker's pane id (pane.json); null (absent) disables the check
@@ -266,14 +268,21 @@ export function outboxDump(i: string, m: string, t: string): string {
   return readIfExists(outboxPath(i, m, t));
 }
 
-export function paneMetaWrite(i: string, m: string, t: string, paneId: string, opts?: { now?: Date }): void {
+/** `nonce` is the pane's ownership proof (its live `@ap_nonce`), recorded beside the id because the
+ *  id alone is not evidence: tmux restarts %N from 0 on a fresh server, so a pane.json that outlived
+ *  its pane can name a stranger's pane. Every reader that acts on the pane re-checks the two
+ *  together. Required, so no spawn path can persist an unverifiable id by omission. */
+export function paneMetaWrite(i: string, m: string, t: string, paneId: string, nonce: string, opts?: { now?: Date }): void {
   const spawned = isoUtc(opts?.now);
-  atomicWrite(paneMetaPath(i, m, t), JSON.stringify({ pane_id: paneId, agent: i, model: m, spawned_at: spawned }) + "\n");
+  atomicWrite(paneMetaPath(i, m, t), JSON.stringify({ pane_id: paneId, pane_nonce: nonce, agent: i, model: m, spawned_at: spawned }) + "\n");
 }
 
-export interface PaneMeta { agent: string; model: string; paneId: string; }
+export interface PaneMeta { agent: string; model: string; paneId: string; nonce: string; }
 
-interface PaneJson { pane_id?: string; agent?: string; model?: string; }
+/** A pane id plus the ownership nonce recorded with it. Never one without the other. */
+export interface PaneOwner { paneId: string; nonce: string; }
+
+interface PaneJson { pane_id?: string; pane_nonce?: string; agent?: string; model?: string; }
 
 /** Read+parse a worker dir's pane.json, or null when absent/unparseable (the read throwing into
  *  the catch is equivalent to an existsSync pre-check). */
@@ -283,13 +292,27 @@ function readPaneJson(dir: string): PaneJson | null {
 
 export function paneMetaReadForDir(dir: string): PaneMeta {
   const o = readPaneJson(dir);
-  if (o && o.agent && o.model) return { agent: o.agent, model: o.model, paneId: o.pane_id ?? "" };
+  if (o && o.agent && o.model) return { agent: o.agent, model: o.model, paneId: o.pane_id ?? "", nonce: o.pane_nonce ?? "" };
   const name = dir.replace(/\/+$/, "").split("/").pop() ?? "";
-  return { agent: name.replace(/-[^-]*$/, ""), model: name.replace(/^.*-/, ""), paneId: "" };
+  return { agent: name.replace(/-[^-]*$/, ""), model: name.replace(/^.*-/, ""), paneId: "", nonce: "" };
 }
 
-export function paneMetaRead(i: string, m: string, t: string): string | null {
-  return readPaneJson(workerDir(i, m, t))?.pane_id ?? null;
+/** The worker's pane id AND its ownership nonce, or null when pane.json is absent/unparseable or
+ *  records no id. Deliberately returns the pair (never the bare id): every consumer acts on the
+ *  pane — kills it, types into it, or calls it alive — and needs the proof to do that safely. A
+ *  pane.json written before this key existed reads `nonce: ""`, which no ownership check accepts. */
+export function paneMetaRead(i: string, m: string, t: string): PaneOwner | null {
+  const o = readPaneJson(workerDir(i, m, t));
+  return o?.pane_id ? { paneId: o.pane_id, nonce: o.pane_nonce ?? "" } : null;
+}
+
+/** `.last_pane` (the next spawn's split target) carries the same `<pane>\t<nonce>` pair pane.json
+ *  does, and for the same reason — it outlives the tmux server. Legacy id-only content parses to an
+ *  empty nonce, i.e. listed but unverifiable. */
+export function formatLastPane(paneId: string, nonce: string): string { return `${paneId}\t${nonce}\n`; }
+export function parseLastPane(text: string): PaneOwner | null {
+  const [paneId, nonce] = text.trim().split("\t");
+  return paneId ? { paneId, nonce: nonce ?? "" } : null;
 }
 
 /** Resolve the model segment for an agent's worker on a topic (the on-disk

@@ -50,7 +50,7 @@ import { buildCorpusDigest, leaderMetricOf, type CorpusEntry } from "../core/aut
 import { agentBinary, consultTimeout } from "../core/contracts.js";
 import { inboxWrite, inboxPath, outboxPath, outboxOffset, paneMetaRead, resolveModel, parseEvent } from "../core/ipc.js";
 import { ledgerPath, controllerGenPath, appendEvent, replayLedger, readGen, renderGen, isStaleGenError, type LedgerEventKind } from "../core/autoresearchLedger.js";
-import { paneSend, killNow, paneAlive, livePanes } from "../core/tmux.js";
+import { paneSend, killNow, paneOwned, livePaneNonces, ownsPane } from "../core/tmux.js";
 import { haveCmd } from "../core/deps.js";
 import { spawnListArg, parsePanesFile, spawnResultsTsv, spawnTally, type SpawnResult } from "../core/roster.js";
 import { pickAgents } from "../core/agents.js";
@@ -306,7 +306,7 @@ export async function spawnAllWith(args: string[], deps: SpawnAllDeps, opts?: Pa
   // only added (N-1) x bootstrap_sleep_s of startup latency.
   const results: SpawnResult[] = await Promise.all(rows.map(async (r) => ({
     agent: r.agent, provider: r.provider,
-    rc: await deps.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent)!, "--cwd", cwd, "--preflight-art-dir", art]),
+    rc: await deps.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent)!.pane, "--cwd", cwd, "--preflight-art-dir", art]),
   })));
   atomicWrite(join(art, "spawn-results.tsv"), spawnResultsTsv(results));
 
@@ -317,8 +317,12 @@ export async function spawnAllWith(args: string[], deps: SpawnAllDeps, opts?: Pa
   return rc;
 }
 
-export interface DropWorkerDeps { killPane(paneId: string): void; }
-const liveDropWorkerDeps: DropWorkerDeps = { killPane: (p) => killNow(p) };
+export interface DropWorkerDeps {
+  killPane(paneId: string): void;
+  /** Ownership proof for that kill: the recorded nonce must still be on the live pane. */
+  paneOwned(pane: string, nonce: string): Promise<boolean>;
+}
+const liveDropWorkerDeps: DropWorkerDeps = { killPane: (p) => killNow(p), paneOwned };
 
 // ---- drop-worker (Phase-3 degraded proceed) — prune workers.txt + kill the dropped worker's preflight pane ----
 // On a partial spawn the directive ships the rest: it drops a failed agent by name so Phase 4's
@@ -343,8 +347,10 @@ export async function dropWorkerWith(rest: string[], deps: DropWorkerDeps, opts?
   const panesFile = join(art, "preflight-panes.txt");
   if (existsSync(panesFile)) {
     try {
-      const pane = parsePanesFile(readFileSync(panesFile, "utf8")).get(agent);
-      if (pane) deps.killPane(pane);
+      const pin = parsePanesFile(readFileSync(panesFile, "utf8")).get(agent);
+      // Only when the live pane still carries the nonce preflight recorded: a stale art dir names
+      // ids a restarted tmux has since handed to other programs.
+      if (pin && await deps.paneOwned(pin.pane, pin.nonce)) deps.killPane(pin.pane);
     } catch (e) { log.warn(`autoresearch drop-worker: preflight pane kill failed (${(e as Error).message})`); }
   }
   log.ok(`autoresearch drop-worker: dropped ${agent}, ${kept.length} worker(s) remain`);
@@ -519,6 +525,7 @@ export interface ExperimentSendDeps {
   now(): string;                                       // isoUtc — last_event_ts
   probeHardware(): string;                             // best-effort "no-gpu" or "detected_at\t..\ngpu\t.."
   paneSend(pane: string, line: string): Promise<void>; // injected (tmux); tests pass a fake/throwing one
+  paneOwned?(pane: string, nonce: string): Promise<boolean>; // ownership gate for that nudge; defaults to the real probe
   consultTimeout(): number;                            // per-experiment cap (e.g. 1800); from contracts
   runSmokeTest?(script: string, cwd: string, timeoutSec: number): { ok: boolean; stderr: string };
   smokeTimeoutSec?: number;                            // default 60
@@ -749,10 +756,14 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
 
   // Best-effort pane nudge (NON-FATAL; inbox + state already committed).
   if (!deps.dryRun) {
-    const pane = paneMetaRead(agent, model, topic);
-    if (pane) {
-      try { await deps.paneSend(pane, taskNudge(inboxPath(agent, model, topic), model)); }
+    const owner = paneMetaRead(agent, model, topic);
+    // The nudge is TYPED INTO the pane and executed there, so a reused pane id must never receive
+    // it: nudge only while the recorded @ap_nonce is still on the live pane.
+    if (owner && await (deps.paneOwned ?? paneOwned)(owner.paneId, owner.nonce)) {
+      try { await deps.paneSend(owner.paneId, taskNudge(inboxPath(agent, model, topic), model)); }
       catch (e) { log.warn(`autoresearch experiment-send: pane nudge failed (${(e as Error).message}); worker may not have noticed inbox`); }
+    } else if (owner) {
+      log.warn(`autoresearch experiment-send: pane ${owner.paneId} is gone or is no longer ours; skipping the nudge (inbox already written)`);
     }
   }
 
@@ -897,7 +908,7 @@ function readSlice(path: string, start: number, end: number): string {
   } catch { return ""; }
 }
 
-export async function monitorRun(args: string[], opts?: { home?: string; cwd?: string; paneAlive?: (p: string) => Promise<boolean>; sleepMs?: number; paneCheckEveryTicks?: number }): Promise<number> {
+export async function monitorRun(args: string[], opts?: { home?: string; cwd?: string; paneOwned?: (p: string, nonce: string) => Promise<boolean>; sleepMs?: number; paneCheckEveryTicks?: number; maxTicks?: number }): Promise<number> {
   // Strip --once anywhere so it's position-independent; the rest are the 2 positionals.
   const once = args.includes("--once");
   const pos = args.filter((a) => a !== "--once");
@@ -948,13 +959,15 @@ export async function monitorRun(args: string[], opts?: { home?: string; cwd?: s
   // Bounded-loop escape hatch (non-once path only): once the worker's tmux pane is gone (its session
   // was torn down or killed) the monitor has nothing left to watch, so stop instead of polling a
   // static outbox forever. Probe the pane every paneCheckEvery ticks and exit after two consecutive
-  // dead probes (a transient probe blip must not stop a live monitor). A null pane id (pane.json
-  // absent) keeps the legacy unbounded loop — a real spawned worker always has one. Probe, cadence,
+  // dead probes (a transient probe blip must not stop a live monitor). The probe is ownership-
+  // checked, so a pane id a restarted tmux reassigned reads as gone rather than as this worker.
+  // No pane.json keeps the legacy unbounded loop — a real spawned worker always has one. Probe, cadence,
   // and sleep are injectable so this is testable without real tmux or 2s waits.
-  const probePane = opts?.paneAlive ?? paneAlive;
+  const probePane = opts?.paneOwned ?? paneOwned;
   const paneCheckEvery = opts?.paneCheckEveryTicks ?? 15;
   const tickMs = opts?.sleepMs ?? 2000;
-  const paneId = paneMetaRead(agent, model, topic);
+  const maxTicks = opts?.maxTicks ?? Infinity;   // test bound only: the live loop is unbounded
+  const owner = paneMetaRead(agent, model, topic);
   let deadPolls = 0, tick = 0;
 
   do {
@@ -982,9 +995,13 @@ export async function monitorRun(args: string[], opts?: { home?: string; cwd?: s
 
     if (once) break;
     tick++;
-    if (paneId && tick % paneCheckEvery === 0) {
+    if (tick >= maxTicks) break;
+    // No nonce = a pre-0.5.30 worker: the probe could only answer false, so skip the check entirely
+    // and keep the legacy unbounded loop — exactly what an absent pane.json already does. Stopping
+    // on an unverifiable record would abandon a LIVE worker after two ticks.
+    if (owner && owner.nonce && tick % paneCheckEvery === 0) {
       let alive = true;
-      try { alive = await probePane(paneId); } catch { alive = false; } // tmux server gone -> pane gone
+      try { alive = await probePane(owner.paneId, owner.nonce); } catch { alive = false; } // tmux server gone -> pane gone
       if (alive) deadPolls = 0;
       else if (++deadPolls >= 2) break;
     }
@@ -1458,6 +1475,9 @@ const liveHandoffDeps: AutoresearchHandoffDeps = { now: () => isoUtc() };
 
 export interface AutoresearchTeardownDeps {
   killPane(pane: string): Promise<void>;
+  /** ONE server-wide pane+nonce snapshot for the sweep; a preflight id is killable only while the
+   *  live pane still carries the nonce preflight recorded for it. */
+  livePaneNonces(): Promise<Map<string, string>>;
   archiveTopic(topic: string, suite: "autoresearch"): string | null;
   now(): string;
   stdout?: (l: string) => void;
@@ -1494,8 +1514,13 @@ export async function teardownWith(args: string[], deps: AutoresearchTeardownDep
   //    --pairs`; no-op when preflight-panes.txt is absent (tests/dogfood).
   const pf = join(art, "preflight-panes.txt");
   if (existsSync(pf)) {
-    for (const pane of parsePanesFile(readFileSync(pf, "utf8")).values()) {
-      try { await deps.killPane(pane); } catch { /* best-effort */ }
+    const live = await deps.livePaneNonces().catch(() => new Map<string, string>());
+    for (const pin of parsePanesFile(readFileSync(pf, "utf8")).values()) {
+      if (!ownsPane(live, pin.pane, pin.nonce)) {
+        if (live.has(pin.pane)) log.warn(`[teardown] pane ${pin.pane} is live but is not ours (nonce mismatch) — not killing it`);
+        continue;
+      }
+      try { await deps.killPane(pin.pane); } catch { /* best-effort */ }
     }
     try { rmSync(pf, { force: true }); } catch { /* best-effort */ }
   }
@@ -1545,6 +1570,7 @@ export async function teardownWith(args: string[], deps: AutoresearchTeardownDep
 
 const liveTeardownDeps: AutoresearchTeardownDeps = {
   killPane: (p) => killNow(p),
+  livePaneNonces: () => livePaneNonces(),
   archiveTopic: (t, s) => archiveTopic(t, s),
   now: () => isoUtc(),
 };
@@ -1626,10 +1652,10 @@ const liveFreshWorkerDeps: AutoresearchFreshWorkerDeps = {
 
 export interface AutoresearchResumeDeps {
   now(): string;
-  paneAlive(pane: string): Promise<boolean>;
-  /** ONE server-wide pane snapshot for the whole liveness pass (the live wiring); callers that
-   *  only inject paneAlive keep the per-pane probe. */
-  livePanes?(): Promise<Set<string>>;
+  paneOwned(pane: string, nonce: string): Promise<boolean>;
+  /** ONE server-wide pane+nonce snapshot for the whole liveness pass (the live wiring); callers that
+   *  only inject paneOwned keep the per-pane probe. */
+  livePaneNonces?(): Promise<Map<string, string>>;
   freshWorker(topic: string, agent: string): Promise<number>;
   stdout?: (line: string) => void;
   opts?: PathOpts;
@@ -1739,25 +1765,42 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
   }
 
   // 4. Pass 3 — pane liveness: interrupt dead working lanes, respawn dead idle ones, report.
-  // ONE server-wide pane snapshot for every lane (a per-pane probe re-runs the identical
-  // full-server scan N times); a tmux-less server yields an empty set = every pane dead.
-  const live = deps.livePanes ? await deps.livePanes().catch(() => new Set<string>()) : null;
+  // ONE server-wide pane+nonce snapshot for every lane (a per-pane probe re-runs the identical
+  // full-server scan N times); a tmux-less server yields an empty map = every pane dead. Liveness
+  // here means OURS-and-live: a pane id a restarted tmux reassigned must not keep a dead lane from
+  // being respawned (nor report the lane as alive).
+  const live = deps.livePaneNonces ? await deps.livePaneNonces().catch(() => new Map<string, string>()) : null;
   const rows: string[] = [];
   const monitors: string[] = [];
   for (const agent of agents) {
     const stateTxt = lanePath(art, agent);
     if (!existsSync(stateTxt)) { rows.push(`WORKER=${agent}:?:no`); continue; }
     const model = resolveModel(agent, topic);
-    const pane = model ? paneMetaRead(agent, model, topic) : null;
+    const owner = model ? paneMetaRead(agent, model, topic) : null;
     let alive = false;
-    if (pane) {
-      if (live) alive = live.has(pane);
-      else { try { alive = await deps.paneAlive(pane); } catch { alive = false; } }
+    // A pane.json with no nonce (pre-0.5.30 worker) is UNKNOWN, not dead: the ownership probe can
+    // only ever answer false for it. Acting on that answer would void a LIVE worker's in-flight
+    // experiment as `interrupted` AND respawn a second process onto the same agent — the respawn's
+    // `stop --pairs` correctly refuses to kill the unverifiable pane but still archives the worker
+    // dir, so the original keeps writing to paths that moved out from under it.
+    const unverifiable = owner !== null && owner.nonce === "";
+    if (owner && !unverifiable) {
+      if (live) alive = ownsPane(live, owner.paneId, owner.nonce);
+      else { try { alive = await deps.paneOwned(owner.paneId, owner.nonce); } catch { alive = false; } }
     }
 
     const raw = readOr(stateTxt);
     const st = parseState(raw);
     let phase = st.phase ?? "";
+    if (unverifiable) {
+      // Degrade to the pre-nonce behavior for a live worker: leave the lane exactly as it is (no
+      // interrupt, no redispatch, no respawn) and keep watching it. The operator gets the one check
+      // ap cannot do itself — an ap pane still carries @ap_label even when it predates @ap_nonce.
+      log.warn(`autoresearch resume: ${agent}'s pane.json predates ownership nonces — its pane cannot be confirmed, so the lane is left as-is (no interrupt, no respawn). Verify by hand: tmux display-message -p -t ${owner!.paneId} '#{pane_current_command} #{@ap_label}'`);
+      rows.push(`WORKER=${agent}:${phase}:yes`);
+      monitors.push(`MONITOR=${agent}`);
+      continue;
+    }
     if (!alive && phase === "working") {
       const workingExp = st.current_exp_id ?? "";
       ledgerAdd({ gen, ts: deps.now(), kind: "interrupted", agent, ...(workingExp ? { exp_id: workingExp } : {}) });
@@ -1789,8 +1832,8 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
 
 const liveResumeDeps: AutoresearchResumeDeps = {
   now: () => isoUtc(),
-  paneAlive,
-  livePanes: () => livePanes(),
+  paneOwned,
+  livePaneNonces: () => livePaneNonces(),
   freshWorker: (t, i) => freshWorkerWith([t, i], liveFreshWorkerDeps),
 };
 

@@ -55,6 +55,50 @@ describe("send error paths", () => {
   });
 });
 
+// send TYPES the nudge into the pane and presses Enter, so a pane id that a restarted tmux handed
+// to another program must never be accepted — the finding reproduced exactly that (the nudge ran in
+// a stranger's shell).
+describe("send pane ownership", () => {
+  function seedOwner(nonce: string | null) {
+    home();
+    const d = workerDir("bravo", "codex", "demo"); mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, "pane.json"), JSON.stringify({
+      pane_id: "%1", ...(nonce === null ? {} : { pane_nonce: nonce }), agent: "bravo", model: "codex", spawned_at: "t",
+    }));
+    writeFileSync(join(d, "outbox.jsonl"), "");
+  }
+  const probes = () => {
+    const sent: string[] = [];
+    return { sent, deps: (owned: boolean) => ({ paneOwned: async () => owned, paneSend: async (p: string) => { sent.push(p); } }) };
+  };
+
+  it("nonce matches → nudges the pane (the healthy path is unchanged)", async () => {
+    seedOwner("n1");
+    const { sent, deps } = probes();
+    expect(await send(["bravo", "demo", "hello"], deps(true))).toBe(0);
+    expect(sent).toEqual(["%1"]);
+  });
+  it("nonce mismatch → exit 1 with the orphan message and NOTHING typed into the pane", async () => {
+    seedOwner("n1");
+    const { sent, deps } = probes();
+    const err: string[] = [];
+    const se = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((s: string | Uint8Array) => { err.push(String(s)); return true; }) as typeof process.stderr.write;
+    try { expect(await send(["bravo", "demo", "hello"], deps(false))).toBe(1); }
+    finally { process.stderr.write = se; }
+    expect(sent).toEqual([]);                       // mutation pin: drop the gate and this fails
+    expect(err.join("")).toContain("is gone or is no longer ours (orphan)");
+  });
+  it("legacy pane.json (no nonce) is unverifiable → refused by the real probe, no tmux call", async () => {
+    seedOwner(null);
+    const { sent } = probes();
+    // paneSend is still injected, but paneOwned is the REAL one: an empty recorded nonce is refused
+    // before any tmux call, so this exercises the shipped gate rather than a fake.
+    expect(await send(["bravo", "demo", "hello"], { paneOwned: (await import("../src/core/tmux.js")).paneOwned, paneSend: async (p: string) => { sent.push(p); } })).toBe(1);
+    expect(sent).toEqual([]);
+  });
+});
+
 describe("send/collect reject unsafe agent/topic slugs (path-segment gate)", () => {
   it("send rejects a traversal topic or agent (rc 2, before any state read)", async () => {
     expect(await send(["alpha", "../evil", "hi"])).toBe(2);

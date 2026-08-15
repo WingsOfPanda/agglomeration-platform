@@ -9,7 +9,7 @@ import { isoUtc, archiveTopic } from "../core/archive.js";
 import { exploreArtDir, deriveSlug, finalLandscapePath, missingListArtifacts } from "../core/explore.js";
 import { extractHandoffData } from "../core/exploreHandoff.js";
 import { runForensics, runFlag } from "../core/forensics.js";
-import { killNow } from "../core/tmux.js";
+import { killNow, livePaneNonces, ownsPane } from "../core/tmux.js";
 import {
   type ListRow, formatListFile, parseListFile, parsePanesFile, spawnAllBatch, lastTag, verifyScopeFiles,
 } from "../core/roster.js";
@@ -667,11 +667,15 @@ export async function forensicsRun(rest: string[]): Promise<number> {
 // ---- teardown (orphan kill + archive; panes torn down by the directive's stop --pairs) ----
 export interface ExploreTeardownDeps {
   killPane(pane: string): Promise<void>;
+  /** ONE server-wide pane+nonce snapshot for the whole sweep; the ids in preflight-panes.txt are
+   *  only killable when the live pane still carries the nonce preflight recorded for it. */
+  livePaneNonces(): Promise<Map<string, string>>;
   archiveTopic(topic: string, suite: "explore"): string | null;
   stdout?: (l: string) => void;
 }
 const liveExploreTeardownDeps: ExploreTeardownDeps = {
   killPane: (p) => killNow(p),
+  livePaneNonces: () => livePaneNonces(),
   archiveTopic: (t, s) => archiveTopic(t, s),
 };
 async function teardownRun(rest: string[]): Promise<number> { return teardownWith(rest, liveExploreTeardownDeps); }
@@ -690,8 +694,15 @@ export async function teardownWith(args: string[], deps: ExploreTeardownDeps): P
 
   const pf = join(art, "preflight-panes.txt");
   if (existsSync(pf)) {
-    for (const pane of parsePanesFile(readFileSync(pf, "utf8")).values()) {
-      try { await deps.killPane(pane); } catch { /* best-effort */ }
+    const live = await deps.livePaneNonces().catch(() => new Map<string, string>());
+    for (const pin of parsePanesFile(readFileSync(pf, "utf8")).values()) {
+      // A stale art dir names ids a restarted tmux has handed to other programs; kill only the
+      // panes still carrying our recorded nonce.
+      if (!ownsPane(live, pin.pane, pin.nonce)) {
+        if (live.has(pin.pane)) log.warn(`explore teardown: pane ${pin.pane} is live but is not ours (nonce mismatch) — not killing it`);
+        continue;
+      }
+      try { await deps.killPane(pin.pane); } catch { /* best-effort */ }
     }
   }
 

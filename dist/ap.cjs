@@ -729,9 +729,9 @@ async function outboxWait(i2, m, t, events, timeoutSec) {
 function outboxDump(i2, m, t) {
   return readIfExists(outboxPath(i2, m, t));
 }
-function paneMetaWrite(i2, m, t, paneId, opts) {
+function paneMetaWrite(i2, m, t, paneId, nonce, opts) {
   const spawned = isoUtc(opts?.now);
-  atomicWrite(paneMetaPath(i2, m, t), JSON.stringify({ pane_id: paneId, agent: i2, model: m, spawned_at: spawned }) + "\n");
+  atomicWrite(paneMetaPath(i2, m, t), JSON.stringify({ pane_id: paneId, pane_nonce: nonce, agent: i2, model: m, spawned_at: spawned }) + "\n");
 }
 function readPaneJson(dir) {
   try {
@@ -742,12 +742,21 @@ function readPaneJson(dir) {
 }
 function paneMetaReadForDir(dir) {
   const o2 = readPaneJson(dir);
-  if (o2 && o2.agent && o2.model) return { agent: o2.agent, model: o2.model, paneId: o2.pane_id ?? "" };
+  if (o2 && o2.agent && o2.model) return { agent: o2.agent, model: o2.model, paneId: o2.pane_id ?? "", nonce: o2.pane_nonce ?? "" };
   const name = dir.replace(/\/+$/, "").split("/").pop() ?? "";
-  return { agent: name.replace(/-[^-]*$/, ""), model: name.replace(/^.*-/, ""), paneId: "" };
+  return { agent: name.replace(/-[^-]*$/, ""), model: name.replace(/^.*-/, ""), paneId: "", nonce: "" };
 }
 function paneMetaRead(i2, m, t) {
-  return readPaneJson(workerDir(i2, m, t))?.pane_id ?? null;
+  const o2 = readPaneJson(workerDir(i2, m, t));
+  return o2?.pane_id ? { paneId: o2.pane_id, nonce: o2.pane_nonce ?? "" } : null;
+}
+function formatLastPane(paneId, nonce) {
+  return `${paneId}	${nonce}
+`;
+}
+function parseLastPane(text) {
+  const [paneId, nonce] = text.trim().split("	");
+  return paneId ? { paneId, nonce: nonce ?? "" } : null;
 }
 function resolveModel(agent, topic) {
   const td = topicDir(topic);
@@ -818,8 +827,8 @@ function spawnTally(rcs) {
 function parsePanesFile(text) {
   const m = /* @__PURE__ */ new Map();
   for (const t of splitNonCommentLines(text)) {
-    const [agent, pane] = t.split("	");
-    if (agent && pane) m.set(agent, pane);
+    const [agent, pane, nonce] = t.split("	");
+    if (agent && pane) m.set(agent, { pane, nonce: nonce ?? "" });
   }
   return m;
 }
@@ -852,7 +861,7 @@ async function spawnAllBatch(label, topic, art, d) {
   }
   const cwd = d.repoRoot();
   const results = await Promise.all(rows.map(async (r) => {
-    const rc2 = await d.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent), "--cwd", cwd, "--preflight-art-dir", art]);
+    const rc2 = await d.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent).pane, "--cwd", cwd, "--preflight-art-dir", art]);
     return { agent: r.agent, provider: r.provider, rc: rc2 };
   }));
   atomicWrite((0, import_node_path4.join)(art, "spawn-results.tsv"), spawnResultsTsv(results));
@@ -862,8 +871,9 @@ async function spawnAllBatch(label, topic, art, d) {
   else log.warn(`${label} spawn-all: ${nOk}/${rows.length} workers ready (rc=${rc})`);
   return rc;
 }
-function paneListedFor(panesTsv, agent, pane) {
-  return panesTsv.split("\n").some((l) => l === `${agent}	${pane}`);
+function paneNonceFor(panesTsv, agent, pane) {
+  const pin = parsePanesFile(panesTsv).get(agent);
+  return pin && pin.pane === pane ? pin.nonce : null;
 }
 function verifyScopeFiles(target, agents) {
   const out = [];
@@ -16635,6 +16645,30 @@ function respawnArgs(pane, launch, cwd) {
 function setOptionArgs(pane, opt, val) {
   return ["set-option", "-p", "-t", pane, opt, val];
 }
+function paneNonceSetArgs(pane, nonce) {
+  return setOptionArgs(pane, "@ap_nonce", nonce);
+}
+function parsePaneNonces(stdout, realIds) {
+  const m = /* @__PURE__ */ new Map();
+  const dup = /* @__PURE__ */ new Set();
+  for (const line of stdout.split("\n")) {
+    if (!line) continue;
+    const tab = line.indexOf("	");
+    const id = tab < 0 ? line : line.slice(0, tab);
+    if (!PANE_ID_RE.test(id)) continue;
+    if (realIds && !realIds.has(id)) continue;
+    if (m.has(id)) {
+      dup.add(id);
+      continue;
+    }
+    m.set(id, tab < 0 ? "" : line.slice(tab + 1));
+  }
+  for (const id of dup) m.set(id, "");
+  return m;
+}
+function ownsPane(snapshot, pane, nonce) {
+  return NONCE_RE.test(nonce) && snapshot.get(pane) === nonce;
+}
 function sendKeysLiteralArgs(pane, line) {
   return ["send-keys", "-t", pane, "-l", line];
 }
@@ -16690,13 +16724,28 @@ async function ensureWindowBorderStatus(target) {
     return false;
   }
 }
-async function paneAlive(pane) {
-  const { stdout } = await execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}"]);
-  return stdout.split("\n").includes(pane);
+async function livePaneNonces() {
+  try {
+    const [ids, pairs] = await Promise.all([
+      execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}"]),
+      execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}	#{@ap_nonce}"])
+    ]);
+    return parsePaneNonces(pairs.stdout, new Set(ids.stdout.split("\n").filter(Boolean)));
+  } catch {
+    return /* @__PURE__ */ new Map();
+  }
 }
-async function livePanes() {
-  const { stdout } = await execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}"]);
-  return new Set(stdout.split("\n"));
+async function paneOwned(pane, nonce) {
+  if (!NONCE_RE.test(nonce)) return false;
+  return ownsPane(await livePaneNonces(), pane, nonce);
+}
+async function paneNonceSet(pane, nonce) {
+  try {
+    await execa("tmux", paneNonceSetArgs(pane, nonce));
+    return true;
+  } catch {
+    return false;
+  }
 }
 async function paneSend(pane, line) {
   await execa("tmux", sendKeysLiteralArgs(pane, line));
@@ -16744,8 +16793,8 @@ async function paneOption(pane, opt) {
     return "";
   }
 }
-async function killGraceful(pane, pluginRoot2, alive) {
-  if (!(alive ?? await paneAlive(pane))) return;
+async function killGraceful(pane, pluginRoot2, owned) {
+  if (!owned) return;
   const label = await paneOption(pane, "#{@ap_label}") || "worker";
   const color = await paneOption(pane, "#{@ap_color}");
   const snap = (0, import_node_path12.join)((0, import_node_fs15.mkdtempSync)((0, import_node_path12.join)((0, import_node_os5.tmpdir)(), "cs-snap-")), "snap.txt");
@@ -16770,14 +16819,16 @@ async function preflightLayout(topic, list, opts) {
       const { stdout } = await execa("tmux", args);
       const pane = stdout.trim();
       created.push(pane);
+      const nonce = (0, import_node_crypto3.randomUUID)();
+      if (!await paneNonceSet(pane, nonce)) throw new Error(`could not stamp @ap_nonce on ${pane}`);
       await paneLabelSet(pane, e.agent, e.model, topic);
-      out.push({ agent: e.agent, pane });
+      out.push({ agent: e.agent, pane, nonce });
       prev = pane;
       flag = "-v";
     }
     await selectLayoutMainVertical(conductor);
     await ensureWindowBorderStatus(conductor);
-    opts.writePanes(out.map((o2) => `${o2.agent}	${o2.pane}`).join("\n") + "\n");
+    opts.writePanes(out.map((o2) => `${o2.agent}	${o2.pane}	${o2.nonce}`).join("\n") + "\n");
     return out;
   } catch (e) {
     for (const p of created) {
@@ -16789,15 +16840,18 @@ async function preflightLayout(topic, list, opts) {
     throw e;
   }
 }
-var import_node_os5, import_node_fs15, import_node_path12, splitRight, splitDown, respawn;
+var import_node_crypto3, import_node_os5, import_node_fs15, import_node_path12, PANE_ID_RE, NONCE_RE, splitRight, splitDown, respawn;
 var init_tmux = __esm({
   "src/core/tmux.ts"() {
     "use strict";
     init_execa();
+    import_node_crypto3 = require("node:crypto");
     import_node_os5 = require("node:os");
     import_node_fs15 = require("node:fs");
     import_node_path12 = require("node:path");
     init_colors();
+    PANE_ID_RE = /^%\d+$/;
+    NONCE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     splitRight = (launch, target, cwd) => tmux(splitRightArgs(launch, target, cwd));
     splitDown = (launch, target, cwd) => tmux(splitDownArgs(launch, target, cwd));
     respawn = async (pane, launch, cwd) => {
@@ -16817,7 +16871,7 @@ function taskNudge(inbox, model, env = process.env) {
   const ultra = env.AP_ULTRACODE !== "0" && model === "claude";
   return `Read ${inbox} and execute the task${ultra ? " with ultracode" : ""}. Reply when done.`;
 }
-async function run(args) {
+async function run(args, deps = liveSendCmdDeps) {
   let from;
   let a2 = [...args];
   if (a2[0] === "--from") {
@@ -16844,13 +16898,14 @@ async function run(args) {
     log.error(`  spawn first: ap spawn ${agent} <model> ${topic}`);
     return 1;
   }
-  const pane = paneMetaRead(agent, model, topic);
-  if (!pane) {
+  const owner = paneMetaRead(agent, model, topic);
+  if (!owner) {
     log.error(`pane.json missing for ${agent}-${model} on ${topic}`);
     return 1;
   }
-  if (!await paneAlive(pane)) {
-    log.error(`${agent}'s pane ${pane} is gone (orphan); run ap stop ${agent} ${topic}`);
+  const pane = owner.paneId;
+  if (!await deps.paneOwned(pane, owner.nonce)) {
+    log.error(`${agent}'s pane ${pane} is gone or is no longer ours (orphan); run ap stop ${agent} ${topic}`);
     return 1;
   }
   if (msg.startsWith("@")) {
@@ -16864,7 +16919,7 @@ async function run(args) {
   inboxWrite(agent, model, topic, msg, from ? { from } : void 0);
   const inbox = inboxPath(agent, model, topic);
   log.info(`wrote inbox at ${inbox}; nudging pane ${pane}`);
-  await paneSend(pane, taskNudge(inbox, model));
+  await deps.paneSend(pane, taskNudge(inbox, model));
   process.stdout.write(`
   worker:    ${agent}-${model} on ${topic}
   pane:    ${pane}
@@ -16873,7 +16928,7 @@ async function run(args) {
 `);
   return 0;
 }
-var import_node_fs16;
+var import_node_fs16, liveSendCmdDeps;
 var init_send2 = __esm({
   "src/commands/send.ts"() {
     "use strict";
@@ -16882,6 +16937,7 @@ var init_send2 = __esm({
     init_ipc();
     init_tmux();
     init_slug();
+    liveSendCmdDeps = { paneOwned, paneSend };
   }
 });
 
@@ -17155,6 +17211,13 @@ __export(spawn_exports, {
 function resolveMode(explicit, dflt) {
   return explicit || dflt || "full";
 }
+async function stampOrFail(pane, nonce, agent, model, topic) {
+  if (await paneNonceSet(pane, nonce)) return true;
+  captureSpawnFailure({ agent, model, topic, reason: "pane_failed", detail: `could not stamp @ap_nonce on ${pane}` });
+  await killNow(pane);
+  log.error(`could not stamp the ownership nonce on ${pane} (tmux unreachable?); the pane was torn down rather than left unownable \u2014 check for a stray pane with: tmux list-panes -a`);
+  return false;
+}
 function prepareWorkerState(agent, model, topic) {
   stateInit(agent, model, topic);
   identityWrite(agent, model, topic);
@@ -17255,34 +17318,42 @@ async function run2(args) {
     const launch = wrapLaunch([binary, ...modeArgs].join(" "));
     const startDir = cwd || repoRoot();
     let pane;
+    let nonce;
     if (targetPane) {
-      if (preflightArtDir) {
-        const pf = (0, import_node_path14.join)(preflightArtDir, "preflight-panes.txt");
-        const ok = (0, import_node_fs18.existsSync)(pf) && paneListedFor((0, import_node_fs18.readFileSync)(pf, "utf8"), agent, targetPane);
-        if (!ok) {
-          captureSpawnFailure({ agent, model, topic, reason: "pane_failed", detail: `--target-pane ${targetPane} not listed for ${agent} in ${pf}` });
-          log.error(`--target-pane ${targetPane} is not a preflight pane for ${agent} (checked ${pf})`);
-          return 1;
-        }
-      }
-      if (!await paneAlive(targetPane)) {
-        captureSpawnFailure({ agent, model, topic, reason: "pane_failed", detail: `--target-pane ${targetPane} is not alive` });
-        log.error(`--target-pane ${targetPane} is not alive`);
+      if (!preflightArtDir) {
+        captureSpawnFailure({ agent, model, topic, reason: "pane_failed", detail: `--target-pane ${targetPane} given without --preflight-art-dir (no ownership record)` });
+        log.error(`--target-pane requires --preflight-art-dir: without it there is no recorded @ap_nonce for ${targetPane}, so ap cannot prove the pane is its own`);
         return 1;
       }
+      const pf = (0, import_node_path14.join)(preflightArtDir, "preflight-panes.txt");
+      const recorded = (0, import_node_fs18.existsSync)(pf) ? paneNonceFor((0, import_node_fs18.readFileSync)(pf, "utf8"), agent, targetPane) : null;
+      if (recorded === null) {
+        captureSpawnFailure({ agent, model, topic, reason: "pane_failed", detail: `--target-pane ${targetPane} not listed for ${agent} in ${pf}` });
+        log.error(`--target-pane ${targetPane} is not a preflight pane for ${agent} (checked ${pf})`);
+        return 1;
+      }
+      if (!await paneOwned(targetPane, recorded)) {
+        captureSpawnFailure({ agent, model, topic, reason: "pane_failed", detail: `--target-pane ${targetPane} is not alive or is not ours (nonce mismatch)` });
+        log.error(`--target-pane ${targetPane} is not alive, or its @ap_nonce does not match ${pf} (it now belongs to another program); not respawning it`);
+        return 1;
+      }
+      nonce = recorded;
       pane = await respawn(targetPane, launch, startDir);
+      if (!await stampOrFail(pane, nonce, agent, model, topic)) return 1;
       await paneLabelSet(pane, agent, model, topic);
     } else {
       const lastFile = (0, import_node_path14.join)(topicDir(topic), ".last_pane");
-      const prior = readIfExists(lastFile).trim();
-      if (prior && await paneAlive(prior)) pane = await splitDown(launch, prior, startDir);
+      const prior = parseLastPane(readIfExists(lastFile));
+      nonce = (0, import_node_crypto4.randomUUID)();
+      if (prior && await paneOwned(prior.paneId, prior.nonce)) pane = await splitDown(launch, prior.paneId, startDir);
       else pane = await splitRight(launch, void 0, startDir);
+      if (!await stampOrFail(pane, nonce, agent, model, topic)) return 1;
       await paneLabelSet(pane, agent, model, topic);
       (0, import_node_fs18.mkdirSync)(topicDir(topic), { recursive: true });
-      atomicWrite(lastFile, pane + "\n");
+      atomicWrite(lastFile, formatLastPane(pane, nonce));
     }
     if (!await ensureWindowBorderStatus(pane)) log.warn(`could not force pane-border-status on the spawn window; '${labelFor(agent, model, topic)}' label may not render`);
-    paneMetaWrite(agent, model, topic, pane);
+    paneMetaWrite(agent, model, topic, pane, nonce);
     log.ok(`spawned ${labelFor(agent, model, topic)} in pane ${pane} (mode=${useMode})`);
     const boot = agentBootstrapSleep(model);
     log.info(`sleeping ${boot}s for ${model} bootstrap`);
@@ -17331,11 +17402,12 @@ ${ob}
     throw e;
   }
 }
-var import_node_fs18, import_node_path14, sleep;
+var import_node_fs18, import_node_crypto4, import_node_path14, sleep;
 var init_spawn = __esm({
   "src/commands/spawn.ts"() {
     "use strict";
     import_node_fs18 = require("node:fs");
+    import_node_crypto4 = require("node:crypto");
     import_node_path14 = require("node:path");
     init_args();
     init_log();
@@ -17421,6 +17493,7 @@ __export(list_exports, {
   classifyStale: () => classifyStale,
   deriveState: () => deriveState,
   lastOutboxEvent: () => lastOutboxEvent,
+  rowState: () => rowState,
   run: () => run4,
   staleThresholdS: () => staleThresholdS
 });
@@ -17451,6 +17524,10 @@ function classifyStale(state, outbox, thresholdS = 180) {
   const ageS = (Date.now() - (0, import_node_fs19.statSync)(outbox).mtimeMs) / 1e3;
   return ageS > 0 && ageS > t ? "stale" : state;
 }
+function rowState(live, meta, outbox, thresholdS) {
+  if (!ownsPane(live, meta.paneId, meta.nonce)) return "[ORPHAN]";
+  return classifyStale(deriveState(lastOutboxEvent(outbox)), outbox, thresholdS);
+}
 async function run4(args) {
   const filter = args.find((a2) => !a2.startsWith("--"));
   const repo = repoStateDir();
@@ -17465,7 +17542,7 @@ async function run4(args) {
   process.stdout.write(`${"-".repeat(32)} ${"-".repeat(8)} ${"-".repeat(12)} ${"-".repeat(9)} -----
 `);
   const threshold = staleThresholdS();
-  const live = await livePanes();
+  const live = await livePaneNonces();
   for (const t of (0, import_node_fs19.readdirSync)(repo, { withFileTypes: true })) {
     if (!t.isDirectory()) continue;
     if (filter && t.name !== filter) continue;
@@ -17476,8 +17553,7 @@ async function run4(args) {
       const meta = paneMetaReadForDir(dir);
       const pane = meta.paneId || "?";
       const ob = outboxPath(meta.agent, meta.model, t.name);
-      let state = "[ORPHAN]";
-      if (pane !== "?" && live.has(pane)) state = classifyStale(deriveState(lastOutboxEvent(ob)), ob, threshold);
+      const state = rowState(live, meta, ob, threshold);
       process.stdout.write(`${W(meta.agent, 32)} ${W(meta.model, 8)} ${W(t.name, 12)} ${W(pane, 9)} ${state}
 `);
     }
@@ -17507,14 +17583,23 @@ __export(stop_exports, {
 });
 async function teardownBatch(topic, pairs, d) {
   const pending = [];
-  const live = pairs.length > 0 ? await d.livePanes() : /* @__PURE__ */ new Set();
+  const stale = /* @__PURE__ */ new Set();
+  const live = pairs.length > 0 ? await d.livePaneNonces() : /* @__PURE__ */ new Map();
   for (const { agent, model } of pairs) {
-    const pane = d.paneMetaRead(agent, model, topic) ?? "";
-    if (pane && live.has(pane)) {
-      log.info(`graceful shutdown for ${agent}-${model} on ${topic} (pane ${pane})`);
-      await d.killGraceful(pane, live.has(pane));
-      pending.push(pane);
+    const owner = d.paneMetaRead(agent, model, topic);
+    if (!owner || !live.has(owner.paneId)) continue;
+    if (!ownsPane(live, owner.paneId, owner.nonce)) {
+      stale.add(`${agent}-${model}`);
+      if (owner.nonce === "") {
+        log.warn(`${agent}-${model}: pane ${owner.paneId} is live but pane.json predates ownership nonces \u2014 cannot prove it is ours, so NOT killing it. Identify it first: tmux display-message -p -t ${owner.paneId} '#{pane_current_command} #{@ap_label}' \u2014 then, if it really is this worker's pane: tmux kill-pane -t ${owner.paneId}`);
+      } else {
+        log.warn(`${agent}-${model}: pane ${owner.paneId} is live but is not ours (nonce mismatch) \u2014 not killing; it belongs to another program`);
+      }
+      continue;
     }
+    log.info(`graceful shutdown for ${agent}-${model} on ${topic} (pane ${owner.paneId})`);
+    await d.killGraceful(owner.paneId, true);
+    pending.push(owner.paneId);
   }
   if (pending.length > 0) {
     log.info("waiting 9s for graceful banners to finish");
@@ -17522,19 +17607,19 @@ async function teardownBatch(topic, pairs, d) {
     for (const p of pending) await d.killNow(p);
   }
   for (const { agent, model } of pairs) {
-    const dest = d.stateArchive(agent, model, topic);
+    const dest = d.stateArchive(agent, model, topic, stale.has(`${agent}-${model}`) ? "stalepane" : void 0);
     if (dest) log.ok(`archived ${agent}-${model}: ${dest}`);
   }
-  const last = d.readLastPane(topic);
-  if (last && pending.includes(last)) d.removeLastPane(topic);
+  const last = parseLastPane(d.readLastPane(topic));
+  if (last && pending.includes(last.paneId)) d.removeLastPane(topic);
 }
 function liveDeps() {
   return {
     paneMetaRead: (i2, m, t) => paneMetaRead(i2, m, t),
-    livePanes: () => livePanes(),
-    killGraceful: (p, alive) => killGraceful(p, pluginRoot(), alive),
+    livePaneNonces: () => livePaneNonces(),
+    killGraceful: (p, owned) => killGraceful(p, pluginRoot(), owned),
     killNow: (p) => killNow(p),
-    stateArchive: (i2, m, t) => stateArchive(i2, m, t),
+    stateArchive: (i2, m, t, suffix) => stateArchive(i2, m, t, suffix),
     sleep: sleep2,
     readLastPane: (t) => {
       const f = (0, import_node_path16.join)(topicDir(t), ".last_pane");
@@ -18399,9 +18484,10 @@ var init_env = __esm({
 
 // src/core/waitLive.ts
 function liveOutboxWait(i2, m, t, offset, events, timeoutSec, clock) {
+  const owner = paneMetaRead(i2, m, t);
   return outboxWaitSince(i2, m, t, offset, events, timeoutSec, {
-    paneAlive,
-    paneId: paneMetaRead(i2, m, t),
+    paneAlive: (p) => paneOwned(p, owner?.nonce ?? ""),
+    paneId: owner?.nonce ? owner.paneId : null,
     extendMult: envNum("AP_WAIT_EXTEND_MULT", 3)
   }, clock);
 }
@@ -19873,7 +19959,7 @@ function latestNonSkippedUnsafe(art, agent, chain) {
   return null;
 }
 function guardLive(topic, provider, d) {
-  return { topic, provider, busyState: d.busyState, paneAlive: d.paneAlive };
+  return { topic, provider, busyState: d.busyState, paneOwned: d.paneOwned };
 }
 async function overrideEvidence(row, art, agent, unsafe, live) {
   const { topic, provider } = live;
@@ -19896,15 +19982,16 @@ async function overrideEvidence(row, art, agent, unsafe, live) {
   const text = readIfExistsOrNull(artifact);
   const settled = text === null || text.trim() === "" || hasArtifactSentinel(text) || WAIT_ACCEPTED.has(lastTag(failState, ARTIFACT_ACCEPT_KEY) ?? "");
   if (!settled) return `${artifact} has no ${END_OF_ARTIFACT} and no ${ARTIFACT_ACCEPT_KEY}= verdict (still being written)`;
-  const pane = paneMetaRead(agent, provider, topic);
-  if (!pane) return "no pane.json (cannot confirm the pane is alive)";
+  const owner = paneMetaRead(agent, provider, topic);
+  if (!owner) return "no pane.json (cannot confirm the pane is alive)";
+  if (!owner.nonce) return "pane.json predates ownership nonces (cannot confirm the pane)";
   let alive = false;
   try {
-    alive = await (live.paneAlive ?? paneAlive)(pane);
+    alive = await (live.paneOwned ?? paneOwned)(owner.paneId, owner.nonce);
   } catch {
     alive = false;
   }
-  if (!alive) return `pane ${pane} is gone`;
+  if (!alive) return `pane ${owner.paneId} is gone or is not ours`;
   return null;
 }
 async function guardSkipped(row, art, agent, stateFile, live) {
@@ -20226,7 +20313,7 @@ var init_phaseTable = __esm({
       offsetFor: (i2, m, t) => outboxOffset(outboxPath(i2, m, t)),
       send: run,
       busyState: workerBusyState,
-      paneAlive
+      paneOwned
     };
     liveWaitDeps = {
       multiplier: agentTimeoutMultiplier
@@ -22795,7 +22882,7 @@ function parseVerifyBlock(result) {
   return block;
 }
 function hashContent(content) {
-  return (0, import_node_crypto3.createHash)("sha256").update(content).digest("hex");
+  return (0, import_node_crypto5.createHash)("sha256").update(content).digest("hex");
 }
 function recomputedFromOutput(stdout, metricFrom, readJson) {
   if (metricFrom === "marker") {
@@ -22862,11 +22949,11 @@ function planVerify(p) {
   }
   return { run: true, command: b.command, metricFrom: b.metric_from ?? "marker" };
 }
-var import_node_crypto3, import_node_path36, MARKER_RE, VERIFICATION_TSV_HEADER;
+var import_node_crypto5, import_node_path36, MARKER_RE, VERIFICATION_TSV_HEADER;
 var init_autoresearchVerify = __esm({
   "src/core/autoresearchVerify.ts"() {
     "use strict";
-    import_node_crypto3 = require("node:crypto");
+    import_node_crypto5 = require("node:crypto");
     import_node_path36 = require("node:path");
     init_tsv();
     MARKER_RE = /^VERIFY_METRIC=(-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)$/;
@@ -24943,7 +25030,7 @@ async function spawnAllWith2(args, deps, opts) {
   const results = await Promise.all(rows.map(async (r) => ({
     agent: r.agent,
     provider: r.provider,
-    rc: await deps.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent), "--cwd", cwd, "--preflight-art-dir", art])
+    rc: await deps.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent).pane, "--cwd", cwd, "--preflight-art-dir", art])
   })));
   atomicWrite((0, import_node_path47.join)(art, "spawn-results.tsv"), spawnResultsTsv(results));
   const rc = spawnTally(results.map((r) => r.rc));
@@ -24982,8 +25069,8 @@ async function dropWorkerWith(rest, deps, opts) {
   const panesFile = (0, import_node_path47.join)(art, "preflight-panes.txt");
   if ((0, import_node_fs45.existsSync)(panesFile)) {
     try {
-      const pane = parsePanesFile((0, import_node_fs45.readFileSync)(panesFile, "utf8")).get(agent);
-      if (pane) deps.killPane(pane);
+      const pin = parsePanesFile((0, import_node_fs45.readFileSync)(panesFile, "utf8")).get(agent);
+      if (pin && await deps.paneOwned(pin.pane, pin.nonce)) deps.killPane(pin.pane);
     } catch (e) {
       log.warn(`autoresearch drop-worker: preflight pane kill failed (${e.message})`);
     }
@@ -25370,13 +25457,15 @@ async function experimentSendWith(args, deps) {
   const deliveredRc = fencedAppend({ gen: effGen, ts: deps.now(), kind: "dispatch-delivered", agent, exp_id: expId, data: { outboxOffset: preOffset } });
   if (deliveredRc !== null) return deliveredRc;
   if (!deps.dryRun) {
-    const pane = paneMetaRead(agent, model, topic);
-    if (pane) {
+    const owner = paneMetaRead(agent, model, topic);
+    if (owner && await (deps.paneOwned ?? paneOwned)(owner.paneId, owner.nonce)) {
       try {
-        await deps.paneSend(pane, taskNudge(inboxPath(agent, model, topic), model));
+        await deps.paneSend(owner.paneId, taskNudge(inboxPath(agent, model, topic), model));
       } catch (e) {
         log.warn(`autoresearch experiment-send: pane nudge failed (${e.message}); worker may not have noticed inbox`);
       }
+    } else if (owner) {
+      log.warn(`autoresearch experiment-send: pane ${owner.paneId} is gone or is no longer ours; skipping the nudge (inbox already written)`);
     }
   }
   out(`dispatched ${expId} -> ${agent}`);
@@ -25510,10 +25599,11 @@ async function monitorRun(args, opts) {
     readIfExistsOrNull(rescanFile)
   );
   persist(state);
-  const probePane = opts?.paneAlive ?? paneAlive;
+  const probePane = opts?.paneOwned ?? paneOwned;
   const paneCheckEvery = opts?.paneCheckEveryTicks ?? 15;
   const tickMs = opts?.sleepMs ?? 2e3;
-  const paneId = paneMetaRead(agent, model, topic);
+  const maxTicks = opts?.maxTicks ?? Infinity;
+  const owner = paneMetaRead(agent, model, topic);
   let deadPolls = 0, tick = 0;
   do {
     let size = 0, mtime = 0;
@@ -25543,10 +25633,11 @@ async function monitorRun(args, opts) {
     persist(state);
     if (once9) break;
     tick++;
-    if (paneId && tick % paneCheckEvery === 0) {
+    if (tick >= maxTicks) break;
+    if (owner && owner.nonce && tick % paneCheckEvery === 0) {
       let alive = true;
       try {
-        alive = await probePane(paneId);
+        alive = await probePane(owner.paneId, owner.nonce);
       } catch {
         alive = false;
       }
@@ -25928,9 +26019,14 @@ async function teardownWith(args, deps) {
   }
   const pf = (0, import_node_path47.join)(art, "preflight-panes.txt");
   if ((0, import_node_fs45.existsSync)(pf)) {
-    for (const pane of parsePanesFile((0, import_node_fs45.readFileSync)(pf, "utf8")).values()) {
+    const live = await deps.livePaneNonces().catch(() => /* @__PURE__ */ new Map());
+    for (const pin of parsePanesFile((0, import_node_fs45.readFileSync)(pf, "utf8")).values()) {
+      if (!ownsPane(live, pin.pane, pin.nonce)) {
+        if (live.has(pin.pane)) log.warn(`[teardown] pane ${pin.pane} is live but is not ours (nonce mismatch) \u2014 not killing it`);
+        continue;
+      }
       try {
-        await deps.killPane(pane);
+        await deps.killPane(pin.pane);
       } catch {
       }
     }
@@ -26122,7 +26218,7 @@ async function resumeWith(args, deps) {
       if (phase !== "working") redispatch.add(`${agent}:${expId}`);
     }
   }
-  const live = deps.livePanes ? await deps.livePanes().catch(() => /* @__PURE__ */ new Set()) : null;
+  const live = deps.livePaneNonces ? await deps.livePaneNonces().catch(() => /* @__PURE__ */ new Map()) : null;
   const rows = [];
   const monitors = [];
   for (const agent of agents) {
@@ -26132,13 +26228,14 @@ async function resumeWith(args, deps) {
       continue;
     }
     const model = resolveModel(agent, topic);
-    const pane = model ? paneMetaRead(agent, model, topic) : null;
+    const owner = model ? paneMetaRead(agent, model, topic) : null;
     let alive = false;
-    if (pane) {
-      if (live) alive = live.has(pane);
+    const unverifiable = owner !== null && owner.nonce === "";
+    if (owner && !unverifiable) {
+      if (live) alive = ownsPane(live, owner.paneId, owner.nonce);
       else {
         try {
-          alive = await deps.paneAlive(pane);
+          alive = await deps.paneOwned(owner.paneId, owner.nonce);
         } catch {
           alive = false;
         }
@@ -26147,6 +26244,12 @@ async function resumeWith(args, deps) {
     const raw = readOr(stateTxt);
     const st = parseState(raw);
     let phase = st.phase ?? "";
+    if (unverifiable) {
+      log.warn(`autoresearch resume: ${agent}'s pane.json predates ownership nonces \u2014 its pane cannot be confirmed, so the lane is left as-is (no interrupt, no respawn). Verify by hand: tmux display-message -p -t ${owner.paneId} '#{pane_current_command} #{@ap_label}'`);
+      rows.push(`WORKER=${agent}:${phase}:yes`);
+      monitors.push(`MONITOR=${agent}`);
+      continue;
+    }
     if (!alive && phase === "working") {
       const workingExp = st.current_exp_id ?? "";
       ledgerAdd({ gen, ts: deps.now(), kind: "interrupted", agent, ...workingExp ? { exp_id: workingExp } : {} });
@@ -26501,7 +26604,7 @@ var init_autoresearch2 = __esm({
       repoRoot,
       pickAgents
     };
-    liveDropWorkerDeps = { killPane: (p) => killNow(p) };
+    liveDropWorkerDeps = { killPane: (p) => killNow(p), paneOwned };
     liveExperimentSendDeps = {
       now: () => isoUtc(),
       probeHardware: liveProbeHardware,
@@ -26554,6 +26657,7 @@ var init_autoresearch2 = __esm({
     liveHandoffDeps = { now: () => isoUtc() };
     liveTeardownDeps = {
       killPane: (p) => killNow(p),
+      livePaneNonces: () => livePaneNonces(),
       archiveTopic: (t, s) => archiveTopic(t, s),
       now: () => isoUtc()
     };
@@ -26564,8 +26668,8 @@ var init_autoresearch2 = __esm({
     };
     liveResumeDeps = {
       now: () => isoUtc(),
-      paneAlive,
-      livePanes: () => livePanes(),
+      paneOwned,
+      livePaneNonces: () => livePaneNonces(),
       freshWorker: (t, i2) => freshWorkerWith([t, i2], liveFreshWorkerDeps)
     };
     liveAbortDeps = {
@@ -28336,9 +28440,14 @@ async function teardownWith2(args, deps) {
   }
   const pf = (0, import_node_path50.join)(art, "preflight-panes.txt");
   if ((0, import_node_fs47.existsSync)(pf)) {
-    for (const pane of parsePanesFile((0, import_node_fs47.readFileSync)(pf, "utf8")).values()) {
+    const live = await deps.livePaneNonces().catch(() => /* @__PURE__ */ new Map());
+    for (const pin of parsePanesFile((0, import_node_fs47.readFileSync)(pf, "utf8")).values()) {
+      if (!ownsPane(live, pin.pane, pin.nonce)) {
+        if (live.has(pin.pane)) log.warn(`explore teardown: pane ${pin.pane} is live but is not ours (nonce mismatch) \u2014 not killing it`);
+        continue;
+      }
       try {
-        await deps.killPane(pane);
+        await deps.killPane(pin.pane);
       } catch {
       }
     }
@@ -28418,6 +28527,7 @@ var init_explore2 = __esm({
     [RESEARCH2, OPENQ, CROSSVERIFY, ADVERSARY, REBUTTAL, GAP, SIGNOFF] = PHASES;
     liveExploreTeardownDeps = {
       killPane: (p) => killNow(p),
+      livePaneNonces: () => livePaneNonces(),
       archiveTopic: (t, s) => archiveTopic(t, s)
     };
   }

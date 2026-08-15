@@ -2,8 +2,8 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { repoStateDir, isArtifactDir } from "../core/paths.js";
 import { readIfExists } from "../core/fsread.js";
-import { paneMetaReadForDir, outboxPath, parseEvent } from "../core/ipc.js";
-import { livePanes } from "../core/tmux.js";
+import { paneMetaReadForDir, outboxPath, parseEvent, type PaneMeta } from "../core/ipc.js";
+import { livePaneNonces, ownsPane } from "../core/tmux.js";
 
 export function deriveState(lastEvent: string | undefined): string {
   switch (lastEvent) {
@@ -33,6 +33,14 @@ export function classifyStale(state: string, outbox: string, thresholdS = 180): 
   return ageS > 0 && ageS > t ? "stale" : state;
 }
 
+/** A worker's STATE column. `[ORPHAN]` unless its recorded pane is live AND still carries the nonce
+ *  recorded with it: a reused id (tmux restarts %N from 0 on a fresh server) shown as a live row is
+ *  what invites the operator to `stop` — i.e. kill — a stranger's pane. */
+export function rowState(live: Map<string, string>, meta: PaneMeta, outbox: string, thresholdS: number): string {
+  if (!ownsPane(live, meta.paneId, meta.nonce)) return "[ORPHAN]";
+  return classifyStale(deriveState(lastOutboxEvent(outbox)), outbox, thresholdS);
+}
+
 export async function run(args: string[]): Promise<number> {
   const filter = args.find((a) => !a.startsWith("--"));
   const repo = repoStateDir();
@@ -41,7 +49,7 @@ export async function run(args: string[]): Promise<number> {
   process.stdout.write(`${W("PART", 32)} ${W("MODEL", 8)} ${W("TOPIC", 12)} ${W("PANE", 9)} STATE\n`);
   process.stdout.write(`${"-".repeat(32)} ${"-".repeat(8)} ${"-".repeat(12)} ${"-".repeat(9)} -----\n`);
   const threshold = staleThresholdS();
-  const live = await livePanes(); // one server-wide pane snapshot, not one scan per worker
+  const live = await livePaneNonces(); // one server-wide pane snapshot, not one scan per worker
   for (const t of readdirSync(repo, { withFileTypes: true })) {
     if (!t.isDirectory()) continue;
     if (filter && t.name !== filter) continue;
@@ -52,8 +60,7 @@ export async function run(args: string[]): Promise<number> {
       const meta = paneMetaReadForDir(dir);
       const pane = meta.paneId || "?";
       const ob = outboxPath(meta.agent, meta.model, t.name);
-      let state = "[ORPHAN]";
-      if (pane !== "?" && live.has(pane)) state = classifyStale(deriveState(lastOutboxEvent(ob)), ob, threshold);
+      const state = rowState(live, meta, ob, threshold);
       process.stdout.write(`${W(meta.agent, 32)} ${W(meta.model, 8)} ${W(t.name, 12)} ${W(pane, 9)} ${state}\n`);
     }
   }

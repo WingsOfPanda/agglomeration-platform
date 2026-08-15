@@ -1,4 +1,5 @@
 import { execa } from "execa";
+import { randomUUID } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -31,6 +32,54 @@ export function respawnArgs(pane: string, launch: string, cwd?: string): string[
 }
 export function setOptionArgs(pane: string, opt: string, val: string): string[] {
   return ["set-option", "-p", "-t", pane, opt, val];
+}
+/** Stamp a pane with its ownership nonce. A raw pane id (%N) is NOT proof of ownership — tmux
+ *  restarts the %N counter from 0 on a fresh server, so a recorded id that outlived its pane can
+ *  name a stranger's pane. @ap_nonce is the per-pane secret ap mints when it CREATES the pane and
+ *  records next to the id; every destructive/typing action re-reads it live and acts only on a
+ *  match. respawn-pane preserves pane options, so the nonce survives the respawn paths. */
+export function paneNonceSetArgs(pane: string, nonce: string): string[] {
+  return setOptionArgs(pane, "@ap_nonce", nonce);
+}
+const PANE_ID_RE = /^%\d+$/;
+/** The shape `randomUUID()` produces, and the ONLY shape an ownership check honours. The generator
+ *  (spawn / preflightLayout) and this pattern change together. */
+const NONCE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** Parse `list-panes -a -F '#{pane_id}\t#{@ap_nonce}'` output into id -> nonce. A pane with no
+ *  @ap_nonce (never ours, or pre-nonce) yields an empty field, i.e. "". Blank lines are skipped.
+ *
+ *  Hardened against a forged option value: tmux allows a NEWLINE inside a pane option, so a pane
+ *  whose @ap_nonce contains one injects extra "rows" into this snapshot — the single oracle every
+ *  kill/nudge consults. Three cheap defenses: a row whose id field is not a real `%N` is dropped;
+ *  a DUPLICATE id is poisoned to "" (never matches) instead of letting a later row overwrite the
+ *  server's own answer for a real pane; and `realIds` — tmux's OWN id list, which no option value
+ *  can forge because tmux assigns `%N` — drops any row naming a pane that is not on the server.
+ *  Forging still needs a pane on the same server plus the victim's recorded nonce, so this is
+ *  hardening, not a trust boundary. */
+export function parsePaneNonces(stdout: string, realIds?: Set<string>): Map<string, string> {
+  const m = new Map<string, string>();
+  const dup = new Set<string>();
+  for (const line of stdout.split("\n")) {
+    if (!line) continue;
+    const tab = line.indexOf("\t");
+    const id = tab < 0 ? line : line.slice(0, tab);   // tolerate a tmux that drops the empty field
+    if (!PANE_ID_RE.test(id)) continue;
+    if (realIds && !realIds.has(id)) continue;        // a phantom row from a forged option value
+    if (m.has(id)) { dup.add(id); continue; }
+    m.set(id, tab < 0 ? "" : line.slice(tab + 1));
+  }
+  for (const id of dup) m.set(id, "");
+  return m;
+}
+/** The one ownership predicate: the pane is live AND carries exactly the nonce we recorded for it.
+ *  A recorded nonce that is not a platform-minted UUID — empty (a pane.json written by a pre-nonce
+ *  ap, or a legacy preflight row) or any other value — never matches: "we cannot prove it is ours"
+ *  is treated as "not ours". NOTE for liveness callers: not-ours is not the same as DEAD. An empty
+ *  recorded nonce means UNKNOWN, and every liveness site must degrade to its pre-nonce behavior
+ *  rather than read this `false` as a death verdict. */
+export function ownsPane(snapshot: Map<string, string>, pane: string, nonce: string): boolean {
+  return NONCE_RE.test(nonce) && snapshot.get(pane) === nonce;
 }
 export function sendKeysLiteralArgs(pane: string, line: string): string[] {
   return ["send-keys", "-t", pane, "-l", line];
@@ -93,17 +142,45 @@ export async function ensureWindowBorderStatus(target: string): Promise<boolean>
   try { await tmux(windowBorderStatusArgs(target)); return true; } catch { return false; }
 }
 
-export async function paneAlive(pane: string): Promise<boolean> {
-  const { stdout } = await execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}"]);
-  return stdout.split("\n").includes(pane);
+/** One snapshot of every live pane id on the server AND its ownership nonce (single tmux call).
+ *  Use this when checking many panes at once (e.g. `ap list`, a teardown batch) instead of probing
+ *  per pane — N panes would otherwise re-run the identical full-server scan N times. This replaced
+ *  the id-only `livePanes`/`paneAlive` pair outright: an id-only liveness answer is exactly the
+ *  evidence that let a stale id name a stranger's pane, so the primitive no longer exists. */
+export async function livePaneNonces(): Promise<Map<string, string>> {
+  // Two listings, issued together: the pairs, plus tmux's own id list. Only the second is
+  // unforgeable (a pane option can carry a newline; a pane_id cannot), so it is what decides WHICH
+  // panes exist — see parsePaneNonces. A pane appearing/vanishing between the two only ever drops a
+  // row, which reads as "not ours", the fail-closed direction.
+  //
+  // NEVER throws (matching ensurePaneBorders/ensureWindowBorderStatus above): no tmux server
+  // running, tmux not installed, and a server with no panes are indistinguishable here and all mean
+  // the same thing — ap cannot prove it owns anything. The empty map answers every ownership
+  // question with "not ours", so nothing is killed, nudged, or called alive. Callers reach this from
+  // paths that must survive a tmux-less machine (a headless box, a container, CI).
+  try {
+    const [ids, pairs] = await Promise.all([
+      execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}"]),
+      execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}\t#{@ap_nonce}"]),
+    ]);
+    return parsePaneNonces(pairs.stdout, new Set(ids.stdout.split("\n").filter(Boolean)));
+  } catch { return new Map(); }
 }
 
-/** One snapshot of every live pane id on the server (single tmux call). Use this when checking
- *  many panes at once (e.g. `ap list`) instead of calling paneAlive per pane — N panes would
- *  otherwise re-run the identical full-server scan N times. */
-export async function livePanes(): Promise<Set<string>> {
-  const { stdout } = await execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}"]);
-  return new Set(stdout.split("\n"));
+/** Is `pane` live and ours (its live @ap_nonce is the one we recorded)? The single-pane form of
+ *  ownsPane; an unverifiable recorded nonce short-circuits without a tmux call. Never throws — a
+ *  tmux-less machine answers `false` (not ours), never an exception in the caller's face. */
+export async function paneOwned(pane: string, nonce: string): Promise<boolean> {
+  if (!NONCE_RE.test(nonce)) return false;   // unverifiable: no tmux call can settle it
+  return ownsPane(await livePaneNonces(), pane, nonce);
+}
+
+/** Stamp the pane's ownership nonce; false on any tmux error (never throws). The boolean is
+ *  load-bearing, unlike the cosmetic label/border setters: a pane that did not take the stamp can
+ *  never be proven ours again, so the CALLER must fail closed rather than record a nonce the pane
+ *  does not carry. */
+export async function paneNonceSet(pane: string, nonce: string): Promise<boolean> {
+  try { await execa("tmux", paneNonceSetArgs(pane, nonce)); return true; } catch { return false; }
 }
 
 export async function paneSend(pane: string, line: string): Promise<void> {
@@ -154,10 +231,11 @@ async function paneOption(pane: string, opt: string): Promise<string> {
   try { return (await execa("tmux", ["display-message", "-p", "-t", pane, opt])).stdout; } catch { return ""; }
 }
 
-/** `alive` lets a caller that already holds a livePanes() snapshot skip the per-pane full-server
- *  scan; omitted → probe with paneAlive as before. */
-export async function killGraceful(pane: string, pluginRoot: string, alive?: boolean): Promise<void> {
-  if (!(alive ?? (await paneAlive(pane)))) return;
+/** `owned` is the caller's ownership verdict from its livePaneNonces() snapshot — required, not a
+ *  probe fallback: this respawns (-k) the pane, so it must never run on a pane we cannot prove is
+ *  ours. */
+export async function killGraceful(pane: string, pluginRoot: string, owned: boolean): Promise<void> {
+  if (!owned) return;
   const label = (await paneOption(pane, "#{@ap_label}")) || "worker";
   const color = await paneOption(pane, "#{@ap_color}");
   const snap = join(mkdtempSync(join(tmpdir(), "cs-snap-")), "snap.txt");
@@ -170,10 +248,10 @@ export async function killGraceful(pane: string, pluginRoot: string, alive?: boo
 
 // --- preflight grid ---
 export interface PreflightEntry { agent: string; model: string; cwd?: string; }
-export async function preflightLayout(topic: string, list: PreflightEntry[], opts: { writePanes: (tsv: string) => void }): Promise<Array<{ agent: string; pane: string }>> {
+export async function preflightLayout(topic: string, list: PreflightEntry[], opts: { writePanes: (tsv: string) => void }): Promise<Array<{ agent: string; pane: string; nonce: string }>> {
   const conductor = await conductorPane();
   const created: string[] = [];
-  const out: Array<{ agent: string; pane: string }> = [];
+  const out: Array<{ agent: string; pane: string; nonce: string }> = [];
   let prev = conductor;
   let flag: "-h" | "-v" = "-h";
   try {
@@ -183,14 +261,21 @@ export async function preflightLayout(topic: string, list: PreflightEntry[], opt
       const { stdout } = await execa("tmux", args);
       const pane = stdout.trim();
       created.push(pane);
+      // Stamp ownership at CREATION: preflight-panes.txt outlives the tmux server (teardown sweeps
+      // it much later), so its ids need the same proof pane.json's do. spawn re-stamps the same
+      // nonce when it respawns this pane into a worker, so one nonce follows the pane end to end.
+      const nonce = randomUUID();
+      // Fail the whole preflight rather than record a pane whose ownership can never be proven:
+      // the catch below kills every pane created so far, so nothing unownable is left behind.
+      if (!(await paneNonceSet(pane, nonce))) throw new Error(`could not stamp @ap_nonce on ${pane}`);
       await paneLabelSet(pane, e.agent, e.model, topic);
-      out.push({ agent: e.agent, pane });
+      out.push({ agent: e.agent, pane, nonce });
       prev = pane;
       flag = "-v";
     }
     await selectLayoutMainVertical(conductor);
     await ensureWindowBorderStatus(conductor);
-    opts.writePanes(out.map((o) => `${o.agent}\t${o.pane}`).join("\n") + "\n");
+    opts.writePanes(out.map((o) => `${o.agent}\t${o.pane}\t${o.nonce}`).join("\n") + "\n");
     return out;
   } catch (e) {
     for (const p of created) { try { await execa("tmux", ["kill-pane", "-t", p]); } catch { /* */ } }

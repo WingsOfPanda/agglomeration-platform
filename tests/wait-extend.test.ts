@@ -6,6 +6,7 @@ import { virtualClock } from "./helpers/clock.js";
 import { outboxWaitSince, outboxPath } from "../src/core/ipc.js";
 import { globalRoot } from "../src/core/paths.js";
 import { awaitTurn } from "../src/core/wait.js";
+import { liveOutboxWait } from "../src/core/waitLive.js";
 import { gateAnomalies } from "../src/core/designTurn.js";
 
 function mkOutbox(i: string, m: string, t: string): string {
@@ -205,5 +206,52 @@ describe("gateAnomalies", () => {
   it("uses the LAST key line (a re-armed question later timing out is reported)", () => {
     expect(gateAnomalies([w("a", true, "OFFSET=0\nVS=question\nOFFSET=9\nVS=timeout\n")], "VS"))
       .toEqual([{ agent: "a", value: "timeout" }]);
+  });
+});
+
+// liveOutboxWait binds the real tmux probe, and that probe can only ever answer false for a record
+// with no nonce. Enabling the escape hatch on one fabricated a `pane-died` error ~30s into every
+// wait on a live pre-0.5.30 worker; an unverifiable record must degrade to the plain outbox-only
+// poll, exactly as an ABSENT pane.json does.
+describe("liveOutboxWait: a legacy pane.json disables the liveness check", () => {
+  const seed = (nonce: string | null): void => {
+    mkOutbox("a", "codex", "t");
+    const pj = join(dirname(outboxPath("a", "codex", "t")), "pane.json");
+    writeFileSync(pj, JSON.stringify({
+      pane_id: "%1", ...(nonce === null ? {} : { pane_nonce: nonce }), agent: "a", model: "codex",
+    }));
+  };
+
+  it("legacy record + no terminal event -> runs the full budget and returns null (never pane-died)", async () => {
+    const { cleanup } = freshHome();
+    try {
+      seed(null);
+      const v = virtualClock();
+      // everyS defaults to 15 and the budget is 60, so a live probe would have fired 3 times over
+      // this window; with the check disabled the wait simply expires.
+      const ev = await liveOutboxWait("a", "codex", "t", 0, ["done"], 60, v.clock);
+      expect(ev).toBeNull();
+    } finally { cleanup(); }
+  });
+
+  it("no pane.json at all behaves identically (the degrade this matches)", async () => {
+    const { cleanup } = freshHome();
+    try {
+      mkOutbox("a", "codex", "t");
+      const v = virtualClock();
+      expect(await liveOutboxWait("a", "codex", "t", 0, ["done"], 60, v.clock)).toBeNull();
+    } finally { cleanup(); }
+  });
+
+  it("a legacy record still returns a real terminal event from the outbox", async () => {
+    const { cleanup } = freshHome();
+    try {
+      seed(null);
+      const p = outboxPath("a", "codex", "t");
+      const v = virtualClock();
+      v.at(3000, () => { appendFileSync(p, '{"event":"done","summary":"ok"}\n'); });
+      const ev = await liveOutboxWait("a", "codex", "t", 0, ["done"], 60, v.clock);
+      expect(ev?.event).toBe("done");
+    } finally { cleanup(); }
   });
 });

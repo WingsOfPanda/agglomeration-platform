@@ -48,12 +48,12 @@ function seedEvidence(opts: { status?: "reported" | "seed" | "absent"; terminal?
   writeFileSync(outboxPath(AGENT, PROVIDER, TOPIC),
     opts.terminal === false ? '{"event":"progress","note":"still going"}\n' : '{"event":"done","summary":"landed late"}\n');
   if (opts.pane !== false) {
-    writeFileSync(paneMetaPath(AGENT, PROVIDER, TOPIC), JSON.stringify({ pane_id: "%9", agent: AGENT, model: PROVIDER }) + "\n");
+    writeFileSync(paneMetaPath(AGENT, PROVIDER, TOPIC), JSON.stringify({ pane_id: "%9", pane_nonce: "n9", agent: AGENT, model: PROVIDER }) + "\n");
   }
 }
 
 const live = (over: Partial<GuardLive> = {}): GuardLive =>
-  ({ topic: TOPIC, provider: PROVIDER, paneAlive: async () => true, ...over });
+  ({ topic: TOPIC, provider: PROVIDER, paneOwned: async () => true, ...over });
 
 async function capture<T>(fn: () => Promise<T>): Promise<{ value: T; err: string }> {
   const err: string[] = [];
@@ -164,14 +164,14 @@ describe("guardSkipped: the override needs all four evidence legs", () => {
 
   it("a dead pane → skip", async () => {
     seedEvidence();
-    const { value, err } = await runOpenqGuard(live({ paneAlive: async () => false }));
+    const { value, err } = await runOpenqGuard(live({ paneOwned: async () => false }));
     expect(value).toBe(true);
     expect(err).toContain("pane %9 is gone");
   });
 
   it("a pane probe that throws (tmux server gone) counts as dead", async () => {
     seedEvidence();
-    const { value, err } = await runOpenqGuard(live({ paneAlive: async () => { throw new Error("no server"); } }));
+    const { value, err } = await runOpenqGuard(live({ paneOwned: async () => { throw new Error("no server"); } }));
     expect(value).toBe(true);
     expect(err).toContain("pane %9 is gone");
   });
@@ -191,21 +191,21 @@ describe("guardSkipped: the override needs all four evidence legs", () => {
   it("a safe chain never probes and never flags", async () => {
     writeFileSync(join(h.home, "research-alpha.txt"), "OFFSET=0\nFS=ok\n");
     const busyState = vi.fn(() => "working");
-    const paneAlive = vi.fn(async () => true);
-    expect(await guardSkipped(row("openq"), h.home, AGENT, stateFile(), live({ busyState, paneAlive }))).toBe(false);
+    const paneOwned = vi.fn(async () => true);
+    expect(await guardSkipped(row("openq"), h.home, AGENT, stateFile(), live({ busyState, paneOwned }))).toBe(false);
     expect(busyState).not.toHaveBeenCalled();
-    expect(paneAlive).not.toHaveBeenCalled();
+    expect(paneOwned).not.toHaveBeenCalled();
     expect(existsSync(stateFile())).toBe(false);
     expect(hubFlags()).toBe("");
   });
 
-  it("the probes get the ids they expect: (agent, provider, topic) and the pane id", async () => {
+  it("the probes get the ids they expect: (agent, provider, topic) and the pane id + its nonce", async () => {
     seedEvidence();
     const busyState = vi.fn(() => null);
-    const paneAlive = vi.fn(async () => true);
-    await runOpenqGuard(live({ busyState, paneAlive }));
+    const paneOwned = vi.fn(async () => true);
+    await runOpenqGuard(live({ busyState, paneOwned }));
     expect(busyState).toHaveBeenCalledWith(AGENT, PROVIDER, TOPIC);
-    expect(paneAlive).toHaveBeenCalledWith("%9");
+    expect(paneOwned).toHaveBeenCalledWith("%9", "n9");   // ownership proof, not a bare id
   });
 });
 

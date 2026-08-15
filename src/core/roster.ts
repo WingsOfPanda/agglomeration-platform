@@ -48,12 +48,17 @@ export function spawnTally(rcs: number[]): 0 | 1 | 2 {
   return 1;
 }
 
-/** Parse preflight-panes.txt (TSV `<agent>\t<pane>`; skip #/blank) into a map. */
-export function parsePanesFile(text: string): Map<string, string> {
-  const m = new Map<string, string>();
+/** A preflight pane: its id plus the ownership nonce preflight stamped on it (`@ap_nonce`). The id
+ *  alone proves nothing — this file outlives the tmux server, and %N is reused after a restart. */
+export interface PanePin { pane: string; nonce: string; }
+
+/** Parse preflight-panes.txt (TSV `<agent>\t<pane>\t<nonce>`; skip #/blank) into a map. A row from
+ *  a pre-nonce ap has no third field and yields `nonce: ""`, which every ownership check rejects. */
+export function parsePanesFile(text: string): Map<string, PanePin> {
+  const m = new Map<string, PanePin>();
   for (const t of splitNonCommentLines(text)) {
-    const [agent, pane] = t.split("\t");
-    if (agent && pane) m.set(agent, pane);
+    const [agent, pane, nonce] = t.split("\t");
+    if (agent && pane) m.set(agent, { pane, nonce: nonce ?? "" });
   }
   return m;
 }
@@ -86,7 +91,7 @@ export async function spawnAllBatch(label: string, topic: string, art: string, d
 
   const cwd = d.repoRoot();
   const results: SpawnResult[] = await Promise.all(rows.map(async (r) => {
-    const rc = await d.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent)!, "--cwd", cwd, "--preflight-art-dir", art]);
+    const rc = await d.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent)!.pane, "--cwd", cwd, "--preflight-art-dir", art]);
     return { agent: r.agent, provider: r.provider, rc };
   }));
   atomicWrite(join(art, "spawn-results.tsv"), spawnResultsTsv(results));
@@ -98,12 +103,15 @@ export async function spawnAllBatch(label: string, topic: string, art: string, d
   return rc;
 }
 
-/** True iff <agent>\t<pane> appears as a line in a preflight-panes.txt body. This is the
- *  --target-pane membership check; stricter-than-spawn.sh: spawn.sh accepts the pane under ANY
- *  agent (wildcard `^[a-z0-9-]+\t<pane>$`), this requires the pane be listed for THIS
- *  agent so a foreign live pane can never be clobbered. */
-export function paneListedFor(panesTsv: string, agent: string, pane: string): boolean {
-  return panesTsv.split("\n").some((l) => l === `${agent}\t${pane}`);
+/** The nonce recorded for <agent>\t<pane> in a preflight-panes.txt body, or null when that pair is
+ *  not listed. This is the --target-pane membership check; stricter-than-spawn.sh: spawn.sh accepts
+ *  the pane under ANY agent (wildcard `^[a-z0-9-]+\t<pane>$`), this requires the pane be listed for
+ *  THIS agent so a foreign live pane can never be clobbered. Membership alone is no longer enough —
+ *  spawn respawns (-k) the pane, so it also has to prove the LIVE pane is the one preflight made;
+ *  returning the nonce is what lets it. A legacy (2-column) row returns "": listed but unverifiable. */
+export function paneNonceFor(panesTsv: string, agent: string, pane: string): string | null {
+  const pin = parsePanesFile(panesTsv).get(agent);
+  return pin && pin.pane === pane ? pin.nonce : null;
 }
 
 /** Bucket filenames whose verdicts `target` should verify — every file where target is NOT a member

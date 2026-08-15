@@ -300,6 +300,8 @@ describe("teardown", () => {
   function deps(over: Partial<AutoresearchTeardownDeps> = {}): AutoresearchTeardownDeps {
     return {
       killPane: async () => {},
+      // Default snapshot: every pane the fixtures record is live and still ours.
+      livePaneNonces: async () => new Map([["%1", "11111111-1111-4111-8111-111111111111"], ["%2", "22222222-2222-4222-8222-222222222222"]]),
       archiveTopic: () => "/fake/archive/dest",
       now: () => "T",
       ...over,
@@ -353,7 +355,7 @@ describe("teardown", () => {
     const art = autoresearchArtDir("tune-model", opts);
     mkdirSync(join(art, "workers", "bravo", "experiments", "exp-003", "code"), { recursive: true });
     writeFileSync(join(art, "scoreboard.md"), WINNER_SB);          // a winner exists...
-    writeFileSync(join(art, "preflight-panes.txt"), "bravo\t%1\nalpha\t%2\n");
+    writeFileSync(join(art, "preflight-panes.txt"), "bravo\t%1\t11111111-1111-4111-8111-111111111111\nalpha\t%2\t22222222-2222-4222-8222-222222222222\n");
     writeFileSync(join(art, "metric.md"), "primary_metric: acc\n");
 
     const killed: string[] = [];
@@ -424,17 +426,34 @@ describe("teardown", () => {
     const opts = { home: h.home, cwd: h.home };
     const art = autoresearchArtDir("kill-topic", opts);
     mkdirSync(art, { recursive: true });
-    writeFileSync(join(art, "preflight-panes.txt"), "bravo\t%1\n\nalpha\t%2\n");
+    writeFileSync(join(art, "preflight-panes.txt"), "bravo\t%1\t11111111-1111-4111-8111-111111111111\n\nalpha\t%2\t22222222-2222-4222-8222-222222222222\n");
 
     const killed: string[] = [];
     const rc = await teardownWith(["kill-topic"], deps({
       opts, killPane: async (p) => { killed.push(p); },
     }));
     expect(rc).toBe(0);
-    // Each non-blank "<agent>\t<pane>" line passes only the PANE field (tab-split) to killPane.
+    // Each non-blank "<agent>\t<pane>\t<nonce>" line passes only the PANE field to killPane.
     expect(killed).toEqual(["%1", "%2"]);
     // The file is removed after the kill sweep.
     expect(existsSync(join(art, "preflight-panes.txt"))).toBe(false);
+  });
+
+  it("preflight orphan kill: skips a recorded pane whose live nonce is not ours, and one with no nonce", async () => {
+    const h = home();
+    const opts = { home: h.home, cwd: h.home };
+    const art = autoresearchArtDir("kill-stale", opts);
+    mkdirSync(art, { recursive: true });
+    // %1 was reused by another program after a tmux restart; %2 is a pre-nonce (legacy) row.
+    writeFileSync(join(art, "preflight-panes.txt"), "bravo\t%1\t11111111-1111-4111-8111-111111111111\nalpha\t%2\n");
+
+    const killed: string[] = [];
+    const rc = await teardownWith(["kill-stale"], deps({
+      opts, killPane: async (p) => { killed.push(p); },
+      livePaneNonces: async () => new Map([["%1", "stranger"], ["%2", ""]]),
+    }));
+    expect(rc).toBe(0);
+    expect(killed).toEqual([]);
   });
 });
 
