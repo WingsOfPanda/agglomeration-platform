@@ -1,5 +1,5 @@
 // src/commands/bridge.ts — /ap:bridge collaborative cross-repo session.
-import { existsSync, mkdirSync, readFileSync, appendFileSync } from "node:fs";
+import { existsSync, mkdirSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile } from "../args.js";
@@ -11,17 +11,15 @@ import { pickRandomAgent } from "../core/agents.js";
 import { runnerAt, preSnapshot, createOrResumeBranch, finishBranchPrMerge, shortstat } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
 import { readIfExists, readField, kvField } from "../core/fsread.js";
-import { runForensics, runFlag, recordHubFlag } from "../core/forensics.js";
+import { runForensics, runFlag } from "../core/forensics.js";
 import { detectTestCommand } from "../core/quick.js";
 import { repoRoot } from "../core/paths.js";
 import { parseBridgeArgs, deriveSlug, bridgeArtDir, bridgeExecDir, renderBridgeSummary, renderBridgeResume } from "../core/bridge.js";
 import type { BridgeSummaryFacts } from "../core/bridge.js";
 import { composeBridgeBrief, composeBridgeFollowup } from "../core/bridgeTurn.js";
-import { classifyTurn } from "../core/turn.js";
-import { awaitTurn, recordWaitOutcome, type WaitFn } from "../core/wait.js";
+import { sendRound, waitRound, type RoundDescriptor, type RoundSendDeps, type RoundWaitDeps } from "../core/roundProtocol.js";
 import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
-import { outboxOffset, outboxPath, workerSendGate } from "../core/ipc.js";
-import type { Clock } from "../core/ipc.js";
+import { outboxOffset, outboxPath } from "../core/ipc.js";
 import { run as sendRun } from "./send.js";
 
 function usage(): number {
@@ -129,11 +127,31 @@ export async function branchWith(topic: string, target: string, r: Runner): Prom
   return 0;
 }
 
-export interface TurnSendDeps {
-  offsetFor(agent: string, model: string, topic: string): number;
-  send(args: string[]): Promise<number>;
-}
+export type TurnSendDeps = RoundSendDeps;
+export type TurnWaitDeps = RoundWaitDeps;
+
 const DUET_TURN_TIMEOUT = envNum("AP_DUET_TURN_TIMEOUT", DEFAULT_TURN_BUDGET_S);
+
+/** bridge's half of the shared send/wait skeleton (src/core/roundProtocol.ts). */
+const BRIDGE_ROUND: RoundDescriptor = {
+  command: "bridge",
+  label: (verb) => `bridge round-${verb}`,
+  initHint: "run bridge init",
+  gateNoun: "round",
+  artDir: bridgeArtDir,
+  execDir: bridgeExecDir,
+  stateFile: (exec, round) => join(exec, `round-${round}.txt`),
+  promptFile: (exec, round) => join(exec, `round-prompt-${round}.md`),
+  bundle: (exec, round) => ({ path: join(exec, `followup-${round}.md`), missingWording: "follow-up bundle missing" }),
+  composeFirst: ({ art, exec }) => composeBridgeBrief(
+    readIfExists(join(art, "topic-text.txt")),
+    readField(join(exec, "target_cwd.txt")),
+    readField(join(exec, "branch.txt")) || "the current branch",
+  ),
+  composeFollowup: composeBridgeFollowup,
+  timeoutS: () => DUET_TURN_TIMEOUT,
+  questionFile: (exec, round) => join(exec, `question-${round}.txt`),
+};
 
 async function roundSendRun(rest: string[]): Promise<number> {
   const [topic, roundStr] = rest;
@@ -146,44 +164,7 @@ async function roundSendRun(rest: string[]): Promise<number> {
 }
 
 export async function roundSendWith(topic: string, round: number, d: TurnSendDeps): Promise<number> {
-  const art = bridgeArtDir(topic);
-  const exec = bridgeExecDir(topic);
-  const agent = readField(join(art, "agent.txt"));
-  const provider = readField(join(art, "selected-provider.txt"));
-  if (!agent || !provider) { log.error("bridge round-send: missing agent.txt/selected-provider.txt (run bridge init)"); return 1; }
-
-  if (!workerSendGate(agent, provider, topic, "bridge round-send", "round")) return 1;
-
-  const stateFile = join(exec, `round-${round}.txt`);
-  if (existsSync(stateFile)) { log.error(`bridge round-send: ${stateFile} already exists; rm to retry`); return 1; }
-
-  let prompt: string;
-  if (round === 1) {
-    const task = readIfExists(join(art, "topic-text.txt"));
-    const repo = readField(join(exec, "target_cwd.txt"));
-    const branch = readField(join(exec, "branch.txt")) || "the current branch";
-    prompt = composeBridgeBrief(task, repo, branch);
-  } else {
-    const bundle = join(exec, `followup-${round}.md`);
-    if (!existsSync(bundle)) { log.error(`bridge round-send: follow-up bundle missing: ${bundle} (the directive must write it first)`); return 1; }
-    prompt = composeBridgeFollowup(readFileSync(bundle, "utf8"), round);
-  }
-
-  const promptFile = join(exec, `round-prompt-${round}.md`);
-  atomicWrite(promptFile, prompt);
-  const offset = d.offsetFor(agent, provider, topic);
-  atomicWrite(stateFile, `OFFSET=${offset}\n`);
-
-  const rc = await d.send([agent, topic, `@${promptFile}`]);
-  if (rc !== 0) { log.error(`bridge round-send: send failed (rc=${rc}); ${stateFile} kept for retry`); return 1; }
-  log.ok(`bridge round-send: round=${round} offset=${offset}`);
-  return 0;
-}
-
-export interface TurnWaitDeps {
-  /** Both left unset by the live verb: awaitTurn's defaults are the live wait on the real clock. */
-  wait?: WaitFn;
-  clock?: Clock;
+  return sendRound(BRIDGE_ROUND, topic, round, d);
 }
 
 async function roundWaitRun(rest: string[]): Promise<number> {
@@ -194,29 +175,7 @@ async function roundWaitRun(rest: string[]): Promise<number> {
 }
 
 export async function roundWaitWith(topic: string, round: number, d: TurnWaitDeps): Promise<number> {
-  const art = bridgeArtDir(topic);
-  const exec = bridgeExecDir(topic);
-  const agent = readField(join(art, "agent.txt"));
-  const provider = readField(join(art, "selected-provider.txt"));
-  if (!agent || !provider) { log.error("bridge round-wait: missing agent.txt/selected-provider.txt"); return 1; }
-  const stateFile = join(exec, `round-${round}.txt`);
-  if (!existsSync(stateFile)) { log.error(`bridge round-wait: ${stateFile} missing (run bridge round-send first)`); return 1; }
-
-  const r = await awaitTurn({
-    agent, model: provider, topic, stateFile, timeoutS: DUET_TURN_TIMEOUT,
-    label: "bridge round-wait", policy: { confirm: true },
-  }, {
-    wait: d.wait, clock: d.clock,
-    onArmed: (offset) => { log.info(`bridge round-wait: round=${round} offset=${offset} timeout=${DUET_TURN_TIMEOUT}s`); },
-    onFlag: (note) => { recordHubFlag({ command: "bridge", topic, note }); },
-  });
-  if ("missingOffset" in r) { log.error(`bridge round-wait: OFFSET not set in ${stateFile}`); return 1; }
-  const ev = r.event;
-  const ts = classifyTurn(ev);
-  recordWaitOutcome(agent, provider, topic, stateFile, ts, "TS",
-    ev ? { file: join(exec, `question-${round}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
-  log.ok(`bridge round-wait: round=${round} TS=${ts}`);
-  return 0;
+  return waitRound(BRIDGE_ROUND, topic, round, d);
 }
 
 async function relayRun(rest: string[]): Promise<number> {
@@ -233,7 +192,7 @@ async function relayRun(rest: string[]): Promise<number> {
   // NOTE: round-wait already bumped OFFSET past the question; relay only sends + records.
   const rc = await sendRun(["--from", "hub", agent, topic, answer]);
   if (rc !== 0) { log.error(`bridge relay: send failed (rc=${rc})`); return 1; }
-  appendFileSync(join(bridgeExecDir(topic), `question-${round}.txt`), `RELAYED=${answer}\n`);
+  appendFileSync(BRIDGE_ROUND.questionFile(bridgeExecDir(topic), round), `RELAYED=${answer}\n`);
   log.ok(`bridge relay: round=${round} answered`);
   return 0;
 }
@@ -296,7 +255,7 @@ async function summaryRun(rest: string[]): Promise<number> {
   }
   // count rounds = highest round-<n>.txt present (files are contiguous 1..K: round-send refuses to
   // overwrite an existing round-<n>.txt and the directive only ever advances the round by +1)
-  let rounds = 0; while (existsSync(join(exec, `round-${rounds + 1}.txt`))) rounds++;
+  let rounds = 0; while (existsSync(BRIDGE_ROUND.stateFile(exec, rounds + 1))) rounds++;
 
   const facts: BridgeSummaryFacts = {
     topic, status: aborted ? "aborted" : "ok", started, ended, duration,
