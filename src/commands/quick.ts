@@ -160,7 +160,11 @@ export async function branchWith(topic: string, target: string, r: Runner, stash
   atomicWrite(join(exec, "target_cwd.txt"), target + "\n");
   atomicWrite(join(exec, "start-branch.txt"), snap.branch + "\n");
   atomicWrite(join(exec, "branch-base.sha"), snap.baseSha + "\n");
-  atomicWrite(join(exec, "branch.txt"), branch + "\n");
+  // The branch the run is ACTUALLY on, the way implement records its `recorded`: a failed checkout
+  // leaves HEAD on the start branch, and writing the intended name there is what lets a leftover
+  // feat/quick-<topic> from an earlier run pass finish's guard and ship as a PR containing none of
+  // this run's work. The worker's round-1 prompt reads this file too.
+  atomicWrite(join(exec, "branch.txt"), (onBranch ? branch : snap.branch) + "\n");
   if (!onBranch) { log.warn(`quick branch: checkout ${branch} failed; staying on ${snap.branch}`); }
   log.ok(`quick branch: ${branch} (snapshot=${snap.state}, base=${snap.baseSha.slice(0, 8)})`);
   return 0;
@@ -289,13 +293,19 @@ export async function finishWith(topic: string, r: Runner, hasGh: boolean): Prom
     log.ok(`quick finish: branch-only — kept ${branch}, restored ${startBranch}`);
     return 0;
   }
-  // branch.txt carries the INTENDED name even when `quick branch`'s checkout failed (it only warns),
-  // so a finish that trusts it pushes a ref that was never created and records `pr-failed-kept` — a PR
-  // problem, when the truth is there was no branch to act on. Refuse loudly instead, and say so.
+  // branch.txt records the branch the run actually ended on, so a failed checkout arrives here as
+  // `branch === startBranch` and is refused below. The ref probe still earns its place: the branch can
+  // be gone by finish time (deleted by hand, or a state dir carried over from another run), and a
+  // finish that trusts the record would push a ref that does not exist and record `pr-failed-kept` — a
+  // PR problem, when the truth is there was no branch to act on. Refuse loudly instead, and say so.
   if (!hasDistinctBranch(r, branch, startBranch)) {
     const named = branch || "(unrecorded)";
+    // The recover line names a branch to CREATE, so a record that IS the start branch — what a failed
+    // checkout now leaves — falls back to the topic-derived name: `git checkout -b main` while on main
+    // is a dead end.
+    const recreate = branch && branch !== startBranch ? branch : `feat/quick-${topic}`;
     log.warn(`quick finish: no branch '${named}' distinct from the start branch '${startBranch}' — NOTHING was pushed and no PR was opened`);
-    log.warn(`  recover: re-run the branch step in the target repo (git checkout -b ${branch || `feat/quick-${topic}`}), commit the work, then finish again`);
+    log.warn(`  recover: re-run the branch step in the target repo (git checkout -b ${recreate}), commit the work, then finish again`);
     r.run("git", ["checkout", "-q", startBranch]);
     // Where the work actually sits is READ BACK, never assumed: this checkout is best-effort and a
     // dirty tree blocks it silently, so a flag naming the start branch could send the user looking

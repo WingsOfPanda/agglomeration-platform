@@ -18912,7 +18912,7 @@ async function branchWith(topic, target, r, stashWip = false) {
   atomicWrite((0, import_node_path22.join)(exec, "target_cwd.txt"), target + "\n");
   atomicWrite((0, import_node_path22.join)(exec, "start-branch.txt"), snap.branch + "\n");
   atomicWrite((0, import_node_path22.join)(exec, "branch-base.sha"), snap.baseSha + "\n");
-  atomicWrite((0, import_node_path22.join)(exec, "branch.txt"), branch + "\n");
+  atomicWrite((0, import_node_path22.join)(exec, "branch.txt"), (onBranch ? branch : snap.branch) + "\n");
   if (!onBranch) {
     log.warn(`quick branch: checkout ${branch} failed; staying on ${snap.branch}`);
   }
@@ -19014,8 +19014,9 @@ async function finishWith(topic, r, hasGh) {
   }
   if (!hasDistinctBranch(r, branch, startBranch)) {
     const named = branch || "(unrecorded)";
+    const recreate = branch && branch !== startBranch ? branch : `feat/quick-${topic}`;
     log.warn(`quick finish: no branch '${named}' distinct from the start branch '${startBranch}' \u2014 NOTHING was pushed and no PR was opened`);
-    log.warn(`  recover: re-run the branch step in the target repo (git checkout -b ${branch || `feat/quick-${topic}`}), commit the work, then finish again`);
+    log.warn(`  recover: re-run the branch step in the target repo (git checkout -b ${recreate}), commit the work, then finish again`);
     r.run("git", ["checkout", "-q", startBranch]);
     const head = currentBranch(r) || "(detached)";
     const keptNoBranch = restoreStashWip(topic, exec, r, startBranch);
