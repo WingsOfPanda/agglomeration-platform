@@ -209,6 +209,61 @@ describe("resume: crash matrix", () => {
     expect(spy).not.toHaveBeenCalled();
     void art;
   });
+
+  it("9. crash after exp-002's intent with exp-001 ALREADY COMPLETED -> redispatch exp-002, no fabricated delivery", async () => {
+    const h = home();
+    const { art, sd, outbox } = scaffold(h, { expCounter: "1" }); // idle again after exp-001 settled
+    const settled = '{"event":"ack","task_summary":"exp-001","ts":"t"}\n{"event":"done","summary":"experiment exp-001","ts":"t"}\n';
+    ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-intent", agent: INST, exp_id: "exp-001", data: { outboxOffset: 0 } });
+    ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-delivered", agent: INST, exp_id: "exp-001", data: { outboxOffset: 0 } });
+    appendFileSync(outbox, settled);
+    mkdirSync(experimentDir(art, INST, "exp-001"), { recursive: true });
+    writeFileSync(join(experimentDir(art, INST, "exp-001"), "result.json"), JSON.stringify({ status: "ok", metric_value: 0.9 }));
+    // exp-002's intent lands stamped with ITS OWN pre-send offset; the hub dies before the inbox.
+    ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-intent", agent: INST, exp_id: "exp-002", data: { outboxOffset: Buffer.byteLength(settled) } });
+
+    const { rc, out } = await run(h, deps(h));
+    expect(rc).toBe(0);
+    expect(out).toContain("REDISPATCH=bravo:exp-002"); // exp-001's ack/done is NOT exp-002's acceptance
+    expect(evs(art).some((e) => e.kind === "dispatch-delivered" && e.exp_id === "exp-002")).toBe(false);
+    const st = state(sd);
+    expect(st.phase).not.toBe("working"); // the lane must not be stranded working on an undelivered exp
+    expect(st.current_exp_id ?? "").not.toBe("exp-002");
+  });
+
+  it("10. same crash after an ERRORED exp-001 -> no phantom failed exp-002 in the campaign record", async () => {
+    const h = home();
+    const { art, sd, outbox } = scaffold(h, { phase: "failed", expCounter: "1" });
+    const settled = '{"event":"ack","task_summary":"exp-001","ts":"t"}\n{"event":"error","message":"boom","ts":"t"}\n';
+    ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-intent", agent: INST, exp_id: "exp-001", data: { outboxOffset: 0 } });
+    ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-delivered", agent: INST, exp_id: "exp-001", data: { outboxOffset: 0 } });
+    appendFileSync(outbox, settled);
+    ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-intent", agent: INST, exp_id: "exp-002", data: { outboxOffset: Buffer.byteLength(settled) } });
+
+    const { rc, out } = await run(h, deps(h));
+    expect(rc).toBe(0);
+    expect(out).toContain("REDISPATCH=bravo:exp-002");
+    expect(state(sd).current_exp_id ?? "").not.toBe("exp-002"); // exp-001's failure never becomes exp-002's
+    expect(evs(art).some((e) => e.kind === "dispatch-delivered" && e.exp_id === "exp-002")).toBe(false);
+  });
+
+  it("11. LEGACY intent (no recorded offset) after a prior delivery -> same exp id re-dispatched, lane not stranded", async () => {
+    const h = home();
+    const { art, sd, outbox } = scaffold(h, { expCounter: "1" });
+    ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-intent", agent: INST, exp_id: "exp-001" });
+    ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-delivered", agent: INST, exp_id: "exp-001", data: { outboxOffset: 0 } });
+    appendFileSync(outbox, '{"event":"ack","task_summary":"exp-001","ts":"t"}\n{"event":"done","summary":"experiment exp-001","ts":"t"}\n');
+    mkdirSync(experimentDir(art, INST, "exp-001"), { recursive: true });
+    writeFileSync(join(experimentDir(art, INST, "exp-001"), "result.json"), JSON.stringify({ status: "ok", metric_value: 0.9 }));
+    ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-intent", agent: INST, exp_id: "exp-002" }); // pre-0.5.29 shape
+
+    const { rc, out } = await run(h, deps(h));
+    expect(rc).toBe(0);
+    expect(out).toContain("REDISPATCH=bravo:exp-002"); // unattributable tail -> fail safe, idempotent re-dispatch
+    expect(evs(art).filter((e) => e.kind === "dispatch-intent" && e.exp_id === "exp-002")).toHaveLength(1);
+    expect(state(sd).phase).not.toBe("working");
+  });
+
 });
 
 describe("resume: report shape", () => {

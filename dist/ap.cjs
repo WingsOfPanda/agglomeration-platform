@@ -24604,7 +24604,8 @@ function replayLedger(text) {
     const key = e.agent && e.exp_id ? `${e.agent}/${e.exp_id}` : null;
     if (e.kind === "dispatch-intent" && key && e.agent && e.exp_id) {
       const operator = typeof e.data?.operator === "string" ? e.data.operator : void 0;
-      if (!intents.has(key)) intents.set(key, { agent: e.agent, expId: e.exp_id, delivered: false, operator });
+      const intentOffset = typeof e.data?.outboxOffset === "number" ? e.data.outboxOffset : void 0;
+      if (!intents.has(key)) intents.set(key, { agent: e.agent, expId: e.exp_id, delivered: false, operator, intentOffset });
       const m = EXP_NUM.exec(e.exp_id);
       if (m) {
         const n2 = parseInt(m[1], 10);
@@ -25340,7 +25341,7 @@ async function experimentSendWith(args, deps) {
   }
   if (prompt.trim() === "") return fail(`prompt rendered empty (template substitution failed)`, 1);
   const preOffset = outboxOffset(outbox);
-  if (hasLedger) ledgerAppend(art, { gen: effGen, ts: deps.now(), kind: "dispatch-intent", agent, exp_id: expId, ...p.operator !== void 0 ? { data: { operator: p.operator } } : {} });
+  if (hasLedger) ledgerAppend(art, { gen: effGen, ts: deps.now(), kind: "dispatch-intent", agent, exp_id: expId, data: { outboxOffset: preOffset, ...p.operator !== void 0 ? { operator: p.operator } : {} } });
   atomicWrite((0, import_node_path47.join)(branchDir, "prompt.md"), prompt);
   if (p.parentId !== void 0) atomicWrite((0, import_node_path47.join)(branchDir, "lineage.txt"), `parent_id=${p.parentId}
 `);
@@ -26067,14 +26068,17 @@ async function resumeWith(args, deps) {
     if (intent.delivered) continue;
     const { agent, expId } = intent;
     const obBuf = readOutbox(agent);
-    const reconstructed = replay.lastDeliveredOffset.get(agent) ?? 0;
-    const tail = obBuf.subarray(reconstructed).toString("utf8");
+    const priorDelivery = replay.lastDeliveredOffset.get(agent);
+    const reconstructed = intent.intentOffset ?? (priorDelivery === void 0 ? 0 : -1);
     let accepted = false;
-    for (const line of tail.split("\n")) {
-      const o2 = parseEvent(line.trim());
-      if (o2 && (o2.event === "ack" || o2.event === "done")) {
-        accepted = true;
-        break;
+    if (reconstructed >= 0) {
+      const tail = obBuf.subarray(reconstructed).toString("utf8");
+      for (const line of tail.split("\n")) {
+        const o2 = parseEvent(line.trim());
+        if (o2 && (o2.event === "ack" || o2.event === "done")) {
+          accepted = true;
+          break;
+        }
       }
     }
     const stateTxt = lanePath(art, agent);

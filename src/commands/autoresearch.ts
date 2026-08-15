@@ -712,9 +712,11 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
 
   // Replay-safe dispatch: record the intent BEFORE any worker-visible effect and the
   // delivery AFTER, carrying the outbox offset captured before the inbox write so
-  // completions are scoped to THIS dispatch without touching the wire protocol.
+  // completions are scoped to THIS dispatch without touching the wire protocol. BOTH
+  // events carry it: a crash between them leaves resume only the intent, and the
+  // previous dispatch's offset would attribute that dispatch's completion to this one.
   const preOffset = outboxOffset(outbox);
-  if (hasLedger) ledgerAppend(art, { gen: effGen, ts: deps.now(), kind: "dispatch-intent", agent, exp_id: expId, ...(p.operator !== undefined ? { data: { operator: p.operator } } : {}) });
+  if (hasLedger) ledgerAppend(art, { gen: effGen, ts: deps.now(), kind: "dispatch-intent", agent, exp_id: expId, data: { outboxOffset: preOffset, ...(p.operator !== undefined ? { operator: p.operator } : {}) } });
   atomicWrite(join(branchDir, "prompt.md"), prompt);
   if (p.parentId !== undefined) atomicWrite(join(branchDir, "lineage.txt"), `parent_id=${p.parentId}\n`);
   if (p.operator !== undefined) atomicWrite(join(branchDir, "operator.txt"), `operator=${p.operator}\n`);
@@ -1673,12 +1675,19 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
     if (intent.delivered) continue;
     const { agent, expId } = intent;
     const obBuf = readOutbox(agent);
-    const reconstructed = replay.lastDeliveredOffset.get(agent) ?? 0;
-    const tail = obBuf.subarray(reconstructed).toString("utf8");
+    // The intent's OWN pre-send offset scopes the acceptance tail to THIS dispatch.
+    // Pre-0.5.29 intents carry none: with no prior delivery the whole outbox is this
+    // dispatch's (offset 0), otherwise the tail is unattributable (-1) and we skip the
+    // scan rather than credit the previous dispatch's ack/done to this experiment.
+    const priorDelivery = replay.lastDeliveredOffset.get(agent);
+    const reconstructed = intent.intentOffset ?? (priorDelivery === undefined ? 0 : -1);
     let accepted = false;
-    for (const line of tail.split("\n")) {
-      const o = parseEvent(line.trim());
-      if (o && (o.event === "ack" || o.event === "done")) { accepted = true; break; }
+    if (reconstructed >= 0) {
+      const tail = obBuf.subarray(reconstructed).toString("utf8");
+      for (const line of tail.split("\n")) {
+        const o = parseEvent(line.trim());
+        if (o && (o.event === "ack" || o.event === "done")) { accepted = true; break; }
+      }
     }
     const stateTxt = lanePath(art, agent);
     if (accepted) {

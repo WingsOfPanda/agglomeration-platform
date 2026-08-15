@@ -381,6 +381,17 @@ describe("autoresearch experiment-send", () => {
     expect(delivered!.data?.outboxOffset).toBe(pre);
   });
 
+  it("the intent carries its OWN pre-send offset, so resume can scope the acceptance tail to it", async () => {
+    const h = home();
+    const { art, pd } = scaffold(h);
+    seedLedger(art);
+    writeFileSync(join(pd, "outbox.jsonl"), '{"event":"done","summary":"experiment exp-001","ts":"t"}\n'); // a PRIOR experiment's completion
+    const pre = statSync(join(pd, "outbox.jsonl")).size;
+    expect(await experimentSendWith([TOPIC, INST, "exp-002", "next", "b"], deps(h))).toBe(0);
+    const intent = parseLedger(readFileSync(ledgerPath(art), "utf8")).find((e) => e.kind === "dispatch-intent");
+    expect(intent!.data?.outboxOffset).toBe(pre);
+  });
+
   it("crash injection: DI inboxWrite throws -> intent recorded, no delivered, state.txt untouched", async () => {
     const h = home();
     const { art, sd } = scaffold(h);

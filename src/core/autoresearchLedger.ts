@@ -87,7 +87,8 @@ export interface LedgerIntent {
   agent: string;
   expId: string;
   delivered: boolean;
-  outboxOffset?: number;
+  outboxOffset?: number;  // from the DELIVERED event (absent until delivery lands)
+  intentOffset?: number;  // from the INTENT event itself (absent in pre-0.5.29 ledgers)
   operator?: string;
 }
 
@@ -116,7 +117,8 @@ export function replayLedger(text: string): LedgerReplay {
     const key = e.agent && e.exp_id ? `${e.agent}/${e.exp_id}` : null;
     if (e.kind === "dispatch-intent" && key && e.agent && e.exp_id) {
       const operator = typeof e.data?.operator === "string" ? (e.data.operator as string) : undefined;
-      if (!intents.has(key)) intents.set(key, { agent: e.agent, expId: e.exp_id, delivered: false, operator });
+      const intentOffset = typeof e.data?.outboxOffset === "number" ? (e.data.outboxOffset as number) : undefined;
+      if (!intents.has(key)) intents.set(key, { agent: e.agent, expId: e.exp_id, delivered: false, operator, intentOffset });
       const m = EXP_NUM.exec(e.exp_id);
       if (m) {
         const n = parseInt(m[1], 10);
