@@ -17,8 +17,8 @@ import { repoRoot } from "../core/paths.js";
 import { parseBridgeArgs, deriveSlug, bridgeArtDir, bridgeExecDir, renderBridgeSummary, renderBridgeResume } from "../core/bridge.js";
 import type { BridgeSummaryFacts } from "../core/bridge.js";
 import { composeBridgeBrief, composeBridgeFollowup } from "../core/bridgeTurn.js";
-import { classifyTurn, waitTurnConfirmed } from "../core/turn.js";
-import { parseLatestOffset, recordWaitOutcome } from "../core/wait.js";
+import { classifyTurn } from "../core/turn.js";
+import { awaitTurn, recordWaitOutcome } from "../core/wait.js";
 import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
 import { outboxOffset, outboxPath, workerSendGate } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
@@ -201,14 +201,17 @@ export async function roundWaitWith(topic: string, round: number, d: TurnWaitDep
   if (!agent || !provider) { log.error("bridge round-wait: missing agent.txt/selected-provider.txt"); return 1; }
   const stateFile = join(exec, `round-${round}.txt`);
   if (!existsSync(stateFile)) { log.error(`bridge round-wait: ${stateFile} missing (run bridge round-send first)`); return 1; }
-  const offset = parseLatestOffset(readFileSync(stateFile, "utf8"));
-  if (offset === null) { log.error(`bridge round-wait: OFFSET not set in ${stateFile}`); return 1; }
 
-  log.info(`bridge round-wait: round=${round} offset=${offset} timeout=${DUET_TURN_TIMEOUT}s`);
-  const ev = await waitTurnConfirmed(agent, provider, topic, offset, DUET_TURN_TIMEOUT, {
+  const r = await awaitTurn({
+    agent, model: provider, topic, stateFile, timeoutS: DUET_TURN_TIMEOUT,
+    label: "bridge round-wait", policy: { confirm: true },
+  }, {
     wait: d.wait, sleep: d.sleep,
-    onVeto: (note) => { recordHubFlag({ command: "bridge", topic, note }); },
+    onArmed: (offset) => { log.info(`bridge round-wait: round=${round} offset=${offset} timeout=${DUET_TURN_TIMEOUT}s`); },
+    onFlag: (note) => { recordHubFlag({ command: "bridge", topic, note }); },
   });
+  if ("missingOffset" in r) { log.error(`bridge round-wait: OFFSET not set in ${stateFile}`); return 1; }
+  const ev = r.event;
   const ts = classifyTurn(ev);
   recordWaitOutcome(agent, provider, topic, stateFile, ts, "TS",
     ev ? { file: join(exec, `question-${round}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);

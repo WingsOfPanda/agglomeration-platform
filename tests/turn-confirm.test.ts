@@ -8,8 +8,25 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, write
 import { dirname, join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { outboxEventsSince, outboxOffset, outboxPath, type OutboxEvent } from "../src/core/ipc.js";
-import { classifyTurn, turnConfirmS, waitTurnConfirmed, type TurnConfirmDeps } from "../src/core/turn.js";
+import { classifyTurn } from "../src/core/turn.js";
+import { awaitTurn, turnConfirmS, type TurnDeps } from "../src/core/wait.js";
 import { globalRoot } from "../src/core/paths.js";
+
+/** The confirmation layer as this suite drives it. The layer is no longer its own entry point —
+ *  it is `awaitTurn`'s `confirm` policy — so this shim supplies the one thing awaitTurn owns that
+ *  the old signature took as an argument: a state file carrying the `OFFSET=`. Everything below is
+ *  the 0.5.15 regression net, unchanged. */
+async function waitTurnConfirmed(
+  i: string, m: string, t: string, offset: number, timeoutS: number, d: TurnDeps,
+): Promise<OutboxEvent | null> {
+  const stateFile = join(globalRoot(), "turn-confirm-state.txt");
+  mkdirSync(dirname(stateFile), { recursive: true });
+  writeFileSync(stateFile, `OFFSET=${offset}\n`);
+  const r = await awaitTurn(
+    { agent: i, model: m, topic: t, stateFile, timeoutS, label: "turn-wait", policy: { confirm: true } }, d);
+  if ("missingOffset" in r) throw new Error("turn-confirm shim: OFFSET not readable");
+  return r.event;
+}
 
 const I = "bravo", M = "codex", T = "auth";
 
@@ -129,8 +146,8 @@ describe("waitTurnConfirmed", () => {
   afterEach(() => { h.cleanup(); delete process.env.AP_TURN_CONFIRM_S; });
 
   /** Wrapper deps from a scripted wait + sleep, collecting every forensics note. */
-  function deps(w: ReturnType<typeof scriptedWait>, s: ReturnType<typeof scriptedSleep>, flags: string[], clock?: { now: () => number }): TurnConfirmDeps {
-    return { wait: w.wait, sleep: s.sleep, nowMs: clock?.now, onVeto: (note) => { flags.push(note); } };
+  function deps(w: ReturnType<typeof scriptedWait>, s: ReturnType<typeof scriptedSleep>, flags: string[], clock?: { now: () => number }): TurnDeps {
+    return { wait: w.wait, sleep: s.sleep, nowMs: clock?.now, onFlag: (note) => { flags.push(note); } };
   }
 
   it("timeout (wait → null) is passed through with no confirmation work", async () => {
@@ -300,7 +317,7 @@ describe("waitTurnConfirmed", () => {
     };
     const flags: string[] = [];
     // base deadline t0+100s; floor is legEnd+3 windows = t0+60s -> the base wins.
-    const ev = await waitTurnConfirmed(I, M, T, 0, 100, { wait, sleep: s.sleep, nowMs: clock.now, onVeto: (n) => flags.push(n) });
+    const ev = await waitTurnConfirmed(I, M, T, 0, 100, { wait, sleep: s.sleep, nowMs: clock.now, onFlag: (n: string) => flags.push(n) });
     expect(ev!.summary).toBe("premature");
     expect(calls).toBe(5);   // first leg + 4 re-arm rounds (20s window + 4x20s = 100s)
     expect(flags).toEqual([
@@ -321,7 +338,7 @@ describe("waitTurnConfirmed", () => {
       appendOutbox([DONE2]); return doneEv("real");
     };
     const flags: string[] = [];
-    const ev = await waitTurnConfirmed(I, M, T, 0, 10, { wait, sleep: s.sleep, nowMs: clock.now, onVeto: (n) => flags.push(n) });
+    const ev = await waitTurnConfirmed(I, M, T, 0, 10, { wait, sleep: s.sleep, nowMs: clock.now, onFlag: (n: string) => flags.push(n) });
     expect(ev!.summary).toBe("real");           // the re-arm ran instead of expiring on arrival
     expect(flags).toEqual(["turn-confirm-veto: codex premature done — outbox still active"]);
   });

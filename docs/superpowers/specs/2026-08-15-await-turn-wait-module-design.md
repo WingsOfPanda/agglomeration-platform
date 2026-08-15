@@ -218,3 +218,44 @@ private key readers together. In the shipped source `lastKeyedValue` is used ONL
 own `gateState`/`gateAnomalies` and by nothing that moves, while `lastKeyedNumber` is used by
 `parseLatestOffset` AND by implement's `OBJECTIONS=` counter. The conditional the spec wrote for
 `lastKeyedValue` therefore fires: it stays in `designTurn.ts`, un-duplicated.
+
+**A3 (commit 2) — `TurnResult.offset` cannot exist; the offset leaves through `onArmed`.** The spec
+gave `TurnResult` an `offset` field, "the offset actually waited from — callers log it". All four
+call sites log the offset BEFORE the wait (it is the line that tells the operator what the hub is
+now blocked on, for up to four hours), so a value returned AFTER the wait cannot feed it, and moving
+the line after the wait would reorder it against the engine's own `outbox-wait: ... extending`
+warning. `TurnResult` therefore carries no `offset`; `TurnDeps` gains `onArmed(offset)`, called once
+between the offset read and the wait. Each verb keeps its own byte-exact wording — the three formats
+genuinely differ (`quick turn-wait: round=N offset=…`, `[turn-wait] lead round=N offset=…`,
+`explore research-wait: alpha offset=…`), so no single composed line could have replaced them.
+
+**A4 (commit 2) — the artifact slot needs the phase KEY, not just the path.** `phaseWait`'s expiry
+warning names the phase key in its own text ("`${row.key}` keeps its own classification so later
+phases still dispatch"). `artifact?: { path: string }` cannot reproduce that byte, so the slot is
+`artifact?: { path: string; key: string }`.
+
+**A5 (commit 2) — `TurnCtx.command` dropped.** With flags leaving through the injected `onFlag`
+(which the callers bind with their own `command` + `topic`), nothing inside `awaitTurn` reads a
+command. Keeping the field would have been a second, unread copy of what `onFlag` already carries.
+
+**A6 (commit 2) — the dep bag is `TurnDeps`, not `WaitDeps`.** `phaseTable.ts` already exports a
+`WaitDeps` that `tests/helpers/phaseDeps.ts` and the design suites import; a second export under
+that name in `wait.ts` would collide for every file importing both.
+
+**A7 (commit 2) — the confirmation body sits in a private `confirmedTerminal`, not inlined.** The
+spec said the 0.5.15 body "lives inside awaitTurn". It lives inside `wait.ts` as a private function
+`awaitTurn` calls, which is what makes "preserved VERBATIM" checkable by eye: the body is the
+0.5.15 body with `d.onVeto` renamed to `d.onFlag` and nothing else touched. It is no longer an
+export, which is what the success criterion actually asks.
+
+**A8 (commit 2) — the provider-scaled timeout is now computed before the missing-OFFSET check.**
+`awaitTurn` takes `timeoutS` up front and owns the offset read, so `phaseWait` and implement's
+turn-wait resolve their timeout one step earlier than the shipped order. Behaviorally invisible:
+`consultTimeout`, `agentTimeoutMultiplier` and `envNum` are pure reads with no logging and no
+writes, and the missing-OFFSET path still prints the same error and returns the same rc. The only
+difference is that a run with no `OFFSET=` now reads `contracts.yaml` before failing.
+
+**A9 (commit 2) — `phaseWait` reads its state file twice.** Once for the `<KEY>=skipped` fast-path
+(which must precede the wait and stays with the caller), then once inside `awaitTurn` for the
+offset. No output, state byte or rc changes; the alternative was to pass pre-read text in, which
+would put offset resolution back with the callers — the thing this PR removes.

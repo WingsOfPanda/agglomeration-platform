@@ -15,8 +15,8 @@ import { runnerAt, preSnapshot, createOrResumeBranch, finishBranch, classifyDirt
 import type { Runner } from "../core/gitwork.js";
 import { outboxOffset, outboxPath, workerSendGate, type OutboxEvent } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
-import { composeRound1Prompt, composeFixPrompt, classifyTurn, waitTurnConfirmed } from "../core/turn.js";
-import { parseLatestOffset, recordWaitOutcome } from "../core/wait.js";
+import { composeRound1Prompt, composeFixPrompt, classifyTurn } from "../core/turn.js";
+import { awaitTurn, recordWaitOutcome } from "../core/wait.js";
 import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
 import { run as sendRun } from "./send.js";
 import { readIfExists, readIfExistsOrNull, readField, kvField } from "../core/fsread.js";
@@ -237,14 +237,17 @@ export async function turnWaitWith(topic: string, round: number, d: TurnWaitDeps
   if (!agent || !provider) { log.error("quick turn-wait: missing agent.txt/selected-provider.txt"); return 1; }
   const stateFile = join(exec, `turn-${round}.txt`);
   if (!existsSync(stateFile)) { log.error(`quick turn-wait: ${stateFile} missing (run quick turn-send first)`); return 1; }
-  const offset = parseLatestOffset(readFileSync(stateFile, "utf8"));
-  if (offset === null) { log.error(`quick turn-wait: OFFSET not set in ${stateFile}`); return 1; }
 
-  log.info(`quick turn-wait: round=${round} offset=${offset} timeout=${QUICK_TURN_TIMEOUT}s`);
-  const ev = await waitTurnConfirmed(agent, provider, topic, offset, QUICK_TURN_TIMEOUT, {
+  const r = await awaitTurn({
+    agent, model: provider, topic, stateFile, timeoutS: QUICK_TURN_TIMEOUT,
+    label: "quick turn-wait", policy: { confirm: true },
+  }, {
     wait: d.wait, sleep: d.sleep,
-    onVeto: (note) => { recordHubFlag({ command: "quick", topic, note }); },
+    onArmed: (offset) => { log.info(`quick turn-wait: round=${round} offset=${offset} timeout=${QUICK_TURN_TIMEOUT}s`); },
+    onFlag: (note) => { recordHubFlag({ command: "quick", topic, note }); },
   });
+  if ("missingOffset" in r) { log.error(`quick turn-wait: OFFSET not set in ${stateFile}`); return 1; }
+  const ev = r.event;
   const ts = classifyTurn(ev);
   recordWaitOutcome(agent, provider, topic, stateFile, ts, "TS",
     ev ? { file: join(exec, `question-${round}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);
