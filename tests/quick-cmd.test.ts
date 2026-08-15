@@ -339,6 +339,7 @@ describe("quick turn-send (turnSendWith core)", () => {
 });
 
 import { turnWaitWith } from "../src/commands/quick.js";
+import { noSleepClock } from "./helpers/clock.js";
 
 describe("quick turn-wait (turnWaitWith core)", () => {
   let h: { home: string; cleanup: () => void };
@@ -347,7 +348,7 @@ describe("quick turn-wait (turnWaitWith core)", () => {
 
   // The terminal-confirmation window is real wall time; these pins only care about the verdict, so
   // the window's sleep is injected away (the layer itself is pinned in tests/turn-confirm.test.ts).
-  const noSleep = async () => {};
+  const noClock = noSleepClock;
 
   async function scaffold(topic: string, stateBody: string) {
     const { quickArtDir, quickExecDir } = await import("../src/core/quick.js");
@@ -360,7 +361,7 @@ describe("quick turn-wait (turnWaitWith core)", () => {
 
   it("done → appends TS=ok; rc 0", async () => {
     await scaffold("auth", "OFFSET=10\n");
-    const rc = await turnWaitWith("auth", 1, { wait: async () => ({ event: "done", summary: "ok" }), sleep: noSleep });
+    const rc = await turnWaitWith("auth", 1, { wait: async () => ({ event: "done", summary: "ok" }), clock: noClock });
     expect(rc).toBe(0);
     const { quickExecDir } = await import("../src/core/quick.js");
     expect(readFileSync(join(quickExecDir("auth"), "turn-1.txt"), "utf8")).toBe("OFFSET=10\nTS=ok\n");
@@ -368,7 +369,7 @@ describe("quick turn-wait (turnWaitWith core)", () => {
 
   it("question → captures payload + TS=question", async () => {
     await scaffold("auth", "OFFSET=0\n");
-    await turnWaitWith("auth", 1, { wait: async () => ({ event: "question", message: "which db?" }), sleep: noSleep });
+    await turnWaitWith("auth", 1, { wait: async () => ({ event: "question", message: "which db?" }), clock: noClock });
     const { quickExecDir } = await import("../src/core/quick.js");
     expect(readFileSync(join(quickExecDir("auth"), "turn-1.txt"), "utf8")).toContain("TS=question");
     expect(readFileSync(join(quickExecDir("auth"), "question-1.txt"), "utf8")).toContain("which db?");
@@ -376,14 +377,14 @@ describe("quick turn-wait (turnWaitWith core)", () => {
 
   it("timeout (null) → TS=timeout", async () => {
     await scaffold("auth", "OFFSET=0\n");
-    await turnWaitWith("auth", 1, { wait: async () => null, sleep: noSleep });
+    await turnWaitWith("auth", 1, { wait: async () => null, clock: noClock });
     const { quickExecDir } = await import("../src/core/quick.js");
     expect(readFileSync(join(quickExecDir("auth"), "turn-1.txt"), "utf8")).toContain("TS=timeout");
   });
 
   it("missing OFFSET → rc 1", async () => {
     await scaffold("auth", "TS=stale\n");
-    expect(await turnWaitWith("auth", 1, { wait: async () => null, sleep: noSleep })).toBe(1);
+    expect(await turnWaitWith("auth", 1, { wait: async () => null, clock: noClock })).toBe(1);
   });
 
   it("question: appends a bumped OFFSET so a re-arm resumes past it (no loop)", async () => {
@@ -399,8 +400,8 @@ describe("quick turn-wait (turnWaitWith core)", () => {
       seen.push(off);
       return seen.length === 1 ? { event: "question", message: "which db?" } : { event: "done", summary: "ok" };
     };
-    await turnWaitWith("auth", 1, { wait, sleep: noSleep });   // round 1: handles the question at offset 0
-    await turnWaitWith("auth", 1, { wait, sleep: noSleep });   // re-arm on the SAME round must resume past it
+    await turnWaitWith("auth", 1, { wait, clock: noClock });   // round 1: handles the question at offset 0
+    await turnWaitWith("auth", 1, { wait, clock: noClock });   // re-arm on the SAME round must resume past it
     const state = readFileSync(join(quickExecDir("auth"), "turn-1.txt"), "utf8");
     expect(state).toContain(`OFFSET=${N}`);     // a bumped OFFSET line was appended on the question
     expect(seen).toEqual([0, N]);               // the re-arm read the LATEST offset, not 0 (no loop)

@@ -4,7 +4,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { topicDir, workerDir } from "../src/core/paths.js";
-import { findingsStatus, researchState, parseLatestOffset, lastKeyedNumber, recordWaitOutcome, scaledTimeout, composeResearchPrompt, composeVerifyPrompt, verifyState, composeDrilldownPrompt, drilldownState } from "../src/core/designTurn.js";
+import { findingsStatus, researchState, composeResearchPrompt, composeVerifyPrompt, verifyState, composeDrilldownPrompt, drilldownState } from "../src/core/designTurn.js";
+import { parseLatestOffset, lastKeyedNumber, recordWaitOutcome, scaledTimeout } from "../src/core/wait.js";
 
 describe("findingsStatus", () => {
   it("null (no findings.md) → missing", () => { expect(findingsStatus(null)).toBe("missing"); });

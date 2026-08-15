@@ -5,8 +5,9 @@ import { join, dirname } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { implementArtDir } from "../src/core/implement.js";
 import { composeRound1Prompt } from "../src/core/implementTurn.js";
-import { parseLatestOffset } from "../src/core/designTurn.js";
+import { parseLatestOffset } from "../src/core/wait.js";
 import { outboxPath } from "../src/core/ipc.js";
+import { noSleepClock } from "./helpers/clock.js";
 import {
   turnSendWith, turnWaitWith,
   type ImplementSendDeps, type ImplementWaitDeps,
@@ -119,8 +120,8 @@ function waitDeps(over: Partial<ImplementWaitDeps> = {}): ImplementWaitDeps {
   return {
     wait: over.wait ?? (async () => null),
     // The terminal-confirmation window is real wall time; inject it away (the layer itself is
-    // pinned in tests/turn-confirm.test.ts).
-    sleep: over.sleep ?? (async () => {}),
+    // pinned in tests/turn-confirm.test.ts). `now` is not the clock — it stamps ASKED_AT.
+    clock: over.clock ?? noSleepClock,
     multiplier: over.multiplier ?? (() => "1"),
     now: over.now ?? (() => 1700000000),
   };

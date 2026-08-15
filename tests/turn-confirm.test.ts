@@ -8,8 +8,26 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, write
 import { dirname, join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { outboxEventsSince, outboxOffset, outboxPath, type OutboxEvent } from "../src/core/ipc.js";
-import { classifyTurn, turnConfirmS, waitTurnConfirmed, type TurnConfirmDeps } from "../src/core/turn.js";
+import { classifyTurn } from "../src/core/turn.js";
+import { awaitTurn, turnConfirmS, type TurnDeps } from "../src/core/wait.js";
 import { globalRoot } from "../src/core/paths.js";
+import { noSleepClock } from "./helpers/clock.js";
+
+/** The confirmation layer as this suite drives it. The layer is no longer its own entry point —
+ *  it is `awaitTurn`'s `confirm` policy — so this shim supplies the one thing awaitTurn owns that
+ *  the old signature took as an argument: a state file carrying the `OFFSET=`. Everything below is
+ *  the 0.5.15 regression net, unchanged. */
+async function waitTurnConfirmed(
+  i: string, m: string, t: string, offset: number, timeoutS: number, d: TurnDeps,
+): Promise<OutboxEvent | null> {
+  const stateFile = join(globalRoot(), "turn-confirm-state.txt");
+  mkdirSync(dirname(stateFile), { recursive: true });
+  writeFileSync(stateFile, `OFFSET=${offset}\n`);
+  const r = await awaitTurn(
+    { agent: i, model: m, topic: t, stateFile, timeoutS, label: "turn-wait", policy: { confirm: true } }, d);
+  if ("missingOffset" in r) throw new Error("turn-confirm shim: OFFSET not readable");
+  return r.event;
+}
 
 const I = "bravo", M = "codex", T = "auth";
 
@@ -41,13 +59,17 @@ function scriptedSleep(steps: Array<() => void>, clock?: { advance: (ms: number)
 }
 
 /** Injected wait: step 1 answers the first leg, later steps answer each re-arm round. Every call's
- *  offset+timeout is recorded, which is how the re-arm's routing through d.wait is pinned. */
-function scriptedWait(steps: Array<{ ev?: OutboxEvent | null; run?: () => void }>) {
+ *  offset+timeout is recorded, which is how the re-arm's routing through d.wait is pinned. With a
+ *  clock, each leg also consumes its own budget, as the real wait would — the pins that must stay
+ *  BOUNDED under a mutation need the deadline to be reachable, or a loop that should have exited
+ *  runs until the suite times out instead of failing an assertion. */
+function scriptedWait(steps: Array<{ ev?: OutboxEvent | null; run?: () => void }>, clock?: { advance: (ms: number) => void }) {
   const calls: Array<{ off: number; to: number }> = [];
   return {
     calls,
     wait: async (_i: string, _m: string, _t: string, off: number, _ev: string[], to: number) => {
       calls.push({ off, to });
+      clock?.advance(to * 1000);
       const step = steps.shift();
       step?.run?.();
       return step?.ev ?? null;
@@ -129,8 +151,8 @@ describe("waitTurnConfirmed", () => {
   afterEach(() => { h.cleanup(); delete process.env.AP_TURN_CONFIRM_S; });
 
   /** Wrapper deps from a scripted wait + sleep, collecting every forensics note. */
-  function deps(w: ReturnType<typeof scriptedWait>, s: ReturnType<typeof scriptedSleep>, flags: string[], clock?: { now: () => number }): TurnConfirmDeps {
-    return { wait: w.wait, sleep: s.sleep, nowMs: clock?.now, onVeto: (note) => { flags.push(note); } };
+  function deps(w: ReturnType<typeof scriptedWait>, s: ReturnType<typeof scriptedSleep>, flags: string[], clock?: { now: () => number }): TurnDeps {
+    return { wait: w.wait, clock: { now: clock?.now ?? (() => Date.now()), sleep: s.sleep }, onFlag: (note) => { flags.push(note); } };
   }
 
   it("timeout (wait → null) is passed through with no confirmation work", async () => {
@@ -222,10 +244,13 @@ describe("waitTurnConfirmed", () => {
 
   it("BLOCKER: a real done + one trailing progress accepts promptly (no waiting out the budget)", async () => {
     writeOutbox([DONE1]);
-    const s = scriptedSleep([() => appendOutbox([PROGRESS])]);   // one trailing line, then silence
-    const w = scriptedWait([{ ev: doneEv("premature") }]);       // the re-arm finds nothing
+    // On the fake clock, so the exit under test is the QUIESCENCE guard and not the suite timeout:
+    // every leg consumes its budget, which makes the re-arm deadline reachable in a few rounds.
+    const clock = fakeClock();
+    const s = scriptedSleep([() => appendOutbox([PROGRESS])], clock);   // one trailing line, then silence
+    const w = scriptedWait([{ ev: doneEv("premature") }], clock);       // the re-arm finds nothing
     const flags: string[] = [];
-    const ev = await waitTurnConfirmed(I, M, T, 0, 14_400, deps(w, s, flags));
+    const ev = await waitTurnConfirmed(I, M, T, 0, 14_400, deps(w, s, flags, clock));
     expect(classifyTurn(ev)).toBe("ok");
     expect(ev!.summary).toBe("premature");
     expect(w.calls.length).toBe(2);        // first leg + exactly ONE short re-arm wait
@@ -300,7 +325,7 @@ describe("waitTurnConfirmed", () => {
     };
     const flags: string[] = [];
     // base deadline t0+100s; floor is legEnd+3 windows = t0+60s -> the base wins.
-    const ev = await waitTurnConfirmed(I, M, T, 0, 100, { wait, sleep: s.sleep, nowMs: clock.now, onVeto: (n) => flags.push(n) });
+    const ev = await waitTurnConfirmed(I, M, T, 0, 100, { wait, clock: { now: clock.now, sleep: s.sleep }, onFlag: (n: string) => flags.push(n) });
     expect(ev!.summary).toBe("premature");
     expect(calls).toBe(5);   // first leg + 4 re-arm rounds (20s window + 4x20s = 100s)
     expect(flags).toEqual([
@@ -321,7 +346,7 @@ describe("waitTurnConfirmed", () => {
       appendOutbox([DONE2]); return doneEv("real");
     };
     const flags: string[] = [];
-    const ev = await waitTurnConfirmed(I, M, T, 0, 10, { wait, sleep: s.sleep, nowMs: clock.now, onVeto: (n) => flags.push(n) });
+    const ev = await waitTurnConfirmed(I, M, T, 0, 10, { wait, clock: { now: clock.now, sleep: s.sleep }, onFlag: (n: string) => flags.push(n) });
     expect(ev!.summary).toBe("real");           // the re-arm ran instead of expiring on arrival
     expect(flags).toEqual(["turn-confirm-veto: codex premature done — outbox still active"]);
   });
@@ -335,7 +360,7 @@ import { quickArtDir, quickExecDir } from "../src/core/quick.js";
 import { bridgeArtDir, bridgeExecDir } from "../src/core/bridge.js";
 import { implementArtDir } from "../src/core/implement.js";
 
-const noSleep = async () => {};
+const noClock = noSleepClock;
 const premature = async () => doneEv("premature");
 
 /** The two-round script every veto pin uses: the window grows, the re-arm finds the real done. */
@@ -378,7 +403,7 @@ describe("turn-wait verbs are wired to the confirmation layer", () => {
   it("quick turn-wait: a LATER error in the outbox overrides the wait's done → TS=failed", async () => {
     seedQuick();
     writeOutbox([DONE1, ERROR2]);
-    expect(await quickTurnWait(T, 1, { wait: premature, sleep: noSleep })).toBe(0);
+    expect(await quickTurnWait(T, 1, { wait: premature, clock: noClock })).toBe(0);
     expect(readFileSync(join(quickExecDir(T), "turn-1.txt"), "utf8")).toContain("TS=failed");
   });
 
@@ -386,7 +411,7 @@ describe("turn-wait verbs are wired to the confirmation layer", () => {
     seedQuick();
     writeOutbox([DONE1]);
     const { sleepDep, waitDep } = vetoScript("bravo");
-    expect(await quickTurnWait(T, 1, { wait: waitDep.wait, sleep: sleepDep.sleep })).toBe(0);
+    expect(await quickTurnWait(T, 1, { wait: waitDep.wait, clock: { now: () => Date.now(), sleep: sleepDep.sleep } })).toBe(0);
     expect(readFileSync(join(quickExecDir(T), "turn-1.txt"), "utf8")).toContain("TS=ok");
     const flags = vetoFlags();
     expect(flags.length).toBe(1);
@@ -398,7 +423,7 @@ describe("turn-wait verbs are wired to the confirmation layer", () => {
   it("bridge round-wait: a LATER error in the outbox overrides the wait's done → TS=failed", async () => {
     seedBridge();
     writeOutbox([DONE1, ERROR2], "alpha");
-    expect(await bridgeRoundWait(T, 1, { wait: premature, sleep: noSleep })).toBe(0);
+    expect(await bridgeRoundWait(T, 1, { wait: premature, clock: noClock })).toBe(0);
     expect(readFileSync(join(bridgeExecDir(T), "round-1.txt"), "utf8")).toContain("TS=failed");
   });
 
@@ -406,7 +431,7 @@ describe("turn-wait verbs are wired to the confirmation layer", () => {
     seedBridge();
     writeOutbox([DONE1], "alpha");
     const { sleepDep, waitDep } = vetoScript("alpha");
-    expect(await bridgeRoundWait(T, 1, { wait: waitDep.wait, sleep: sleepDep.sleep })).toBe(0);
+    expect(await bridgeRoundWait(T, 1, { wait: waitDep.wait, clock: { now: () => Date.now(), sleep: sleepDep.sleep } })).toBe(0);
     expect(readFileSync(join(bridgeExecDir(T), "round-1.txt"), "utf8")).toContain("TS=ok");
     const flags = vetoFlags();
     expect(flags.length).toBe(1);
@@ -418,7 +443,7 @@ describe("turn-wait verbs are wired to the confirmation layer", () => {
     const art = seedImplement();
     writeOutbox([DONE1, ERROR2], "lead");
     const rc = await implementTurnWait(T, 1, {
-      wait: premature, sleep: noSleep, multiplier: () => "1", now: () => 1700000000,
+      wait: premature, clock: noClock, multiplier: () => "1", now: () => 1700000000,
     });
     expect(rc).toBe(0);
     expect(readFileSync(join(art, "turn-lead-1.txt"), "utf8")).toContain("TS=failed");
@@ -429,7 +454,8 @@ describe("turn-wait verbs are wired to the confirmation layer", () => {
     writeOutbox([DONE1], "lead");
     const { sleepDep, waitDep } = vetoScript("lead");
     const rc = await implementTurnWait(T, 1, {
-      wait: waitDep.wait, sleep: sleepDep.sleep, multiplier: () => "1", now: () => 1700000000,
+      wait: waitDep.wait, clock: { now: () => Date.now(), sleep: sleepDep.sleep },
+      multiplier: () => "1", now: () => 1700000000,
     });
     expect(rc).toBe(0);
     expect(readFileSync(join(art, "turn-lead-1.txt"), "utf8")).toContain("TS=ok");

@@ -19,7 +19,8 @@ import { readProviderList } from "../core/providers.js";
 import { activeProvidersPath, repoRoot, topicDir } from "../core/paths.js";
 import { pickAgents } from "../core/agents.js";
 import { agentConsultValidated, consultTimeout } from "../core/contracts.js";
-import { composeResearchPrompt, scaledTimeout, composeVerifyPrompt, composeDrilldownPrompt, drilldownState, parseLatestOffset } from "../core/designTurn.js";
+import { composeResearchPrompt, composeVerifyPrompt, composeDrilldownPrompt, drilldownState } from "../core/designTurn.js";
+import { boundWait, scaledTimeout, parseLatestOffset } from "../core/wait.js";
 import {
   DESIGN_PHASES, phaseSend, phaseWait, phaseStems, rowFor, waitGateVerb, surveyPhaseArtifact, triad,
   liveSendDeps, liveWaitDeps, type SendDeps, type WaitDeps,
@@ -409,7 +410,7 @@ export async function drilldownWith(rest: string[], d: DrilldownDeps, hooks: Dri
     const rc = await d.send(["--from", "hub", j.inst, topic, `@${promptFile}`]);
     if (rc !== 0) return "missing" as const;
     hooks.writeProbe?.(j.outPath);                                // test-only: simulate the worker's write
-    const ev = await d.wait(j.inst, j.model, topic, offset, ["done", "error"], timeout(j.model));
+    const ev = await boundWait(d)(j.inst, j.model, topic, offset, ["done", "error"], timeout(j.model));
     const fileText = readIfExistsOrNull(j.outPath);
     return drilldownState(ev, fileText);
   }));

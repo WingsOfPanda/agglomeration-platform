@@ -19,12 +19,10 @@ import { runForensics, runFlag, recordHubFlag } from "../core/forensics.js";
 import { haveCmd } from "../core/deps.js";
 import { implementState, composeRound1Prompt, composeFixPrompt } from "../core/implementTurn.js";
 import { extractQuestionPayload, parseQuestionPayload } from "../core/questionCodec.js";
-import { outboxOffset, outboxPath, statusPath, workerSendGate, resolveModel, type OutboxEvent } from "../core/ipc.js";
-import { liveOutboxWait } from "../core/waitLive.js";
-import { waitTurnConfirmed } from "../core/turn.js";
+import { outboxOffset, outboxPath, statusPath, workerSendGate, resolveModel, type Clock } from "../core/ipc.js";
 import { kvField, readField, readIfExists, readIfExistsOrNull } from "../core/fsread.js";
 import { agentTimeoutMultiplier } from "../core/contracts.js";
-import { scaledTimeout, parseLatestOffset, lastKeyedNumber, recordWaitOutcome } from "../core/designTurn.js";
+import { awaitTurn, scaledTimeout, lastKeyedNumber, recordWaitOutcome, type WaitFn } from "../core/wait.js";
 import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
 import { run as sendRun } from "./send.js";
 import { detectTestCommand } from "../core/quick.js";
@@ -183,8 +181,10 @@ export async function turnSendWith(topic: string, round: number, d: ImplementSen
 }
 
 // ---- turn-wait (deploy-turn-wait.sh) — rc 0 ALWAYS; TS= carries outcome ----
-export interface ImplementWaitDeps { wait(i: string, m: string, t: string, off: number, ev: string[], to: number): Promise<OutboxEvent | null>; sleep?(ms: number): Promise<void>; multiplier(model: string): string; now(): number; }
-const liveWaitDeps: ImplementWaitDeps = { wait: liveOutboxWait, multiplier: agentTimeoutMultiplier, now: () => Math.floor(Date.now() / 1000) };
+/** `now` is NOT a clock: it stamps the question payload's ASKED_AT in epoch SECONDS. The wait's
+ *  own time source is `clock`. */
+export interface ImplementWaitDeps { wait?: WaitFn; clock?: Clock; multiplier(model: string): string; now(): number; }
+const liveWaitDeps: ImplementWaitDeps = { multiplier: agentTimeoutMultiplier, now: () => Math.floor(Date.now() / 1000) };
 async function turnWaitRun(rest: string[]): Promise<number> {
   const [topic, roundStr] = rest;
   if (!topic || !roundStr) { log.error("usage: implement turn-wait <topic> <round>"); return 2; }
@@ -196,14 +196,17 @@ export async function turnWaitWith(topic: string, round: number, d: ImplementWai
   const model = workerModel(art);
   const stateFile = join(art, `turn-${WORKER}-${round}.txt`);
   if (!existsSync(stateFile)) { log.error(`implement turn-wait: ${stateFile} missing — run implement turn-send first`); return 1; }
-  const offset = parseLatestOffset(readFileSync(stateFile, "utf8"));
-  if (offset === null) { log.error(`implement turn-wait: OFFSET not set in ${stateFile}`); return 1; }
   const timeout = scaledTimeout(IMPLEMENT_TURN_TIMEOUT(), d.multiplier(model));
-  log.info(`[turn-wait] ${WORKER} round=${round} offset=${offset} timeout=${timeout}s`);
-  const ev = await waitTurnConfirmed(WORKER, model, topic, offset, timeout, {
-    wait: d.wait, sleep: d.sleep,
-    onVeto: (note) => { recordHubFlag({ command: "implement", topic, note }); },
+  const r = await awaitTurn({
+    agent: WORKER, model, topic, stateFile, timeoutS: timeout,
+    label: "[turn-wait]", policy: { confirm: true },
+  }, {
+    wait: d.wait, clock: d.clock,
+    onArmed: (offset) => { log.info(`[turn-wait] ${WORKER} round=${round} offset=${offset} timeout=${timeout}s`); },
+    onFlag: (note) => { recordHubFlag({ command: "implement", topic, note }); },
   });
+  if ("missingOffset" in r) { log.error(`implement turn-wait: OFFSET not set in ${stateFile}`); return 1; }
+  const ev = r.event;
   const verifyPath = join(art, `verify-report-${round}.md`);
   const verifyText = readIfExistsOrNull(verifyPath);
   let ts = implementState(ev, verifyText);

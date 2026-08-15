@@ -689,7 +689,7 @@ function outboxEventsSince(i2, m, t, offset) {
   }
   return out;
 }
-async function outboxWaitSince(i2, m, t, offset, events, timeoutSec, live) {
+async function outboxWaitSince(i2, m, t, offset, events, timeoutSec, live, clock = realClock) {
   const path6 = outboxPath(i2, m, t);
   const everyS = live?.everyS ?? 15;
   const extendMult = live?.paneId ? Math.min(10, Math.max(1, live.extendMult ?? 1)) : 1;
@@ -711,7 +711,7 @@ async function outboxWaitSince(i2, m, t, offset, events, timeoutSec, live) {
     if (n2 === timeoutSec && capSec > timeoutSec) {
       log.warn(`outbox-wait: ${i2} budget ${timeoutSec}s elapsed, pane not confirmed dead \u2014 extending up to ${extendMult}x`);
     }
-    await sleep(1e3);
+    await clock.sleep(1e3);
   }
   return null;
 }
@@ -749,7 +749,7 @@ function resolveModel(agent, topic) {
   const model = d.name.slice(agent.length + 1);
   return readPaneJson(workerDir(agent, model, topic))?.model ?? model;
 }
-var import_node_fs6, import_node_path3, TERMINAL_WORKER_STATES, SENDER_RE, TERMINAL_EVENTS, sleep;
+var import_node_fs6, import_node_path3, TERMINAL_WORKER_STATES, SENDER_RE, TERMINAL_EVENTS, realClock;
 var init_ipc = __esm({
   "src/core/ipc.ts"() {
     "use strict";
@@ -763,7 +763,12 @@ var init_ipc = __esm({
     TERMINAL_WORKER_STATES = /* @__PURE__ */ new Set(["idle", "done", "complete", "error", "ready"]);
     SENDER_RE = /^[a-zA-Z0-9_-]+$/;
     TERMINAL_EVENTS = ["done", "error", "question"];
-    sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    realClock = {
+      now: () => Date.now(),
+      sleep: (ms) => new Promise((r) => {
+        setTimeout(r, ms);
+      })
+    };
   }
 });
 
@@ -17271,7 +17276,7 @@ async function run2(args) {
     log.ok(`spawned ${labelFor(agent, model, topic)} in pane ${pane} (mode=${useMode})`);
     const boot = agentBootstrapSleep(model);
     log.info(`sleeping ${boot}s for ${model} bootstrap`);
-    await sleep2(boot * 1e3);
+    await sleep(boot * 1e3);
     log.info(`asking ${agent} to read identity`);
     await paneSend(pane, `Read ${identityPath(agent, model, topic)} and follow its instructions exactly.`);
     log.info(`waiting for {ready,error} in outbox (timeout ${readyTimeout}s)`);
@@ -17316,7 +17321,7 @@ ${ob}
     throw e;
   }
 }
-var import_node_fs18, import_node_path14, sleep2;
+var import_node_fs18, import_node_path14, sleep;
 var init_spawn = __esm({
   "src/commands/spawn.ts"() {
     "use strict";
@@ -17338,7 +17343,7 @@ var init_spawn = __esm({
     init_colors();
     init_send2();
     init_forensics();
-    sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
+    sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   }
 });
 
@@ -17520,7 +17525,7 @@ function liveDeps() {
     killGraceful: (p, alive) => killGraceful(p, pluginRoot(), alive),
     killNow: (p) => killNow(p),
     stateArchive: (i2, m, t) => stateArchive(i2, m, t),
-    sleep: sleep3,
+    sleep: sleep2,
     readLastPane: (t) => {
       const f = (0, import_node_path16.join)(topicDir(t), ".last_pane");
       return readIfExists(f).trim();
@@ -17627,7 +17632,7 @@ async function run5(args) {
   process.stderr.write("Usage: stop <topic> | <agent> <topic> | --all | --pairs <topic> <i...>\n");
   return 2;
 }
-var import_node_fs20, import_node_path16, GRACEFUL_BATCH_WAIT_MS, sleep3;
+var import_node_fs20, import_node_path16, GRACEFUL_BATCH_WAIT_MS, sleep2;
 var init_stop = __esm({
   "src/commands/stop.ts"() {
     "use strict";
@@ -17640,7 +17645,7 @@ var init_stop = __esm({
     init_ipc();
     init_tmux();
     GRACEFUL_BATCH_WAIT_MS = 9e3;
-    sleep3 = (ms) => new Promise((r) => setTimeout(r, ms));
+    sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
   }
 });
 
@@ -18314,6 +18319,61 @@ var init_gitwork = __esm({
   }
 });
 
+// src/core/turn.ts
+function composeRound1Prompt(briefText, branch) {
+  return [
+    `You are implementing a single, self-contained change on the branch \`${branch}\` of this repository.`,
+    "",
+    "This is one autonomous turn: read the task, implement it, commit your work, then report.",
+    "",
+    "THE TASK:",
+    "",
+    briefText.trim(),
+    "",
+    "INSTRUCTIONS:",
+    `- Implement the change directly in this repository's working tree (you are on \`${branch}\`).`,
+    "- Commit per logical change with Conventional Commits messages.",
+    "- If the repository has a test suite, run it and make your change pass it.",
+    "- When the implementation is complete and committed, emit the done event (see below).",
+    "",
+    BRANCH_DISCIPLINE,
+    BLOCKERS
+  ].join("\n");
+}
+function classifyTurn(ev) {
+  if (!ev) return "timeout";
+  if (ev.event === "done") return "ok";
+  if (ev.event === "question") return "question";
+  return "failed";
+}
+function composeFixPrompt(issuesText, round) {
+  return [
+    `You are entering ROUND ${round} of /ap:quick (fix loop), still on the same branch.`,
+    "",
+    "This is one autonomous turn: fix each issue below, commit per fix, re-run the tests, then report.",
+    "",
+    "ISSUES TO ADDRESS:",
+    "",
+    issuesText.trim(),
+    "",
+    "INSTRUCTIONS:",
+    "- Fix each issue above. Commit per fix with Conventional Commits messages.",
+    "- Re-run the repository's test suite and confirm it passes.",
+    "- When all issues are addressed and committed, emit the done event (see below).",
+    "",
+    BRANCH_DISCIPLINE,
+    BLOCKERS
+  ].join("\n");
+}
+var BRANCH_DISCIPLINE, BLOCKERS;
+var init_turn = __esm({
+  "src/core/turn.ts"() {
+    "use strict";
+    BRANCH_DISCIPLINE = 'BRANCH DISCIPLINE (hard rule):\n- You are already on the correct branch. Do NOT run `git checkout`, `git switch`,\n  or `git branch`, and do NOT create new branches.\n- If the work genuinely needs a different branch, do NOT switch; instead emit\n  {"event":"error","reason":"branch-discipline: needed a different branch"} and stop.\n';
+    BLOCKERS = 'IF YOU ARE BLOCKED:\n- If a path, file, command, or assumption is wrong or missing, do NOT guess or invent a\n  workaround. Append a question event to your outbox and stop:\n  {"event":"question","message":"<what you need and why>","ts":"<iso>"}\n  The conductor will reply via your inbox, then re-engage you.\n';
+  }
+});
+
 // src/core/env.ts
 function envNum(name, def) {
   return Number(process.env[name]) || def;
@@ -18327,12 +18387,12 @@ var init_env = __esm({
 });
 
 // src/core/waitLive.ts
-function liveOutboxWait(i2, m, t, offset, events, timeoutSec) {
+function liveOutboxWait(i2, m, t, offset, events, timeoutSec, clock) {
   return outboxWaitSince(i2, m, t, offset, events, timeoutSec, {
     paneAlive,
     paneId: paneMetaRead(i2, m, t),
     extendMult: envNum("AP_WAIT_EXTEND_MULT", 3)
-  });
+  }, clock);
 }
 var init_waitLive = __esm({
   "src/core/waitLive.ts"() {
@@ -18373,13 +18433,13 @@ function probe(path6) {
   const text = readIfExistsOrNull(path6);
   return { complete: hasArtifactSentinel(text), size: text === null ? 0 : Buffer.byteLength(text) };
 }
-async function awaitArtifact(path6, graceS, sleep5) {
+async function awaitArtifact(path6, graceS, sleep4) {
   const first = probe(path6);
   if (first.complete) return "sentinel";
   let last = first.size;
   let stable = 0;
   for (let waited = 0; waited < graceS; waited += ARTIFACT_POLL_S) {
-    await sleep5(ARTIFACT_POLL_S * 1e3);
+    await sleep4(ARTIFACT_POLL_S * 1e3);
     const now = probe(path6);
     if (now.complete) return "sentinel";
     stable = now.size > 0 && now.size === last ? stable + 1 : 0;
@@ -18443,7 +18503,7 @@ function artifactBackstop(opts) {
   log.error(`${opts.label}: ${opts.agent} ${opts.artifact} has no ${END_OF_ARTIFACT} and no ${ARTIFACT_ACCEPT_KEY}= verdict (still writing; strike ${strikes}/${NO_GROWTH_STRIKES}, refusal ${total}/${MAX_REFUSALS}) \u2014 run that phase's wait verb, then retry`);
   return "still-writing";
 }
-var import_node_fs25, import_node_path20, END_OF_ARTIFACT, ARTIFACT_ACCEPT_KEY, ARTIFACT_POLL_S, QUIESCENT_POLLS, MIN_GRACE_S, NO_GROWTH_STRIKES, MAX_REFUSALS, realSleep, WAIT_ACCEPTED;
+var import_node_fs25, import_node_path20, END_OF_ARTIFACT, ARTIFACT_ACCEPT_KEY, ARTIFACT_POLL_S, QUIESCENT_POLLS, MIN_GRACE_S, NO_GROWTH_STRIKES, MAX_REFUSALS, WAIT_ACCEPTED;
 var init_artifact = __esm({
   "src/core/artifact.ts"() {
     "use strict";
@@ -18461,277 +18521,17 @@ var init_artifact = __esm({
     MIN_GRACE_S = QUIESCENT_POLLS * ARTIFACT_POLL_S;
     NO_GROWTH_STRIKES = 3;
     MAX_REFUSALS = 6;
-    realSleep = (ms) => new Promise((r) => {
-      setTimeout(r, ms);
-    });
     WAIT_ACCEPTED = /* @__PURE__ */ new Set(["sentinel", "quiescent"]);
   }
 });
 
-// src/core/turn.ts
-function composeRound1Prompt(briefText, branch) {
-  return [
-    `You are implementing a single, self-contained change on the branch \`${branch}\` of this repository.`,
-    "",
-    "This is one autonomous turn: read the task, implement it, commit your work, then report.",
-    "",
-    "THE TASK:",
-    "",
-    briefText.trim(),
-    "",
-    "INSTRUCTIONS:",
-    `- Implement the change directly in this repository's working tree (you are on \`${branch}\`).`,
-    "- Commit per logical change with Conventional Commits messages.",
-    "- If the repository has a test suite, run it and make your change pass it.",
-    "- When the implementation is complete and committed, emit the done event (see below).",
-    "",
-    BRANCH_DISCIPLINE,
-    BLOCKERS
-  ].join("\n");
-}
-function classifyTurn(ev) {
-  if (!ev) return "timeout";
-  if (ev.event === "done") return "ok";
-  if (ev.event === "question") return "question";
-  return "failed";
-}
-function turnConfirmS() {
-  const raw = process.env.AP_TURN_CONFIRM_S;
-  const n2 = raw === void 0 || raw.trim() === "" ? TURN_CONFIRM_DEFAULT_S : Number(raw);
-  if (!Number.isFinite(n2)) return TURN_CONFIRM_DEFAULT_S;
-  if (n2 <= 0) return 0;
-  return Math.min(120, Math.max(5, n2));
-}
-function latestTerminal(events) {
-  for (let k = events.length - 1; k >= 0; k--) if (TERMINAL_EVENTS.includes(events[k].event)) return events[k];
-  return null;
-}
-async function waitTurnConfirmed(i2, m, t, offset, timeoutS, d) {
-  const now = d.nowMs ?? (() => Date.now());
-  const startMs = now();
-  const first = await d.wait(i2, m, t, offset, TERMINAL_EVENTS, timeoutS);
-  const confirmS = turnConfirmS();
-  if (!first || confirmS === 0) return first;
-  const legEndMs = now();
-  const path6 = outboxPath(i2, m, t);
-  const sleep5 = d.sleep ?? realSleep;
-  const windowMs = confirmS * 1e3;
-  const deadlineMs = Math.max(startMs + timeoutS * 1e3, legEndMs + REARM_FLOOR_WINDOWS * windowMs);
-  let armed = latestTerminal(outboxEventsSince(i2, m, t, offset)) ?? first;
-  let vetoes = 0;
-  for (; ; ) {
-    if (armed.event === "question") return armed;
-    const s0 = outboxOffset(path6);
-    await sleep5(windowMs);
-    if (outboxOffset(path6) <= s0) return armed;
-    if (vetoes >= MAX_VETOES) {
-      d.onVeto?.(`turn-confirm-cap: ${m} still writing after ${vetoes + 1} windows \u2014 accepting ${armed.event}`);
-      return armed;
-    }
-    d.onVeto?.(`turn-confirm-veto: ${m} premature ${armed.event} \u2014 outbox still active`);
-    vetoes++;
-    let next = null;
-    while (!next) {
-      const before = outboxOffset(path6);
-      next = await d.wait(i2, m, t, s0, TERMINAL_EVENTS, confirmS);
-      if (next) break;
-      if (outboxOffset(path6) <= before) return armed;
-      if (now() >= deadlineMs) {
-        d.onVeto?.(`turn-confirm-deadline: ${m} re-arm expired \u2014 accepting ${armed.event}`);
-        return armed;
-      }
-    }
-    armed = latestTerminal(outboxEventsSince(i2, m, t, s0)) ?? next;
-  }
-}
-function composeFixPrompt(issuesText, round) {
-  return [
-    `You are entering ROUND ${round} of /ap:quick (fix loop), still on the same branch.`,
-    "",
-    "This is one autonomous turn: fix each issue below, commit per fix, re-run the tests, then report.",
-    "",
-    "ISSUES TO ADDRESS:",
-    "",
-    issuesText.trim(),
-    "",
-    "INSTRUCTIONS:",
-    "- Fix each issue above. Commit per fix with Conventional Commits messages.",
-    "- Re-run the repository's test suite and confirm it passes.",
-    "- When all issues are addressed and committed, emit the done event (see below).",
-    "",
-    BRANCH_DISCIPLINE,
-    BLOCKERS
-  ].join("\n");
-}
-var BRANCH_DISCIPLINE, BLOCKERS, TURN_CONFIRM_DEFAULT_S, MAX_VETOES, REARM_FLOOR_WINDOWS;
-var init_turn = __esm({
-  "src/core/turn.ts"() {
-    "use strict";
-    init_ipc();
-    init_artifact();
-    BRANCH_DISCIPLINE = 'BRANCH DISCIPLINE (hard rule):\n- You are already on the correct branch. Do NOT run `git checkout`, `git switch`,\n  or `git branch`, and do NOT create new branches.\n- If the work genuinely needs a different branch, do NOT switch; instead emit\n  {"event":"error","reason":"branch-discipline: needed a different branch"} and stop.\n';
-    BLOCKERS = 'IF YOU ARE BLOCKED:\n- If a path, file, command, or assumption is wrong or missing, do NOT guess or invent a\n  workaround. Append a question event to your outbox and stop:\n  {"event":"question","message":"<what you need and why>","ts":"<iso>"}\n  The conductor will reply via your inbox, then re-engage you.\n';
-    TURN_CONFIRM_DEFAULT_S = 20;
-    MAX_VETOES = 2;
-    REARM_FLOOR_WINDOWS = 3;
-  }
-});
-
-// src/core/designDiff.ts
-function parseClaims(findings, headings = ["Claims"]) {
-  const out = [];
-  let inClaims = false;
-  for (const line of findings.split("\n")) {
-    if (headings.some((h2) => line.startsWith(`## ${h2}`))) {
-      inClaims = true;
-      continue;
-    }
-    if (/^## /.test(line)) {
-      inClaims = false;
-      continue;
-    }
-    if (inClaims && /^[0-9]+\. \[[^\]]+\] /.test(line)) {
-      const m = line.match(/\[[^\]]+\]/);
-      if (!m || m.index === void 0) continue;
-      const cite = m[0].slice(1, -1);
-      const text = line.slice(m.index + m[0].length).replace(/^[ \t]+/, "");
-      out.push({ cite, text });
-    }
-  }
-  return out;
-}
-function citationOverlaps(aRaw, bRaw) {
-  const a2 = aRaw.replace(/^\.\//, "");
-  const b = bRaw.replace(/^\.\//, "");
-  if (a2.startsWith("http") || b.startsWith("http")) return a2 === b;
-  if (a2.startsWith("runtime:") || b.startsWith("runtime:")) return a2 === b;
-  if (a2.startsWith("paper:") || b.startsWith("paper:")) return a2 === b;
-  const aPath = a2.split(":")[0];
-  const bPath = b.split(":")[0];
-  if (aPath !== bPath) return false;
-  const aLines = a2.includes(":") ? a2.slice(a2.indexOf(":") + 1) : "";
-  const bLines = b.includes(":") ? b.slice(b.indexOf(":") + 1) : "";
-  if (aLines === "" || bLines === "") return true;
-  const split = (s) => s.includes("-") ? [s.slice(0, s.indexOf("-")), s.slice(s.indexOf("-") + 1)] : [s, s];
-  const [a1s, a2s] = split(aLines);
-  const [b1s, b2s] = split(bLines);
-  if (![a1s, a2s, b1s, b2s].every((x) => /^[0-9]+$/.test(x))) return false;
-  const a1 = parseInt(a1s, 10), a22 = parseInt(a2s, 10), b1 = parseInt(b1s, 10), b2 = parseInt(b2s, 10);
-  return a1 <= b2 && b1 <= a22;
-}
-function mdSection(header, lines) {
-  return header + "\n" + (lines && lines.length ? lines.map((l) => `- ${l}`).join("\n") + "\n" : "");
-}
-function diffFindings(workers, headings) {
-  const n2 = workers.length;
-  if (n2 < 2) throw new Error(`diffFindings: need >=2 workers, got ${n2}`);
-  const names = workers.map((p) => p.name);
-  const owner = [], cite = [], text = [], flag = [];
-  const start = [], end = [];
-  for (let idx = 0; idx < n2; idx++) {
-    start[idx] = owner.length;
-    for (const c3 of parseClaims(workers[idx].findings, headings)) {
-      owner.push(idx);
-      cite.push(c3.cite);
-      text.push(c3.text);
-      flag.push(false);
-    }
-    end[idx] = owner.length;
-  }
-  const buckets = /* @__PURE__ */ new Map();
-  const add = (key, line) => {
-    if (!buckets.has(key)) buckets.set(key, []);
-    buckets.get(key).push(line);
-  };
-  for (let i2 = 0; i2 < n2; i2++) {
-    for (let j = start[i2]; j < end[i2]; j++) {
-      if (flag[j]) continue;
-      let memberKeys = names[i2];
-      const firstCite = cite[j];
-      let combined = text[j];
-      flag[j] = true;
-      for (let k = i2 + 1; k < n2; k++) {
-        for (let m = start[k]; m < end[k]; m++) {
-          if (flag[m]) continue;
-          if (citationOverlaps(firstCite, cite[m])) {
-            memberKeys += `,${names[k]}`;
-            combined += ` | ${text[m]}`;
-            flag[m] = true;
-            break;
-          }
-        }
-      }
-      add(memberKeys, `[${firstCite}] ${combined}`);
-    }
-  }
-  const allKey = names.join(",");
-  const files = [];
-  let diffMd = "";
-  if (n2 === 2) {
-    for (const name of names) files.push({ filename: `${name}_only_items.txt`, content: fileBody(buckets.get(name)) });
-    diffMd = mdSection("## Agreed", buckets.get(allKey)) + "\n" + mdSection(`## ${titlecase(names[0])}-only`, buckets.get(names[0])) + "\n" + mdSection(`## ${titlecase(names[1])}-only`, buckets.get(names[1]));
-  } else {
-    files.push({ filename: "consensus.txt", content: fileBody(buckets.get(allKey)) });
-    const pairKeys = [];
-    for (let i2 = 0; i2 < n2; i2++) for (let j = i2 + 1; j < n2; j++) pairKeys.push(`${names[i2]},${names[j]}`);
-    for (const key of pairKeys) {
-      const [a2, b] = key.split(",");
-      files.push({ filename: `${a2}+${b}_only.txt`, content: fileBody(buckets.get(key)) });
-    }
-    for (const name of names) files.push({ filename: `${name}_only_items.txt`, content: fileBody(buckets.get(name)) });
-    let md = mdSection("## Consensus", buckets.get(allKey));
-    for (const key of pairKeys) {
-      const [a2, b] = key.split(",");
-      md += "\n" + mdSection(`## ${titlecase(a2)}+${titlecase(b)} only`, buckets.get(key));
-    }
-    for (const name of names) md += "\n" + mdSection(`## ${titlecase(name)}-only`, buckets.get(name));
-    diffMd = md;
-  }
-  return { files, diffMd };
-}
-var titlecase, fileBody;
-var init_designDiff = __esm({
-  "src/core/designDiff.ts"() {
-    "use strict";
-    titlecase = (s) => s.length ? s[0].toUpperCase() + s.slice(1) : s;
-    fileBody = (lines) => lines && lines.length ? lines.join("\n") + "\n" : "";
-  }
-});
-
-// src/core/designTurn.ts
-function findingsStatus(text) {
-  if (text === null) return "missing";
-  if (parseClaims(text).length > 0) return "ok";
-  let inClaims = false;
-  let count2 = 0;
-  for (const line of text.split("\n")) {
-    if (/^## Claims/.test(line)) {
-      inClaims = true;
-      continue;
-    }
-    if (/^## /.test(line)) {
-      inClaims = false;
-    }
-    if (inClaims && line.trim() !== "") count2++;
-  }
-  return count2 > 0 ? "malformed" : "empty";
-}
-function researchState(ev, findingsText) {
-  if (!ev) return "timeout";
-  if (ev.event === "question") return "question";
-  if (ev.event === "done") return findingsStatus(findingsText);
-  return "failed";
-}
+// src/core/wait.ts
 function lastKeyedNumber(text, key) {
   const ms = [...text.matchAll(new RegExp(`^${key}=(\\d+)\\s*$`, "gm"))];
   return ms.length ? Number(ms[ms.length - 1][1]) : null;
 }
 function parseLatestOffset(stateText) {
   return lastKeyedNumber(stateText, "OFFSET");
-}
-function lastKeyedValue(text, key) {
-  const matches = text.split("\n").filter((l) => l.startsWith(`${key}=`));
-  return matches.length ? matches[matches.length - 1].slice(key.length + 1).trim() : null;
 }
 function recordWaitOutcome(agent, model, topic, stateFile, state, key, question, lead) {
   const head = lead ? `${lead}
@@ -18751,131 +18551,96 @@ function scaledTimeout(baseSec, multiplier) {
   const m = Number(multiplier);
   return Math.floor(baseSec * (Number.isFinite(m) && m > 0 ? m : 1) + 0.5);
 }
-function composeResearchPrompt(topicText, findingsPath) {
-  const topic = topicText.trim();
-  return [
-    "Investigate the following topic and produce structured findings.",
-    "",
-    `Topic: ${topic}`,
-    "",
-    `Output requirements \u2014 write to ${findingsPath} with this EXACT structure:`,
-    "",
-    `  # Findings: ${topic}`,
-    "",
-    "  ## Summary",
-    "  <2-3 sentence overview, free-form prose>",
-    "",
-    "  ## Claims",
-    "  1. [<source citation>] <one-sentence claim>",
-    "  2. [<source citation>] <one-sentence claim>",
-    "  ...",
-    "",
-    "  ## Notes",
-    "  <any free-form additions; not parsed>",
-    "",
-    "Citation format options:",
-    "  - <file path>:<line>          e.g. src/auth/store.py:42",
-    "  - <file path>:<line-range>    e.g. src/auth/refresh.py:15-30",
-    "  - <URL>                       e.g. https://datatracker.ietf.org/doc/html/rfc6749",
-    "  - runtime: <command>          e.g. runtime: pytest tests/test_auth.py",
-    "",
-    "Each claim must have a citation in [brackets]. Claims without citations will be silently",
-    "dropped \u2014 and if NO claim has a citation, your findings will be flagged as malformed.",
-    "",
-    "Research methods: use any tool available in your environment. When local repository evidence is",
-    "insufficient or the topic references external knowledge (RFCs, standards, library docs, vendor",
-    "APIs, recent CVEs, design patterns), you SHOULD use web search / fetch to find authoritative",
-    "sources and cite them as URL citations. Prefer primary sources over blog posts. If a tool is",
-    "unavailable, fall back to local-only investigation and note the gap as an [unverified] claim.",
-    "",
-    RESEARCH_BLOCKERS,
-    artifactContract(findingsPath)
-  ].join("\n");
+function turnConfirmS() {
+  const raw = process.env.AP_TURN_CONFIRM_S;
+  const n2 = raw === void 0 || raw.trim() === "" ? TURN_CONFIRM_DEFAULT_S : Number(raw);
+  if (!Number.isFinite(n2)) return TURN_CONFIRM_DEFAULT_S;
+  if (n2 <= 0) return 0;
+  return Math.min(120, Math.max(5, n2));
 }
-function verifyState(ev, verifyText) {
-  if (!ev) return "timeout";
-  if (ev.event === "question") return "question";
-  if (ev.event === "done") return verifyText !== null && verifyText.length > 0 ? "ok" : "missing";
-  return "failed";
+function boundWait(d) {
+  return d.wait ?? ((i2, m, t, off, ev, to) => liveOutboxWait(i2, m, t, off, ev, to, d.clock));
 }
-function gateState(workers, key) {
-  return workers.map((p) => {
-    const last = lastKeyedValue(p.stateText ?? "", key);
-    const status = last === "question" ? "question" : p.doneExists && last !== null ? "terminal" : "pending";
-    return { agent: p.agent, status };
-  });
+function latestTerminal(events) {
+  for (let k = events.length - 1; k >= 0; k--) if (TERMINAL_EVENTS.includes(events[k].event)) return events[k];
+  return null;
 }
-function gateAnomalies(workers, key) {
-  const out = [];
-  for (const p of workers) {
-    if (!p.doneExists) continue;
-    const last = lastKeyedValue(p.stateText ?? "", key);
-    if (last === "timeout" || last === "failed" || last === "missing") out.push({ agent: p.agent, value: last });
+async function confirmedTerminal(i2, m, t, offset, timeoutS, d) {
+  const { now } = clockOf(d);
+  const startMs = now();
+  const first = await boundWait(d)(i2, m, t, offset, TERMINAL_EVENTS, timeoutS);
+  const confirmS = turnConfirmS();
+  if (!first || confirmS === 0) return first;
+  const legEndMs = now();
+  const path6 = outboxPath(i2, m, t);
+  const { sleep: sleep4 } = clockOf(d);
+  const windowMs = confirmS * 1e3;
+  const deadlineMs = Math.max(startMs + timeoutS * 1e3, legEndMs + REARM_FLOOR_WINDOWS * windowMs);
+  let armed = latestTerminal(outboxEventsSince(i2, m, t, offset)) ?? first;
+  let vetoes = 0;
+  for (; ; ) {
+    if (armed.event === "question") return armed;
+    const s0 = outboxOffset(path6);
+    await sleep4(windowMs);
+    if (outboxOffset(path6) <= s0) return armed;
+    if (vetoes >= MAX_VETOES) {
+      d.onFlag?.(`turn-confirm-cap: ${m} still writing after ${vetoes + 1} windows \u2014 accepting ${armed.event}`);
+      return armed;
+    }
+    d.onFlag?.(`turn-confirm-veto: ${m} premature ${armed.event} \u2014 outbox still active`);
+    vetoes++;
+    let next = null;
+    while (!next) {
+      const before = outboxOffset(path6);
+      next = await boundWait(d)(i2, m, t, s0, TERMINAL_EVENTS, confirmS);
+      if (next) break;
+      if (outboxOffset(path6) <= before) return armed;
+      if (now() >= deadlineMs) {
+        d.onFlag?.(`turn-confirm-deadline: ${m} re-arm expired \u2014 accepting ${armed.event}`);
+        return armed;
+      }
+    }
+    armed = latestTerminal(outboxEventsSince(i2, m, t, s0)) ?? next;
   }
-  return out;
 }
-function composeVerifyPrompt(itemsText, verifyPath) {
-  const items = itemsText.split("\n").filter((l) => l.length > 0).map((l, i2) => `${i2 + 1}. ${l}`).join("\n");
-  return [
-    "You researched a topic in your previous turn. Below are claims the OTHER researchers raised that",
-    "you did not. For EACH item, do ONE of:",
-    "",
-    "  AGREE     \u2014 confirm with your own evidence (cite a file/line/source)",
-    "  DISPUTE   \u2014 explain why it's wrong, with counter-evidence",
-    "  UNCERTAIN \u2014 you cannot tell from available evidence; say so",
-    "",
-    "Items to verify:",
-    items,
-    "",
-    `Write your verdicts to ${verifyPath} in this exact format:`,
-    "",
-    "  # Verify",
-    "  ## Verdicts",
-    "  1. <TAG> <original [citation] and text>",
-    "     <one-line evidence>",
-    "  2. ...",
-    "",
-    "Where <TAG> is one of: AGREE / DISPUTE / UNCERTAIN.",
-    "",
-    "Verification methods: use any tool in your environment. WebSearch / fetch are authorized when an",
-    "item cites a URL, references external standards/docs, or makes a claim local repo evidence cannot",
-    "resolve. For URL-cited items, fetching the source is the default. For file-cited items prefer the",
-    "local file. If a tool is unavailable, mark the item UNCERTAIN and note the gap \u2014 never fabricate.",
-    "",
-    RESEARCH_BLOCKERS,
-    artifactContract(verifyPath)
-  ].join("\n");
+async function artifactAccept(ctx, art, ev, d) {
+  const { label, agent } = ctx;
+  const artifact = art.path;
+  const graceS = artifactGraceS();
+  const isDone = ev !== null && ev.event === "done";
+  const accept = !isDone ? null : graceS > 0 ? await awaitArtifact(artifact, graceS, clockOf(d).sleep) : "unchecked";
+  if (accept === "quiescent") {
+    log.warn(`${label}: ${agent} ${artifact} has no ${END_OF_ARTIFACT} but stopped growing \u2014 accepting it and flagging the missing sentinel`);
+    d.onFlag?.(`artifact-quiescent-no-sentinel: ${agent} ${artifact}`);
+  }
+  if (accept === "expired") {
+    log.warn(`${label}: ${agent} ${artifact} has no ${END_OF_ARTIFACT} after ${graceS}s grace \u2014 recording ${ARTIFACT_ACCEPT_KEY}=expired (the validators drop this artifact; ${art.key} keeps its own classification so later phases still dispatch)`);
+    d.onFlag?.(`artifact-incomplete: ${agent} ${artifact} done-event without ${END_OF_ARTIFACT} after ${graceS}s grace`);
+  }
+  return accept;
 }
-function drilldownState(ev, fileText) {
-  if (!ev) return "timeout";
-  return fileText !== null && fileText.length > 0 ? "ok" : "missing";
+async function awaitTurn(ctx, d) {
+  const { agent, model, topic, timeoutS, policy } = ctx;
+  const offset = parseLatestOffset((0, import_node_fs26.readFileSync)(ctx.stateFile, "utf8"));
+  if (offset === null) return { missingOffset: true };
+  d.onArmed?.(offset);
+  const event = policy.confirm ? await confirmedTerminal(agent, model, topic, offset, timeoutS, d) : await boundWait(d)(agent, model, topic, offset, TERMINAL_EVENTS, timeoutS);
+  return { event, accept: policy.artifact ? await artifactAccept(ctx, policy.artifact, event, d) : null };
 }
-function composeDrilldownPrompt(opts) {
-  const focus = opts.focus.trim() || `Provide more depth, citations, and concrete trade-offs for the ${opts.section} section.`;
-  return [
-    `You are drilling deeper into the **${opts.section}** section of a design doc derived from the`,
-    "investigation you just completed.",
-    "",
-    `Read the design doc you produced: ${opts.designDocPath}`,
-    "",
-    `Focus: ${focus}`,
-    "",
-    "Write your expanded notes (with [citation] anchors) to:",
-    `  ${opts.outPath}`,
-    "",
-    artifactContract(opts.outPath)
-  ].join("\n");
-}
-var import_node_fs26, RESEARCH_BLOCKERS;
-var init_designTurn = __esm({
-  "src/core/designTurn.ts"() {
+var import_node_fs26, TURN_CONFIRM_DEFAULT_S, MAX_VETOES, REARM_FLOOR_WINDOWS, clockOf;
+var init_wait = __esm({
+  "src/core/wait.ts"() {
     "use strict";
     import_node_fs26 = require("node:fs");
     init_ipc();
+    init_waitLive();
     init_atomic();
-    init_designDiff();
+    init_log();
     init_artifact();
-    RESEARCH_BLOCKERS = 'IF YOU ARE BLOCKED:\n- If a referenced path, file, command, env var, or assumption is wrong or missing, do NOT guess\n  or silently work around it. Append a question event to your outbox and stop:\n  {"event":"question","message":"<what you need and why>","ts":"<iso>"}\n  The Hub will reply via your inbox, then re-engage you.\n';
+    TURN_CONFIRM_DEFAULT_S = 20;
+    MAX_VETOES = 2;
+    REARM_FLOOR_WINDOWS = 3;
+    clockOf = (d) => d.clock ?? realClock;
   }
 });
 
@@ -19105,7 +18870,7 @@ async function turnWaitRun(rest) {
     log.error("usage: quick turn-wait <topic> <round>=1..");
     return 2;
   }
-  return turnWaitWith(topic, round, { wait: liveOutboxWait });
+  return turnWaitWith(topic, round, {});
 }
 async function turnWaitWith(topic, round, d) {
   const art = quickArtDir(topic);
@@ -19121,19 +18886,29 @@ async function turnWaitWith(topic, round, d) {
     log.error(`quick turn-wait: ${stateFile} missing (run quick turn-send first)`);
     return 1;
   }
-  const offset = parseLatestOffset((0, import_node_fs27.readFileSync)(stateFile, "utf8"));
-  if (offset === null) {
-    log.error(`quick turn-wait: OFFSET not set in ${stateFile}`);
-    return 1;
-  }
-  log.info(`quick turn-wait: round=${round} offset=${offset} timeout=${QUICK_TURN_TIMEOUT}s`);
-  const ev = await waitTurnConfirmed(agent, provider, topic, offset, QUICK_TURN_TIMEOUT, {
+  const r = await awaitTurn({
+    agent,
+    model: provider,
+    topic,
+    stateFile,
+    timeoutS: QUICK_TURN_TIMEOUT,
+    label: "quick turn-wait",
+    policy: { confirm: true }
+  }, {
     wait: d.wait,
-    sleep: d.sleep,
-    onVeto: (note) => {
+    clock: d.clock,
+    onArmed: (offset) => {
+      log.info(`quick turn-wait: round=${round} offset=${offset} timeout=${QUICK_TURN_TIMEOUT}s`);
+    },
+    onFlag: (note) => {
       recordHubFlag({ command: "quick", topic, note });
     }
   });
+  if ("missingOffset" in r) {
+    log.error(`quick turn-wait: OFFSET not set in ${stateFile}`);
+    return 1;
+  }
+  const ev = r.event;
   const ts = classifyTurn(ev);
   recordWaitOutcome(
     agent,
@@ -19317,9 +19092,8 @@ var init_quick2 = __esm({
     init_agents();
     init_gitwork();
     init_ipc();
-    init_waitLive();
     init_turn();
-    init_designTurn();
+    init_wait();
     init_env();
     init_send2();
     init_fsread();
@@ -19680,6 +19454,280 @@ var init_implementScope = __esm({
   }
 });
 
+// src/core/designDiff.ts
+function parseClaims(findings, headings = ["Claims"]) {
+  const out = [];
+  let inClaims = false;
+  for (const line of findings.split("\n")) {
+    if (headings.some((h2) => line.startsWith(`## ${h2}`))) {
+      inClaims = true;
+      continue;
+    }
+    if (/^## /.test(line)) {
+      inClaims = false;
+      continue;
+    }
+    if (inClaims && /^[0-9]+\. \[[^\]]+\] /.test(line)) {
+      const m = line.match(/\[[^\]]+\]/);
+      if (!m || m.index === void 0) continue;
+      const cite = m[0].slice(1, -1);
+      const text = line.slice(m.index + m[0].length).replace(/^[ \t]+/, "");
+      out.push({ cite, text });
+    }
+  }
+  return out;
+}
+function citationOverlaps(aRaw, bRaw) {
+  const a2 = aRaw.replace(/^\.\//, "");
+  const b = bRaw.replace(/^\.\//, "");
+  if (a2.startsWith("http") || b.startsWith("http")) return a2 === b;
+  if (a2.startsWith("runtime:") || b.startsWith("runtime:")) return a2 === b;
+  if (a2.startsWith("paper:") || b.startsWith("paper:")) return a2 === b;
+  const aPath = a2.split(":")[0];
+  const bPath = b.split(":")[0];
+  if (aPath !== bPath) return false;
+  const aLines = a2.includes(":") ? a2.slice(a2.indexOf(":") + 1) : "";
+  const bLines = b.includes(":") ? b.slice(b.indexOf(":") + 1) : "";
+  if (aLines === "" || bLines === "") return true;
+  const split = (s) => s.includes("-") ? [s.slice(0, s.indexOf("-")), s.slice(s.indexOf("-") + 1)] : [s, s];
+  const [a1s, a2s] = split(aLines);
+  const [b1s, b2s] = split(bLines);
+  if (![a1s, a2s, b1s, b2s].every((x) => /^[0-9]+$/.test(x))) return false;
+  const a1 = parseInt(a1s, 10), a22 = parseInt(a2s, 10), b1 = parseInt(b1s, 10), b2 = parseInt(b2s, 10);
+  return a1 <= b2 && b1 <= a22;
+}
+function mdSection(header, lines) {
+  return header + "\n" + (lines && lines.length ? lines.map((l) => `- ${l}`).join("\n") + "\n" : "");
+}
+function diffFindings(workers, headings) {
+  const n2 = workers.length;
+  if (n2 < 2) throw new Error(`diffFindings: need >=2 workers, got ${n2}`);
+  const names = workers.map((p) => p.name);
+  const owner = [], cite = [], text = [], flag = [];
+  const start = [], end = [];
+  for (let idx = 0; idx < n2; idx++) {
+    start[idx] = owner.length;
+    for (const c3 of parseClaims(workers[idx].findings, headings)) {
+      owner.push(idx);
+      cite.push(c3.cite);
+      text.push(c3.text);
+      flag.push(false);
+    }
+    end[idx] = owner.length;
+  }
+  const buckets = /* @__PURE__ */ new Map();
+  const add = (key, line) => {
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(line);
+  };
+  for (let i2 = 0; i2 < n2; i2++) {
+    for (let j = start[i2]; j < end[i2]; j++) {
+      if (flag[j]) continue;
+      let memberKeys = names[i2];
+      const firstCite = cite[j];
+      let combined = text[j];
+      flag[j] = true;
+      for (let k = i2 + 1; k < n2; k++) {
+        for (let m = start[k]; m < end[k]; m++) {
+          if (flag[m]) continue;
+          if (citationOverlaps(firstCite, cite[m])) {
+            memberKeys += `,${names[k]}`;
+            combined += ` | ${text[m]}`;
+            flag[m] = true;
+            break;
+          }
+        }
+      }
+      add(memberKeys, `[${firstCite}] ${combined}`);
+    }
+  }
+  const allKey = names.join(",");
+  const files = [];
+  let diffMd = "";
+  if (n2 === 2) {
+    for (const name of names) files.push({ filename: `${name}_only_items.txt`, content: fileBody(buckets.get(name)) });
+    diffMd = mdSection("## Agreed", buckets.get(allKey)) + "\n" + mdSection(`## ${titlecase(names[0])}-only`, buckets.get(names[0])) + "\n" + mdSection(`## ${titlecase(names[1])}-only`, buckets.get(names[1]));
+  } else {
+    files.push({ filename: "consensus.txt", content: fileBody(buckets.get(allKey)) });
+    const pairKeys = [];
+    for (let i2 = 0; i2 < n2; i2++) for (let j = i2 + 1; j < n2; j++) pairKeys.push(`${names[i2]},${names[j]}`);
+    for (const key of pairKeys) {
+      const [a2, b] = key.split(",");
+      files.push({ filename: `${a2}+${b}_only.txt`, content: fileBody(buckets.get(key)) });
+    }
+    for (const name of names) files.push({ filename: `${name}_only_items.txt`, content: fileBody(buckets.get(name)) });
+    let md = mdSection("## Consensus", buckets.get(allKey));
+    for (const key of pairKeys) {
+      const [a2, b] = key.split(",");
+      md += "\n" + mdSection(`## ${titlecase(a2)}+${titlecase(b)} only`, buckets.get(key));
+    }
+    for (const name of names) md += "\n" + mdSection(`## ${titlecase(name)}-only`, buckets.get(name));
+    diffMd = md;
+  }
+  return { files, diffMd };
+}
+var titlecase, fileBody;
+var init_designDiff = __esm({
+  "src/core/designDiff.ts"() {
+    "use strict";
+    titlecase = (s) => s.length ? s[0].toUpperCase() + s.slice(1) : s;
+    fileBody = (lines) => lines && lines.length ? lines.join("\n") + "\n" : "";
+  }
+});
+
+// src/core/designTurn.ts
+function findingsStatus(text) {
+  if (text === null) return "missing";
+  if (parseClaims(text).length > 0) return "ok";
+  let inClaims = false;
+  let count2 = 0;
+  for (const line of text.split("\n")) {
+    if (/^## Claims/.test(line)) {
+      inClaims = true;
+      continue;
+    }
+    if (/^## /.test(line)) {
+      inClaims = false;
+    }
+    if (inClaims && line.trim() !== "") count2++;
+  }
+  return count2 > 0 ? "malformed" : "empty";
+}
+function researchState(ev, findingsText) {
+  if (!ev) return "timeout";
+  if (ev.event === "question") return "question";
+  if (ev.event === "done") return findingsStatus(findingsText);
+  return "failed";
+}
+function lastKeyedValue(text, key) {
+  const matches = text.split("\n").filter((l) => l.startsWith(`${key}=`));
+  return matches.length ? matches[matches.length - 1].slice(key.length + 1).trim() : null;
+}
+function composeResearchPrompt(topicText, findingsPath) {
+  const topic = topicText.trim();
+  return [
+    "Investigate the following topic and produce structured findings.",
+    "",
+    `Topic: ${topic}`,
+    "",
+    `Output requirements \u2014 write to ${findingsPath} with this EXACT structure:`,
+    "",
+    `  # Findings: ${topic}`,
+    "",
+    "  ## Summary",
+    "  <2-3 sentence overview, free-form prose>",
+    "",
+    "  ## Claims",
+    "  1. [<source citation>] <one-sentence claim>",
+    "  2. [<source citation>] <one-sentence claim>",
+    "  ...",
+    "",
+    "  ## Notes",
+    "  <any free-form additions; not parsed>",
+    "",
+    "Citation format options:",
+    "  - <file path>:<line>          e.g. src/auth/store.py:42",
+    "  - <file path>:<line-range>    e.g. src/auth/refresh.py:15-30",
+    "  - <URL>                       e.g. https://datatracker.ietf.org/doc/html/rfc6749",
+    "  - runtime: <command>          e.g. runtime: pytest tests/test_auth.py",
+    "",
+    "Each claim must have a citation in [brackets]. Claims without citations will be silently",
+    "dropped \u2014 and if NO claim has a citation, your findings will be flagged as malformed.",
+    "",
+    "Research methods: use any tool available in your environment. When local repository evidence is",
+    "insufficient or the topic references external knowledge (RFCs, standards, library docs, vendor",
+    "APIs, recent CVEs, design patterns), you SHOULD use web search / fetch to find authoritative",
+    "sources and cite them as URL citations. Prefer primary sources over blog posts. If a tool is",
+    "unavailable, fall back to local-only investigation and note the gap as an [unverified] claim.",
+    "",
+    RESEARCH_BLOCKERS,
+    artifactContract(findingsPath)
+  ].join("\n");
+}
+function verifyState(ev, verifyText) {
+  if (!ev) return "timeout";
+  if (ev.event === "question") return "question";
+  if (ev.event === "done") return verifyText !== null && verifyText.length > 0 ? "ok" : "missing";
+  return "failed";
+}
+function gateState(workers, key) {
+  return workers.map((p) => {
+    const last = lastKeyedValue(p.stateText ?? "", key);
+    const status = last === "question" ? "question" : p.doneExists && last !== null ? "terminal" : "pending";
+    return { agent: p.agent, status };
+  });
+}
+function gateAnomalies(workers, key) {
+  const out = [];
+  for (const p of workers) {
+    if (!p.doneExists) continue;
+    const last = lastKeyedValue(p.stateText ?? "", key);
+    if (last === "timeout" || last === "failed" || last === "missing") out.push({ agent: p.agent, value: last });
+  }
+  return out;
+}
+function composeVerifyPrompt(itemsText, verifyPath) {
+  const items = itemsText.split("\n").filter((l) => l.length > 0).map((l, i2) => `${i2 + 1}. ${l}`).join("\n");
+  return [
+    "You researched a topic in your previous turn. Below are claims the OTHER researchers raised that",
+    "you did not. For EACH item, do ONE of:",
+    "",
+    "  AGREE     \u2014 confirm with your own evidence (cite a file/line/source)",
+    "  DISPUTE   \u2014 explain why it's wrong, with counter-evidence",
+    "  UNCERTAIN \u2014 you cannot tell from available evidence; say so",
+    "",
+    "Items to verify:",
+    items,
+    "",
+    `Write your verdicts to ${verifyPath} in this exact format:`,
+    "",
+    "  # Verify",
+    "  ## Verdicts",
+    "  1. <TAG> <original [citation] and text>",
+    "     <one-line evidence>",
+    "  2. ...",
+    "",
+    "Where <TAG> is one of: AGREE / DISPUTE / UNCERTAIN.",
+    "",
+    "Verification methods: use any tool in your environment. WebSearch / fetch are authorized when an",
+    "item cites a URL, references external standards/docs, or makes a claim local repo evidence cannot",
+    "resolve. For URL-cited items, fetching the source is the default. For file-cited items prefer the",
+    "local file. If a tool is unavailable, mark the item UNCERTAIN and note the gap \u2014 never fabricate.",
+    "",
+    RESEARCH_BLOCKERS,
+    artifactContract(verifyPath)
+  ].join("\n");
+}
+function drilldownState(ev, fileText) {
+  if (!ev) return "timeout";
+  return fileText !== null && fileText.length > 0 ? "ok" : "missing";
+}
+function composeDrilldownPrompt(opts) {
+  const focus = opts.focus.trim() || `Provide more depth, citations, and concrete trade-offs for the ${opts.section} section.`;
+  return [
+    `You are drilling deeper into the **${opts.section}** section of a design doc derived from the`,
+    "investigation you just completed.",
+    "",
+    `Read the design doc you produced: ${opts.designDocPath}`,
+    "",
+    `Focus: ${focus}`,
+    "",
+    "Write your expanded notes (with [citation] anchors) to:",
+    `  ${opts.outPath}`,
+    "",
+    artifactContract(opts.outPath)
+  ].join("\n");
+}
+var RESEARCH_BLOCKERS;
+var init_designTurn = __esm({
+  "src/core/designTurn.ts"() {
+    "use strict";
+    init_designDiff();
+    init_artifact();
+    RESEARCH_BLOCKERS = 'IF YOU ARE BLOCKED:\n- If a referenced path, file, command, env var, or assumption is wrong or missing, do NOT guess\n  or silently work around it. Append a question event to your outbox and stop:\n  {"event":"question","message":"<what you need and why>","ts":"<iso>"}\n  The Hub will reply via your inbox, then re-engage you.\n';
+  }
+});
+
 // src/core/explore.ts
 function exploreArtDir(topic, opts) {
   return (0, import_node_path25.join)(topicDir(topic, opts), "_explore");
@@ -19842,34 +19890,31 @@ async function phaseWait(row, topic, agent, provider, d) {
     log.ok(`${label}: ${agent} ${row.key}=skipped (already)`);
     return 0;
   }
-  const offset = parseLatestOffset(text);
-  if (offset === null) {
+  const timeout = scaledTimeout(consultTimeout(row.timeoutKind), d.multiplier(provider));
+  const artifact = row.artifactFor(art, agent, provider, topic);
+  const r = await awaitTurn({
+    agent,
+    model: provider,
+    topic,
+    stateFile,
+    timeoutS: timeout,
+    label,
+    policy: { artifact: { path: artifact, key: row.key } }
+  }, {
+    wait: d.wait,
+    clock: d.clock,
+    onArmed: (offset) => {
+      log.info(`${label}: ${agent} offset=${offset} timeout=${timeout}s`);
+    },
+    onFlag: (note) => {
+      recordHubFlag({ command: row.cmd, topic, note });
+    }
+  });
+  if ("missingOffset" in r) {
     log.error(`${label}: OFFSET not set in ${stateFile}`);
     return 1;
   }
-  const timeout = scaledTimeout(consultTimeout(row.timeoutKind), d.multiplier(provider));
-  log.info(`${label}: ${agent} offset=${offset} timeout=${timeout}s`);
-  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
-  const artifact = row.artifactFor(art, agent, provider, topic);
-  const graceS = artifactGraceS();
-  const isDone = ev !== null && ev.event === "done";
-  const accept = !isDone ? null : graceS > 0 ? await awaitArtifact(artifact, graceS, d.sleep ?? realSleep) : "unchecked";
-  if (accept === "quiescent") {
-    log.warn(`${label}: ${agent} ${artifact} has no ${END_OF_ARTIFACT} but stopped growing \u2014 accepting it and flagging the missing sentinel`);
-    recordHubFlag({
-      command: row.cmd,
-      topic,
-      note: `artifact-quiescent-no-sentinel: ${agent} ${artifact}`
-    });
-  }
-  if (accept === "expired") {
-    log.warn(`${label}: ${agent} ${artifact} has no ${END_OF_ARTIFACT} after ${graceS}s grace \u2014 recording ${ARTIFACT_ACCEPT_KEY}=expired (the validators drop this artifact; ${row.key} keeps its own classification so later phases still dispatch)`);
-    recordHubFlag({
-      command: row.cmd,
-      topic,
-      note: `artifact-incomplete: ${agent} ${artifact} done-event without ${END_OF_ARTIFACT} after ${graceS}s grace`
-    });
-  }
+  const { event: ev, accept } = r;
   const state = row.stateFn(ev, readIfExistsOrNull(artifact));
   recordWaitOutcome(
     agent,
@@ -19970,8 +20015,8 @@ var init_phaseTable = __esm({
     init_tmux();
     init_forensics();
     init_artifact();
-    init_waitLive();
     init_designTurn();
+    init_wait();
     init_send2();
     RETRY_NOTE = "exists; rm to retry";
     PHASES = [
@@ -20084,9 +20129,7 @@ var init_phaseTable = __esm({
       paneAlive
     };
     liveWaitDeps = {
-      wait: liveOutboxWait,
-      multiplier: agentTimeoutMultiplier,
-      sleep: realSleep
+      multiplier: agentTimeoutMultiplier
     };
   }
 });
@@ -20703,7 +20746,7 @@ async function drilldownWith(rest, d, hooks) {
     const rc = await d.send(["--from", "hub", j.inst, topic, `@${promptFile}`]);
     if (rc !== 0) return "missing";
     hooks.writeProbe?.(j.outPath);
-    const ev = await d.wait(j.inst, j.model, topic, offset, ["done", "error"], timeout(j.model));
+    const ev = await boundWait(d)(j.inst, j.model, topic, offset, ["done", "error"], timeout(j.model));
     const fileText = readIfExistsOrNull(j.outPath);
     return drilldownState(ev, fileText);
   }));
@@ -20786,6 +20829,7 @@ var init_design2 = __esm({
     init_agents();
     init_contracts();
     init_designTurn();
+    init_wait();
     init_phaseTable();
     init_ipc();
     init_env();
@@ -21418,20 +21462,30 @@ async function turnWaitWith2(topic, round, d) {
     log.error(`implement turn-wait: ${stateFile} missing \u2014 run implement turn-send first`);
     return 1;
   }
-  const offset = parseLatestOffset((0, import_node_fs36.readFileSync)(stateFile, "utf8"));
-  if (offset === null) {
-    log.error(`implement turn-wait: OFFSET not set in ${stateFile}`);
-    return 1;
-  }
   const timeout = scaledTimeout(IMPLEMENT_TURN_TIMEOUT(), d.multiplier(model));
-  log.info(`[turn-wait] ${WORKER} round=${round} offset=${offset} timeout=${timeout}s`);
-  const ev = await waitTurnConfirmed(WORKER, model, topic, offset, timeout, {
+  const r = await awaitTurn({
+    agent: WORKER,
+    model,
+    topic,
+    stateFile,
+    timeoutS: timeout,
+    label: "[turn-wait]",
+    policy: { confirm: true }
+  }, {
     wait: d.wait,
-    sleep: d.sleep,
-    onVeto: (note) => {
+    clock: d.clock,
+    onArmed: (offset) => {
+      log.info(`[turn-wait] ${WORKER} round=${round} offset=${offset} timeout=${timeout}s`);
+    },
+    onFlag: (note) => {
       recordHubFlag({ command: "implement", topic, note });
     }
   });
+  if ("missingOffset" in r) {
+    log.error(`implement turn-wait: OFFSET not set in ${stateFile}`);
+    return 1;
+  }
+  const ev = r.event;
   const verifyPath = (0, import_node_path31.join)(art, `verify-report-${round}.md`);
   const verifyText = readIfExistsOrNull(verifyPath);
   let ts = implementState(ev, verifyText);
@@ -21852,11 +21906,9 @@ var init_implement2 = __esm({
     init_implementTurn();
     init_questionCodec();
     init_ipc();
-    init_waitLive();
-    init_turn();
     init_fsread();
     init_contracts();
-    init_designTurn();
+    init_wait();
     init_env();
     init_send2();
     init_quick();
@@ -21865,7 +21917,7 @@ var init_implement2 = __esm({
     IMPLEMENT_TURN_TIMEOUT = () => envNum("AP_IMPLEMENT_TURN_TIMEOUT_S", DEFAULT_TURN_BUDGET_S);
     liveInitDeps3 = { repoRoot };
     liveSendDeps2 = { offsetFor: (i2, m, t) => outboxOffset(outboxPath(i2, m, t)), send: run };
-    liveWaitDeps2 = { wait: liveOutboxWait, multiplier: agentTimeoutMultiplier, now: () => Math.floor(Date.now() / 1e3) };
+    liveWaitDeps2 = { multiplier: agentTimeoutMultiplier, now: () => Math.floor(Date.now() / 1e3) };
     liveScopeDeps = { runnerFor: runnerAt };
     liveVerifyTestsDeps = { runner: liveTestRunner, detect: detectTestCommand, now: isoUtc };
     liveSummaryDeps = { runnerFor: runnerAt, now: () => isoUtc() };
@@ -25365,7 +25417,7 @@ async function monitorRun(args, opts) {
       if (alive) deadPolls = 0;
       else if (++deadPolls >= 2) break;
     }
-    await sleep4(tickMs);
+    await sleep3(tickMs);
   } while (!once9);
   return 0;
 }
@@ -26241,7 +26293,7 @@ async function run13(args) {
       return usage4();
   }
 }
-var import_node_fs43, import_node_child_process11, import_node_path45, stdoutLine, liveInitDeps4, liveSpawnAllDeps2, liveDropWorkerDeps, liveExperimentSendDeps, liveScoreDeps, sleep4, liveFinalizeDeps, liveRefineDeps, liveHandoffDeps, liveTeardownDeps, liveFreshWorkerDeps, liveResumeDeps, liveAbortDeps, liveConsensusDeps, liveMemoryRetrieveDeps, liveCorpusDigestDeps, readMetricMd, liveValidityCheckDeps, liveVerifyPlanDeps, liveVerifyCheckDeps, liveInspectPlanDeps, liveInspectCheckDeps;
+var import_node_fs43, import_node_child_process11, import_node_path45, stdoutLine, liveInitDeps4, liveSpawnAllDeps2, liveDropWorkerDeps, liveExperimentSendDeps, liveScoreDeps, sleep3, liveFinalizeDeps, liveRefineDeps, liveHandoffDeps, liveTeardownDeps, liveFreshWorkerDeps, liveResumeDeps, liveAbortDeps, liveConsensusDeps, liveMemoryRetrieveDeps, liveCorpusDigestDeps, readMetricMd, liveValidityCheckDeps, liveVerifyPlanDeps, liveVerifyCheckDeps, liveInspectPlanDeps, liveInspectCheckDeps;
 var init_autoresearch2 = __esm({
   "src/commands/autoresearch.ts"() {
     "use strict";
@@ -26348,7 +26400,7 @@ var init_autoresearch2 = __esm({
       },
       now: () => isoUtc()
     };
-    sleep4 = (ms) => new Promise((r) => setTimeout(r, ms));
+    sleep3 = (ms) => new Promise((r) => setTimeout(r, ms));
     liveFinalizeDeps = {
       now: () => isoUtc(),
       keepIntermediate: process.env.AP_AUTORESEARCH_KEEP_INTERMEDIATE ? true : void 0,
@@ -28590,7 +28642,7 @@ async function roundWaitRun(rest) {
     log.error("usage: bridge round-wait <topic> <round>=1..");
     return 2;
   }
-  return roundWaitWith(topic, round, { wait: liveOutboxWait });
+  return roundWaitWith(topic, round, {});
 }
 async function roundWaitWith(topic, round, d) {
   const art = bridgeArtDir(topic);
@@ -28606,19 +28658,29 @@ async function roundWaitWith(topic, round, d) {
     log.error(`bridge round-wait: ${stateFile} missing (run bridge round-send first)`);
     return 1;
   }
-  const offset = parseLatestOffset((0, import_node_fs46.readFileSync)(stateFile, "utf8"));
-  if (offset === null) {
-    log.error(`bridge round-wait: OFFSET not set in ${stateFile}`);
-    return 1;
-  }
-  log.info(`bridge round-wait: round=${round} offset=${offset} timeout=${DUET_TURN_TIMEOUT}s`);
-  const ev = await waitTurnConfirmed(agent, provider, topic, offset, DUET_TURN_TIMEOUT, {
+  const r = await awaitTurn({
+    agent,
+    model: provider,
+    topic,
+    stateFile,
+    timeoutS: DUET_TURN_TIMEOUT,
+    label: "bridge round-wait",
+    policy: { confirm: true }
+  }, {
     wait: d.wait,
-    sleep: d.sleep,
-    onVeto: (note) => {
+    clock: d.clock,
+    onArmed: (offset) => {
+      log.info(`bridge round-wait: round=${round} offset=${offset} timeout=${DUET_TURN_TIMEOUT}s`);
+    },
+    onFlag: (note) => {
       recordHubFlag({ command: "bridge", topic, note });
     }
   });
+  if ("missingOffset" in r) {
+    log.error(`bridge round-wait: OFFSET not set in ${stateFile}`);
+    return 1;
+  }
+  const ev = r.event;
   const ts = classifyTurn(ev);
   recordWaitOutcome(
     agent,
@@ -28788,10 +28850,9 @@ var init_bridge2 = __esm({
     init_bridge();
     init_bridgeTurn();
     init_turn();
-    init_designTurn();
+    init_wait();
     init_env();
     init_ipc();
-    init_waitLive();
     init_send2();
     liveInitDeps5 = {
       haveCmd,

@@ -19,7 +19,7 @@ import { exploreArtDir } from "../src/core/explore.js";
 import { PHASES, phaseWait, type PhaseKey, type PhaseRow, type SendDeps } from "../src/core/phaseTable.js";
 import { END_OF_ARTIFACT } from "../src/core/artifact.js";
 import { consultTimeout } from "../src/core/contracts.js";
-import { scaledTimeout } from "../src/core/designTurn.js";
+import { scaledTimeout } from "../src/core/wait.js";
 
 /** Put a worker mid-turn. Since the 2026-08-08 liveness spec an unsafe guard chain skips unless the
  *  worker is verifiably free — every skip case below pins the chain semantics, so it seeds a busy

@@ -48,18 +48,16 @@ import { workerDir } from "./paths.js";
 import { consultTimeout, agentTimeoutMultiplier, type ConsultKind } from "./contracts.js";
 import {
   outboxOffset, outboxPath, outboxTerminalSince, paneMetaRead, statusPath, workerBusyState,
-  workerStatusReport, TERMINAL_EVENTS, type OutboxEvent,
+  workerStatusReport, type Clock, type OutboxEvent,
 } from "./ipc.js";
 import { paneAlive } from "./tmux.js";
 import { recordHubFlag } from "./forensics.js";
 import {
-  ARTIFACT_ACCEPT_KEY, END_OF_ARTIFACT, WAIT_ACCEPTED, artifactBackstop, artifactGraceS, awaitArtifact,
-  clearArtifactStrikes, hasArtifactSentinel, realSleep, type ArtifactVerdict, type WaitAccept,
+  ARTIFACT_ACCEPT_KEY, END_OF_ARTIFACT, WAIT_ACCEPTED, artifactBackstop,
+  clearArtifactStrikes, hasArtifactSentinel, type ArtifactVerdict,
 } from "./artifact.js";
-import { liveOutboxWait } from "./waitLive.js";
-import {
-  parseLatestOffset, scaledTimeout, researchState, verifyState, gateState, gateAnomalies, recordWaitOutcome,
-} from "./designTurn.js";
+import { researchState, verifyState, gateState, gateAnomalies } from "./designTurn.js";
+import { awaitTurn, parseLatestOffset, recordWaitOutcome, scaledTimeout, type WaitFn } from "./wait.js";
 import { run as sendRun } from "../commands/send.js";
 
 /** The frozen state-file status keys, declared ONCE (designTurn's gate signatures import it):
@@ -319,10 +317,12 @@ export interface SendDeps {
 }
 
 export interface WaitDeps {
-  wait(agent: string, model: string, topic: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null>;
+  /** Left unset by the live verbs: awaitTurn's default is the live wait on this bag's clock. */
+  wait?: WaitFn;
   multiplier(provider: string): string;
-  /** Poll delay inside the artifact grace loop; injected so tests do not sleep for real. */
-  sleep?(ms: number): Promise<void>;
+  /** The wait's time source — the engine's poll and the artifact grace loop both run on it;
+   *  injected so tests do not sleep for real. */
+  clock?: Clock;
 }
 
 export const liveSendDeps: SendDeps = {
@@ -333,9 +333,7 @@ export const liveSendDeps: SendDeps = {
 };
 
 export const liveWaitDeps: WaitDeps = {
-  wait: liveOutboxWait,
   multiplier: agentTimeoutMultiplier,
-  sleep: realSleep,
 };
 
 /** The row-derived paths a phase's own preconditions and composer work from. Everything here is
@@ -428,8 +426,8 @@ export async function dispatchPrompt(
   return 0;
 }
 
-/** The whole wait body, identical for all nine phases: skipped fast-path, latest-offset read,
- *  provider-scaled timeout, the outbox wait, classify, record the outcome (a question re-arms the
+/** The phase-wait body, identical for all nine phases: skipped fast-path, provider-scaled timeout,
+ *  `awaitTurn` under the artifact policy, classify, record the outcome (a question re-arms the
  *  offset instead of terminating), drop the `.done` marker the wait gate reads, log. */
 export async function phaseWait(
   row: PhaseRow, topic: string, agent: string, provider: string, d: WaitDeps,
@@ -444,46 +442,22 @@ export async function phaseWait(
     log.ok(`${label}: ${agent} ${row.key}=skipped (already)`);
     return 0;
   }
-  const offset = parseLatestOffset(text);
-  if (offset === null) { log.error(`${label}: OFFSET not set in ${stateFile}`); return 1; }
-
   const timeout = scaledTimeout(consultTimeout(row.timeoutKind), d.multiplier(provider));
-  log.info(`${label}: ${agent} offset=${offset} timeout=${timeout}s`);
-  const ev = await d.wait(agent, provider, topic, offset, TERMINAL_EVENTS, timeout);
-
-  // A `done` event whose artifact lacks the sentinel is a worker that emitted done before its file
-  // was written: hold the phase open for the grace window, then classify. Two acceptances (the
-  // 2026-07-31 quiescence amendment): the sentinel lands, OR the file is non-empty and stops
-  // changing — finished work from a worker that skipped a soft-compliance line, accepted exactly
-  // like a sentinel but flagged for /ap:review. Only an empty or still-growing artifact expires.
-  // Non-done terminal events (error/question) bypass the check — those paths are unchanged.
-  //
-  // The outcome is recorded as its OWN `AC=` line, never folded into the phase key. Two reasons,
-  // both bugs the first draft shipped: (1) the validators need "did the wait accept this file?",
-  // which `<KEY>=ok` does not answer (explore's healthy findings classify `empty`); (2) forcing
-  // `<KEY>=timeout` on expiry made every later phase's dispatch guard treat that worker as unsafe
-  // and cascade-skip it, so ONE missing optional artifact silently ended a worker's run. The key
-  // now always carries the row's natural classification and `AC=` carries the acceptance.
   const artifact = row.artifactFor(art, agent, provider, topic);
-  const graceS = artifactGraceS();
-  const isDone = ev !== null && ev.event === "done";
-  const accept: WaitAccept | null = !isDone
-    ? null // no done event: nothing was written to accept — the stateFn's answer stands alone
-    : graceS > 0 ? await awaitArtifact(artifact, graceS, d.sleep ?? realSleep) : "unchecked";
-  if (accept === "quiescent") {
-    log.warn(`${label}: ${agent} ${artifact} has no ${END_OF_ARTIFACT} but stopped growing — accepting it and flagging the missing sentinel`);
-    recordHubFlag({
-      command: row.cmd, topic,
-      note: `artifact-quiescent-no-sentinel: ${agent} ${artifact}`,
-    });
-  }
-  if (accept === "expired") {
-    log.warn(`${label}: ${agent} ${artifact} has no ${END_OF_ARTIFACT} after ${graceS}s grace — recording ${ARTIFACT_ACCEPT_KEY}=expired (the validators drop this artifact; ${row.key} keeps its own classification so later phases still dispatch)`);
-    recordHubFlag({
-      command: row.cmd, topic,
-      note: `artifact-incomplete: ${agent} ${artifact} done-event without ${END_OF_ARTIFACT} after ${graceS}s grace`,
-    });
-  }
+  // The wait itself is awaitTurn's: the offset read, the terminal selection, and the artifact
+  // policy — the grace that holds a `done` open until its file is complete, whose verdict comes
+  // back for THIS layer to record as its own `AC=` line.
+  const r = await awaitTurn({
+    agent, model: provider, topic, stateFile, timeoutS: timeout, label,
+    policy: { artifact: { path: artifact, key: row.key } },
+  }, {
+    wait: d.wait, clock: d.clock,
+    onArmed: (offset) => { log.info(`${label}: ${agent} offset=${offset} timeout=${timeout}s`); },
+    onFlag: (note) => { recordHubFlag({ command: row.cmd, topic, note }); },
+  });
+  if ("missingOffset" in r) { log.error(`${label}: OFFSET not set in ${stateFile}`); return 1; }
+  const { event: ev, accept } = r;
+
   const state = row.stateFn(ev, readIfExistsOrNull(artifact));
   recordWaitOutcome(agent, provider, topic, stateFile, state, row.key,
     ev ? { file: join(art, `question-${agent}.txt`), body: JSON.stringify(ev) + "\n" } : undefined,

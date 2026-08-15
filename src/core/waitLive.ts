@@ -1,7 +1,7 @@
 // src/core/waitLive.ts — the live wiring of outboxWaitSince's pane-liveness escape hatch.
 // Kept out of ipc.ts so ipc stays free of the tmux/execa dependency (outboxWaitSince takes the
 // probe as an injected function; this is the one place that binds it to the real tmux probe).
-import { outboxWaitSince, paneMetaRead, type OutboxEvent } from "./ipc.js";
+import { outboxWaitSince, paneMetaRead, type Clock, type OutboxEvent } from "./ipc.js";
 import { paneAlive } from "./tmux.js";
 import { envNum } from "./env.js";
 
@@ -15,9 +15,9 @@ import { envNum } from "./env.js";
  *  Knob semantics: default 3; set 1 to DISABLE (envNum's `|| def` means 0/unset also fall back
  *  to 3, so 1 is the only off-switch); clamped to <=10 so a typo cannot yield a multi-day wait. */
 export function liveOutboxWait(
-  i: string, m: string, t: string, offset: number, events: string[], timeoutSec: number,
+  i: string, m: string, t: string, offset: number, events: string[], timeoutSec: number, clock?: Clock,
 ): Promise<OutboxEvent | null> {
   return outboxWaitSince(i, m, t, offset, events, timeoutSec, {
     paneAlive, paneId: paneMetaRead(i, m, t), extendMult: envNum("AP_WAIT_EXTEND_MULT", 3),
-  });
+  }, clock);
 }

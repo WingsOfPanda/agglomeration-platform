@@ -17,12 +17,11 @@ import { repoRoot } from "../core/paths.js";
 import { parseBridgeArgs, deriveSlug, bridgeArtDir, bridgeExecDir, renderBridgeSummary, renderBridgeResume } from "../core/bridge.js";
 import type { BridgeSummaryFacts } from "../core/bridge.js";
 import { composeBridgeBrief, composeBridgeFollowup } from "../core/bridgeTurn.js";
-import { classifyTurn, waitTurnConfirmed } from "../core/turn.js";
-import { parseLatestOffset, recordWaitOutcome } from "../core/designTurn.js";
+import { classifyTurn } from "../core/turn.js";
+import { awaitTurn, recordWaitOutcome, type WaitFn } from "../core/wait.js";
 import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
 import { outboxOffset, outboxPath, workerSendGate } from "../core/ipc.js";
-import { liveOutboxWait } from "../core/waitLive.js";
-import type { OutboxEvent } from "../core/ipc.js";
+import type { Clock } from "../core/ipc.js";
 import { run as sendRun } from "./send.js";
 
 function usage(): number {
@@ -182,15 +181,16 @@ export async function roundSendWith(topic: string, round: number, d: TurnSendDep
 }
 
 export interface TurnWaitDeps {
-  wait(agent: string, model: string, topic: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null>;
-  sleep?(ms: number): Promise<void>;
+  /** Both left unset by the live verb: awaitTurn's defaults are the live wait on the real clock. */
+  wait?: WaitFn;
+  clock?: Clock;
 }
 
 async function roundWaitRun(rest: string[]): Promise<number> {
   const [topic, roundStr] = rest;
   const round = Number(roundStr);
   if (!topic || !Number.isInteger(round) || round < 1) { log.error("usage: bridge round-wait <topic> <round>=1.."); return 2; }
-  return roundWaitWith(topic, round, { wait: liveOutboxWait });
+  return roundWaitWith(topic, round, {});
 }
 
 export async function roundWaitWith(topic: string, round: number, d: TurnWaitDeps): Promise<number> {
@@ -201,14 +201,17 @@ export async function roundWaitWith(topic: string, round: number, d: TurnWaitDep
   if (!agent || !provider) { log.error("bridge round-wait: missing agent.txt/selected-provider.txt"); return 1; }
   const stateFile = join(exec, `round-${round}.txt`);
   if (!existsSync(stateFile)) { log.error(`bridge round-wait: ${stateFile} missing (run bridge round-send first)`); return 1; }
-  const offset = parseLatestOffset(readFileSync(stateFile, "utf8"));
-  if (offset === null) { log.error(`bridge round-wait: OFFSET not set in ${stateFile}`); return 1; }
 
-  log.info(`bridge round-wait: round=${round} offset=${offset} timeout=${DUET_TURN_TIMEOUT}s`);
-  const ev = await waitTurnConfirmed(agent, provider, topic, offset, DUET_TURN_TIMEOUT, {
-    wait: d.wait, sleep: d.sleep,
-    onVeto: (note) => { recordHubFlag({ command: "bridge", topic, note }); },
+  const r = await awaitTurn({
+    agent, model: provider, topic, stateFile, timeoutS: DUET_TURN_TIMEOUT,
+    label: "bridge round-wait", policy: { confirm: true },
+  }, {
+    wait: d.wait, clock: d.clock,
+    onArmed: (offset) => { log.info(`bridge round-wait: round=${round} offset=${offset} timeout=${DUET_TURN_TIMEOUT}s`); },
+    onFlag: (note) => { recordHubFlag({ command: "bridge", topic, note }); },
   });
+  if ("missingOffset" in r) { log.error(`bridge round-wait: OFFSET not set in ${stateFile}`); return 1; }
+  const ev = r.event;
   const ts = classifyTurn(ev);
   recordWaitOutcome(agent, provider, topic, stateFile, ts, "TS",
     ev ? { file: join(exec, `question-${round}.txt`), body: JSON.stringify(ev) + "\n" } : undefined);

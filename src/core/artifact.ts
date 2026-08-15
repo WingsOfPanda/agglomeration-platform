@@ -106,8 +106,6 @@ export function artifactContract(finalPath: string, alsoPaths: string[] = []): s
   ].join("\n");
 }
 
-export const realSleep = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms); });
-
 /** How a phase wait's grace loop ended: the sentinel landed, the file went quiescent without one
  *  (accepted, but flagged), or grace expired on a file that is empty or still changing. */
 export type ArtifactWait = "sentinel" | "quiescent" | "expired";
