@@ -242,9 +242,20 @@ export async function finishWith(topic: string, r: Runner, hasGh: boolean): Prom
   // `bridge branch` checkout now records — is a silent `none` in the record, so it gets a flag of its
   // own. Where the work actually sits is READ BACK, never assumed: this arm performs no checkout, so
   // HEAD is still wherever the branch step left it.
-  if (res.outcome === "no-branch") {
+  // A refused base checkout is the same shape of silence — the finisher stopped before acting and
+  // recorded it — so it takes the same read-back and flag, with its own cause. The CONSEQUENCE
+  // depends on which arm refused: the remote arm stops after the push with a PR possibly open, the
+  // no-remote arm never pushed anything, and a flag that claimed a PR either way would be the same
+  // false record this outcome exists to prevent.
+  if (res.outcome === "no-branch" || res.outcome === "base-checkout-failed") {
     const head = currentBranch(r) || "(detached)";
-    runFlag("bridge", topic, `finish-no-branch: the recorded branch '${branch || "(unrecorded)"}' is missing or is the start branch '${startBranch}' — nothing was pushed, no PR opened; the work (if any) is on '${head}'`);
+    const left = res.action === "local-merge"
+      ? "this repo has no remote, so nothing was pushed and no PR exists"
+      : "the branch WAS pushed and any PR opened for it is still open, unmerged";
+    const why = res.outcome === "no-branch"
+      ? `the recorded branch '${branch || "(unrecorded)"}' is missing or is the start branch '${startBranch}' — nothing was pushed, no PR opened`
+      : `the checkout of the base branch '${startBranch}' was refused (check the checkout's own error: e.g. a dirty tree, the base held by another worktree, or the base ref gone) — nothing was merged and the local base was NOT updated; ${left}`;
+    runFlag("bridge", topic, `finish-${res.outcome}: ${why}; the work (if any) is on '${head}'`);
   }
   log.ok(`bridge finish: ${res.action} → ${res.outcome}`);
   return 0;

@@ -400,14 +400,15 @@ function hubFlags(home: string): string[] {
   return readdirSync(root).flatMap((d) => readdirSync(join(root, d)).map((f) => readFileSync(join(root, d, f), "utf8")));
 }
 
-describe("bridge finish: the no-branch refusal is flagged for /ap:review", () => {
+describe("bridge finish: the finisher's refusals are flagged for /ap:review", () => {
   let h: { home: string; cleanup: () => void };
   beforeEach(() => { h = freshHome(); });
   afterEach(() => h.cleanup());
 
   /** `refRc` decides whether the recorded branch still exists; `head` is where the run really is —
-   *  the refusal arm performs no checkout, so this is whatever the branch step left behind. */
-  function seed(branch: string, startBranch: string, refRc: number, head = "main"): { r: Runner; calls: string[][] } {
+   *  the refusal arm performs no checkout, so this is whatever the branch step left behind.
+   *  `checkoutRc` refuses the base checkout, the other way the finisher stops without acting. */
+  function seed(branch: string, startBranch: string, refRc: number, head = "main", checkoutRc = 0): { r: Runner; calls: string[][] } {
     const exec = bridgeExecDir("t"); mkdirSync(exec, { recursive: true });
     writeFileSync(join(exec, "mode.txt"), "branch\n");
     if (branch) writeFileSync(join(exec, "branch.txt"), branch + "\n");
@@ -420,6 +421,7 @@ describe("bridge finish: the no-branch refusal is flagged for /ap:review", () =>
       const k = [cmd, ...args].join(" ");
       if (k.startsWith("git show-ref")) return { code: refRc, stdout: "" };
       if (k === "git symbolic-ref --short HEAD") return head ? { code: 0, stdout: head + "\n" } : { code: 128, stdout: "" };
+      if (k === `git checkout -q ${startBranch}`) return { code: checkoutRc, stdout: "" };
       if (k === "git remote") return { code: 0, stdout: "origin\n" };
       if (k === "git remote get-url origin") return { code: 0, stdout: "git@x:y.git\n" };
       return { code: 0, stdout: "" };
@@ -445,6 +447,27 @@ describe("bridge finish: the no-branch refusal is flagged for /ap:review", () =>
     const { r } = seed("", "main", 1);
     expect(await finishWith("t", r, true)).toBe(0);
     expect(hubFlags(h.home).join("")).toContain("'(unrecorded)'");
+  });
+
+  // The other refusal: the branch is real and pushed, but the base could not be checked out, so the
+  // finisher stops before `gh pr merge` rather than merging over a base it cannot fast-forward.
+  it("the base checkout is refused: its own cause, and the PR is left unmerged", async () => {
+    const { r, calls } = seed("feat/bridge-t", "main", 0, "feat/bridge-t", 1);
+    expect(await finishWith("t", r, true)).toBe(0);
+    expect(readFileSync(join(bridgeExecDir("t"), "finish-result.txt"), "utf8")).toBe("pr-merge\tbase-checkout-failed\n");
+    expect(calls.some((c) => c.join(" ").startsWith("gh pr merge"))).toBe(false);
+    expect(hubFlags(h.home).join("")).toContain(
+      "finish-base-checkout-failed: the checkout of the base branch 'main' was refused (check the checkout's own error: e.g. a dirty tree, the base held by another worktree, or the base ref gone) — nothing was merged and the local base was NOT updated; the branch WAS pushed and any PR opened for it is still open, unmerged; the work (if any) is on 'feat/bridge-t'",
+    );
+  });
+
+  // The other arm reaching the same outcome pushed NOTHING, so its flag must not claim a PR.
+  it("the base checkout is refused with no remote: the flag claims no push and no PR", async () => {
+    const { r: seeded } = seed("feat/bridge-t", "main", 0, "feat/bridge-t", 1);
+    const r: Runner = { run: (cmd, args) => [cmd, ...args].join(" ") === "git remote" ? { code: 0, stdout: "" } : seeded.run(cmd, args) };
+    expect(await finishWith("t", r, true)).toBe(0);
+    expect(readFileSync(join(bridgeExecDir("t"), "finish-result.txt"), "utf8")).toBe("local-merge\tbase-checkout-failed\n");
+    expect(hubFlags(h.home).join("")).toContain("this repo has no remote, so nothing was pushed and no PR exists");
   });
 
   it("a healthy pr-merge finish writes NO flag — the refusal is the only flagged outcome", async () => {

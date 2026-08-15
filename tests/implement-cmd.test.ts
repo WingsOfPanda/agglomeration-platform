@@ -326,6 +326,23 @@ describe("implement finish", () => {
     expect(readFileSync(join(art, "finish-results.tsv"), "utf8")).toBe("main\tmerge\tsame-branch\n");
   });
 
+  // Same silence as same-branch, different cause and recovery — so it is counted and worded apart.
+  it("the baseline checkout is refused → base-checkout-failed, its own flag, nothing merged", async () => {
+    const art = seedArt();
+    seedFinish(art); // branch feat/implement-foo, baseline main
+    writeFileSync(join(art, "branch-mode.txt"), "branch\n");
+    const r = fakeRunner({
+      "git show-ref --verify --quiet refs/heads/feat/implement-foo": { code: 0, stdout: "" },
+      "git checkout -q main": { code: 1, stdout: "" },
+    });
+    const { rc, out } = await capture(() => finishWith2(TOPIC, "merge", () => r, false));
+    expect(rc).toBe(0);
+    expect(readFileSync(join(art, "finish-results.tsv"), "utf8")).toBe("main\tmerge\tbase-checkout-failed\n");
+    expect(readFileSync(out.trim(), "utf8")).toContain(
+      "finish merge: base-checkout-failed on 1 target(s) — the checkout of the baseline branch was refused (check the checkout's own error: e.g. a dirty tree, the baseline held by another worktree, or its ref gone), so NOTHING was merged or discarded; the work is still on the feature branch",
+    );
+  });
+
   it("mode branch + a recorded branch whose ref is gone → same-branch", async () => {
     const art = seedArt();
     seedFinish(art); // branch feat/implement-foo, baseline main

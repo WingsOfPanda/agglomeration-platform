@@ -300,7 +300,12 @@ Then `ROUND=$((ROUND+1))`, `RETRY=0`, and loop back to Stage 1.
    file is absent this is a pre-0.5.14 art dir, where `same-branch` may simply be a deliberate
    `--no-branch` run that predates the record — confirm with the user before relaying the
    stranded-work recovery. (With the file present, `no-branch` is the deliberate run and needs no
-   recovery; `branch` means the work really is stranded.)
+   recovery; `branch` means the work really is stranded.) **`base-checkout-failed`** is a different
+   defect: the branch is real and holds the work, but `git checkout <baseline>` was refused (read the
+   checkout's own error — e.g. a dirty tracked file, the baseline held by another worktree, or its
+   ref gone), so the finisher stopped before merging or deleting anything and the work is intact on
+   `feat/implement-<TOPIC>`. Recovery: clear whatever the error names (clean or commit the tree, free
+   the baseline branch) and re-run `implement finish`.
 4. **Forensics + reflection.** `$CS implement forensics <TOPIC>`. If it printed a path, use the
    **Edit/Write tool** to APPEND an idempotent `## Hub reflection` section to that file — 3-5
    short bullets interpreting the mechanical findings.

@@ -68,6 +68,46 @@ describe("finishWork arms", () => {
   });
 });
 
+// The base checkout is LOAD-BEARING wherever an outcome is decided after it: refused, HEAD stays on
+// the feature branch, where `git merge` merges the branch into ITSELF and records "merged". These
+// arms must refuse instead and issue nothing. The restore-only checkouts keep their outcome.
+describe("finishWork: a refused base checkout fails closed", () => {
+  const BLOCKED = { ...EXISTS, "git checkout -q main": { code: 1, stdout: "" } };
+
+  it("merge → base-checkout-failed: no merge, no branch -D", () => {
+    const { r, calls } = fakeRunner(BLOCKED);
+    expect(finishWork(r, opts({ action: "merge" }))).toEqual({ action: "merge", outcome: "base-checkout-failed" });
+    expect(calls.some((c) => c[1] === "merge" || c[1] === "branch")).toBe(false);
+  });
+  it("discard → base-checkout-failed: the branch survives, so a resume still finds the work", () => {
+    const { r, calls } = fakeRunner(BLOCKED);
+    expect(finishWork(r, opts({ action: "discard" }))).toEqual({ action: "discard", outcome: "base-checkout-failed" });
+    expect(calls.some((c) => c[1] === "branch")).toBe(false);
+  });
+  it("keep is still kept — its outcome is decided BEFORE the checkout, which is only a restore", () => {
+    const { r } = fakeRunner(BLOCKED);
+    expect(finishWork(r, opts({ action: "keep" }))).toEqual({ action: "keep", outcome: "kept" });
+  });
+  it("the pr arm is still pr-opened — it pushes and opens the PR before the restoring checkout", () => {
+    const { r } = fakeRunner({ ...BLOCKED, "git remote get-url origin": { code: 0, stdout: "u\n" } });
+    expect(finishWork(r, opts({ action: "pr", hasGh: true })).outcome).toBe("pr-opened");
+  });
+
+  // rc != 0 is not the same as "the switch did not happen": a post-checkout hook (git-lfs with no
+  // binary, husky) fails AFTER git has switched. Position is read back, so a healthy finish that
+  // merely tripped a hook still merges.
+  it("a post-checkout hook failing after the switch is NOT a refusal — the merge still happens", () => {
+    const { r, calls } = fakeRunner({ ...BLOCKED, "git symbolic-ref --short HEAD": { code: 0, stdout: "main\n" } });
+    expect(finishWork(r, opts({ action: "merge" }))).toEqual({ action: "merge", outcome: "merged" });
+    expect(calls).toContainEqual(["git", "merge", "--no-edit", "-q", "feat/x"]);
+  });
+  it("the read-back costs nothing on the healthy path — rc 0 never probes HEAD", () => {
+    const { r, calls } = fakeRunner({ ...EXISTS });
+    expect(finishWork(r, opts({ action: "merge" })).outcome).toBe("merged");
+    expect(calls.some((c) => c[1] === "symbolic-ref")).toBe(false);
+  });
+});
+
 describe("finishWork pr arm (pushAndPr)", () => {
   const pushable = { ...EXISTS, "git remote get-url origin": { code: 0, stdout: "git@h:o/r.git\n" } };
 
