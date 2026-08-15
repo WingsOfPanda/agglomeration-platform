@@ -45,6 +45,7 @@ import { designArtDir } from "./design.js";
 import { parseListFile, lastTag } from "./roster.js";
 import { exploreArtDir } from "./explore.js";
 import { workerDir } from "./paths.js";
+import { assertSlug } from "./slug.js";
 import { consultTimeout, agentTimeoutMultiplier, type ConsultKind } from "./contracts.js";
 import {
   outboxOffset, outboxPath, outboxTerminalSince, paneMetaRead, statusPath, workerBusyState,
@@ -581,6 +582,11 @@ export function triad<D>(
   return async (rest: string[]): Promise<number> => {
     const [topic, agent, provider] = rest;
     if (!topic || !agent || !provider) { log.error(`usage: ${usageLabel} <topic> <agent> <provider>`); return 2; }
+    // The shared arg validation for every design/explore phase verb, so the one gate here covers
+    // both skeletons: phaseSend/phaseWait spell the agent into `<phase>-<agent>.txt`,
+    // `<agent>_<phase>_prompt.md` and `question-<agent>.txt` inside the already-resolved art dir,
+    // ahead of the workerDir reads that would otherwise be the first thing to see it.
+    assertSlug("agent", agent);
     return fn(topic, agent, provider, deps);
   };
 }

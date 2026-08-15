@@ -17,6 +17,7 @@ import { auditDoc } from "../core/audit.js";
 import { lintComponentsPaths } from "../core/implementScope.js";
 import { readProviderList } from "../core/providers.js";
 import { activeProvidersPath, repoRoot, topicDir } from "../core/paths.js";
+import { assertSlug } from "../core/slug.js";
 import { pickAgents } from "../core/agents.js";
 import { agentConsultValidated, consultTimeout } from "../core/contracts.js";
 import { composeResearchPrompt, composeVerifyPrompt, composeDrilldownPrompt, drilldownState } from "../core/designTurn.js";
@@ -428,6 +429,7 @@ export async function offsetResetRun(rest: string[]): Promise<number> {
   const [topic, agent, phase] = pos;
   if (!topic || !agent || !phase) { log.error("usage: design offset-reset <topic> <agent> <phase> [--keep-findings]"); return 2; }
   if (!rowFor("design", phase)) { log.error(`design offset-reset: phase must be ${phaseStems("design")} (got ${phase})`); return 2; }
+  assertSlug("agent", agent); // spelled into filenames INSIDE art (below), so workerDir never gates it
   const art = designArtDir(topic);
   if (!existsSync(art)) { log.error(`design offset-reset: art dir missing: ${art}`); return 1; }
 

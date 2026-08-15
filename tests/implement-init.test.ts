@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { captureStdout } from "./helpers/captureStdout.js";
 import { implementArtDir } from "../src/core/implement.js";
+import { repoStateDir } from "../src/core/paths.js";
 import { initWith, run as implementRun, type ImplementInitDeps } from "../src/commands/implement.js";
 
 // A minimal design doc that satisfies auditDoc (title + the four required sections).
@@ -118,7 +119,9 @@ describe("implement init", () => {
     const badTopic = "demo-repo-simplify-sweep-2-tiers-bce"; // 36 chars
     const rc = await initWith(["--topic", badTopic, p], deps);
     expect(rc).toBe(2);
-    expect(existsSync(implementArtDir(badTopic))).toBe(false);
+    // The path gate now REFUSES an out-of-charset topic, so the "scaffolds nothing" probe spells the
+    // state path out instead of deriving it through implementArtDir (which throws on this topic).
+    expect(existsSync(join(repoStateDir(), badTopic))).toBe(false);
     expect(errSpy.text()).toContain("--topic");
   });
 
