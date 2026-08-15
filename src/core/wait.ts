@@ -10,9 +10,9 @@
 // reading them; this table is the one place they are named together:
 //
 //   MAX_VETOES          2  vetoed confirmation windows before a turn wait accepts its armed
-//                          terminal event anyway (a pane still writing is chatty or stuck)   turn.ts
+//                          terminal event anyway (a pane still writing is chatty or stuck)   wait.ts
 //   REARM_FLOOR_WINDOWS 3  confirmation windows the re-arm is guaranteed past the FIRST leg's
-//                          end, so a liveness-extended leg still gets a real confirmation     turn.ts
+//                          end, so a liveness-extended leg still gets a real confirmation     wait.ts
 //   QUIESCENT_POLLS     5  consecutive equal-size artifact polls (~10s) that count as
 //                          "finished writing" without the sentinel                       artifact.ts
 //   NO_GROWTH_STRIKES   3  backstop refusals with no growth before it degrades to the drop
@@ -21,8 +21,10 @@
 //                          a run open forever                                            artifact.ts
 import { appendFileSync, readFileSync } from "node:fs";
 import {
-  outboxEventsSince, outboxOffset, outboxPath, TERMINAL_EVENTS, type OutboxEvent,
+  outboxEventsSince, outboxOffset, outboxPath, realClock, TERMINAL_EVENTS,
+  type Clock, type OutboxEvent,
 } from "./ipc.js";
+import { liveOutboxWait } from "./waitLive.js";
 import { atomicWrite } from "./atomic.js";
 import { log } from "./log.js";
 import {
@@ -76,8 +78,6 @@ export function scaledTimeout(baseSec: number, multiplier: string): number {
   const m = Number(multiplier);
   return Math.floor(baseSec * (Number.isFinite(m) && m > 0 ? m : 1) + 0.5);
 }
-
-export const realSleep = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms); });
 
 // ---------------------------------------------------------------------------------------------
 // awaitTurn — the ONE entry point every turn/round/phase wait goes through.
@@ -142,11 +142,14 @@ export interface TurnResult {
 }
 
 export interface TurnDeps {
-  wait: WaitFn;
-  /** Injected for tests; the live verbs leave it unset and get real sleeps. */
-  sleep?(ms: number): Promise<void>;
-  /** Injected for tests (a virtual clock); the live verbs leave it unset and get Date.now. */
-  nowMs?(): number;
+  /** The wait itself. Left unset by every live verb — the default IS the live wait, bound to this
+   *  bag's clock, so the one `liveOutboxWait` binding in the codebase is here. Tests that script a
+   *  wait still override it. */
+  wait?: WaitFn;
+  /** The one time source this wait runs on: the confirmation window and deadline here, and the
+   *  engine's own poll and liveness extension underneath. Tests bind a virtual clock and get both
+   *  layers on one timeline; the live verbs leave it unset and get the real one. */
+  clock?: Clock;
   /** Called with the resolved offset once, BEFORE the wait starts. Each verb's pre-wait log line
    *  has its own byte-exact wording and must still precede a wait that can run for hours, so the
    *  line stays the caller's while the offset it names is resolved here. */
@@ -154,6 +157,16 @@ export interface TurnDeps {
   /** Every forensics note this wait produces (the confirmation veto/cap/deadline, the artifact
    *  quiescence/expiry); the verbs bind it to `recordHubFlag` with their own command + topic. */
   onFlag?(note: string): void;
+}
+
+const clockOf = (d: TurnDeps): Clock => d.clock ?? realClock;
+
+/** The wait a dep bag runs on: the injected one, or the live outbox poll bound to that bag's clock
+ *  — the one place `liveOutboxWait` is wired in the codebase. Exported for the one wait that is
+ *  NOT a turn wait and so does not go through awaitTurn: design's drilldown, which listens for its
+ *  own `["done", "error"]` event list and resolves no state-file offset. */
+export function boundWait(d: { wait?: WaitFn; clock?: Clock }): WaitFn {
+  return d.wait ?? ((i, m, t, off, ev, to) => liveOutboxWait(i, m, t, off, ev, to, d.clock));
 }
 
 /** The LAST terminal event in file order, or null when the region holds none. */
@@ -194,14 +207,14 @@ function latestTerminal(events: OutboxEvent[]): OutboxEvent | null {
 async function confirmedTerminal(
   i: string, m: string, t: string, offset: number, timeoutS: number, d: TurnDeps,
 ): Promise<OutboxEvent | null> {
-  const now = d.nowMs ?? (() => Date.now());
+  const { now } = clockOf(d);
   const startMs = now();
-  const first = await d.wait(i, m, t, offset, TERMINAL_EVENTS, timeoutS);
+  const first = await boundWait(d)(i, m, t, offset, TERMINAL_EVENTS, timeoutS);
   const confirmS = turnConfirmS();
   if (!first || confirmS === 0) return first;
   const legEndMs = now();
   const path = outboxPath(i, m, t);
-  const sleep = d.sleep ?? realSleep;
+  const { sleep } = clockOf(d);
   const windowMs = confirmS * 1000;
   const deadlineMs = Math.max(startMs + timeoutS * 1000, legEndMs + REARM_FLOOR_WINDOWS * windowMs);
   let armed = latestTerminal(outboxEventsSince(i, m, t, offset)) ?? first;
@@ -220,7 +233,7 @@ async function confirmedTerminal(
     let next: OutboxEvent | null = null;
     while (!next) {
       const before = outboxOffset(path);
-      next = await d.wait(i, m, t, s0, TERMINAL_EVENTS, confirmS);
+      next = await boundWait(d)(i, m, t, s0, TERMINAL_EVENTS, confirmS);
       if (next) break;
       if (outboxOffset(path) <= before) return armed;   // quiescent: the burst was trailing noise
       if (now() >= deadlineMs) {
@@ -255,7 +268,7 @@ async function artifactAccept(
   const isDone = ev !== null && ev.event === "done";
   const accept: WaitAccept | null = !isDone
     ? null // no done event: nothing was written to accept — the stateFn's answer stands alone
-    : graceS > 0 ? await awaitArtifact(artifact, graceS, d.sleep ?? realSleep) : "unchecked";
+    : graceS > 0 ? await awaitArtifact(artifact, graceS, clockOf(d).sleep) : "unchecked";
   if (accept === "quiescent") {
     log.warn(`${label}: ${agent} ${artifact} has no ${END_OF_ARTIFACT} but stopped growing — accepting it and flagging the missing sentinel`);
     d.onFlag?.(`artifact-quiescent-no-sentinel: ${agent} ${artifact}`);
@@ -286,6 +299,6 @@ export async function awaitTurn(ctx: TurnCtx, d: TurnDeps): Promise<TurnResult |
   d.onArmed?.(offset);
   const event = policy.confirm
     ? await confirmedTerminal(agent, model, topic, offset, timeoutS, d)
-    : await d.wait(agent, model, topic, offset, TERMINAL_EVENTS, timeoutS);
+    : await boundWait(d)(agent, model, topic, offset, TERMINAL_EVENTS, timeoutS);
   return { event, accept: policy.artifact ? await artifactAccept(ctx, policy.artifact, event, d) : null };
 }

@@ -4,6 +4,7 @@
 // sendDeps/waitDeps. Defaults are the inert ones (offset 0, send ok, no event, multiplier 1);
 // pass only the slot a test actually asserts on.
 import type { SendDeps, WaitDeps } from "../../src/core/phaseTable.js";
+import { noSleepClock } from "./clock.js";
 
 export function sendDeps(over: Partial<SendDeps> = {}): SendDeps {
   return {
@@ -18,11 +19,14 @@ export function sendDeps(over: Partial<SendDeps> = {}): SendDeps {
   };
 }
 
-export function waitDeps(over: Partial<WaitDeps> = {}): WaitDeps {
+/** `sleep` is not a WaitDeps field any more (the wait runs on a Clock), but it stays the override
+ *  every caller writes: the tests that pin the artifact grace loop count its polls. It is wired
+ *  into the clock here, so those call sites and their assertions are unchanged. */
+export function waitDeps(over: Partial<WaitDeps> & { sleep?: (ms: number) => Promise<void> } = {}): WaitDeps {
   return {
     wait: over.wait ?? (async () => null),
     multiplier: over.multiplier ?? (() => "1"),
     // No-op sleep: the artifact grace loop must not add real seconds to the suite.
-    sleep: over.sleep ?? (async () => {}),
+    clock: over.clock ?? (over.sleep ? { now: () => Date.now(), sleep: over.sleep } : noSleepClock),
   };
 }

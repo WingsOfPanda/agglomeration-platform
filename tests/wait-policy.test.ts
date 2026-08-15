@@ -57,7 +57,7 @@ function harness(events: Array<OutboxEvent | null>, steps: Array<() => void> = [
   const armed: number[] = [];
   const d: TurnDeps = {
     wait: async (_i, _m, _t, off, _ev, to) => { waits.push({ off, to }); return events.shift() ?? null; },
-    sleep: async (ms) => { sleeps.push(ms); steps.shift()?.(); },
+    clock: { now: () => Date.now(), sleep: async (ms: number) => { sleeps.push(ms); steps.shift()?.(); } },
     onArmed: (off) => { armed.push(off); },
     onFlag: (note) => { flags.push(note); },
   };

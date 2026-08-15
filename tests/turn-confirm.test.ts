@@ -11,6 +11,7 @@ import { outboxEventsSince, outboxOffset, outboxPath, type OutboxEvent } from ".
 import { classifyTurn } from "../src/core/turn.js";
 import { awaitTurn, turnConfirmS, type TurnDeps } from "../src/core/wait.js";
 import { globalRoot } from "../src/core/paths.js";
+import { noSleepClock } from "./helpers/clock.js";
 
 /** The confirmation layer as this suite drives it. The layer is no longer its own entry point —
  *  it is `awaitTurn`'s `confirm` policy — so this shim supplies the one thing awaitTurn owns that
@@ -147,7 +148,7 @@ describe("waitTurnConfirmed", () => {
 
   /** Wrapper deps from a scripted wait + sleep, collecting every forensics note. */
   function deps(w: ReturnType<typeof scriptedWait>, s: ReturnType<typeof scriptedSleep>, flags: string[], clock?: { now: () => number }): TurnDeps {
-    return { wait: w.wait, sleep: s.sleep, nowMs: clock?.now, onFlag: (note) => { flags.push(note); } };
+    return { wait: w.wait, clock: { now: clock?.now ?? (() => Date.now()), sleep: s.sleep }, onFlag: (note) => { flags.push(note); } };
   }
 
   it("timeout (wait → null) is passed through with no confirmation work", async () => {
@@ -317,7 +318,7 @@ describe("waitTurnConfirmed", () => {
     };
     const flags: string[] = [];
     // base deadline t0+100s; floor is legEnd+3 windows = t0+60s -> the base wins.
-    const ev = await waitTurnConfirmed(I, M, T, 0, 100, { wait, sleep: s.sleep, nowMs: clock.now, onFlag: (n: string) => flags.push(n) });
+    const ev = await waitTurnConfirmed(I, M, T, 0, 100, { wait, clock: { now: clock.now, sleep: s.sleep }, onFlag: (n: string) => flags.push(n) });
     expect(ev!.summary).toBe("premature");
     expect(calls).toBe(5);   // first leg + 4 re-arm rounds (20s window + 4x20s = 100s)
     expect(flags).toEqual([
@@ -338,7 +339,7 @@ describe("waitTurnConfirmed", () => {
       appendOutbox([DONE2]); return doneEv("real");
     };
     const flags: string[] = [];
-    const ev = await waitTurnConfirmed(I, M, T, 0, 10, { wait, sleep: s.sleep, nowMs: clock.now, onFlag: (n: string) => flags.push(n) });
+    const ev = await waitTurnConfirmed(I, M, T, 0, 10, { wait, clock: { now: clock.now, sleep: s.sleep }, onFlag: (n: string) => flags.push(n) });
     expect(ev!.summary).toBe("real");           // the re-arm ran instead of expiring on arrival
     expect(flags).toEqual(["turn-confirm-veto: codex premature done — outbox still active"]);
   });
@@ -352,7 +353,7 @@ import { quickArtDir, quickExecDir } from "../src/core/quick.js";
 import { bridgeArtDir, bridgeExecDir } from "../src/core/bridge.js";
 import { implementArtDir } from "../src/core/implement.js";
 
-const noSleep = async () => {};
+const noClock = noSleepClock;
 const premature = async () => doneEv("premature");
 
 /** The two-round script every veto pin uses: the window grows, the re-arm finds the real done. */
@@ -395,7 +396,7 @@ describe("turn-wait verbs are wired to the confirmation layer", () => {
   it("quick turn-wait: a LATER error in the outbox overrides the wait's done → TS=failed", async () => {
     seedQuick();
     writeOutbox([DONE1, ERROR2]);
-    expect(await quickTurnWait(T, 1, { wait: premature, sleep: noSleep })).toBe(0);
+    expect(await quickTurnWait(T, 1, { wait: premature, clock: noClock })).toBe(0);
     expect(readFileSync(join(quickExecDir(T), "turn-1.txt"), "utf8")).toContain("TS=failed");
   });
 
@@ -403,7 +404,7 @@ describe("turn-wait verbs are wired to the confirmation layer", () => {
     seedQuick();
     writeOutbox([DONE1]);
     const { sleepDep, waitDep } = vetoScript("bravo");
-    expect(await quickTurnWait(T, 1, { wait: waitDep.wait, sleep: sleepDep.sleep })).toBe(0);
+    expect(await quickTurnWait(T, 1, { wait: waitDep.wait, clock: { now: () => Date.now(), sleep: sleepDep.sleep } })).toBe(0);
     expect(readFileSync(join(quickExecDir(T), "turn-1.txt"), "utf8")).toContain("TS=ok");
     const flags = vetoFlags();
     expect(flags.length).toBe(1);
@@ -415,7 +416,7 @@ describe("turn-wait verbs are wired to the confirmation layer", () => {
   it("bridge round-wait: a LATER error in the outbox overrides the wait's done → TS=failed", async () => {
     seedBridge();
     writeOutbox([DONE1, ERROR2], "alpha");
-    expect(await bridgeRoundWait(T, 1, { wait: premature, sleep: noSleep })).toBe(0);
+    expect(await bridgeRoundWait(T, 1, { wait: premature, clock: noClock })).toBe(0);
     expect(readFileSync(join(bridgeExecDir(T), "round-1.txt"), "utf8")).toContain("TS=failed");
   });
 
@@ -423,7 +424,7 @@ describe("turn-wait verbs are wired to the confirmation layer", () => {
     seedBridge();
     writeOutbox([DONE1], "alpha");
     const { sleepDep, waitDep } = vetoScript("alpha");
-    expect(await bridgeRoundWait(T, 1, { wait: waitDep.wait, sleep: sleepDep.sleep })).toBe(0);
+    expect(await bridgeRoundWait(T, 1, { wait: waitDep.wait, clock: { now: () => Date.now(), sleep: sleepDep.sleep } })).toBe(0);
     expect(readFileSync(join(bridgeExecDir(T), "round-1.txt"), "utf8")).toContain("TS=ok");
     const flags = vetoFlags();
     expect(flags.length).toBe(1);
@@ -435,7 +436,7 @@ describe("turn-wait verbs are wired to the confirmation layer", () => {
     const art = seedImplement();
     writeOutbox([DONE1, ERROR2], "lead");
     const rc = await implementTurnWait(T, 1, {
-      wait: premature, sleep: noSleep, multiplier: () => "1", now: () => 1700000000,
+      wait: premature, clock: noClock, multiplier: () => "1", now: () => 1700000000,
     });
     expect(rc).toBe(0);
     expect(readFileSync(join(art, "turn-lead-1.txt"), "utf8")).toContain("TS=failed");
@@ -446,7 +447,8 @@ describe("turn-wait verbs are wired to the confirmation layer", () => {
     writeOutbox([DONE1], "lead");
     const { sleepDep, waitDep } = vetoScript("lead");
     const rc = await implementTurnWait(T, 1, {
-      wait: waitDep.wait, sleep: sleepDep.sleep, multiplier: () => "1", now: () => 1700000000,
+      wait: waitDep.wait, clock: { now: () => Date.now(), sleep: sleepDep.sleep },
+      multiplier: () => "1", now: () => 1700000000,
     });
     expect(rc).toBe(0);
     expect(readFileSync(join(art, "turn-lead-1.txt"), "utf8")).toContain("TS=ok");

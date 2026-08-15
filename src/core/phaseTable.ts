@@ -48,7 +48,7 @@ import { workerDir } from "./paths.js";
 import { consultTimeout, agentTimeoutMultiplier, type ConsultKind } from "./contracts.js";
 import {
   outboxOffset, outboxPath, outboxTerminalSince, paneMetaRead, statusPath, workerBusyState,
-  workerStatusReport, type OutboxEvent,
+  workerStatusReport, type Clock, type OutboxEvent,
 } from "./ipc.js";
 import { paneAlive } from "./tmux.js";
 import { recordHubFlag } from "./forensics.js";
@@ -56,9 +56,8 @@ import {
   ARTIFACT_ACCEPT_KEY, END_OF_ARTIFACT, WAIT_ACCEPTED, artifactBackstop,
   clearArtifactStrikes, hasArtifactSentinel, type ArtifactVerdict,
 } from "./artifact.js";
-import { liveOutboxWait } from "./waitLive.js";
 import { researchState, verifyState, gateState, gateAnomalies } from "./designTurn.js";
-import { awaitTurn, parseLatestOffset, realSleep, recordWaitOutcome, scaledTimeout } from "./wait.js";
+import { awaitTurn, parseLatestOffset, recordWaitOutcome, scaledTimeout, type WaitFn } from "./wait.js";
 import { run as sendRun } from "../commands/send.js";
 
 /** The frozen state-file status keys, declared ONCE (designTurn's gate signatures import it):
@@ -318,10 +317,12 @@ export interface SendDeps {
 }
 
 export interface WaitDeps {
-  wait(agent: string, model: string, topic: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null>;
+  /** Left unset by the live verbs: awaitTurn's default is the live wait on this bag's clock. */
+  wait?: WaitFn;
   multiplier(provider: string): string;
-  /** Poll delay inside the artifact grace loop; injected so tests do not sleep for real. */
-  sleep?(ms: number): Promise<void>;
+  /** The wait's time source — the engine's poll and the artifact grace loop both run on it;
+   *  injected so tests do not sleep for real. */
+  clock?: Clock;
 }
 
 export const liveSendDeps: SendDeps = {
@@ -332,9 +333,7 @@ export const liveSendDeps: SendDeps = {
 };
 
 export const liveWaitDeps: WaitDeps = {
-  wait: liveOutboxWait,
   multiplier: agentTimeoutMultiplier,
-  sleep: realSleep,
 };
 
 /** The row-derived paths a phase's own preconditions and composer work from. Everything here is
@@ -452,7 +451,7 @@ export async function phaseWait(
     agent, model: provider, topic, stateFile, timeoutS: timeout, label,
     policy: { artifact: { path: artifact, key: row.key } },
   }, {
-    wait: d.wait, sleep: d.sleep,
+    wait: d.wait, clock: d.clock,
     onArmed: (offset) => { log.info(`${label}: ${agent} offset=${offset} timeout=${timeout}s`); },
     onFlag: (note) => { recordHubFlag({ command: row.cmd, topic, note }); },
   });

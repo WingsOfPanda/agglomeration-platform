@@ -259,3 +259,53 @@ difference is that a run with no `OFFSET=` now reads `contracts.yaml` before fai
 (which must precede the wait and stays with the caller), then once inside `awaitTurn` for the
 offset. No output, state byte or rc changes; the alternative was to pass pre-read text in, which
 would put offset resolution back with the callers — the thing this PR removes.
+
+**A10 (commit 3) — `wait` becomes OPTIONAL in the dep bags instead of being deleted.** The spec
+said to delete it outright. Ten shipped assertions observe the injected wait itself — its arguments
+(`explore-cmd`'s per-row "the wait budget is contracts' X timeout, provider-scaled";
+`implement-turn-cmd`'s `AP_IMPLEMENT_TURN_TIMEOUT_S=5 -> wait dep receives scaledTimeout(5,'1')`;
+`quick-cmd`'s `expect(seen).toEqual([0, N])` for the re-armed offset; `turn-confirm`'s
+`expect(w.calls[1]).toEqual({ off: …, to: 20 })`) or its call count (`expect(wait).not
+.toHaveBeenCalled()` on the skipped and missing-state-file paths). With the field gone, every one of
+them must be rewritten against a virtual clock over a real outbox — the assertion rewrite the PR's
+own testing rule makes a STOP condition. Optional achieves what the success criterion actually
+asks: all FOUR production `wait: liveOutboxWait` bindings are gone, awaitTurn's default IS the live
+wait bound to the bag's clock, and `grep -rn "liveOutboxWait" src/` shows the definition plus ONE
+binding. Tests that script a wait keep doing so, unchanged.
+
+**A11 (commit 3) — `sleep` and `nowMs` are deleted, replaced by one `clock?`; implement's `now`
+stays.** `ImplementWaitDeps` never had a `nowMs`: its `now()` returns epoch SECONDS and stamps the
+question payload's `ASKED_AT=`, which is domain data, not a time source. It stays exactly as it was.
+
+**A12 (commit 3) — the `Clock` type lives in `ipc.ts`, not `wait.ts`.** The Components list homed
+it in `wait.ts`, but `wait.ts` imports `ipc.ts`, so `ipc.ts` defaulting its parameter to a
+`wait.ts` value would be a runtime import cycle — the failure mode `artifact.ts`'s header already
+records. The engine owns the seam it reads, and `wait.ts` imports `Clock`/`realClock` from it.
+
+**A13 (commit 3) — `realSleep` is deleted, not homed.** Commit 1 moved it into `wait.ts` as the
+spec asked; once the clock exists, all three of its consumers (turn.ts's window, phaseWait's grace,
+`liveWaitDeps.sleep`) read `clock.sleep` instead, leaving it with no callers. Two sleep helpers for
+one concept becomes one Clock, which was the point.
+
+**A14 (commit 3) — the engine's extension math stays iteration-counted.** The spec said "its
+private 1 s poll and the extension math both read that clock". The budget is a loop counter
+(`for (let n = 0; n < capSec; n++)` with a 1 s sleep per turn), not a wall-clock deadline, so making
+the cap read `now()` would CHANGE behavior: read time, poll latency and scheduler drift would start
+counting against the budget. Only the sleep reads the clock. `now()` is on the interface because
+awaitTurn's deadline needs it, and both layers must share one timeline.
+
+**A15 (commit 3) — a FIFTH consumer of the injected wait, absent from the spec's table.** design's
+`drilldownWith` calls `d.wait` directly with its OWN event list (`["done", "error"]` — drilldown
+relays no questions) and no state-file offset, so it is not a turn wait and cannot route through
+`awaitTurn`. It resolves its wait through the exported `boundWait(d)` instead, which is what keeps
+the live binding singular; the spec's six-entry-point table missed it because it is a caller of
+`outboxWaitSince`-via-deps rather than an entry point of its own.
+
+**A16 (commit 3) — `wait-extend.test.ts` gains a virtual-clock block instead of being converted.**
+The spec wanted it to "stop spending real seconds". Three of its five assertions bracket real wall
+time (`elapsed >= 1900`, `< 2500`), so converting them is an assertion rewrite — and, more
+importantly, that block is now the ONLY thing exercising the DEFAULT clock end to end: a
+`realClock.sleep` that resolved immediately would spin every wait at 100% CPU and still pass every
+virtual-clock test. The virtual block is added alongside, asserting the same budgets EXACTLY (in
+virtual ms) rather than by bracket, plus the new `AP_WAIT_EXTEND_MULT` x deadline-floor interaction.
+The file still costs its original ~10 s.

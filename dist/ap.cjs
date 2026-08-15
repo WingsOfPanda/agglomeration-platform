@@ -689,7 +689,7 @@ function outboxEventsSince(i2, m, t, offset) {
   }
   return out;
 }
-async function outboxWaitSince(i2, m, t, offset, events, timeoutSec, live) {
+async function outboxWaitSince(i2, m, t, offset, events, timeoutSec, live, clock = realClock) {
   const path6 = outboxPath(i2, m, t);
   const everyS = live?.everyS ?? 15;
   const extendMult = live?.paneId ? Math.min(10, Math.max(1, live.extendMult ?? 1)) : 1;
@@ -711,7 +711,7 @@ async function outboxWaitSince(i2, m, t, offset, events, timeoutSec, live) {
     if (n2 === timeoutSec && capSec > timeoutSec) {
       log.warn(`outbox-wait: ${i2} budget ${timeoutSec}s elapsed, pane not confirmed dead \u2014 extending up to ${extendMult}x`);
     }
-    await sleep(1e3);
+    await clock.sleep(1e3);
   }
   return null;
 }
@@ -749,7 +749,7 @@ function resolveModel(agent, topic) {
   const model = d.name.slice(agent.length + 1);
   return readPaneJson(workerDir(agent, model, topic))?.model ?? model;
 }
-var import_node_fs6, import_node_path3, TERMINAL_WORKER_STATES, SENDER_RE, TERMINAL_EVENTS, sleep;
+var import_node_fs6, import_node_path3, TERMINAL_WORKER_STATES, SENDER_RE, TERMINAL_EVENTS, realClock;
 var init_ipc = __esm({
   "src/core/ipc.ts"() {
     "use strict";
@@ -763,7 +763,12 @@ var init_ipc = __esm({
     TERMINAL_WORKER_STATES = /* @__PURE__ */ new Set(["idle", "done", "complete", "error", "ready"]);
     SENDER_RE = /^[a-zA-Z0-9_-]+$/;
     TERMINAL_EVENTS = ["done", "error", "question"];
-    sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    realClock = {
+      now: () => Date.now(),
+      sleep: (ms) => new Promise((r) => {
+        setTimeout(r, ms);
+      })
+    };
   }
 });
 
@@ -17271,7 +17276,7 @@ async function run2(args) {
     log.ok(`spawned ${labelFor(agent, model, topic)} in pane ${pane} (mode=${useMode})`);
     const boot = agentBootstrapSleep(model);
     log.info(`sleeping ${boot}s for ${model} bootstrap`);
-    await sleep2(boot * 1e3);
+    await sleep(boot * 1e3);
     log.info(`asking ${agent} to read identity`);
     await paneSend(pane, `Read ${identityPath(agent, model, topic)} and follow its instructions exactly.`);
     log.info(`waiting for {ready,error} in outbox (timeout ${readyTimeout}s)`);
@@ -17316,7 +17321,7 @@ ${ob}
     throw e;
   }
 }
-var import_node_fs18, import_node_path14, sleep2;
+var import_node_fs18, import_node_path14, sleep;
 var init_spawn = __esm({
   "src/commands/spawn.ts"() {
     "use strict";
@@ -17338,7 +17343,7 @@ var init_spawn = __esm({
     init_colors();
     init_send2();
     init_forensics();
-    sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
+    sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   }
 });
 
@@ -17520,7 +17525,7 @@ function liveDeps() {
     killGraceful: (p, alive) => killGraceful(p, pluginRoot(), alive),
     killNow: (p) => killNow(p),
     stateArchive: (i2, m, t) => stateArchive(i2, m, t),
-    sleep: sleep3,
+    sleep: sleep2,
     readLastPane: (t) => {
       const f = (0, import_node_path16.join)(topicDir(t), ".last_pane");
       return readIfExists(f).trim();
@@ -17627,7 +17632,7 @@ async function run5(args) {
   process.stderr.write("Usage: stop <topic> | <agent> <topic> | --all | --pairs <topic> <i...>\n");
   return 2;
 }
-var import_node_fs20, import_node_path16, GRACEFUL_BATCH_WAIT_MS, sleep3;
+var import_node_fs20, import_node_path16, GRACEFUL_BATCH_WAIT_MS, sleep2;
 var init_stop = __esm({
   "src/commands/stop.ts"() {
     "use strict";
@@ -17640,7 +17645,7 @@ var init_stop = __esm({
     init_ipc();
     init_tmux();
     GRACEFUL_BATCH_WAIT_MS = 9e3;
-    sleep3 = (ms) => new Promise((r) => setTimeout(r, ms));
+    sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
   }
 });
 
@@ -18314,35 +18319,6 @@ var init_gitwork = __esm({
   }
 });
 
-// src/core/env.ts
-function envNum(name, def) {
-  return Number(process.env[name]) || def;
-}
-var DEFAULT_TURN_BUDGET_S;
-var init_env = __esm({
-  "src/core/env.ts"() {
-    "use strict";
-    DEFAULT_TURN_BUDGET_S = 14400;
-  }
-});
-
-// src/core/waitLive.ts
-function liveOutboxWait(i2, m, t, offset, events, timeoutSec) {
-  return outboxWaitSince(i2, m, t, offset, events, timeoutSec, {
-    paneAlive,
-    paneId: paneMetaRead(i2, m, t),
-    extendMult: envNum("AP_WAIT_EXTEND_MULT", 3)
-  });
-}
-var init_waitLive = __esm({
-  "src/core/waitLive.ts"() {
-    "use strict";
-    init_ipc();
-    init_tmux();
-    init_env();
-  }
-});
-
 // src/core/turn.ts
 function composeRound1Prompt(briefText, branch) {
   return [
@@ -18398,6 +18374,35 @@ var init_turn = __esm({
   }
 });
 
+// src/core/env.ts
+function envNum(name, def) {
+  return Number(process.env[name]) || def;
+}
+var DEFAULT_TURN_BUDGET_S;
+var init_env = __esm({
+  "src/core/env.ts"() {
+    "use strict";
+    DEFAULT_TURN_BUDGET_S = 14400;
+  }
+});
+
+// src/core/waitLive.ts
+function liveOutboxWait(i2, m, t, offset, events, timeoutSec, clock) {
+  return outboxWaitSince(i2, m, t, offset, events, timeoutSec, {
+    paneAlive,
+    paneId: paneMetaRead(i2, m, t),
+    extendMult: envNum("AP_WAIT_EXTEND_MULT", 3)
+  }, clock);
+}
+var init_waitLive = __esm({
+  "src/core/waitLive.ts"() {
+    "use strict";
+    init_ipc();
+    init_tmux();
+    init_env();
+  }
+});
+
 // src/core/artifact.ts
 function artifactGraceS() {
   const raw = process.env.AP_ARTIFACT_GRACE_S;
@@ -18428,13 +18433,13 @@ function probe(path6) {
   const text = readIfExistsOrNull(path6);
   return { complete: hasArtifactSentinel(text), size: text === null ? 0 : Buffer.byteLength(text) };
 }
-async function awaitArtifact(path6, graceS, sleep5) {
+async function awaitArtifact(path6, graceS, sleep4) {
   const first = probe(path6);
   if (first.complete) return "sentinel";
   let last = first.size;
   let stable = 0;
   for (let waited = 0; waited < graceS; waited += ARTIFACT_POLL_S) {
-    await sleep5(ARTIFACT_POLL_S * 1e3);
+    await sleep4(ARTIFACT_POLL_S * 1e3);
     const now = probe(path6);
     if (now.complete) return "sentinel";
     stable = now.size > 0 && now.size === last ? stable + 1 : 0;
@@ -18553,19 +18558,22 @@ function turnConfirmS() {
   if (n2 <= 0) return 0;
   return Math.min(120, Math.max(5, n2));
 }
+function boundWait(d) {
+  return d.wait ?? ((i2, m, t, off, ev, to) => liveOutboxWait(i2, m, t, off, ev, to, d.clock));
+}
 function latestTerminal(events) {
   for (let k = events.length - 1; k >= 0; k--) if (TERMINAL_EVENTS.includes(events[k].event)) return events[k];
   return null;
 }
 async function confirmedTerminal(i2, m, t, offset, timeoutS, d) {
-  const now = d.nowMs ?? (() => Date.now());
+  const { now } = clockOf(d);
   const startMs = now();
-  const first = await d.wait(i2, m, t, offset, TERMINAL_EVENTS, timeoutS);
+  const first = await boundWait(d)(i2, m, t, offset, TERMINAL_EVENTS, timeoutS);
   const confirmS = turnConfirmS();
   if (!first || confirmS === 0) return first;
   const legEndMs = now();
   const path6 = outboxPath(i2, m, t);
-  const sleep5 = d.sleep ?? realSleep;
+  const { sleep: sleep4 } = clockOf(d);
   const windowMs = confirmS * 1e3;
   const deadlineMs = Math.max(startMs + timeoutS * 1e3, legEndMs + REARM_FLOOR_WINDOWS * windowMs);
   let armed = latestTerminal(outboxEventsSince(i2, m, t, offset)) ?? first;
@@ -18573,7 +18581,7 @@ async function confirmedTerminal(i2, m, t, offset, timeoutS, d) {
   for (; ; ) {
     if (armed.event === "question") return armed;
     const s0 = outboxOffset(path6);
-    await sleep5(windowMs);
+    await sleep4(windowMs);
     if (outboxOffset(path6) <= s0) return armed;
     if (vetoes >= MAX_VETOES) {
       d.onFlag?.(`turn-confirm-cap: ${m} still writing after ${vetoes + 1} windows \u2014 accepting ${armed.event}`);
@@ -18584,7 +18592,7 @@ async function confirmedTerminal(i2, m, t, offset, timeoutS, d) {
     let next = null;
     while (!next) {
       const before = outboxOffset(path6);
-      next = await d.wait(i2, m, t, s0, TERMINAL_EVENTS, confirmS);
+      next = await boundWait(d)(i2, m, t, s0, TERMINAL_EVENTS, confirmS);
       if (next) break;
       if (outboxOffset(path6) <= before) return armed;
       if (now() >= deadlineMs) {
@@ -18600,7 +18608,7 @@ async function artifactAccept(ctx, art, ev, d) {
   const artifact = art.path;
   const graceS = artifactGraceS();
   const isDone = ev !== null && ev.event === "done";
-  const accept = !isDone ? null : graceS > 0 ? await awaitArtifact(artifact, graceS, d.sleep ?? realSleep) : "unchecked";
+  const accept = !isDone ? null : graceS > 0 ? await awaitArtifact(artifact, graceS, clockOf(d).sleep) : "unchecked";
   if (accept === "quiescent") {
     log.warn(`${label}: ${agent} ${artifact} has no ${END_OF_ARTIFACT} but stopped growing \u2014 accepting it and flagging the missing sentinel`);
     d.onFlag?.(`artifact-quiescent-no-sentinel: ${agent} ${artifact}`);
@@ -18616,24 +18624,23 @@ async function awaitTurn(ctx, d) {
   const offset = parseLatestOffset((0, import_node_fs26.readFileSync)(ctx.stateFile, "utf8"));
   if (offset === null) return { missingOffset: true };
   d.onArmed?.(offset);
-  const event = policy.confirm ? await confirmedTerminal(agent, model, topic, offset, timeoutS, d) : await d.wait(agent, model, topic, offset, TERMINAL_EVENTS, timeoutS);
+  const event = policy.confirm ? await confirmedTerminal(agent, model, topic, offset, timeoutS, d) : await boundWait(d)(agent, model, topic, offset, TERMINAL_EVENTS, timeoutS);
   return { event, accept: policy.artifact ? await artifactAccept(ctx, policy.artifact, event, d) : null };
 }
-var import_node_fs26, realSleep, TURN_CONFIRM_DEFAULT_S, MAX_VETOES, REARM_FLOOR_WINDOWS;
+var import_node_fs26, TURN_CONFIRM_DEFAULT_S, MAX_VETOES, REARM_FLOOR_WINDOWS, clockOf;
 var init_wait = __esm({
   "src/core/wait.ts"() {
     "use strict";
     import_node_fs26 = require("node:fs");
     init_ipc();
+    init_waitLive();
     init_atomic();
     init_log();
     init_artifact();
-    realSleep = (ms) => new Promise((r) => {
-      setTimeout(r, ms);
-    });
     TURN_CONFIRM_DEFAULT_S = 20;
     MAX_VETOES = 2;
     REARM_FLOOR_WINDOWS = 3;
+    clockOf = (d) => d.clock ?? realClock;
   }
 });
 
@@ -18863,7 +18870,7 @@ async function turnWaitRun(rest) {
     log.error("usage: quick turn-wait <topic> <round>=1..");
     return 2;
   }
-  return turnWaitWith(topic, round, { wait: liveOutboxWait });
+  return turnWaitWith(topic, round, {});
 }
 async function turnWaitWith(topic, round, d) {
   const art = quickArtDir(topic);
@@ -18889,7 +18896,7 @@ async function turnWaitWith(topic, round, d) {
     policy: { confirm: true }
   }, {
     wait: d.wait,
-    sleep: d.sleep,
+    clock: d.clock,
     onArmed: (offset) => {
       log.info(`quick turn-wait: round=${round} offset=${offset} timeout=${QUICK_TURN_TIMEOUT}s`);
     },
@@ -19085,7 +19092,6 @@ var init_quick2 = __esm({
     init_agents();
     init_gitwork();
     init_ipc();
-    init_waitLive();
     init_turn();
     init_wait();
     init_env();
@@ -19896,7 +19902,7 @@ async function phaseWait(row, topic, agent, provider, d) {
     policy: { artifact: { path: artifact, key: row.key } }
   }, {
     wait: d.wait,
-    sleep: d.sleep,
+    clock: d.clock,
     onArmed: (offset) => {
       log.info(`${label}: ${agent} offset=${offset} timeout=${timeout}s`);
     },
@@ -20009,7 +20015,6 @@ var init_phaseTable = __esm({
     init_tmux();
     init_forensics();
     init_artifact();
-    init_waitLive();
     init_designTurn();
     init_wait();
     init_send2();
@@ -20124,9 +20129,7 @@ var init_phaseTable = __esm({
       paneAlive
     };
     liveWaitDeps = {
-      wait: liveOutboxWait,
-      multiplier: agentTimeoutMultiplier,
-      sleep: realSleep
+      multiplier: agentTimeoutMultiplier
     };
   }
 });
@@ -20743,7 +20746,7 @@ async function drilldownWith(rest, d, hooks) {
     const rc = await d.send(["--from", "hub", j.inst, topic, `@${promptFile}`]);
     if (rc !== 0) return "missing";
     hooks.writeProbe?.(j.outPath);
-    const ev = await d.wait(j.inst, j.model, topic, offset, ["done", "error"], timeout(j.model));
+    const ev = await boundWait(d)(j.inst, j.model, topic, offset, ["done", "error"], timeout(j.model));
     const fileText = readIfExistsOrNull(j.outPath);
     return drilldownState(ev, fileText);
   }));
@@ -21470,7 +21473,7 @@ async function turnWaitWith2(topic, round, d) {
     policy: { confirm: true }
   }, {
     wait: d.wait,
-    sleep: d.sleep,
+    clock: d.clock,
     onArmed: (offset) => {
       log.info(`[turn-wait] ${WORKER} round=${round} offset=${offset} timeout=${timeout}s`);
     },
@@ -21903,7 +21906,6 @@ var init_implement2 = __esm({
     init_implementTurn();
     init_questionCodec();
     init_ipc();
-    init_waitLive();
     init_fsread();
     init_contracts();
     init_wait();
@@ -21915,7 +21917,7 @@ var init_implement2 = __esm({
     IMPLEMENT_TURN_TIMEOUT = () => envNum("AP_IMPLEMENT_TURN_TIMEOUT_S", DEFAULT_TURN_BUDGET_S);
     liveInitDeps3 = { repoRoot };
     liveSendDeps2 = { offsetFor: (i2, m, t) => outboxOffset(outboxPath(i2, m, t)), send: run };
-    liveWaitDeps2 = { wait: liveOutboxWait, multiplier: agentTimeoutMultiplier, now: () => Math.floor(Date.now() / 1e3) };
+    liveWaitDeps2 = { multiplier: agentTimeoutMultiplier, now: () => Math.floor(Date.now() / 1e3) };
     liveScopeDeps = { runnerFor: runnerAt };
     liveVerifyTestsDeps = { runner: liveTestRunner, detect: detectTestCommand, now: isoUtc };
     liveSummaryDeps = { runnerFor: runnerAt, now: () => isoUtc() };
@@ -25415,7 +25417,7 @@ async function monitorRun(args, opts) {
       if (alive) deadPolls = 0;
       else if (++deadPolls >= 2) break;
     }
-    await sleep4(tickMs);
+    await sleep3(tickMs);
   } while (!once9);
   return 0;
 }
@@ -26291,7 +26293,7 @@ async function run13(args) {
       return usage4();
   }
 }
-var import_node_fs43, import_node_child_process11, import_node_path45, stdoutLine, liveInitDeps4, liveSpawnAllDeps2, liveDropWorkerDeps, liveExperimentSendDeps, liveScoreDeps, sleep4, liveFinalizeDeps, liveRefineDeps, liveHandoffDeps, liveTeardownDeps, liveFreshWorkerDeps, liveResumeDeps, liveAbortDeps, liveConsensusDeps, liveMemoryRetrieveDeps, liveCorpusDigestDeps, readMetricMd, liveValidityCheckDeps, liveVerifyPlanDeps, liveVerifyCheckDeps, liveInspectPlanDeps, liveInspectCheckDeps;
+var import_node_fs43, import_node_child_process11, import_node_path45, stdoutLine, liveInitDeps4, liveSpawnAllDeps2, liveDropWorkerDeps, liveExperimentSendDeps, liveScoreDeps, sleep3, liveFinalizeDeps, liveRefineDeps, liveHandoffDeps, liveTeardownDeps, liveFreshWorkerDeps, liveResumeDeps, liveAbortDeps, liveConsensusDeps, liveMemoryRetrieveDeps, liveCorpusDigestDeps, readMetricMd, liveValidityCheckDeps, liveVerifyPlanDeps, liveVerifyCheckDeps, liveInspectPlanDeps, liveInspectCheckDeps;
 var init_autoresearch2 = __esm({
   "src/commands/autoresearch.ts"() {
     "use strict";
@@ -26398,7 +26400,7 @@ var init_autoresearch2 = __esm({
       },
       now: () => isoUtc()
     };
-    sleep4 = (ms) => new Promise((r) => setTimeout(r, ms));
+    sleep3 = (ms) => new Promise((r) => setTimeout(r, ms));
     liveFinalizeDeps = {
       now: () => isoUtc(),
       keepIntermediate: process.env.AP_AUTORESEARCH_KEEP_INTERMEDIATE ? true : void 0,
@@ -28640,7 +28642,7 @@ async function roundWaitRun(rest) {
     log.error("usage: bridge round-wait <topic> <round>=1..");
     return 2;
   }
-  return roundWaitWith(topic, round, { wait: liveOutboxWait });
+  return roundWaitWith(topic, round, {});
 }
 async function roundWaitWith(topic, round, d) {
   const art = bridgeArtDir(topic);
@@ -28666,7 +28668,7 @@ async function roundWaitWith(topic, round, d) {
     policy: { confirm: true }
   }, {
     wait: d.wait,
-    sleep: d.sleep,
+    clock: d.clock,
     onArmed: (offset) => {
       log.info(`bridge round-wait: round=${round} offset=${offset} timeout=${DUET_TURN_TIMEOUT}s`);
     },
@@ -28851,7 +28853,6 @@ var init_bridge2 = __esm({
     init_wait();
     init_env();
     init_ipc();
-    init_waitLive();
     init_send2();
     liveInitDeps5 = {
       haveCmd,

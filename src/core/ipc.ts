@@ -198,7 +198,20 @@ export function outboxEventsSince(i: string, m: string, t: string, offset: numbe
   return out;
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** The time source every wait loop reads. Injected at the ENGINE (not above it, where the old
+ *  seam sat): the layer that computes a confirmation deadline and the layer that applies
+ *  `AP_WAIT_EXTEND_MULT` to a budget must share one clock, or neither can see what the other did
+ *  to the quantity it reasons about. Tests bind a virtual one and drive the REAL matcher over a
+ *  real temp outbox instead of mocking the wait away. */
+export interface Clock {
+  now(): number;
+  sleep(ms: number): Promise<void>;
+}
+
+export const realClock: Clock = {
+  now: () => Date.now(),
+  sleep: (ms) => new Promise((r) => { setTimeout(r, ms); }),
+};
 
 /** Optional pane-liveness escape hatch for outboxWaitSince. A worker whose tmux pane has died will
  *  never emit a terminal event, so without this the wait blocks out the entire (up to 4h) turn
@@ -213,7 +226,7 @@ export interface WaitLivenessOpts {
   extendMult?: number;     // budget extension cap while the pane stays alive (default 1 = off; liveOutboxWait wires 3)
 }
 
-export async function outboxWaitSince(i: string, m: string, t: string, offset: number, events: string[], timeoutSec: number, live?: WaitLivenessOpts): Promise<OutboxEvent | null> {
+export async function outboxWaitSince(i: string, m: string, t: string, offset: number, events: string[], timeoutSec: number, live?: WaitLivenessOpts, clock: Clock = realClock): Promise<OutboxEvent | null> {
   const path = outboxPath(i, m, t);
   const everyS = live?.everyS ?? 15;
   // Liveness-extended budget: a pane that is ALIVE at budget expiry is a worker mid-turn, not a
@@ -236,7 +249,7 @@ export async function outboxWaitSince(i: string, m: string, t: string, offset: n
     if (n === timeoutSec && capSec > timeoutSec) {
       log.warn(`outbox-wait: ${i} budget ${timeoutSec}s elapsed, pane not confirmed dead — extending up to ${extendMult}x`);
     }
-    await sleep(1000);
+    await clock.sleep(1000);
   }
   return null;
 }

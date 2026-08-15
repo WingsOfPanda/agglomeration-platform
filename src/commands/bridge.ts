@@ -18,11 +18,10 @@ import { parseBridgeArgs, deriveSlug, bridgeArtDir, bridgeExecDir, renderBridgeS
 import type { BridgeSummaryFacts } from "../core/bridge.js";
 import { composeBridgeBrief, composeBridgeFollowup } from "../core/bridgeTurn.js";
 import { classifyTurn } from "../core/turn.js";
-import { awaitTurn, recordWaitOutcome } from "../core/wait.js";
+import { awaitTurn, recordWaitOutcome, type WaitFn } from "../core/wait.js";
 import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
 import { outboxOffset, outboxPath, workerSendGate } from "../core/ipc.js";
-import { liveOutboxWait } from "../core/waitLive.js";
-import type { OutboxEvent } from "../core/ipc.js";
+import type { Clock } from "../core/ipc.js";
 import { run as sendRun } from "./send.js";
 
 function usage(): number {
@@ -182,15 +181,16 @@ export async function roundSendWith(topic: string, round: number, d: TurnSendDep
 }
 
 export interface TurnWaitDeps {
-  wait(agent: string, model: string, topic: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null>;
-  sleep?(ms: number): Promise<void>;
+  /** Both left unset by the live verb: awaitTurn's defaults are the live wait on the real clock. */
+  wait?: WaitFn;
+  clock?: Clock;
 }
 
 async function roundWaitRun(rest: string[]): Promise<number> {
   const [topic, roundStr] = rest;
   const round = Number(roundStr);
   if (!topic || !Number.isInteger(round) || round < 1) { log.error("usage: bridge round-wait <topic> <round>=1.."); return 2; }
-  return roundWaitWith(topic, round, { wait: liveOutboxWait });
+  return roundWaitWith(topic, round, {});
 }
 
 export async function roundWaitWith(topic: string, round: number, d: TurnWaitDeps): Promise<number> {
@@ -206,7 +206,7 @@ export async function roundWaitWith(topic: string, round: number, d: TurnWaitDep
     agent, model: provider, topic, stateFile, timeoutS: DUET_TURN_TIMEOUT,
     label: "bridge round-wait", policy: { confirm: true },
   }, {
-    wait: d.wait, sleep: d.sleep,
+    wait: d.wait, clock: d.clock,
     onArmed: (offset) => { log.info(`bridge round-wait: round=${round} offset=${offset} timeout=${DUET_TURN_TIMEOUT}s`); },
     onFlag: (note) => { recordHubFlag({ command: "bridge", topic, note }); },
   });

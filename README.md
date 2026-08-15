@@ -413,6 +413,10 @@ There are **two roots**:
   messages and `END_OF_ARTIFACT` on artifacts. The wire protocol is **frozen** so external model
   binaries stay drop-in. A worker's inbox is its **only** task channel — instructions arriving any
   other way (another session, its terminal, a file it was asked to read) are flagged and ignored.
+- **One wait for every worker turn.** `src/core/wait.ts` owns it: a turn/round/phase wait resolves
+  its offset, picks its terminal event and applies its still-writing protections (`AP_TURN_CONFIRM_S`
+  and `AP_ARTIFACT_GRACE_S`) in one place, with the clock injected at the engine so tests drive the
+  real matcher instead of mocking the wait away.
 - **A closed provider set** — `codex` / `claude` / `agy` / `opencode`, each a row in
   `config/contracts.yaml` (binary, modes, timeouts, multipliers). A new provider is a config row
   plus a live dogfood, not an open compatibility surface.

@@ -13,10 +13,9 @@ import { haveCmd } from "../core/deps.js";
 import { pickRandomAgent } from "../core/agents.js";
 import { runnerAt, preSnapshot, createOrResumeBranch, finishBranch, classifyDirty, currentBranch, hasDistinctBranch, stashPush, stashPopOnBranch } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
-import { outboxOffset, outboxPath, workerSendGate, type OutboxEvent } from "../core/ipc.js";
-import { liveOutboxWait } from "../core/waitLive.js";
+import { outboxOffset, outboxPath, workerSendGate, type Clock } from "../core/ipc.js";
 import { composeRound1Prompt, composeFixPrompt, classifyTurn } from "../core/turn.js";
-import { awaitTurn, recordWaitOutcome } from "../core/wait.js";
+import { awaitTurn, recordWaitOutcome, type WaitFn } from "../core/wait.js";
 import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
 import { run as sendRun } from "./send.js";
 import { readIfExists, readIfExistsOrNull, readField, kvField } from "../core/fsread.js";
@@ -216,8 +215,9 @@ export async function turnSendWith(topic: string, round: number, d: TurnSendDeps
 }
 
 export interface TurnWaitDeps {
-  wait(agent: string, model: string, topic: string, offset: number, events: string[], timeoutSec: number): Promise<OutboxEvent | null>;
-  sleep?(ms: number): Promise<void>;
+  /** Both left unset by the live verb: awaitTurn's defaults are the live wait on the real clock. */
+  wait?: WaitFn;
+  clock?: Clock;
 }
 
 const QUICK_TURN_TIMEOUT = envNum("AP_QUICK_TURN_TIMEOUT", DEFAULT_TURN_BUDGET_S);
@@ -226,7 +226,7 @@ async function turnWaitRun(rest: string[]): Promise<number> {
   const [topic, roundStr] = rest;
   const round = Number(roundStr);
   if (!topic || !Number.isInteger(round) || round < 1) { log.error("usage: quick turn-wait <topic> <round>=1.."); return 2; }
-  return turnWaitWith(topic, round, { wait: liveOutboxWait });
+  return turnWaitWith(topic, round, {});
 }
 
 export async function turnWaitWith(topic: string, round: number, d: TurnWaitDeps): Promise<number> {
@@ -242,7 +242,7 @@ export async function turnWaitWith(topic: string, round: number, d: TurnWaitDeps
     agent, model: provider, topic, stateFile, timeoutS: QUICK_TURN_TIMEOUT,
     label: "quick turn-wait", policy: { confirm: true },
   }, {
-    wait: d.wait, sleep: d.sleep,
+    wait: d.wait, clock: d.clock,
     onArmed: (offset) => { log.info(`quick turn-wait: round=${round} offset=${offset} timeout=${QUICK_TURN_TIMEOUT}s`); },
     onFlag: (note) => { recordHubFlag({ command: "quick", topic, note }); },
   });
