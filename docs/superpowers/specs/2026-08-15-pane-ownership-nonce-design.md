@@ -49,10 +49,23 @@ key).
    worker state (the sweep must keep clearing leftovers) with a distinguishing suffix
    (`stateArchive(..., "stalepane")`) so forensics sees teardown never reached a pane. Extend
    `StopDeps` so the fake deps in tests/stop.test.ts get the nonce.
-5. **Legacy pane.json (no `pane_nonce`)** = exactly the dangerous pre-upgrade leftovers: UNVERIFIABLE
-   → do NOT kill; warn with the exact manual line (`tmux kill-pane -t <id>`) and archive. This is the
-   one deliberate policy call (a mid-upgrade worker spawned by an old bundle is no longer auto-killed)
-   — stated here so it is a decision, not a surprise.
+5. **Legacy pane.json (no `pane_nonce`) = UNKNOWN, which is neither "ours" nor "dead".** These are
+   exactly the dangerous pre-upgrade leftovers, and the rule has two halves that must BOTH hold:
+   - **Never acted ON**: not killed, not respawned into, not typed into. `stop` warns with the manual
+     line (identify first — `tmux display-message -p -t <id> '#{pane_current_command} #{@ap_label}'`,
+     since an ap pane carries `@ap_label` even when it predates `@ap_nonce` — then
+     `tmux kill-pane -t <id>`) and archives. This is the one deliberate policy call (a mid-upgrade
+     worker spawned by an old bundle is no longer auto-killed) — stated here so it is a decision, not
+     a surprise.
+   - **Never read as DEAD** (added after review; the original wording caused two majors): every
+     LIVENESS site must degrade to its exact pre-nonce behavior instead of consuming `ownsPane`'s
+     `false` as a death verdict. Concretely: no `interrupted` transition, no REDISPATCH, no
+     fresh-worker respawn (`autoresearch resume`); no synthetic `pane-died` (`waitLive` — the escape
+     hatch is DISABLED, as with an absent pane.json); no monitor exit (`autoresearch monitor` keeps
+     its unbounded loop); and the guard's evidence leg reports "cannot confirm" rather than "is gone"
+     (`phaseTable`). The failure this prevents: resume declared a LIVE pre-0.5.30 worker dead, voided
+     its in-flight experiment, and respawned a second codex onto the same agent while the first kept
+     writing to a directory `stop --pairs` had archived away.
 6. **The other id consumers, or the fix is half a fix:** `send`/`paneSend` (gate the nudge on the
    nonce — currently types into a stranger's shell); `list` (nonce mismatch ⇒ `[ORPHAN]`, removing the
    fabricated "live" row that PROMPTS the stop); `check` if it reads panes; the liveness probes
@@ -131,6 +144,14 @@ two of its prescriptions were wrong in detail. What shipped, and why:
    `roster.paneListedFor` became `paneNonceFor` (membership answer + the nonce the caller must
    verify); `list`'s row decision moved into a pure exported `rowState`; `send.run` gained an
    injectable `SendCmdDeps` so its refusal is unit-testable without a real pane.
-7. **Testing note:** spawn's two branches stay unit-untested (they need real panes, which the repo
+7. **The oracle is hardened against forged rows** (review, round 2): tmux permits a NEWLINE inside a
+   pane option, so a hostile pane's `@ap_nonce` can append phantom rows to the `list-panes -a`
+   snapshot. `livePaneNonces` now takes TWO listings — the pairs plus tmux's own `#{pane_id}` list,
+   which no option value can forge — and `parsePaneNonces` keeps only rows naming a pane that really
+   exists, drops rows whose id is not a `%N`, and poisons a DUPLICATE id to `""` (fail-closed)
+   instead of letting a later row overwrite the server's answer. `ownsPane` additionally honours only
+   a platform-minted UUID. Forging still needs a pane on the same server AND the victim's recorded
+   nonce, so this is hardening, not a trust boundary.
+8. **Testing note:** spawn's two branches stay unit-untested (they need real panes, which the repo
    forbids); their contract is covered by the arg-builder/codec/`paneNonceFor` tests plus the now
    REQUIRED `nonce` parameter on `paneMetaWrite`, which no spawn path can omit.

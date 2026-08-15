@@ -258,6 +258,10 @@ async function overrideEvidence(
   // per remaining phase ("state file kept"), which is strictly worse for the operator.
   const owner = paneMetaRead(agent, provider, topic);
   if (!owner) return "no pane.json (cannot confirm the pane is alive)";
+  // Unverifiable is its own answer, distinct from confirmed-gone: the override still fails closed
+  // (silence is never evidence), but the operator must be able to tell "we could not check" from
+  // "we checked and the pane is gone".
+  if (!owner.nonce) return "pane.json predates ownership nonces (cannot confirm the pane)";
   let alive = false;
   try { alive = await (live.paneOwned ?? paneOwned)(owner.paneId, owner.nonce); } catch { alive = false; }
   if (!alive) return `pane ${owner.paneId} is gone or is not ours`;

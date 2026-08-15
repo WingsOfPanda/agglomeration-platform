@@ -298,9 +298,9 @@ describe("autoresearch drop-worker", () => {
     const art = autoresearchArtDir(TOPIC, opts(h));
     mkdirSync(art, { recursive: true });
     writeFileSync(join(art, "workers.txt"), "rex\nkeeli\n");
-    writeFileSync(join(art, "preflight-panes.txt"), "rex\t%5\tn5\nkeeli\t%6\tn6\n");
+    writeFileSync(join(art, "preflight-panes.txt"), "rex\t%5\t55555555-5555-4555-8555-555555555555\nkeeli\t%6\t66666666-6666-4666-8666-666666666666\n");
     const killed: string[] = [];
-    const owned = new Map([["%5", "n5"], ["%6", "n6"]]);
+    const owned = new Map([["%5", "55555555-5555-4555-8555-555555555555"], ["%6", "66666666-6666-4666-8666-666666666666"]]);
     await dropWorkerWith([TOPIC, "keeli"], { killPane: (p) => killed.push(p), paneOwned: async (p, n) => owned.get(p) === n }, opts(h));
     expect(killed).toEqual(["%6"]);
   });
@@ -310,7 +310,7 @@ describe("autoresearch drop-worker", () => {
     mkdirSync(art, { recursive: true });
     writeFileSync(join(art, "workers.txt"), "rex\nkeeli\n");
     // %6 is live, but a tmux restart handed it to another program: its @ap_nonce is not ours.
-    writeFileSync(join(art, "preflight-panes.txt"), "rex\t%5\tn5\nkeeli\t%6\tn6\n");
+    writeFileSync(join(art, "preflight-panes.txt"), "rex\t%5\t55555555-5555-4555-8555-555555555555\nkeeli\t%6\t66666666-6666-4666-8666-666666666666\n");
     const killed: string[] = [];
     await dropWorkerWith([TOPIC, "keeli"], { killPane: (p) => killed.push(p), paneOwned: async (p, n) => n === "stranger" }, opts(h));
     expect(killed).toEqual([]);
@@ -359,7 +359,7 @@ describe("autoresearch experiment-send", () => {
     else mkdirSync(sd, { recursive: true });
     const pd = workerDir(INST, MODEL, TOPIC, o);
     mkdirSync(pd, { recursive: true });
-    writeFileSync(join(pd, "pane.json"), JSON.stringify({ pane_id: "%7", agent: INST, model: MODEL, spawned_at: "t" }));
+    writeFileSync(join(pd, "pane.json"), JSON.stringify({ pane_id: "%7", pane_nonce: "11111111-1111-4111-8111-111111111111", agent: INST, model: MODEL, spawned_at: "t" }));
     if (over.outbox !== false) writeFileSync(join(pd, "outbox.jsonl"), "");
     return { art, sd, pd, o };
   }
@@ -900,7 +900,7 @@ describe("autoresearch monitor", () => {
     mkdirSync(art, { recursive: true });
     const pd = workerDir(INST, MODEL, TOPIC, o);
     mkdirSync(pd, { recursive: true });
-    writeFileSync(join(pd, "pane.json"), JSON.stringify({ agent: INST, model: MODEL, pane_id: "%1" }));
+    writeFileSync(join(pd, "pane.json"), JSON.stringify({ agent: INST, model: MODEL, pane_id: "%1", pane_nonce: "11111111-1111-4111-8111-111111111111" }));
     writeFileSync(join(pd, "outbox.jsonl"), '{"event":"done","summary":"finished","ts":"T"}\n');
     const sd = workerStateDir(art, INST);
     mkdirSync(sd, { recursive: true });
@@ -984,6 +984,21 @@ describe("autoresearch monitor", () => {
     }));
     expect(rc).toBe(0);
     expect(calls).toBeGreaterThan(3);   // ran past the alive probes before the sustained death exit
+  });
+
+  it("a legacy (nonce-less) pane.json is never probed, and never stops the loop", async () => {
+    const h = home();
+    const { pd } = scaffold(h);
+    // A pane.json written by a pre-0.5.30 ap: the probe could only ever answer false for it, and
+    // two of those would abandon a LIVE worker. The check is skipped entirely instead — the same
+    // unbounded loop an absent pane.json already gets. maxTicks bounds the test, not the verb.
+    writeFileSync(join(pd, "pane.json"), JSON.stringify({ pane_id: "%1", agent: INST, model: MODEL }));
+    const probe = vi.fn(async () => false);
+    const { rc } = await capture(() => monitorRun([TOPIC, INST], {
+      ...opts(h), paneOwned: probe, sleepMs: 0, paneCheckEveryTicks: 1, maxTicks: 6,
+    }));
+    expect(rc).toBe(0);
+    expect(probe).not.toHaveBeenCalled();   // would have been called 6x, and exited at 2, before the fix
   });
 });
 

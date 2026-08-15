@@ -33,7 +33,7 @@ const PAIRS = [
 
 describe("stop batch", () => {
   it("sleeps ONCE for a 3-pane batch and killNow each; archive all", async () => {
-    const { calls, archived, d } = deps({ "%bravo": "nb", "%alpha": "na", "%charlie": "nc" });
+    const { calls, archived, d } = deps({ "%bravo": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "%alpha": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "%charlie": "cccccccc-cccc-4ccc-8ccc-cccccccccccc" });
     await teardownBatch("demo", PAIRS, d as any);
     expect(calls.graceful).toBe(3);
     expect(calls.sleep).toBe(1);              // ONE wait for the whole batch
@@ -63,7 +63,7 @@ describe("stop batch: pane ownership", () => {
     const err: string[] = [];
     const se = process.stderr.write.bind(process.stderr);
     process.stderr.write = ((s: string | Uint8Array) => { err.push(String(s)); return true; }) as typeof process.stderr.write;
-    const { calls, archived, d } = deps({ "%bravo": "somebody-elses-pane" }, { "%bravo": "ours" });
+    const { calls, archived, d } = deps({ "%bravo": "somebody-elses-pane" }, { "%bravo": "0dd00000-0000-4000-8000-000000000001" });
     try { await teardownBatch("demo", [{ agent: "bravo", model: "codex" }], d as any); }
     finally { process.stderr.write = se; }
     expect(calls.graceful).toBe(0);
@@ -76,7 +76,7 @@ describe("stop batch: pane ownership", () => {
     const err: string[] = [];
     const se = process.stderr.write.bind(process.stderr);
     process.stderr.write = ((s: string | Uint8Array) => { err.push(String(s)); return true; }) as typeof process.stderr.write;
-    const { calls, archived, d } = deps({ "%bravo": "nb" }, { "%bravo": "" });
+    const { calls, archived, d } = deps({ "%bravo": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" }, { "%bravo": "" });
     try { await teardownBatch("demo", [{ agent: "bravo", model: "codex" }], d as any); }
     finally { process.stderr.write = se; }
     expect(calls.graceful).toBe(0);
@@ -86,7 +86,7 @@ describe("stop batch: pane ownership", () => {
   });
   it("one stale pane in a batch does not stop the others being torn down", async () => {
     const { calls, archived, d } = deps(
-      { "%bravo": "nb", "%alpha": "stranger", "%charlie": "nc" }, { "%alpha": "na" },
+      { "%bravo": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "%alpha": "stranger", "%charlie": "cccccccc-cccc-4ccc-8ccc-cccccccccccc" }, { "%alpha": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" },
     );
     await teardownBatch("demo", PAIRS, d as any);
     expect(calls.graceful).toBe(2);
@@ -95,7 +95,7 @@ describe("stop batch: pane ownership", () => {
   });
   it("an unowned pane is never handed to killGraceful (the respawn -k that destroys it)", async () => {
     const seen: string[] = [];
-    const { d } = deps({ "%bravo": "stranger" }, { "%bravo": "ours" });
+    const { d } = deps({ "%bravo": "stranger" }, { "%bravo": "0dd00000-0000-4000-8000-000000000001" });
     (d as { killGraceful: (p: string) => Promise<void> }).killGraceful = async (p) => { seen.push(p); };
     await teardownBatch("demo", [{ agent: "bravo", model: "codex" }], d as any);
     expect(seen).toEqual([]);

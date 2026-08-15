@@ -41,23 +41,45 @@ export function setOptionArgs(pane: string, opt: string, val: string): string[] 
 export function paneNonceSetArgs(pane: string, nonce: string): string[] {
   return setOptionArgs(pane, "@ap_nonce", nonce);
 }
+const PANE_ID_RE = /^%\d+$/;
+/** The shape `randomUUID()` produces, and the ONLY shape an ownership check honours. The generator
+ *  (spawn / preflightLayout) and this pattern change together. */
+const NONCE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 /** Parse `list-panes -a -F '#{pane_id}\t#{@ap_nonce}'` output into id -> nonce. A pane with no
- *  @ap_nonce (never ours, or pre-nonce) yields an empty field, i.e. "". Blank lines are skipped. */
-export function parsePaneNonces(stdout: string): Map<string, string> {
+ *  @ap_nonce (never ours, or pre-nonce) yields an empty field, i.e. "". Blank lines are skipped.
+ *
+ *  Hardened against a forged option value: tmux allows a NEWLINE inside a pane option, so a pane
+ *  whose @ap_nonce contains one injects extra "rows" into this snapshot — the single oracle every
+ *  kill/nudge consults. Three cheap defenses: a row whose id field is not a real `%N` is dropped;
+ *  a DUPLICATE id is poisoned to "" (never matches) instead of letting a later row overwrite the
+ *  server's own answer for a real pane; and `realIds` — tmux's OWN id list, which no option value
+ *  can forge because tmux assigns `%N` — drops any row naming a pane that is not on the server.
+ *  Forging still needs a pane on the same server plus the victim's recorded nonce, so this is
+ *  hardening, not a trust boundary. */
+export function parsePaneNonces(stdout: string, realIds?: Set<string>): Map<string, string> {
   const m = new Map<string, string>();
+  const dup = new Set<string>();
   for (const line of stdout.split("\n")) {
     if (!line) continue;
     const tab = line.indexOf("\t");
-    if (tab < 0) { m.set(line, ""); continue; }   // tolerate a tmux that drops the empty field
-    m.set(line.slice(0, tab), line.slice(tab + 1));
+    const id = tab < 0 ? line : line.slice(0, tab);   // tolerate a tmux that drops the empty field
+    if (!PANE_ID_RE.test(id)) continue;
+    if (realIds && !realIds.has(id)) continue;        // a phantom row from a forged option value
+    if (m.has(id)) { dup.add(id); continue; }
+    m.set(id, tab < 0 ? "" : line.slice(tab + 1));
   }
+  for (const id of dup) m.set(id, "");
   return m;
 }
 /** The one ownership predicate: the pane is live AND carries exactly the nonce we recorded for it.
- *  An empty recorded nonce is UNVERIFIABLE (a pane.json written by a pre-nonce ap, or a legacy
- *  preflight row) and never matches — "we cannot prove it is ours" is treated as "not ours". */
+ *  A recorded nonce that is not a platform-minted UUID — empty (a pane.json written by a pre-nonce
+ *  ap, or a legacy preflight row) or any other value — never matches: "we cannot prove it is ours"
+ *  is treated as "not ours". NOTE for liveness callers: not-ours is not the same as DEAD. An empty
+ *  recorded nonce means UNKNOWN, and every liveness site must degrade to its pre-nonce behavior
+ *  rather than read this `false` as a death verdict. */
 export function ownsPane(snapshot: Map<string, string>, pane: string, nonce: string): boolean {
-  return nonce !== "" && snapshot.get(pane) === nonce;
+  return NONCE_RE.test(nonce) && snapshot.get(pane) === nonce;
 }
 export function sendKeysLiteralArgs(pane: string, line: string): string[] {
   return ["send-keys", "-t", pane, "-l", line];
@@ -126,14 +148,21 @@ export async function ensureWindowBorderStatus(target: string): Promise<boolean>
  *  the id-only `livePanes`/`paneAlive` pair outright: an id-only liveness answer is exactly the
  *  evidence that let a stale id name a stranger's pane, so the primitive no longer exists. */
 export async function livePaneNonces(): Promise<Map<string, string>> {
-  const { stdout } = await execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}\t#{@ap_nonce}"]);
-  return parsePaneNonces(stdout);
+  // Two listings, issued together: the pairs, plus tmux's own id list. Only the second is
+  // unforgeable (a pane option can carry a newline; a pane_id cannot), so it is what decides WHICH
+  // panes exist — see parsePaneNonces. A pane appearing/vanishing between the two only ever drops a
+  // row, which reads as "not ours", the fail-closed direction.
+  const [ids, pairs] = await Promise.all([
+    execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}"]),
+    execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}\t#{@ap_nonce}"]),
+  ]);
+  return parsePaneNonces(pairs.stdout, new Set(ids.stdout.split("\n").filter(Boolean)));
 }
 
 /** Is `pane` live and ours (its live @ap_nonce is the one we recorded)? The single-pane form of
  *  ownsPane; an empty recorded nonce short-circuits without a tmux call. */
 export async function paneOwned(pane: string, nonce: string): Promise<boolean> {
-  if (nonce === "") return false;
+  if (!NONCE_RE.test(nonce)) return false;   // unverifiable: no tmux call can settle it
   return ownsPane(await livePaneNonces(), pane, nonce);
 }
 

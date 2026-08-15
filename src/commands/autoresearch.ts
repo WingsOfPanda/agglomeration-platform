@@ -908,7 +908,7 @@ function readSlice(path: string, start: number, end: number): string {
   } catch { return ""; }
 }
 
-export async function monitorRun(args: string[], opts?: { home?: string; cwd?: string; paneOwned?: (p: string, nonce: string) => Promise<boolean>; sleepMs?: number; paneCheckEveryTicks?: number }): Promise<number> {
+export async function monitorRun(args: string[], opts?: { home?: string; cwd?: string; paneOwned?: (p: string, nonce: string) => Promise<boolean>; sleepMs?: number; paneCheckEveryTicks?: number; maxTicks?: number }): Promise<number> {
   // Strip --once anywhere so it's position-independent; the rest are the 2 positionals.
   const once = args.includes("--once");
   const pos = args.filter((a) => a !== "--once");
@@ -966,6 +966,7 @@ export async function monitorRun(args: string[], opts?: { home?: string; cwd?: s
   const probePane = opts?.paneOwned ?? paneOwned;
   const paneCheckEvery = opts?.paneCheckEveryTicks ?? 15;
   const tickMs = opts?.sleepMs ?? 2000;
+  const maxTicks = opts?.maxTicks ?? Infinity;   // test bound only: the live loop is unbounded
   const owner = paneMetaRead(agent, model, topic);
   let deadPolls = 0, tick = 0;
 
@@ -994,7 +995,11 @@ export async function monitorRun(args: string[], opts?: { home?: string; cwd?: s
 
     if (once) break;
     tick++;
-    if (owner && tick % paneCheckEvery === 0) {
+    if (tick >= maxTicks) break;
+    // No nonce = a pre-0.5.30 worker: the probe could only answer false, so skip the check entirely
+    // and keep the legacy unbounded loop — exactly what an absent pane.json already does. Stopping
+    // on an unverifiable record would abandon a LIVE worker after two ticks.
+    if (owner && owner.nonce && tick % paneCheckEvery === 0) {
       let alive = true;
       try { alive = await probePane(owner.paneId, owner.nonce); } catch { alive = false; } // tmux server gone -> pane gone
       if (alive) deadPolls = 0;
@@ -1773,7 +1778,13 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
     const model = resolveModel(agent, topic);
     const owner = model ? paneMetaRead(agent, model, topic) : null;
     let alive = false;
-    if (owner) {
+    // A pane.json with no nonce (pre-0.5.30 worker) is UNKNOWN, not dead: the ownership probe can
+    // only ever answer false for it. Acting on that answer would void a LIVE worker's in-flight
+    // experiment as `interrupted` AND respawn a second process onto the same agent — the respawn's
+    // `stop --pairs` correctly refuses to kill the unverifiable pane but still archives the worker
+    // dir, so the original keeps writing to paths that moved out from under it.
+    const unverifiable = owner !== null && owner.nonce === "";
+    if (owner && !unverifiable) {
       if (live) alive = ownsPane(live, owner.paneId, owner.nonce);
       else { try { alive = await deps.paneOwned(owner.paneId, owner.nonce); } catch { alive = false; } }
     }
@@ -1781,6 +1792,15 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
     const raw = readOr(stateTxt);
     const st = parseState(raw);
     let phase = st.phase ?? "";
+    if (unverifiable) {
+      // Degrade to the pre-nonce behavior for a live worker: leave the lane exactly as it is (no
+      // interrupt, no redispatch, no respawn) and keep watching it. The operator gets the one check
+      // ap cannot do itself — an ap pane still carries @ap_label even when it predates @ap_nonce.
+      log.warn(`autoresearch resume: ${agent}'s pane.json predates ownership nonces — its pane cannot be confirmed, so the lane is left as-is (no interrupt, no respawn). Verify by hand: tmux display-message -p -t ${owner!.paneId} '#{pane_current_command} #{@ap_label}'`);
+      rows.push(`WORKER=${agent}:${phase}:yes`);
+      monitors.push(`MONITOR=${agent}`);
+      continue;
+    }
     if (!alive && phase === "working") {
       const workingExp = st.current_exp_id ?? "";
       ledgerAdd({ gen, ts: deps.now(), kind: "interrupted", agent, ...(workingExp ? { exp_id: workingExp } : {}) });

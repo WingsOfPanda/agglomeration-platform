@@ -37,7 +37,7 @@ function seedOverrideEvidence(agent: string, provider: string, topic: string): v
   mkdirSync(workerDir(agent, provider, topic), { recursive: true });
   writeFileSync(statusPath(agent, provider, topic), JSON.stringify({ state: "idle", last_event: "done" }) + "\n");
   writeFileSync(outboxPath(agent, provider, topic), '{"event":"done","summary":"landed late"}\n');
-  writeFileSync(paneMetaPath(agent, provider, topic), JSON.stringify({ pane_id: "%9", agent, model: provider }) + "\n");
+  writeFileSync(paneMetaPath(agent, provider, topic), JSON.stringify({ pane_id: "%9", pane_nonce: "99999999-9999-4999-8999-999999999999", agent, model: provider }) + "\n");
 }
 
 /** The hub flags recorded under AP_HOME/forensics/<date>/ — /ap:review's feed. */
@@ -1034,12 +1034,12 @@ describe("explore teardown", () => {
     try {
       await initWith(["x"], initDeps());
       const art = exploreArtDir("x");
-      writeFileSync(join(art, "preflight-panes.txt"), "alpha\t%1\tn1\ncharlie\t%2\tn2\n");
+      writeFileSync(join(art, "preflight-panes.txt"), "alpha\t%1\t11111111-1111-4111-8111-111111111111\ncharlie\t%2\t22222222-2222-4222-8222-222222222222\n");
       let dest = "";
       const killed: string[] = [];
       const rc = await exploreTeardownWith(["x"], {
         killPane: async (p) => { killed.push(p); },
-        livePaneNonces: async () => new Map([["%1", "n1"], ["%2", "n2"]]),
+        livePaneNonces: async () => new Map([["%1", "11111111-1111-4111-8111-111111111111"], ["%2", "22222222-2222-4222-8222-222222222222"]]),
         archiveTopic: () => { dest = "/archive/x/_explore-T"; return dest; },
         stdout: (l) => { dest = l; },
       });
@@ -1054,13 +1054,13 @@ describe("explore teardown", () => {
     try {
       await initWith(["x"], initDeps());
       const art = exploreArtDir("x");
-      writeFileSync(join(art, "preflight-panes.txt"), "alpha\t%1\tn1\ncharlie\t%2\tn2\n");
+      writeFileSync(join(art, "preflight-panes.txt"), "alpha\t%1\t11111111-1111-4111-8111-111111111111\ncharlie\t%2\t22222222-2222-4222-8222-222222222222\n");
       writeFileSync(join(art, "spawn-results.tsv"), "alpha\tcodex\t0\n");
       const killed: string[] = [];
       let archived = false;
       const rc = await exploreTeardownWith(["x", "--panes-only"], {
         killPane: async (p) => { killed.push(p); },
-        livePaneNonces: async () => new Map([["%1", "n1"], ["%2", "n2"]]),
+        livePaneNonces: async () => new Map([["%1", "11111111-1111-4111-8111-111111111111"], ["%2", "22222222-2222-4222-8222-222222222222"]]),
         archiveTopic: () => { archived = true; return "/should/not/happen"; },
       });
       expect(rc).toBe(0);

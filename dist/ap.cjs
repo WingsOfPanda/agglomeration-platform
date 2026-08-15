@@ -16648,21 +16648,26 @@ function setOptionArgs(pane, opt, val) {
 function paneNonceSetArgs(pane, nonce) {
   return setOptionArgs(pane, "@ap_nonce", nonce);
 }
-function parsePaneNonces(stdout) {
+function parsePaneNonces(stdout, realIds) {
   const m = /* @__PURE__ */ new Map();
+  const dup = /* @__PURE__ */ new Set();
   for (const line of stdout.split("\n")) {
     if (!line) continue;
     const tab = line.indexOf("	");
-    if (tab < 0) {
-      m.set(line, "");
+    const id = tab < 0 ? line : line.slice(0, tab);
+    if (!PANE_ID_RE.test(id)) continue;
+    if (realIds && !realIds.has(id)) continue;
+    if (m.has(id)) {
+      dup.add(id);
       continue;
     }
-    m.set(line.slice(0, tab), line.slice(tab + 1));
+    m.set(id, tab < 0 ? "" : line.slice(tab + 1));
   }
+  for (const id of dup) m.set(id, "");
   return m;
 }
 function ownsPane(snapshot, pane, nonce) {
-  return nonce !== "" && snapshot.get(pane) === nonce;
+  return NONCE_RE.test(nonce) && snapshot.get(pane) === nonce;
 }
 function sendKeysLiteralArgs(pane, line) {
   return ["send-keys", "-t", pane, "-l", line];
@@ -16720,11 +16725,14 @@ async function ensureWindowBorderStatus(target) {
   }
 }
 async function livePaneNonces() {
-  const { stdout } = await execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}	#{@ap_nonce}"]);
-  return parsePaneNonces(stdout);
+  const [ids, pairs] = await Promise.all([
+    execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}"]),
+    execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}	#{@ap_nonce}"])
+  ]);
+  return parsePaneNonces(pairs.stdout, new Set(ids.stdout.split("\n").filter(Boolean)));
 }
 async function paneOwned(pane, nonce) {
-  if (nonce === "") return false;
+  if (!NONCE_RE.test(nonce)) return false;
   return ownsPane(await livePaneNonces(), pane, nonce);
 }
 async function paneNonceSet(pane, nonce) {
@@ -16823,7 +16831,7 @@ async function preflightLayout(topic, list, opts) {
     throw e;
   }
 }
-var import_node_crypto3, import_node_os5, import_node_fs15, import_node_path12, splitRight, splitDown, respawn;
+var import_node_crypto3, import_node_os5, import_node_fs15, import_node_path12, PANE_ID_RE, NONCE_RE, splitRight, splitDown, respawn;
 var init_tmux = __esm({
   "src/core/tmux.ts"() {
     "use strict";
@@ -16833,6 +16841,8 @@ var init_tmux = __esm({
     import_node_fs15 = require("node:fs");
     import_node_path12 = require("node:path");
     init_colors();
+    PANE_ID_RE = /^%\d+$/;
+    NONCE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     splitRight = (launch, target, cwd) => tmux(splitRightArgs(launch, target, cwd));
     splitDown = (launch, target, cwd) => tmux(splitDownArgs(launch, target, cwd));
     respawn = async (pane, launch, cwd) => {
@@ -17565,7 +17575,7 @@ async function teardownBatch(topic, pairs, d) {
     if (!ownsPane(live, owner.paneId, owner.nonce)) {
       stale.add(`${agent}-${model}`);
       if (owner.nonce === "") {
-        log.warn(`${agent}-${model}: pane ${owner.paneId} is live but pane.json predates ownership nonces \u2014 cannot prove it is ours, so NOT killing it. If it really is the worker's pane, end it by hand: tmux kill-pane -t ${owner.paneId}`);
+        log.warn(`${agent}-${model}: pane ${owner.paneId} is live but pane.json predates ownership nonces \u2014 cannot prove it is ours, so NOT killing it. Identify it first: tmux display-message -p -t ${owner.paneId} '#{pane_current_command} #{@ap_label}' \u2014 then, if it really is this worker's pane: tmux kill-pane -t ${owner.paneId}`);
       } else {
         log.warn(`${agent}-${model}: pane ${owner.paneId} is live but is not ours (nonce mismatch) \u2014 not killing; it belongs to another program`);
       }
@@ -18461,7 +18471,7 @@ function liveOutboxWait(i2, m, t, offset, events, timeoutSec, clock) {
   const owner = paneMetaRead(i2, m, t);
   return outboxWaitSince(i2, m, t, offset, events, timeoutSec, {
     paneAlive: (p) => paneOwned(p, owner?.nonce ?? ""),
-    paneId: owner?.paneId ?? null,
+    paneId: owner?.nonce ? owner.paneId : null,
     extendMult: envNum("AP_WAIT_EXTEND_MULT", 3)
   }, clock);
 }
@@ -19958,6 +19968,7 @@ async function overrideEvidence(row, art, agent, unsafe, live) {
   if (!settled) return `${artifact} has no ${END_OF_ARTIFACT} and no ${ARTIFACT_ACCEPT_KEY}= verdict (still being written)`;
   const owner = paneMetaRead(agent, provider, topic);
   if (!owner) return "no pane.json (cannot confirm the pane is alive)";
+  if (!owner.nonce) return "pane.json predates ownership nonces (cannot confirm the pane)";
   let alive = false;
   try {
     alive = await (live.paneOwned ?? paneOwned)(owner.paneId, owner.nonce);
@@ -25575,6 +25586,7 @@ async function monitorRun(args, opts) {
   const probePane = opts?.paneOwned ?? paneOwned;
   const paneCheckEvery = opts?.paneCheckEveryTicks ?? 15;
   const tickMs = opts?.sleepMs ?? 2e3;
+  const maxTicks = opts?.maxTicks ?? Infinity;
   const owner = paneMetaRead(agent, model, topic);
   let deadPolls = 0, tick = 0;
   do {
@@ -25605,7 +25617,8 @@ async function monitorRun(args, opts) {
     persist(state);
     if (once9) break;
     tick++;
-    if (owner && tick % paneCheckEvery === 0) {
+    if (tick >= maxTicks) break;
+    if (owner && owner.nonce && tick % paneCheckEvery === 0) {
       let alive = true;
       try {
         alive = await probePane(owner.paneId, owner.nonce);
@@ -26201,7 +26214,8 @@ async function resumeWith(args, deps) {
     const model = resolveModel(agent, topic);
     const owner = model ? paneMetaRead(agent, model, topic) : null;
     let alive = false;
-    if (owner) {
+    const unverifiable = owner !== null && owner.nonce === "";
+    if (owner && !unverifiable) {
       if (live) alive = ownsPane(live, owner.paneId, owner.nonce);
       else {
         try {
@@ -26214,6 +26228,12 @@ async function resumeWith(args, deps) {
     const raw = readOr(stateTxt);
     const st = parseState(raw);
     let phase = st.phase ?? "";
+    if (unverifiable) {
+      log.warn(`autoresearch resume: ${agent}'s pane.json predates ownership nonces \u2014 its pane cannot be confirmed, so the lane is left as-is (no interrupt, no respawn). Verify by hand: tmux display-message -p -t ${owner.paneId} '#{pane_current_command} #{@ap_label}'`);
+      rows.push(`WORKER=${agent}:${phase}:yes`);
+      monitors.push(`MONITOR=${agent}`);
+      continue;
+    }
     if (!alive && phase === "working") {
       const workingExp = st.current_exp_id ?? "";
       ledgerAdd({ gen, ts: deps.now(), kind: "interrupted", agent, ...workingExp ? { exp_id: workingExp } : {} });

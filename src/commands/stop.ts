@@ -35,7 +35,10 @@ export async function teardownBatch(topic: string, pairs: Pair[], d: StopDeps): 
     if (!ownsPane(live, owner.paneId, owner.nonce)) {
       stale.add(`${agent}-${model}`);
       if (owner.nonce === "") {
-        log.warn(`${agent}-${model}: pane ${owner.paneId} is live but pane.json predates ownership nonces — cannot prove it is ours, so NOT killing it. If it really is the worker's pane, end it by hand: tmux kill-pane -t ${owner.paneId}`);
+        // An ap worker pane still carries @ap_label even when it predates @ap_nonce, so the
+        // operator has one check ap cannot make for itself. Name it BEFORE the kill line: this pane
+        // is precisely the one ap just said it could not identify.
+        log.warn(`${agent}-${model}: pane ${owner.paneId} is live but pane.json predates ownership nonces — cannot prove it is ours, so NOT killing it. Identify it first: tmux display-message -p -t ${owner.paneId} '#{pane_current_command} #{@ap_label}' — then, if it really is this worker's pane: tmux kill-pane -t ${owner.paneId}`);
       } else {
         log.warn(`${agent}-${model}: pane ${owner.paneId} is live but is not ours (nonce mismatch) — not killing; it belongs to another program`);
       }

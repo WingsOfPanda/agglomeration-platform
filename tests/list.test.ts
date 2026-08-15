@@ -44,19 +44,19 @@ describe("list rowState (pane ownership)", () => {
   const meta = (paneId: string, nonce: string) => ({ agent: "bravo", model: "codex", paneId, nonce });
 
   it("live pane + matching nonce → the real state", () => {
-    expect(rowState(new Map([["%1", "n1"]]), meta("%1", "n1"), outbox(), 180)).toBe("working");
+    expect(rowState(new Map([["%1", "11111111-1111-4111-8111-111111111111"]]), meta("%1", "11111111-1111-4111-8111-111111111111"), outbox(), 180)).toBe("working");
   });
   it("live pane + DIFFERENT nonce (id reused after a tmux restart) → [ORPHAN]", () => {
-    expect(rowState(new Map([["%1", "stranger"]]), meta("%1", "n1"), outbox(), 180)).toBe("[ORPHAN]");
+    expect(rowState(new Map([["%1", "stranger"]]), meta("%1", "11111111-1111-4111-8111-111111111111"), outbox(), 180)).toBe("[ORPHAN]");
   });
   it("live pane carrying no @ap_nonce at all → [ORPHAN]", () => {
-    expect(rowState(new Map([["%1", ""]]), meta("%1", "n1"), outbox(), 180)).toBe("[ORPHAN]");
+    expect(rowState(new Map([["%1", ""]]), meta("%1", "11111111-1111-4111-8111-111111111111"), outbox(), 180)).toBe("[ORPHAN]");
   });
   it("legacy pane.json (no recorded nonce) → [ORPHAN], even against a live id", () => {
-    expect(rowState(new Map([["%1", "n1"]]), meta("%1", ""), outbox(), 180)).toBe("[ORPHAN]");
+    expect(rowState(new Map([["%1", "11111111-1111-4111-8111-111111111111"]]), meta("%1", ""), outbox(), 180)).toBe("[ORPHAN]");
   });
   it("pane gone, and no pane id recorded at all → [ORPHAN]", () => {
-    expect(rowState(new Map(), meta("%1", "n1"), outbox(), 180)).toBe("[ORPHAN]");
-    expect(rowState(new Map([["%1", "n1"]]), meta("", ""), outbox(), 180)).toBe("[ORPHAN]");
+    expect(rowState(new Map(), meta("%1", "11111111-1111-4111-8111-111111111111"), outbox(), 180)).toBe("[ORPHAN]");
+    expect(rowState(new Map([["%1", "11111111-1111-4111-8111-111111111111"]]), meta("", ""), outbox(), 180)).toBe("[ORPHAN]");
   });
 });
