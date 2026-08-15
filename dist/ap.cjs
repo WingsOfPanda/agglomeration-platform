@@ -24584,11 +24584,14 @@ function controllerGenOf(events) {
   for (const e of events) if ((e.kind === "campaign-init" || e.kind === "resume") && e.gen > g) g = e.gen;
   return g;
 }
+function isStaleGenError(e) {
+  return e instanceof Error && e.message.startsWith(STALE_GEN_PREFIX);
+}
 function appendEvent(prevText, ev) {
   const events = parseLedger(prevText);
   const controllerGen2 = controllerGenOf(events);
   if (ev.gen < controllerGen2) {
-    throw new Error(`autoresearchLedger: stale gen ${ev.gen} < controller gen ${controllerGen2}`);
+    throw new Error(`${STALE_GEN_PREFIX} ${ev.gen} < controller gen ${controllerGen2}`);
   }
   const lastSeq = events.length ? events[events.length - 1].seq : 0;
   return JSON.stringify({ seq: lastSeq + 1, ...ev }) + "\n";
@@ -24604,7 +24607,8 @@ function replayLedger(text) {
     const key = e.agent && e.exp_id ? `${e.agent}/${e.exp_id}` : null;
     if (e.kind === "dispatch-intent" && key && e.agent && e.exp_id) {
       const operator = typeof e.data?.operator === "string" ? e.data.operator : void 0;
-      if (!intents.has(key)) intents.set(key, { agent: e.agent, expId: e.exp_id, delivered: false, operator });
+      const intentOffset = typeof e.data?.outboxOffset === "number" ? e.data.outboxOffset : void 0;
+      if (!intents.has(key)) intents.set(key, { agent: e.agent, expId: e.exp_id, delivered: false, operator, intentOffset });
       const m = EXP_NUM.exec(e.exp_id);
       if (m) {
         const n2 = parseInt(m[1], 10);
@@ -24652,7 +24656,7 @@ acquired_ts=${acquiredTs}
 holder=${holder}
 `;
 }
-var import_node_path46, KINDS, EXP_NUM;
+var import_node_path46, KINDS, STALE_GEN_PREFIX, EXP_NUM;
 var init_autoresearchLedger = __esm({
   "src/core/autoresearchLedger.ts"() {
     "use strict";
@@ -24669,6 +24673,7 @@ var init_autoresearchLedger = __esm({
       "fresh-worker-respawn",
       "interrupted"
     ];
+    STALE_GEN_PREFIX = "autoresearchLedger: stale gen";
     EXP_NUM = /^exp-([0-9]+)$/;
   }
 });
@@ -25278,6 +25283,9 @@ async function experimentSendWith(args, deps) {
   if (!(0, import_node_fs45.existsSync)(stateTxt)) return fail(`worker state.txt missing: ${stateTxt}`, 1);
   const hasLedger = (0, import_node_fs45.existsSync)(ledgerPath(art));
   const effGen = hasLedger ? controllerGen(art) : 1;
+  if (hasLedger && effGen > 1 && p.gen === void 0) {
+    return fail(`campaign is on controller generation ${effGen}; pass --gen (re-enter via 'autoresearch resume ${topic}')`, 3);
+  }
   if (hasLedger && p.gen !== void 0 && Number(p.gen) !== effGen) {
     return fail(`stale controller generation (--gen ${p.gen}, current ${effGen}); re-enter via 'autoresearch resume ${topic}'`, 3);
   }
@@ -25339,8 +25347,19 @@ async function experimentSendWith(args, deps) {
     return fail(e.message, 1);
   }
   if (prompt.trim() === "") return fail(`prompt rendered empty (template substitution failed)`, 1);
+  const fencedAppend = (ev) => {
+    if (!hasLedger) return null;
+    try {
+      ledgerAppend(art, ev);
+      return null;
+    } catch (e) {
+      if (!isStaleGenError(e)) throw e;
+      return fail(`${e.message}; re-enter via 'autoresearch resume ${topic}'`, 3);
+    }
+  };
   const preOffset = outboxOffset(outbox);
-  if (hasLedger) ledgerAppend(art, { gen: effGen, ts: deps.now(), kind: "dispatch-intent", agent, exp_id: expId, ...p.operator !== void 0 ? { data: { operator: p.operator } } : {} });
+  const intentRc = fencedAppend({ gen: effGen, ts: deps.now(), kind: "dispatch-intent", agent, exp_id: expId, data: { outboxOffset: preOffset, ...p.operator !== void 0 ? { operator: p.operator } : {} } });
+  if (intentRc !== null) return intentRc;
   atomicWrite((0, import_node_path47.join)(branchDir, "prompt.md"), prompt);
   if (p.parentId !== void 0) atomicWrite((0, import_node_path47.join)(branchDir, "lineage.txt"), `parent_id=${p.parentId}
 `);
@@ -25348,7 +25367,8 @@ async function experimentSendWith(args, deps) {
 `);
   (deps.inboxWrite ?? inboxWrite)(agent, model, topic, prompt, { from: "hub", noDoneInstruction: true });
   atomicWrite(stateTxt, buildDispatchState((0, import_node_fs45.readFileSync)(stateTxt, "utf8"), expId, deps.now()));
-  if (hasLedger) ledgerAppend(art, { gen: effGen, ts: deps.now(), kind: "dispatch-delivered", agent, exp_id: expId, data: { outboxOffset: preOffset } });
+  const deliveredRc = fencedAppend({ gen: effGen, ts: deps.now(), kind: "dispatch-delivered", agent, exp_id: expId, data: { outboxOffset: preOffset } });
+  if (deliveredRc !== null) return deliveredRc;
   if (!deps.dryRun) {
     const pane = paneMetaRead(agent, model, topic);
     if (pane) {
@@ -26067,14 +26087,18 @@ async function resumeWith(args, deps) {
     if (intent.delivered) continue;
     const { agent, expId } = intent;
     const obBuf = readOutbox(agent);
-    const reconstructed = replay.lastDeliveredOffset.get(agent) ?? 0;
-    const tail = obBuf.subarray(reconstructed).toString("utf8");
+    const priorDelivery = replay.lastDeliveredOffset.get(agent);
+    const reconstructed = intent.intentOffset ?? (priorDelivery === void 0 ? 0 : -1);
     let accepted = false;
-    for (const line of tail.split("\n")) {
-      const o2 = parseEvent(line.trim());
-      if (o2 && (o2.event === "ack" || o2.event === "done")) {
-        accepted = true;
-        break;
+    if (reconstructed >= 0) {
+      const start = obBuf.length < reconstructed ? 0 : reconstructed;
+      const tail = obBuf.subarray(start).toString("utf8");
+      for (const line of tail.split("\n")) {
+        const o2 = parseEvent(line.trim());
+        if (o2 && (o2.event === "ack" || o2.event === "done")) {
+          accepted = true;
+          break;
+        }
       }
     }
     const stateTxt = lanePath(art, agent);

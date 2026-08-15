@@ -61,8 +61,10 @@ New pure module `src/core/autoresearchLedger.ts` + the file `$ART/campaign-ledge
   budget-debit | stop-decision | resume | fresh-worker-respawn | interrupted`.
 - Module API (pure; CLI does the I/O like every other core module):
   `appendEvent(prevText, event)` → the new line to append (validates seq/gen monotonicity),
-  `replayLedger(text)` → `{ lastSeq, gen, intents: Map<exp_id, {agent, delivered, outboxOffset?}>,
-  completionOrder: exp_id[], counters: Map<agent, number> }` — the reducer every consumer shares,
+  `replayLedger(text)` → `{ lastSeq, gen, intents: Map<exp_id, {agent, delivered, outboxOffset?,
+  intentOffset?}>, completionOrder: exp_id[], counters: Map<agent, number> }` — the reducer every
+  consumer shares (`outboxOffset` comes from the DELIVERED event, `intentOffset` from the INTENT
+  event itself; 0.5.29 added the latter, so pre-0.5.29 ledgers leave it undefined),
   `parseLedger(text)` (tolerant line parse, skips malformed).
 - **Controller lease + fencing:** `$ART/controller.gen` holds the current generation KV
   (`gen=<n>`, `acquired_ts=`, `holder=`), written via `atomicWrite`. `resume` increments it;
@@ -75,7 +77,10 @@ New pure module `src/core/autoresearchLedger.ts` + the file `$ART/campaign-ledge
 
 `experiment-send` (src/commands/autoresearch.ts:640-670) changes its effect order:
 
-1. Append `dispatch-intent { agent, exp_id, gen }` — BEFORE any effect. The exp_id is minted as
+1. Append `dispatch-intent { agent, exp_id, gen, data: { outboxOffset } }` — BEFORE any effect
+   (0.5.29 added `data.outboxOffset`, the same pre-send offset the delivered event carries, so a
+   crash between the two still scopes the tail to THIS dispatch rather than the previous one; it
+   also carries `data.operator` when the dispatch has one). The exp_id is minted as
    today (worker `exp_counter` + 1) but the intent is now the durable record;
    `replayLedger().counters` takes `max(state.txt exp_counter, highest intent number per agent)`,
    which makes the counter reconstructible (hazard 2 closed).

@@ -1,6 +1,6 @@
 // tests/autoresearch-cmd.test.ts — autoresearch CLI verbs (Phase B).
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, rmSync } from "node:fs";
 import { freshHome } from "./helpers/tmpHome.js";
 import { captureStdout } from "./helpers/captureStdout.js";
 import { initWith, type AutoresearchInitDeps } from "../src/commands/autoresearch.js";
@@ -14,7 +14,7 @@ import { scoreWith, liveScoreDeps, type AutoresearchScoreDeps } from "../src/com
 import { type ScoreComputation } from "../src/core/autoresearchScore.js";
 import { monitorRun } from "../src/commands/autoresearch.js";
 import { statusBriefWith } from "../src/commands/autoresearch.js";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { autoresearchArtDir, workerStateDir, experimentDir, workersDir } from "../src/core/autoresearch.js";
 import { workerDir } from "../src/core/paths.js";
@@ -25,6 +25,12 @@ const cleanups: Array<() => void> = [];
 afterEach(() => { while (cleanups.length) cleanups.pop()!(); });
 
 function home() { const h = freshHome(); cleanups.push(h.cleanup); return h; }
+
+function captureStderr(): { text: () => string; restore: () => void } {
+  const chunks: string[] = [];
+  const spy = vi.spyOn(process.stderr, "write").mockImplementation(((s: unknown) => { chunks.push(String(s)); return true; }) as never);
+  return { text: () => chunks.join(""), restore: () => spy.mockRestore() };
+}
 
 const okDeps = (over: Partial<AutoresearchInitDeps> = {}): AutoresearchInitDeps => ({
   haveCmd: () => true,
@@ -381,6 +387,17 @@ describe("autoresearch experiment-send", () => {
     expect(delivered!.data?.outboxOffset).toBe(pre);
   });
 
+  it("the intent carries its OWN pre-send offset, so resume can scope the acceptance tail to it", async () => {
+    const h = home();
+    const { art, pd } = scaffold(h);
+    seedLedger(art);
+    writeFileSync(join(pd, "outbox.jsonl"), '{"event":"done","summary":"experiment exp-001","ts":"t"}\n'); // a PRIOR experiment's completion
+    const pre = statSync(join(pd, "outbox.jsonl")).size;
+    expect(await experimentSendWith([TOPIC, INST, "exp-002", "next", "b"], deps(h))).toBe(0);
+    const intent = parseLedger(readFileSync(ledgerPath(art), "utf8")).find((e) => e.kind === "dispatch-intent");
+    expect(intent!.data?.outboxOffset).toBe(pre);
+  });
+
   it("crash injection: DI inboxWrite throws -> intent recorded, no delivered, state.txt untouched", async () => {
     const h = home();
     const { art, sd } = scaffold(h);
@@ -403,6 +420,58 @@ describe("autoresearch experiment-send", () => {
     expect(rc).toBe(3);
     expect(spy).not.toHaveBeenCalled();
     expect(parseLedger(readFileSync(ledgerPath(art), "utf8")).some((e) => e.kind === "dispatch-intent")).toBe(false);
+  });
+
+  it("NO --gen on a resumed campaign (gen > 1) refuses with rc 3 BEFORE any effect", async () => {
+    const h = home();
+    const { art } = scaffold(h);
+    seedLedger(art, 2); // a resume bumped the controller; this hub never re-entered
+    const spy = vi.fn();
+    const err = captureStderr();
+    let rc: number;
+    try { rc = await experimentSendWith([TOPIC, INST, "exp-001", "x", "y"], deps(h, { inboxWrite: spy })); }
+    finally { err.restore(); }
+    expect(rc).toBe(3);
+    expect(spy).not.toHaveBeenCalled();
+    expect(parseLedger(readFileSync(ledgerPath(art), "utf8")).some((e) => e.kind === "dispatch-intent")).toBe(false);
+    expect(err.text()).toContain(`campaign is on controller generation 2; pass --gen (re-enter via 'autoresearch resume ${TOPIC}')`);
+  });
+
+  it("NO --gen on a never-resumed campaign (gen 1) still dispatches (grandfather clause)", async () => {
+    const h = home();
+    const { art } = scaffold(h);
+    seedLedger(art, 1);
+    const spy = vi.fn();
+    expect(await experimentSendWith([TOPIC, INST, "exp-001", "x", "y"], deps(h, { inboxWrite: spy }))).toBe(0);
+    expect(spy).toHaveBeenCalled();
+    void art;
+  });
+
+  it("a resume landing INSIDE the dispatch window: rc 3 AFTER the inbox landed, only the delivery record fenced", async () => {
+    const h = home();
+    const { art, sd } = scaffold(h);
+    seedLedger(art, 1);
+    // The competing hub resumes mid-dispatch (right as this hub writes the inbox), so
+    // appendEvent's append-time re-read fences the delivered event that follows it.
+    const inbox = vi.fn(() => appendFileSync(ledgerPath(art), appendEvent(readFileSync(ledgerPath(art), "utf8"), { gen: 2, ts: "T", kind: "resume" })));
+    const err = captureStderr();
+    let rc: number;
+    try { rc = await experimentSendWith([TOPIC, INST, "exp-001", "x", "y"], deps(h, { inboxWrite: inbox })); }
+    finally { err.restore(); }
+    expect(rc).toBe(3);
+    expect(inbox).toHaveBeenCalled();                                                   // the worker ALREADY has the task
+    expect(readFileSync(join(sd, "state.txt"), "utf8")).toContain("phase=working");      // and the lane already moved
+    expect(parseLedger(readFileSync(ledgerPath(art), "utf8")).some((e) => e.kind === "dispatch-delivered")).toBe(false);
+    expect(err.text()).toContain(`stale gen 1 < controller gen 2; re-enter via 'autoresearch resume ${TOPIC}'`);
+  });
+
+  it("a NON-fencing ledger failure keeps surfacing as itself (never a generation refusal)", async () => {
+    const h = home();
+    const { art } = scaffold(h);
+    seedLedger(art);
+    rmSync(ledgerPath(art));
+    mkdirSync(ledgerPath(art)); // an unreadable/unwritable ledger, not a stale generation
+    await expect(experimentSendWith([TOPIC, INST, "exp-001", "x", "y"], deps(h))).rejects.toThrow(/EISDIR/);
   });
 
   it("matching --gen dispatches normally (rc 0)", async () => {
