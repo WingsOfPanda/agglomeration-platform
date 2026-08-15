@@ -164,6 +164,25 @@ var init_atomic = __esm({
   }
 });
 
+// src/core/slug.ts
+function validateSlug(s) {
+  return SLUG.test(s) && s.length >= 1 && s.length <= 32;
+}
+function assertSlug(kind, s) {
+  if (!validateSlug(s)) throw new SlugError(`${kind} must match [a-z0-9-]+ and be <= 32 chars; got: '${s}'`);
+  return s;
+}
+var SLUG, SlugError;
+var init_slug = __esm({
+  "src/core/slug.ts"() {
+    "use strict";
+    SLUG = /^[a-z0-9-]+$/;
+    SlugError = class extends Error {
+      code = 2;
+    };
+  }
+});
+
 // src/core/paths.ts
 function globalRoot(home) {
   return home ?? process.env.AP_HOME ?? (0, import_node_path.join)((0, import_node_os.homedir)(), ".ap");
@@ -206,10 +225,10 @@ function repoStateDir(opts) {
   return (0, import_node_path.join)(stateRoot(opts), "state", repoHash(opts?.cwd));
 }
 function topicDir(topic, opts) {
-  return (0, import_node_path.join)(repoStateDir(opts), topic);
+  return (0, import_node_path.join)(repoStateDir(opts), assertSlug("topic", topic));
 }
 function workerDir(agent, model, topic, opts) {
-  return (0, import_node_path.join)(topicDir(topic, opts), `${agent}-${model}`);
+  return (0, import_node_path.join)(topicDir(topic, opts), `${assertSlug("agent", agent)}-${model}`);
 }
 function repoRoot(cwd = process.cwd()) {
   try {
@@ -263,6 +282,7 @@ var init_paths = __esm({
     import_node_path = require("node:path");
     import_node_child_process = require("node:child_process");
     init_atomic();
+    init_slug();
   }
 });
 
@@ -528,18 +548,6 @@ var init_fsread = __esm({
   "src/core/fsread.ts"() {
     "use strict";
     import_node_fs5 = require("node:fs");
-  }
-});
-
-// src/core/slug.ts
-function validateSlug(s) {
-  return SLUG.test(s) && s.length >= 1 && s.length <= 32;
-}
-var SLUG;
-var init_slug = __esm({
-  "src/core/slug.ts"() {
-    "use strict";
-    SLUG = /^[a-z0-9-]+$/;
   }
 });
 
@@ -17110,6 +17118,7 @@ function runFlag(command, topic, note) {
     log.error(`usage: ${command} flag <topic> <observation>`);
     return 2;
   }
+  assertSlug("topic", topic);
   const path6 = recordHubFlag({ command, topic, note });
   if (path6) {
     log.ok(`${command} flag: recorded ${path6}`);
@@ -17124,6 +17133,7 @@ var init_forensics = __esm({
     import_node_fs17 = require("node:fs");
     import_node_path13 = require("node:path");
     init_paths();
+    init_slug();
     init_atomic();
     init_archive();
     init_log();
@@ -17929,10 +17939,7 @@ async function run7(args) {
       i2 += r.shift - 1;
     }
   }
-  if (!SLUG2.test(topic) || topic.length > 64) {
-    log.error(`topic must match [a-z0-9-]+ and be <= 64 chars; got: '${topic}'`);
-    return 2;
-  }
+  assertSlug("topic", topic);
   if (!Number.isInteger(n2) || n2 < 2 || n2 > 4) {
     log.error(`N must be 2..4; got: '${args[1]}'`);
     return 2;
@@ -17959,7 +17966,7 @@ async function run7(args) {
     return 1;
   }
 }
-var import_node_fs23, import_node_path18, SLUG2;
+var import_node_fs23, import_node_path18;
 var init_preflight = __esm({
   "src/commands/preflight.ts"() {
     "use strict";
@@ -17968,9 +17975,9 @@ var init_preflight = __esm({
     init_args();
     init_log();
     init_paths();
+    init_slug();
     init_atomic();
     init_tmux();
-    SLUG2 = /^[a-z0-9-]+$/;
   }
 });
 
@@ -20082,6 +20089,7 @@ function triad(usageLabel, fn, deps) {
       log.error(`usage: ${usageLabel} <topic> <agent> <provider>`);
       return 2;
     }
+    assertSlug("agent", agent);
     return fn(topic, agent, provider, deps);
   };
 }
@@ -20098,6 +20106,7 @@ var init_phaseTable = __esm({
     init_roster();
     init_explore();
     init_paths();
+    init_slug();
     init_contracts();
     init_ipc();
     init_tmux();
@@ -20854,6 +20863,7 @@ async function offsetResetRun(rest) {
     log.error(`design offset-reset: phase must be ${phaseStems("design")} (got ${phase})`);
     return 2;
   }
+  assertSlug("agent", agent);
   const art = designArtDir(topic);
   if (!(0, import_node_fs36.existsSync)(art)) {
     log.error(`design offset-reset: art dir missing: ${art}`);
@@ -20914,6 +20924,7 @@ var init_design2 = __esm({
     init_implementScope();
     init_providers();
     init_paths();
+    init_slug();
     init_agents();
     init_contracts();
     init_designTurn();
@@ -24980,6 +24991,11 @@ async function verifyPlanWith(args, deps) {
     return 2;
   }
   const [topic, agent, expId] = pos;
+  assertSlug("agent", agent);
+  if (!EXP_ID_RE.test(expId)) {
+    log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`);
+    return 2;
+  }
   const art = autoresearchArtDir(topic, deps.opts);
   const result = deps.readResult(art, agent, expId);
   if (result === null) {
@@ -25019,6 +25035,11 @@ async function verifyCheckWith(args, deps) {
     return 2;
   }
   const [topic, agent, expId] = pos;
+  assertSlug("agent", agent);
+  if (!EXP_ID_RE.test(expId)) {
+    log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`);
+    return 2;
+  }
   const art = autoresearchArtDir(topic, deps.opts);
   const result = deps.readResult(art, agent, expId);
   if (result === null) {
@@ -25048,6 +25069,11 @@ async function inspectPlanWith(args, deps) {
     return 2;
   }
   const [topic, agent, expId] = pos;
+  assertSlug("agent", agent);
+  if (!EXP_ID_RE.test(expId)) {
+    log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`);
+    return 2;
+  }
   const art = autoresearchArtDir(topic, deps.opts);
   const result = deps.readResult(art, agent, expId);
   if (result === null) {
@@ -25096,6 +25122,11 @@ async function inspectCheckWith(args, deps) {
     return 2;
   }
   const [topic, agent, expId] = pos;
+  assertSlug("agent", agent);
+  if (!EXP_ID_RE.test(expId)) {
+    log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`);
+    return 2;
+  }
   const art = autoresearchArtDir(topic, deps.opts);
   const result = deps.readResult(art, agent, expId);
   if (result === null) {
@@ -25416,6 +25447,7 @@ async function monitorRun(args, opts) {
     return 2;
   }
   const [topic, agent] = pos;
+  assertSlug("agent", agent);
   const art = autoresearchArtDir(topic, opts);
   if (!(0, import_node_fs45.existsSync)(art)) {
     log.error(`autoresearch monitor: art dir missing: ${art}`);
@@ -26420,6 +26452,7 @@ var init_autoresearch2 = __esm({
     init_roster();
     init_agents();
     init_paths();
+    init_slug();
     init_spawn();
     init_preflight();
     init_send2();
@@ -28891,11 +28924,12 @@ init_colors();
 
 // src/core/dispatch.ts
 init_args();
+init_slug();
 async function dispatch(fn, args) {
   try {
     return await fn(args);
   } catch (e) {
-    if (e instanceof KvError) {
+    if (e instanceof KvError || e instanceof SlugError) {
       process.stderr.write(`${e.message}
 `);
       return e.code;

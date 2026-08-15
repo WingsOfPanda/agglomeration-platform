@@ -3,10 +3,9 @@ import { join } from "node:path";
 import { kvParse } from "../args.js";
 import { log } from "../core/log.js";
 import { topicDir } from "../core/paths.js";
+import { assertSlug } from "../core/slug.js";
 import { atomicWrite } from "../core/atomic.js";
 import { preflightLayout, PreflightEntry } from "../core/tmux.js";
-
-const SLUG = /^[a-z0-9-]+$/;
 
 export async function run(args: string[]): Promise<number> {
   if (args.length < 2) { log.error("usage: preflight <topic> <N> [--list i1:m1,i2:m2,...] [--art-dir abs]"); return 2; }
@@ -18,7 +17,10 @@ export async function run(args: string[]): Promise<number> {
     if (a === "--list" || a.startsWith("--list=")) { const r = kvParse(a, args[i + 1]); listArg = r.value; i += r.shift - 1; }
     else if (a === "--art-dir" || a.startsWith("--art-dir=")) { const r = kvParse(a, args[i + 1]); artDir = r.value; i += r.shift - 1; }
   }
-  if (!SLUG.test(topic) || topic.length > 64) { log.error(`topic must match [a-z0-9-]+ and be <= 64 chars; got: '${topic}'`); return 2; }
+  // The shared gate, not a private copy: the old regex here carried its own <=64 bound, which the
+  // choke point's <=32 has silently disagreed with since. Kept as an explicit call because `--art-dir`
+  // skips the topicDir below, and the topic still reaches tmux as part of the pane's sentinel command.
+  assertSlug("topic", topic);
   if (!Number.isInteger(n) || n < 2 || n > 4) { log.error(`N must be 2..4; got: '${args[1]}'`); return 2; }
 
   const list: PreflightEntry[] = listArg.split(",").filter(Boolean).map((pair) => {

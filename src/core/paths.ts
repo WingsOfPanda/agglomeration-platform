@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join, basename, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 import { atomicWrite } from "./atomic.js";
+import { assertSlug } from "./slug.js";
 
 export function globalRoot(home?: string): string {
   return home ?? process.env.AP_HOME ?? join(homedir(), ".ap");
@@ -52,11 +53,15 @@ export function repoHash(cwd: string = process.cwd()): string {
 export function repoStateDir(opts?: { home?: string; cwd?: string }): string {
   return join(stateRoot(opts), "state", repoHash(opts?.cwd));
 }
+/** The containment choke point: every art dir (design/explore/implement/quick/bridge/autoresearch),
+ *  archive, stop, preflight and ipc path derives from these two, so gating the segments here refuses
+ *  a `../` topic/agent for every verb at once instead of at ~90 call sites. `model` stays ungated —
+ *  it comes from contracts.yaml, not from an operator arg, and spawn never validated it either. */
 export function topicDir(topic: string, opts?: { home?: string; cwd?: string }): string {
-  return join(repoStateDir(opts), topic);
+  return join(repoStateDir(opts), assertSlug("topic", topic));
 }
 export function workerDir(agent: string, model: string, topic: string, opts?: { home?: string; cwd?: string }): string {
-  return join(topicDir(topic, opts), `${agent}-${model}`);
+  return join(topicDir(topic, opts), `${assertSlug("agent", agent)}-${model}`);
 }
 
 export function repoRoot(cwd: string = process.cwd()): string {

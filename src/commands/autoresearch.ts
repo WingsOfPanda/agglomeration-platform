@@ -55,6 +55,7 @@ import { haveCmd } from "../core/deps.js";
 import { spawnListArg, parsePanesFile, spawnResultsTsv, spawnTally, type SpawnResult } from "../core/roster.js";
 import { pickAgents } from "../core/agents.js";
 import { repoRoot, pluginRoot, globalRoot, repoHash } from "../core/paths.js";
+import { assertSlug } from "../core/slug.js";
 import { run as spawnRun } from "./spawn.js";
 import { run as preflightRun } from "./preflight.js";
 import { run as sendRun, taskNudge } from "./send.js";
@@ -379,6 +380,8 @@ export async function verifyPlanWith(args: string[], deps: VerifyPlanDeps): Prom
   const pos = args.filter((a) => !a.startsWith("--"));
   if (pos.length !== 3) { log.error("autoresearch verify-plan: usage: <topic> <agent> <exp-id> [--authorize-rerun]"); return 2; }
   const [topic, agent, expId] = pos;
+  assertSlug("agent", agent); // <art>/workers/<agent>/... — the lane path, never a workerDir join
+  if (!EXP_ID_RE.test(expId)) { log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`); return 2; } // the next segment down
   const art = autoresearchArtDir(topic, deps.opts);
   const result = deps.readResult(art, agent, expId);
   if (result === null) { log.error(`autoresearch verify-plan: result.json missing for ${agent}/${expId}`); return 1; }
@@ -412,6 +415,8 @@ export async function verifyCheckWith(args: string[], deps: VerifyCheckDeps): Pr
   if (pos.length !== 3) { log.error("autoresearch verify-check: usage: <topic> <agent> <exp-id> (--stdout-file <path> | --run-failed)"); return 2; }
   if (!runFailed && stdoutFile === undefined) { log.error("autoresearch verify-check: need --stdout-file <path> or --run-failed"); return 2; }
   const [topic, agent, expId] = pos;
+  assertSlug("agent", agent); // <art>/workers/<agent>/... — the lane path, never a workerDir join
+  if (!EXP_ID_RE.test(expId)) { log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`); return 2; } // the next segment down
   const art = autoresearchArtDir(topic, deps.opts);
   const result = deps.readResult(art, agent, expId);
   if (result === null) { log.error(`autoresearch verify-check: result.json missing for ${agent}/${expId}`); return 1; }
@@ -443,6 +448,8 @@ export async function inspectPlanWith(args: string[], deps: InspectPlanDeps): Pr
   const pos = args.filter((a) => !a.startsWith("--"));
   if (pos.length !== 3) { log.error("autoresearch inspect-plan: usage: <topic> <agent> <exp-id> [--authorize-inspect]"); return 2; }
   const [topic, agent, expId] = pos;
+  assertSlug("agent", agent); // <art>/workers/<agent>/... — the lane path, never a workerDir join
+  if (!EXP_ID_RE.test(expId)) { log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`); return 2; } // the next segment down
   const art = autoresearchArtDir(topic, deps.opts);
   const result = deps.readResult(art, agent, expId);
   if (result === null) { log.error(`autoresearch inspect-plan: result.json missing for ${agent}/${expId}`); return 1; }
@@ -484,6 +491,8 @@ export async function inspectCheckWith(args: string[], deps: InspectCheckDeps): 
   if (pos.length !== 3) { log.error("autoresearch inspect-check: usage: <topic> <agent> <exp-id> (--stdout-file <path> | --run-failed) [--integrity-refuted]"); return 2; }
   if (!runFailed && !integrityRefuted && stdoutFile === undefined) { log.error("autoresearch inspect-check: need --stdout-file <path> or --run-failed or --integrity-refuted"); return 2; }
   const [topic, agent, expId] = pos;
+  assertSlug("agent", agent); // <art>/workers/<agent>/... — the lane path, never a workerDir join
+  if (!EXP_ID_RE.test(expId)) { log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`); return 2; } // the next segment down
   const art = autoresearchArtDir(topic, deps.opts);
   const result = deps.readResult(art, agent, expId);
   if (result === null) { log.error(`autoresearch inspect-check: result.json missing for ${agent}/${expId}`); return 1; }
@@ -869,6 +878,7 @@ export async function monitorRun(args: string[], opts?: { home?: string; cwd?: s
   const pos = args.filter((a) => a !== "--once");
   if (pos.length !== 2) { log.error("autoresearch monitor: usage: <topic> <agent> [--once]"); return 2; }
   const [topic, agent] = pos;
+  assertSlug("agent", agent); // mkdir's <art>/workers/<agent>/ below — an art-dir path, not a workerDir one
 
   const art = autoresearchArtDir(topic, opts);
   if (!existsSync(art)) { log.error(`autoresearch monitor: art dir missing: ${art}`); return 2; }
