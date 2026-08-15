@@ -70,6 +70,16 @@ function controllerGenOf(events: LedgerEvent[]): number {
   return g;
 }
 
+/** Message prefix of appendEvent's fencing throw — the only error it raises itself.
+ *  Callers match on it (isStaleGenError) to convert the refusal into their own
+ *  documented rc without swallowing an IO failure: an unwritable ledger must keep
+ *  surfacing as itself, not as a generation refusal the operator cannot act on. */
+const STALE_GEN_PREFIX = "autoresearchLedger: stale gen";
+
+export function isStaleGenError(e: unknown): boolean {
+  return e instanceof Error && e.message.startsWith(STALE_GEN_PREFIX);
+}
+
 /** Mint the next event line to append. seq = last valid seq + 1 (1 on empty);
  *  throws on a gen below the ledger's controller gen (fencing — a stale writer
  *  must fail LOUDLY, never silently clobber). Returns one JSONL line + "\n". */
@@ -77,7 +87,7 @@ export function appendEvent(prevText: string, ev: Omit<LedgerEvent, "seq">): str
   const events = parseLedger(prevText);
   const controllerGen = controllerGenOf(events);
   if (ev.gen < controllerGen) {
-    throw new Error(`autoresearchLedger: stale gen ${ev.gen} < controller gen ${controllerGen}`);
+    throw new Error(`${STALE_GEN_PREFIX} ${ev.gen} < controller gen ${controllerGen}`);
   }
   const lastSeq = events.length ? events[events.length - 1].seq : 0;
   return JSON.stringify({ seq: lastSeq + 1, ...ev }) + "\n";

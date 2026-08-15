@@ -115,7 +115,9 @@ Step 5 may add a per-dispatch `<agent> exp-NNN on <approach-label>` sub-row.
      `MONITOR=<agent>` rows, `LAST_SEQ=<n>`. Re-seed ONE persistent Monitor task per
      `MONITOR=` row (same Monitor tool config as Phase 4 step 2; append the new task ids to
      `$ART/monitor-tasks.txt`), re-dispatch each `REDISPATCH=<agent>:<exp-id>` row via
-     `experiment-send` with the SAME exp-id, re-applying the same `--operator` if
+     `experiment-send` with the SAME exp-id and `--gen <GEN>` (REQUIRED on this path — a
+     resumed campaign is always at gen >= 2, so an omitted `--gen` refuses with rc 3),
+     re-applying the same `--operator` if
      `$ART/workers/<agent>/experiments/<exp-id>/operator.txt` exists (read its `operator=` value)
      (never mint a new id for an unresolved intent),
      then continue the loop at Step 5. Skip Phases 1-4 entirely.

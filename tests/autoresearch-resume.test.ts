@@ -266,6 +266,43 @@ describe("resume: crash matrix", () => {
 
 });
 
+describe("resume: intent-offset edge cases", () => {
+  it("12. RECREATED outbox (recorded offset past EOF) -> whole new file is the tail, matching the reconcile's shrink guard", async () => {
+    const h = home();
+    const { art, sd, outbox } = scaffold(h, { expCounter: "1" });
+    ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-intent", agent: INST, exp_id: "exp-001", data: { outboxOffset: 0 } });
+    ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-delivered", agent: INST, exp_id: "exp-001", data: { outboxOffset: 0 } });
+    // exp-002's intent recorded a far offset; then a respawn RECREATED the outbox, which now
+    // holds only exp-002's own ack. Scanning from the stale offset would see an empty tail.
+    ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-intent", agent: INST, exp_id: "exp-002", data: { outboxOffset: 5000 } });
+    writeFileSync(outbox, '{"event":"ack","task_summary":"exp-002","ts":"t"}\n');
+
+    const { rc, out } = await run(h, deps(h));
+    expect(rc).toBe(0);
+    expect(out.some((l) => l.startsWith("REDISPATCH="))).toBe(false); // the ack IS this dispatch's
+    expect(evs(art).some((e) => e.kind === "dispatch-delivered" && e.exp_id === "exp-002")).toBe(true);
+    expect(state(sd).current_exp_id).toBe("exp-002");
+  });
+
+  it("13. a VALID zero intent offset is honored (?? not ||) even with a non-zero prior delivery", async () => {
+    const h = home();
+    const { art, sd, outbox } = scaffold(h, { expCounter: "1" });
+    ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-intent", agent: INST, exp_id: "exp-001", data: { outboxOffset: 0 } });
+    ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-delivered", agent: INST, exp_id: "exp-001", data: { outboxOffset: 40 } });
+    // The outbox was recreated before exp-002 went out, so ITS pre-send offset is a valid 0;
+    // a `||` fallback reads that as "no recorded offset", falls back to -1, and strands the lane.
+    ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-intent", agent: INST, exp_id: "exp-002", data: { outboxOffset: 0 } });
+    writeFileSync(outbox, '{"event":"ack","task_summary":"exp-002","ts":"t"}\n');
+
+    const { rc, out } = await run(h, deps(h));
+    expect(rc).toBe(0);
+    expect(out.some((l) => l.startsWith("REDISPATCH="))).toBe(false);
+    const d = evs(art).find((e) => e.kind === "dispatch-delivered" && e.exp_id === "exp-002");
+    expect(d?.data?.outboxOffset).toBe(0); // the intent's own zero, not the prior delivery's 40
+    expect(state(sd).current_exp_id).toBe("exp-002");
+  });
+});
+
 describe("resume: report shape", () => {
   it("prints GEN, WORKER rows, MONITOR rows for live workers, LAST_SEQ", async () => {
     const h = home();

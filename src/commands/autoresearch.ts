@@ -49,7 +49,7 @@ import { retrieveForDispatch, resolveMemoryScope, liveMemoryIo, type MemoryIo } 
 import { buildCorpusDigest, leaderMetricOf, type CorpusEntry } from "../core/autoresearchCorpus.js";
 import { agentBinary, consultTimeout } from "../core/contracts.js";
 import { inboxWrite, inboxPath, outboxPath, outboxOffset, paneMetaRead, resolveModel, parseEvent } from "../core/ipc.js";
-import { ledgerPath, controllerGenPath, appendEvent, replayLedger, readGen, renderGen, type LedgerEventKind } from "../core/autoresearchLedger.js";
+import { ledgerPath, controllerGenPath, appendEvent, replayLedger, readGen, renderGen, isStaleGenError, type LedgerEventKind } from "../core/autoresearchLedger.js";
 import { paneSend, killNow, paneAlive, livePanes } from "../core/tmux.js";
 import { haveCmd } from "../core/deps.js";
 import { spawnListArg, parsePanesFile, spawnResultsTsv, spawnTally, type SpawnResult } from "../core/roster.js";
@@ -724,10 +724,15 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   // previous dispatch's offset would attribute that dispatch's completion to this one.
   // appendEvent re-reads the ledger at append time, so a resume landing inside this
   // window makes it throw: that is the same stale-generation refusal (rc 3), not a crash.
+  // ONLY that throw converts — an unwritable ledger keeps surfacing as itself rather
+  // than sending the operator after a generation that is not the problem.
   const fencedAppend = (ev: LedgerEventArgs): number | null => {
     if (!hasLedger) return null;
     try { ledgerAppend(art, ev); return null; }
-    catch (e) { return fail(`${(e as Error).message}; re-enter via 'autoresearch resume ${topic}'`, 3); }
+    catch (e) {
+      if (!isStaleGenError(e)) throw e;
+      return fail(`${(e as Error).message}; re-enter via 'autoresearch resume ${topic}'`, 3);
+    }
   };
   const preOffset = outboxOffset(outbox);
   const intentRc = fencedAppend({ gen: effGen, ts: deps.now(), kind: "dispatch-intent", agent, exp_id: expId, data: { outboxOffset: preOffset, ...(p.operator !== undefined ? { operator: p.operator } : {}) } });
@@ -737,6 +742,8 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   if (p.operator !== undefined) atomicWrite(join(branchDir, "operator.txt"), `operator=${p.operator}\n`);
   (deps.inboxWrite ?? inboxWrite)(agent, model, topic, prompt, { from: "hub", noDoneInstruction: true });
   atomicWrite(stateTxt, buildDispatchState(readFileSync(stateTxt, "utf8"), expId, deps.now()));
+  // rc 3 HERE means the inbox already landed and only the delivery RECORD was fenced:
+  // the superseding controller's resume reconciles that lane (unresolved-intent pass).
   const deliveredRc = fencedAppend({ gen: effGen, ts: deps.now(), kind: "dispatch-delivered", agent, exp_id: expId, data: { outboxOffset: preOffset } });
   if (deliveredRc !== null) return deliveredRc;
 
@@ -1699,7 +1706,11 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
     const reconstructed = intent.intentOffset ?? (priorDelivery === undefined ? 0 : -1);
     let accepted = false;
     if (reconstructed >= 0) {
-      const tail = obBuf.subarray(reconstructed).toString("utf8");
+      // Shrink guard, as in reconcileFromOutboxSince/ipc.readFrom (and the reconcile on the
+      // next line): an offset past EOF means the outbox was RECREATED, so the whole of the
+      // new file is this dispatch's tail. -1 stays the legacy "unattributable" sentinel.
+      const start = obBuf.length < reconstructed ? 0 : reconstructed;
+      const tail = obBuf.subarray(start).toString("utf8");
       for (const line of tail.split("\n")) {
         const o = parseEvent(line.trim());
         if (o && (o.event === "ack" || o.event === "done")) { accepted = true; break; }

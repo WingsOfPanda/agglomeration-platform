@@ -24584,11 +24584,14 @@ function controllerGenOf(events) {
   for (const e of events) if ((e.kind === "campaign-init" || e.kind === "resume") && e.gen > g) g = e.gen;
   return g;
 }
+function isStaleGenError(e) {
+  return e instanceof Error && e.message.startsWith(STALE_GEN_PREFIX);
+}
 function appendEvent(prevText, ev) {
   const events = parseLedger(prevText);
   const controllerGen2 = controllerGenOf(events);
   if (ev.gen < controllerGen2) {
-    throw new Error(`autoresearchLedger: stale gen ${ev.gen} < controller gen ${controllerGen2}`);
+    throw new Error(`${STALE_GEN_PREFIX} ${ev.gen} < controller gen ${controllerGen2}`);
   }
   const lastSeq = events.length ? events[events.length - 1].seq : 0;
   return JSON.stringify({ seq: lastSeq + 1, ...ev }) + "\n";
@@ -24653,7 +24656,7 @@ acquired_ts=${acquiredTs}
 holder=${holder}
 `;
 }
-var import_node_path46, KINDS, EXP_NUM;
+var import_node_path46, KINDS, STALE_GEN_PREFIX, EXP_NUM;
 var init_autoresearchLedger = __esm({
   "src/core/autoresearchLedger.ts"() {
     "use strict";
@@ -24670,6 +24673,7 @@ var init_autoresearchLedger = __esm({
       "fresh-worker-respawn",
       "interrupted"
     ];
+    STALE_GEN_PREFIX = "autoresearchLedger: stale gen";
     EXP_NUM = /^exp-([0-9]+)$/;
   }
 });
@@ -25349,6 +25353,7 @@ async function experimentSendWith(args, deps) {
       ledgerAppend(art, ev);
       return null;
     } catch (e) {
+      if (!isStaleGenError(e)) throw e;
       return fail(`${e.message}; re-enter via 'autoresearch resume ${topic}'`, 3);
     }
   };
@@ -26086,7 +26091,8 @@ async function resumeWith(args, deps) {
     const reconstructed = intent.intentOffset ?? (priorDelivery === void 0 ? 0 : -1);
     let accepted = false;
     if (reconstructed >= 0) {
-      const tail = obBuf.subarray(reconstructed).toString("utf8");
+      const start = obBuf.length < reconstructed ? 0 : reconstructed;
+      const tail = obBuf.subarray(start).toString("utf8");
       for (const line of tail.split("\n")) {
         const o2 = parseEvent(line.trim());
         if (o2 && (o2.event === "ack" || o2.event === "done")) {
