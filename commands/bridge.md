@@ -44,6 +44,8 @@ straight to the review feed (survives teardown and aborts) and costs nothing. Re
 1. If `MODE=branch`: `$CS bridge branch <SLUG>`. On **rc 1** (not a git repo, or repo B already on another
    `feat/bridge-*` branch) → abort: `$CS bridge summary <SLUG> --aborted setup branch "<reason>"`, print the
    SUMMARY, stop. (No worker spawned, so no `stop`.) If `MODE=in-place`: skip branch entirely.
+   `branch.txt` records the branch the run is **actually** on, so a checkout that failed ends in finish's
+   `no-branch` refusal (flagged for `/ap:review`) rather than a merged PR containing none of the run's work.
 2. Spawn the worker **in repo B** (NO initial prompt — the brief is round 1):
    `$CS spawn <AGENT> <PROVIDER> <SLUG> --cwd <TARGET>`. On **rc 1** (bootstrap failed) → abort:
    `$CS bridge summary <SLUG> --aborted setup spawn-failed "worker failed bootstrap"`, print SUMMARY, stop.
@@ -103,8 +105,10 @@ continue.
    merge on record and no local/remote divergence. Fallbacks (each recorded in `finish-result.txt`): no
    remote → it merges into base locally; no `gh` → it pushes the branch and you open + merge the PR
    manually, then `git -C <TARGET> pull`; the PR merge being blocked (branch protection / CI / conflict)
-   → it leaves the PR open for you to merge; base can't fast-forward → it reports and stops. In
-   **in-place mode** it leaves the commits on the current branch.
+   → it leaves the PR open for you to merge; base can't fast-forward → it reports and stops; the branch
+   step never landed (`branch.txt` == the start branch) → it refuses: `none\tno-branch`, nothing pushed,
+   no PR — tell the user the work (if any) is on repo B's start branch and that nothing was integrated.
+   In **in-place mode** it leaves the commits on the current branch.
 
 ## Stage 4 — Teardown + SUMMARY
 

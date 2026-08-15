@@ -28653,7 +28653,7 @@ async function branchWith3(topic, target, r) {
   const exec = bridgeExecDir(topic);
   atomicWrite((0, import_node_path52.join)(exec, "start-branch.txt"), snap.branch + "\n");
   atomicWrite((0, import_node_path52.join)(exec, "branch-base.sha"), snap.baseSha + "\n");
-  atomicWrite((0, import_node_path52.join)(exec, "branch.txt"), branch + "\n");
+  atomicWrite((0, import_node_path52.join)(exec, "branch.txt"), (onBranch ? branch : snap.branch) + "\n");
   if (!onBranch) {
     log.warn(`bridge branch: checkout ${branch} failed; staying on ${snap.branch}`);
   }
@@ -28759,6 +28759,10 @@ Verify: ${verify}
   });
   atomicWrite((0, import_node_path52.join)(exec, "finish-result.txt"), `${res.action}	${res.outcome}
 `);
+  if (res.outcome === "no-branch") {
+    const head = currentBranch(r) || "(detached)";
+    runFlag("bridge", topic, `finish-no-branch: the recorded branch '${branch || "(unrecorded)"}' is missing or is the start branch '${startBranch}' \u2014 nothing was pushed, no PR opened; the work (if any) is on '${head}'`);
+  }
   log.ok(`bridge finish: ${res.action} \u2192 ${res.outcome}`);
   return 0;
 }
