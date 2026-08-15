@@ -2,7 +2,7 @@
 // Kept out of ipc.ts so ipc stays free of the tmux/execa dependency (outboxWaitSince takes the
 // probe as an injected function; this is the one place that binds it to the real tmux probe).
 import { outboxWaitSince, paneMetaRead, type Clock, type OutboxEvent } from "./ipc.js";
-import { paneAlive } from "./tmux.js";
+import { paneOwned } from "./tmux.js";
 import { envNum } from "./env.js";
 
 /** Drop-in replacement for the wait verbs' live `outboxWaitSince` call: identical signature, but with
@@ -17,7 +17,13 @@ import { envNum } from "./env.js";
 export function liveOutboxWait(
   i: string, m: string, t: string, offset: number, events: string[], timeoutSec: number, clock?: Clock,
 ): Promise<OutboxEvent | null> {
+  // The probe is ownership-checked, not id-only: a pane id recorded before a tmux server restart
+  // can name a stranger's pane, and reading that as "the worker is alive" would extend the wait
+  // instead of failing fast. An absent pane.json still disables the check (paneId null).
+  const owner = paneMetaRead(i, m, t);
   return outboxWaitSince(i, m, t, offset, events, timeoutSec, {
-    paneAlive, paneId: paneMetaRead(i, m, t), extendMult: envNum("AP_WAIT_EXTEND_MULT", 3),
+    paneAlive: (p) => paneOwned(p, owner?.nonce ?? ""),
+    paneId: owner?.paneId ?? null,
+    extendMult: envNum("AP_WAIT_EXTEND_MULT", 3),
   }, clock);
 }

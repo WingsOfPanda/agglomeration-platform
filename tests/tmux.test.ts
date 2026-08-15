@@ -54,4 +54,46 @@ describe("tmux arg builders", () => {
   it("windowBorderStatusArgs sets pane-border-status top on the target window", () => {
     expect(T.windowBorderStatusArgs("%5")).toEqual(["set-option", "-w", "-t", "%5", "pane-border-status", "top"]);
   });
+  it("paneNonceSetArgs stamps @ap_nonce on the pane (a per-pane set-option)", () => {
+    expect(T.paneNonceSetArgs("%1", "abc-123")).toEqual(["set-option", "-p", "-t", "%1", "@ap_nonce", "abc-123"]);
+  });
+});
+
+// The pane id is not ownership evidence: tmux restarts %N from 0 on a fresh server, so a recorded
+// id can name a pane that now belongs to another program.
+describe("pane ownership nonce", () => {
+  it("parsePaneNonces: id↔nonce map from the tab-separated list-panes format", () => {
+    const m = T.parsePaneNonces("%0\tn-zero\n%1\tn-one\n%2\tn-two");
+    expect(m.get("%0")).toBe("n-zero");
+    expect(m.get("%2")).toBe("n-two");
+    expect(m.size).toBe(3);
+  });
+  it("parsePaneNonces: an unstamped pane has an EMPTY nonce field, and blank lines are skipped", () => {
+    const m = T.parsePaneNonces("%0\t\n\n%1\tours\n");
+    expect(m.get("%0")).toBe("");
+    expect(m.get("%1")).toBe("ours");
+    expect(m.size).toBe(2);
+  });
+  it("parsePaneNonces: a line with no tab at all still registers the pane as unstamped", () => {
+    expect(T.parsePaneNonces("%7").get("%7")).toBe("");
+  });
+  it("parsePaneNonces: a nonce is taken whole, even if it somehow contains a tab", () => {
+    expect(T.parsePaneNonces("%1\ta\tb").get("%1")).toBe("a\tb");
+  });
+  it("ownsPane: true only when the live nonce IS the recorded one", () => {
+    const snap = T.parsePaneNonces("%1\tours\n%2\tsomebody-elses\n%3\t\n");
+    expect(T.ownsPane(snap, "%1", "ours")).toBe(true);
+    expect(T.ownsPane(snap, "%2", "ours")).toBe(false);   // id reused by another program
+    expect(T.ownsPane(snap, "%3", "ours")).toBe(false);   // live pane, never stamped by ap
+    expect(T.ownsPane(snap, "%9", "ours")).toBe(false);   // pane gone
+  });
+  it("ownsPane: an empty RECORDED nonce (legacy pane.json) never matches, not even an unstamped pane", () => {
+    const snap = T.parsePaneNonces("%1\t\n%2\tours\n");
+    expect(T.ownsPane(snap, "%1", "")).toBe(false);
+    expect(T.ownsPane(snap, "%2", "")).toBe(false);
+  });
+  it("paneOwned short-circuits an empty recorded nonce without touching tmux", async () => {
+    // No tmux server is reachable in the suite: reaching execa would reject, not return false.
+    await expect(T.paneOwned("%1", "")).resolves.toBe(false);
+  });
 });

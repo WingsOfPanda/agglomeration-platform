@@ -261,7 +261,7 @@ describe("autoresearch spawn-all", () => {
 describe("autoresearch drop-worker", () => {
   const TOPIC = "dp-topic";
   const opts = (h: { home: string }) => ({ home: h.home, cwd: process.cwd() });
-  const noKill: DropWorkerDeps = { killPane: () => {} };
+  const noKill: DropWorkerDeps = { killPane: () => {}, paneOwned: async () => true };
   it("prunes the named agent from workers.txt and reports remaining N", async () => {
     const h = home();
     const art = autoresearchArtDir(TOPIC, opts(h));
@@ -298,10 +298,22 @@ describe("autoresearch drop-worker", () => {
     const art = autoresearchArtDir(TOPIC, opts(h));
     mkdirSync(art, { recursive: true });
     writeFileSync(join(art, "workers.txt"), "rex\nkeeli\n");
-    writeFileSync(join(art, "preflight-panes.txt"), "rex\t%5\nkeeli\t%6\n");
+    writeFileSync(join(art, "preflight-panes.txt"), "rex\t%5\tn5\nkeeli\t%6\tn6\n");
     const killed: string[] = [];
-    await dropWorkerWith([TOPIC, "keeli"], { killPane: (p) => killed.push(p) }, opts(h));
+    const owned = new Map([["%5", "n5"], ["%6", "n6"]]);
+    await dropWorkerWith([TOPIC, "keeli"], { killPane: (p) => killed.push(p), paneOwned: async (p, n) => owned.get(p) === n }, opts(h));
     expect(killed).toEqual(["%6"]);
+  });
+  it("does NOT kill the dropped agent's recorded pane when its nonce no longer matches", async () => {
+    const h = home();
+    const art = autoresearchArtDir(TOPIC, opts(h));
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "workers.txt"), "rex\nkeeli\n");
+    // %6 is live, but a tmux restart handed it to another program: its @ap_nonce is not ours.
+    writeFileSync(join(art, "preflight-panes.txt"), "rex\t%5\tn5\nkeeli\t%6\tn6\n");
+    const killed: string[] = [];
+    await dropWorkerWith([TOPIC, "keeli"], { killPane: (p) => killed.push(p), paneOwned: async (p, n) => n === "stranger" }, opts(h));
+    expect(killed).toEqual([]);
   });
 });
 
@@ -956,7 +968,7 @@ describe("autoresearch monitor", () => {
     // Inject a probe that reports the pane dead + a 0ms tick + per-tick checks: the loop must exit
     // after two consecutive dead probes instead of polling forever. (Fails via the vitest timeout.)
     const { rc } = await capture(() => monitorRun([TOPIC, INST], {
-      ...opts(h), paneAlive: async () => false, sleepMs: 0, paneCheckEveryTicks: 1,
+      ...opts(h), paneOwned: async () => false, sleepMs: 0, paneCheckEveryTicks: 1,
     }));
     expect(rc).toBe(0);
   });
@@ -968,7 +980,7 @@ describe("autoresearch monitor", () => {
     // only a sustained death stops the loop (no false early-exit on a transient blip).
     let calls = 0;
     const { rc } = await capture(() => monitorRun([TOPIC, INST], {
-      ...opts(h), paneAlive: async () => (++calls <= 3 ? calls % 2 === 1 : false), sleepMs: 0, paneCheckEveryTicks: 1,
+      ...opts(h), paneOwned: async () => (++calls <= 3 ? calls % 2 === 1 : false), sleepMs: 0, paneCheckEveryTicks: 1,
     }));
     expect(rc).toBe(0);
     expect(calls).toBeGreaterThan(3);   // ran past the alive probes before the sustained death exit

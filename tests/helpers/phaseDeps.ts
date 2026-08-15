@@ -15,7 +15,7 @@ export function sendDeps(over: Partial<SendDeps> = {}): SendDeps {
     busyState: over.busyState,
     // Same seam the send verbs hand to guardSkipped. Inject it in any test that seeds a pane.json,
     // or the guard's fourth evidence leg would shell out to the real tmux.
-    paneAlive: over.paneAlive,
+    paneOwned: over.paneOwned,
   };
 }
 

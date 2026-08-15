@@ -95,7 +95,7 @@ const BROKEN_LEGS: Array<{
     break: (i, m, t) => { rmSync(paneMetaPath(i, m, t), { force: true }); return {}; },
     why: "no pane.json",
   },
-  { name: "the pane is gone", break: () => ({ paneAlive: async () => false }), why: "is gone" },
+  { name: "the pane is gone", break: () => ({ paneOwned: async () => false }), why: "is gone" },
 ];
 
 /** A worker artifact as the completeness contract requires it: body + the sentinel as its LAST
@@ -445,7 +445,7 @@ describe("explore phase send/wait skeleton (table-driven over PHASES)", () => {
           const send = vi.fn(async () => 0);
           const err = captureStderr();
           try {
-            expect(await s.send(TOPIC, AGENT, PROVIDER, sendDeps({ offsetFor: () => 4, send, paneAlive: async () => true }))).toBe(0);
+            expect(await s.send(TOPIC, AGENT, PROVIDER, sendDeps({ offsetFor: () => 4, send, paneOwned: async () => true }))).toBe(0);
           } finally { err.restore(); }
           expect(send).toHaveBeenCalled();
           expect(readFileSync(stateFile(), "utf8")).toBe("OFFSET=4\n");
@@ -463,7 +463,7 @@ describe("explore phase send/wait skeleton (table-driven over PHASES)", () => {
             const send = vi.fn(async () => 0);
             const err = captureStderr();
             try {
-              expect(await s.send(TOPIC, AGENT, PROVIDER, sendDeps({ send, paneAlive: async () => true, ...over }))).toBe(0);
+              expect(await s.send(TOPIC, AGENT, PROVIDER, sendDeps({ send, paneOwned: async () => true, ...over }))).toBe(0);
             } finally { err.restore(); }
             expect(send).not.toHaveBeenCalled();
             expect(readFileSync(stateFile(), "utf8")).toBe(`${KEY}=skipped\n`);
@@ -1034,11 +1034,12 @@ describe("explore teardown", () => {
     try {
       await initWith(["x"], initDeps());
       const art = exploreArtDir("x");
-      writeFileSync(join(art, "preflight-panes.txt"), "alpha\t%1\ncharlie\t%2\n");
+      writeFileSync(join(art, "preflight-panes.txt"), "alpha\t%1\tn1\ncharlie\t%2\tn2\n");
       let dest = "";
       const killed: string[] = [];
       const rc = await exploreTeardownWith(["x"], {
         killPane: async (p) => { killed.push(p); },
+        livePaneNonces: async () => new Map([["%1", "n1"], ["%2", "n2"]]),
         archiveTopic: () => { dest = "/archive/x/_explore-T"; return dest; },
         stdout: (l) => { dest = l; },
       });
@@ -1053,12 +1054,13 @@ describe("explore teardown", () => {
     try {
       await initWith(["x"], initDeps());
       const art = exploreArtDir("x");
-      writeFileSync(join(art, "preflight-panes.txt"), "alpha\t%1\ncharlie\t%2\n");
+      writeFileSync(join(art, "preflight-panes.txt"), "alpha\t%1\tn1\ncharlie\t%2\tn2\n");
       writeFileSync(join(art, "spawn-results.tsv"), "alpha\tcodex\t0\n");
       const killed: string[] = [];
       let archived = false;
       const rc = await exploreTeardownWith(["x", "--panes-only"], {
         killPane: async (p) => { killed.push(p); },
+        livePaneNonces: async () => new Map([["%1", "n1"], ["%2", "n2"]]),
         archiveTopic: () => { archived = true; return "/should/not/happen"; },
       });
       expect(rc).toBe(0);

@@ -219,8 +219,30 @@ describe("ipc outbox pane-liveness escape hatch", () => {
 describe("ipc pane meta", () => {
   it("paneMeta round-trips hyphenated model via JSON, not dir parse", () => {
     home(); seedPart("bravo", "claude-haiku", "demo");
-    IPC.paneMetaWrite("bravo", "claude-haiku", "demo", "%99");
+    IPC.paneMetaWrite("bravo", "claude-haiku", "demo", "%99", "nonce-1");
     const m = IPC.paneMetaReadForDir(workerDir("bravo", "claude-haiku", "demo"));
-    expect(m).toEqual({ agent: "bravo", model: "claude-haiku", paneId: "%99" });
+    expect(m).toEqual({ agent: "bravo", model: "claude-haiku", paneId: "%99", nonce: "nonce-1" });
+  });
+  it("pane.json carries the ownership nonce beside the id, and paneMetaRead returns the pair", () => {
+    home(); const d = seedPart("bravo", "codex", "demo");
+    IPC.paneMetaWrite("bravo", "codex", "demo", "%3", "nonce-abc");
+    expect(JSON.parse(readFileSync(join(d, "pane.json"), "utf8")).pane_nonce).toBe("nonce-abc");
+    expect(IPC.paneMetaRead("bravo", "codex", "demo")).toEqual({ paneId: "%3", nonce: "nonce-abc" });
+  });
+  it("a pane.json from a pre-nonce ap reads as recorded-but-unverifiable (nonce '')", () => {
+    home(); const d = seedPart("bravo", "codex", "demo");
+    writeFileSync(join(d, "pane.json"), JSON.stringify({ pane_id: "%3", agent: "bravo", model: "codex", spawned_at: "t" }));
+    expect(IPC.paneMetaRead("bravo", "codex", "demo")).toEqual({ paneId: "%3", nonce: "" });
+    expect(IPC.paneMetaReadForDir(d).nonce).toBe("");
+  });
+  it("no pane.json → null (not a bare id)", () => {
+    home(); seedPart("bravo", "codex", "demo");
+    expect(IPC.paneMetaRead("bravo", "codex", "demo")).toBeNull();
+  });
+  it(".last_pane round-trips the same <pane>\\t<nonce> pair; legacy id-only content is unverifiable", () => {
+    expect(IPC.formatLastPane("%4", "n4")).toBe("%4\tn4\n");
+    expect(IPC.parseLastPane(IPC.formatLastPane("%4", "n4"))).toEqual({ paneId: "%4", nonce: "n4" });
+    expect(IPC.parseLastPane("%4\n")).toEqual({ paneId: "%4", nonce: "" });
+    expect(IPC.parseLastPane("")).toBeNull();
   });
 });

@@ -33,7 +33,7 @@ function scaffold(h: { home: string }, over: { phase?: string; expCounter?: stri
     `phase=${over.phase ?? "idle"}\nexp_counter=${over.expCounter ?? "0"}\ncurrent_exp_id=${over.currentExp ?? ""}\n`);
   const pd = workerDir(INST, MODEL, TOPIC, o);
   mkdirSync(pd, { recursive: true });
-  writeFileSync(join(pd, "pane.json"), JSON.stringify({ pane_id: "%9", agent: INST, model: MODEL, spawned_at: "t" }));
+  writeFileSync(join(pd, "pane.json"), JSON.stringify({ pane_id: "%9", pane_nonce: "n9", agent: INST, model: MODEL, spawned_at: "t" }));
   writeFileSync(join(pd, "outbox.jsonl"), "");
   writeFileSync(ledgerPath(art), appendEvent("", { gen: 1, ts: "T", kind: "campaign-init" }));
   writeFileSync(controllerGenPath(art), renderGen(1, "T", "init"));
@@ -47,7 +47,7 @@ function evs(art: string) { return parseLedger(readFileSync(ledgerPath(art), "ut
 function state(sd: string) { return parseState(readFileSync(join(sd, "state.txt"), "utf8")); }
 
 function deps(h: { home: string }, over: Partial<AutoresearchResumeDeps> = {}): AutoresearchResumeDeps {
-  return { now: () => "T2", paneAlive: async () => true, freshWorker: vi.fn(async () => 0), opts: opts(h), ...over };
+  return { now: () => "T2", paneOwned: async () => true, freshWorker: vi.fn(async () => 0), opts: opts(h), ...over };
 }
 async function run(h: { home: string }, d: AutoresearchResumeDeps) {
   const out: string[] = [];
@@ -171,7 +171,7 @@ describe("resume: crash matrix", () => {
     const { art, sd } = scaffold(h, { phase: "working", expCounter: "1", currentExp: "exp-001" });
     ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-intent", agent: INST, exp_id: "exp-001" });
     const fresh = vi.fn(async () => 0);
-    const { rc, out } = await run(h, deps(h, { paneAlive: async () => false, freshWorker: fresh }));
+    const { rc, out } = await run(h, deps(h, { paneOwned: async () => false, freshWorker: fresh }));
     expect(rc).toBe(0);
     expect(evs(art).some((e) => e.kind === "interrupted" && e.exp_id === "exp-001")).toBe(true);
     const st = state(sd);

@@ -1,4 +1,5 @@
 import { execa } from "execa";
+import { randomUUID } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -31,6 +32,32 @@ export function respawnArgs(pane: string, launch: string, cwd?: string): string[
 }
 export function setOptionArgs(pane: string, opt: string, val: string): string[] {
   return ["set-option", "-p", "-t", pane, opt, val];
+}
+/** Stamp a pane with its ownership nonce. A raw pane id (%N) is NOT proof of ownership — tmux
+ *  restarts the %N counter from 0 on a fresh server, so a recorded id that outlived its pane can
+ *  name a stranger's pane. @ap_nonce is the per-pane secret ap mints when it CREATES the pane and
+ *  records next to the id; every destructive/typing action re-reads it live and acts only on a
+ *  match. respawn-pane preserves pane options, so the nonce survives the respawn paths. */
+export function paneNonceSetArgs(pane: string, nonce: string): string[] {
+  return setOptionArgs(pane, "@ap_nonce", nonce);
+}
+/** Parse `list-panes -a -F '#{pane_id}\t#{@ap_nonce}'` output into id -> nonce. A pane with no
+ *  @ap_nonce (never ours, or pre-nonce) yields an empty field, i.e. "". Blank lines are skipped. */
+export function parsePaneNonces(stdout: string): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const line of stdout.split("\n")) {
+    if (!line) continue;
+    const tab = line.indexOf("\t");
+    if (tab < 0) { m.set(line, ""); continue; }   // tolerate a tmux that drops the empty field
+    m.set(line.slice(0, tab), line.slice(tab + 1));
+  }
+  return m;
+}
+/** The one ownership predicate: the pane is live AND carries exactly the nonce we recorded for it.
+ *  An empty recorded nonce is UNVERIFIABLE (a pane.json written by a pre-nonce ap, or a legacy
+ *  preflight row) and never matches — "we cannot prove it is ours" is treated as "not ours". */
+export function ownsPane(snapshot: Map<string, string>, pane: string, nonce: string): boolean {
+  return nonce !== "" && snapshot.get(pane) === nonce;
 }
 export function sendKeysLiteralArgs(pane: string, line: string): string[] {
   return ["send-keys", "-t", pane, "-l", line];
@@ -93,17 +120,25 @@ export async function ensureWindowBorderStatus(target: string): Promise<boolean>
   try { await tmux(windowBorderStatusArgs(target)); return true; } catch { return false; }
 }
 
-export async function paneAlive(pane: string): Promise<boolean> {
-  const { stdout } = await execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}"]);
-  return stdout.split("\n").includes(pane);
+/** One snapshot of every live pane id on the server AND its ownership nonce (single tmux call).
+ *  Use this when checking many panes at once (e.g. `ap list`, a teardown batch) instead of probing
+ *  per pane — N panes would otherwise re-run the identical full-server scan N times. This replaced
+ *  the id-only `livePanes`/`paneAlive` pair outright: an id-only liveness answer is exactly the
+ *  evidence that let a stale id name a stranger's pane, so the primitive no longer exists. */
+export async function livePaneNonces(): Promise<Map<string, string>> {
+  const { stdout } = await execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}\t#{@ap_nonce}"]);
+  return parsePaneNonces(stdout);
 }
 
-/** One snapshot of every live pane id on the server (single tmux call). Use this when checking
- *  many panes at once (e.g. `ap list`) instead of calling paneAlive per pane — N panes would
- *  otherwise re-run the identical full-server scan N times. */
-export async function livePanes(): Promise<Set<string>> {
-  const { stdout } = await execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}"]);
-  return new Set(stdout.split("\n"));
+/** Is `pane` live and ours (its live @ap_nonce is the one we recorded)? The single-pane form of
+ *  ownsPane; an empty recorded nonce short-circuits without a tmux call. */
+export async function paneOwned(pane: string, nonce: string): Promise<boolean> {
+  if (nonce === "") return false;
+  return ownsPane(await livePaneNonces(), pane, nonce);
+}
+
+export async function paneNonceSet(pane: string, nonce: string): Promise<void> {
+  await execa("tmux", paneNonceSetArgs(pane, nonce));
 }
 
 export async function paneSend(pane: string, line: string): Promise<void> {
@@ -154,10 +189,11 @@ async function paneOption(pane: string, opt: string): Promise<string> {
   try { return (await execa("tmux", ["display-message", "-p", "-t", pane, opt])).stdout; } catch { return ""; }
 }
 
-/** `alive` lets a caller that already holds a livePanes() snapshot skip the per-pane full-server
- *  scan; omitted → probe with paneAlive as before. */
-export async function killGraceful(pane: string, pluginRoot: string, alive?: boolean): Promise<void> {
-  if (!(alive ?? (await paneAlive(pane)))) return;
+/** `owned` is the caller's ownership verdict from its livePaneNonces() snapshot — required, not a
+ *  probe fallback: this respawns (-k) the pane, so it must never run on a pane we cannot prove is
+ *  ours. */
+export async function killGraceful(pane: string, pluginRoot: string, owned: boolean): Promise<void> {
+  if (!owned) return;
   const label = (await paneOption(pane, "#{@ap_label}")) || "worker";
   const color = await paneOption(pane, "#{@ap_color}");
   const snap = join(mkdtempSync(join(tmpdir(), "cs-snap-")), "snap.txt");
@@ -170,10 +206,10 @@ export async function killGraceful(pane: string, pluginRoot: string, alive?: boo
 
 // --- preflight grid ---
 export interface PreflightEntry { agent: string; model: string; cwd?: string; }
-export async function preflightLayout(topic: string, list: PreflightEntry[], opts: { writePanes: (tsv: string) => void }): Promise<Array<{ agent: string; pane: string }>> {
+export async function preflightLayout(topic: string, list: PreflightEntry[], opts: { writePanes: (tsv: string) => void }): Promise<Array<{ agent: string; pane: string; nonce: string }>> {
   const conductor = await conductorPane();
   const created: string[] = [];
-  const out: Array<{ agent: string; pane: string }> = [];
+  const out: Array<{ agent: string; pane: string; nonce: string }> = [];
   let prev = conductor;
   let flag: "-h" | "-v" = "-h";
   try {
@@ -183,14 +219,19 @@ export async function preflightLayout(topic: string, list: PreflightEntry[], opt
       const { stdout } = await execa("tmux", args);
       const pane = stdout.trim();
       created.push(pane);
+      // Stamp ownership at CREATION: preflight-panes.txt outlives the tmux server (teardown sweeps
+      // it much later), so its ids need the same proof pane.json's do. spawn re-stamps the same
+      // nonce when it respawns this pane into a worker, so one nonce follows the pane end to end.
+      const nonce = randomUUID();
+      await execa("tmux", paneNonceSetArgs(pane, nonce));
       await paneLabelSet(pane, e.agent, e.model, topic);
-      out.push({ agent: e.agent, pane });
+      out.push({ agent: e.agent, pane, nonce });
       prev = pane;
       flag = "-v";
     }
     await selectLayoutMainVertical(conductor);
     await ensureWindowBorderStatus(conductor);
-    opts.writePanes(out.map((o) => `${o.agent}\t${o.pane}`).join("\n") + "\n");
+    opts.writePanes(out.map((o) => `${o.agent}\t${o.pane}\t${o.nonce}`).join("\n") + "\n");
     return out;
   } catch (e) {
     for (const p of created) { try { await execa("tmux", ["kill-pane", "-t", p]); } catch { /* */ } }

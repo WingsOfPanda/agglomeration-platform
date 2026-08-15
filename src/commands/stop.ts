@@ -4,18 +4,18 @@ import { log } from "../core/log.js";
 import { topicDir, repoStateDir, isArtifactDir, pluginRoot } from "../core/paths.js";
 import { stateArchive } from "../core/archive.js";
 import { readIfExists } from "../core/fsread.js";
-import { paneMetaRead, paneMetaReadForDir } from "../core/ipc.js";
-import { livePanes, killGraceful, killNow } from "../core/tmux.js";
+import { paneMetaRead, paneMetaReadForDir, parseLastPane, type PaneOwner } from "../core/ipc.js";
+import { livePaneNonces, ownsPane, killGraceful, killNow } from "../core/tmux.js";
 
 export const GRACEFUL_BATCH_WAIT_MS = 9000;
 export interface Pair { agent: string; model: string; }
 
 export interface StopDeps {
-  paneMetaRead(i: string, m: string, t: string): string | null;
-  livePanes(): Promise<Set<string>>;
-  killGraceful(pane: string, alive?: boolean): Promise<void>;
+  paneMetaRead(i: string, m: string, t: string): PaneOwner | null;
+  livePaneNonces(): Promise<Map<string, string>>;
+  killGraceful(pane: string, owned: boolean): Promise<void>;
   killNow(pane: string): Promise<void>;
-  stateArchive(i: string, m: string, t: string): string | null;
+  stateArchive(i: string, m: string, t: string, suffix?: string): string | null;
   sleep(ms: number): Promise<void>;
   readLastPane(t: string): string;
   removeLastPane(t: string): void;
@@ -23,16 +23,27 @@ export interface StopDeps {
 
 export async function teardownBatch(topic: string, pairs: Pair[], d: StopDeps): Promise<void> {
   const pending: string[] = [];
-  // ONE full-server pane snapshot for the whole batch (per-pane paneAlive would re-run the
+  const stale = new Set<string>();   // pairs whose recorded pane is live but not ours (archive-only)
+  // ONE full-server pane+nonce snapshot for the whole batch (a per-pane probe would re-run the
   // identical `tmux list-panes -a` scan for every worker).
-  const live = pairs.length > 0 ? await d.livePanes() : new Set<string>();
+  const live = pairs.length > 0 ? await d.livePaneNonces() : new Map<string, string>();
   for (const { agent, model } of pairs) {
-    const pane = d.paneMetaRead(agent, model, topic) ?? "";
-    if (pane && live.has(pane)) {
-      log.info(`graceful shutdown for ${agent}-${model} on ${topic} (pane ${pane})`);
-      await d.killGraceful(pane, live.has(pane)); // pass the batch snapshot: no per-pane re-scan
-      pending.push(pane);
+    const owner = d.paneMetaRead(agent, model, topic);
+    if (!owner || !live.has(owner.paneId)) continue;   // pane gone: today's orphan path, archive only
+    // The pane id is live — but a %N is reused after a tmux server restart, which is exactly when a
+    // never-archived pane.json is doing the naming. Kill ONLY on a matching @ap_nonce.
+    if (!ownsPane(live, owner.paneId, owner.nonce)) {
+      stale.add(`${agent}-${model}`);
+      if (owner.nonce === "") {
+        log.warn(`${agent}-${model}: pane ${owner.paneId} is live but pane.json predates ownership nonces — cannot prove it is ours, so NOT killing it. If it really is the worker's pane, end it by hand: tmux kill-pane -t ${owner.paneId}`);
+      } else {
+        log.warn(`${agent}-${model}: pane ${owner.paneId} is live but is not ours (nonce mismatch) — not killing; it belongs to another program`);
+      }
+      continue;
     }
+    log.info(`graceful shutdown for ${agent}-${model} on ${topic} (pane ${owner.paneId})`);
+    await d.killGraceful(owner.paneId, true); // ownership already proven from the batch snapshot
+    pending.push(owner.paneId);
   }
   if (pending.length > 0) {
     log.info("waiting 9s for graceful banners to finish");
@@ -40,11 +51,13 @@ export async function teardownBatch(topic: string, pairs: Pair[], d: StopDeps): 
     for (const p of pending) await d.killNow(p);
   }
   for (const { agent, model } of pairs) {
-    const dest = d.stateArchive(agent, model, topic);
+    // A skipped kill still archives — the sweep's job is clearing leftover state — but the archive
+    // is marked so forensics can see teardown never reached a pane.
+    const dest = d.stateArchive(agent, model, topic, stale.has(`${agent}-${model}`) ? "stalepane" : undefined);
     if (dest) log.ok(`archived ${agent}-${model}: ${dest}`);
   }
-  const last = d.readLastPane(topic);
-  if (last && pending.includes(last)) d.removeLastPane(topic);
+  const last = parseLastPane(d.readLastPane(topic));
+  if (last && pending.includes(last.paneId)) d.removeLastPane(topic);
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -52,10 +65,10 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 function liveDeps(): StopDeps {
   return {
     paneMetaRead: (i, m, t) => paneMetaRead(i, m, t),
-    livePanes: () => livePanes(),
-    killGraceful: (p, alive) => killGraceful(p, pluginRoot(), alive),
+    livePaneNonces: () => livePaneNonces(),
+    killGraceful: (p, owned) => killGraceful(p, pluginRoot(), owned),
     killNow: (p) => killNow(p),
-    stateArchive: (i, m, t) => stateArchive(i, m, t),
+    stateArchive: (i, m, t, suffix) => stateArchive(i, m, t, suffix),
     sleep,
     readLastPane: (t) => { const f = join(topicDir(t), ".last_pane"); return readIfExists(f).trim(); },
     removeLastPane: (t) => { try { rmSync(join(topicDir(t), ".last_pane"), { force: true }); } catch { /* */ } },

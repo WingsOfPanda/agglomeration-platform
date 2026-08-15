@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { kvParse } from "../args.js";
 import { log } from "../core/log.js";
@@ -8,11 +9,11 @@ import { stateInit, stateArchive, isoUtc } from "../core/archive.js";
 import { readIfExists } from "../core/fsread.js";
 import { atomicWrite } from "../core/atomic.js";
 import { validateSlug } from "../core/slug.js";
-import { identityWrite, identityPath, seedWorkerStatus, writeWorkerStatus, inboxWrite, inboxPath, paneMetaWrite, outboxWait, outboxDump } from "../core/ipc.js";
-import { paneListedFor } from "../core/roster.js";
+import { identityWrite, identityPath, seedWorkerStatus, writeWorkerStatus, inboxWrite, inboxPath, paneMetaWrite, outboxWait, outboxDump, parseLastPane, formatLastPane } from "../core/ipc.js";
+import { paneNonceFor } from "../core/roster.js";
 import { pickRandomAgent, agentInUse, formatCollisionError } from "../core/agents.js";
 import { agentBinary, agentDefaultMode, agentModeArgs, agentReadyTimeout, agentBootstrapSleep } from "../core/contracts.js";
-import { wrapLaunch, splitRight, splitDown, respawn, paneAlive, paneLabelSet, paneSend, killNow, capturePane, ensurePaneBorders, ensureWindowBorderStatus } from "../core/tmux.js";
+import { wrapLaunch, splitRight, splitDown, respawn, paneOwned, paneNonceSet, paneLabelSet, paneSend, killNow, capturePane, ensurePaneBorders, ensureWindowBorderStatus } from "../core/tmux.js";
 import { labelFor } from "../core/colors.js";
 import { taskNudge } from "./send.js";
 import { captureFailure, captureSpawnFailure, bootstrapFailureArgs } from "../core/forensics.js";
@@ -76,32 +77,49 @@ export async function run(args: string[]): Promise<number> {
     const launch = wrapLaunch([binary, ...modeArgs].join(" "));
     const startDir = cwd || repoRoot();
     let pane: string;
+    let nonce: string;
     if (targetPane) {
-      if (preflightArtDir) {
-        const pf = join(preflightArtDir, "preflight-panes.txt");
-        const ok = existsSync(pf) && paneListedFor(readFileSync(pf, "utf8"), agent, targetPane);
-        if (!ok) {
-          captureSpawnFailure({ agent, model, topic, reason: "pane_failed", detail: `--target-pane ${targetPane} not listed for ${agent} in ${pf}` });
-          log.error(`--target-pane ${targetPane} is not a preflight pane for ${agent} (checked ${pf})`); return 1;
-        }
+      // respawn-pane (-k) DESTROYS whatever runs in the target, so membership in preflight-panes.txt
+      // is not enough: that file outlives the tmux server, and %N is reused after a restart. The
+      // recorded nonce must still be on the live pane. Without an art dir there is no recorded
+      // nonce at all, i.e. no ownership evidence — refuse rather than respawn a stranger's pane.
+      if (!preflightArtDir) {
+        captureSpawnFailure({ agent, model, topic, reason: "pane_failed", detail: `--target-pane ${targetPane} given without --preflight-art-dir (no ownership record)` });
+        log.error(`--target-pane requires --preflight-art-dir: without it there is no recorded @ap_nonce for ${targetPane}, so ap cannot prove the pane is its own`); return 1;
       }
-      if (!(await paneAlive(targetPane))) {
-        captureSpawnFailure({ agent, model, topic, reason: "pane_failed", detail: `--target-pane ${targetPane} is not alive` });
-        log.error(`--target-pane ${targetPane} is not alive`); return 1;
+      const pf = join(preflightArtDir, "preflight-panes.txt");
+      const recorded = existsSync(pf) ? paneNonceFor(readFileSync(pf, "utf8"), agent, targetPane) : null;
+      if (recorded === null) {
+        captureSpawnFailure({ agent, model, topic, reason: "pane_failed", detail: `--target-pane ${targetPane} not listed for ${agent} in ${pf}` });
+        log.error(`--target-pane ${targetPane} is not a preflight pane for ${agent} (checked ${pf})`); return 1;
       }
+      if (!(await paneOwned(targetPane, recorded))) {
+        captureSpawnFailure({ agent, model, topic, reason: "pane_failed", detail: `--target-pane ${targetPane} is not alive or is not ours (nonce mismatch)` });
+        log.error(`--target-pane ${targetPane} is not alive, or its @ap_nonce does not match ${pf} (it now belongs to another program); not respawning it`); return 1;
+      }
+      // Keep the preflight nonce: one nonce follows the pane from creation to teardown, so the
+      // preflight-orphan sweep still recognizes a pane that became a worker.
+      nonce = recorded;
       pane = await respawn(targetPane, launch, startDir);
+      await paneNonceSet(pane, nonce);   // respawn preserves pane options; re-stamp so ownership never rests on that
       await paneLabelSet(pane, agent, model, topic);
     } else {
       const lastFile = join(topicDir(topic), ".last_pane");
-      const prior = readIfExists(lastFile).trim();
-      if (prior && await paneAlive(prior)) pane = await splitDown(launch, prior, startDir);
+      // .last_pane records `<pane>\t<nonce>` for the same reason pane.json does: it survives a tmux
+      // restart, and splitting off an unverified id would put this worker inside a stranger's
+      // window. Unverifiable (legacy/mismatched/dead) → the plain splitRight, exactly as an absent
+      // file behaves today.
+      const prior = parseLastPane(readIfExists(lastFile));
+      nonce = randomUUID();
+      if (prior && await paneOwned(prior.paneId, prior.nonce)) pane = await splitDown(launch, prior.paneId, startDir);
       else pane = await splitRight(launch, undefined, startDir);
+      await paneNonceSet(pane, nonce);
       await paneLabelSet(pane, agent, model, topic);
       mkdirSync(topicDir(topic), { recursive: true });
-      atomicWrite(lastFile, pane + "\n");   // atomic: a torn .last_pane would break the next split-target
+      atomicWrite(lastFile, formatLastPane(pane, nonce));   // atomic: a torn .last_pane would break the next split-target
     }
     if (!(await ensureWindowBorderStatus(pane))) log.warn(`could not force pane-border-status on the spawn window; '${labelFor(agent, model, topic)}' label may not render`);
-    paneMetaWrite(agent, model, topic, pane);
+    paneMetaWrite(agent, model, topic, pane, nonce);
     log.ok(`spawned ${labelFor(agent, model, topic)} in pane ${pane} (mode=${useMode})`);
 
     const boot = agentBootstrapSleep(model);
@@ -126,7 +144,7 @@ export async function run(args: string[]): Promise<number> {
         { workerDir, capturePane: (p, n) => capturePane(p, n), atomicWriteSync: (d, c) => writeFileSync(d, c), isWritableDir: (d) => existsSync(d), now: () => isoUtc() },
       );
       captureSpawnFailure({ agent, model, topic, ...bootstrapFailureArgs(ev ?? null, fr.ok ? fr.path : undefined) });
-      await killNow(pane);
+      await killNow(pane);   // no ownership re-check: this id was created by THIS call, it cannot be stale
       // stamp the truth over the seed: a FAILED archive must not claim a dispatchable state for a worker that never reported (`error` is terminal, so no gate changes)
       writeWorkerStatus(agent, model, topic, "error", "bootstrap-failed");
       const arch = stateArchive(agent, model, topic, "FAILED");

@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, utimesSync, closeSync, openSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { deriveState, classifyStale, lastOutboxEvent } from "../src/commands/list.js";
+import { deriveState, classifyStale, lastOutboxEvent, rowState } from "../src/commands/list.js";
 
 afterEach(() => { /* no env */ });
 
@@ -30,5 +30,33 @@ describe("list pure logic", () => {
     const f = join(mkdtempSync(join(tmpdir(), "le-")), "outbox.jsonl");
     writeFileSync(f, `{"event":"ack"}\n{"event":"progress","note":"\\"event\\":\\"done\\""}\n`);
     expect(lastOutboxEvent(f)).toBe("progress"); // last line's real event, not the quoted "done"
+  });
+});
+
+// A live row is the prompt to run `stop` on that worker, so it must never be fabricated for a pane
+// id a restarted tmux handed to another program.
+describe("list rowState (pane ownership)", () => {
+  const outbox = () => {
+    const f = join(mkdtempSync(join(tmpdir(), "rs-")), "outbox.jsonl");
+    writeFileSync(f, `{"event":"ack"}\n`);
+    return f;
+  };
+  const meta = (paneId: string, nonce: string) => ({ agent: "bravo", model: "codex", paneId, nonce });
+
+  it("live pane + matching nonce → the real state", () => {
+    expect(rowState(new Map([["%1", "n1"]]), meta("%1", "n1"), outbox(), 180)).toBe("working");
+  });
+  it("live pane + DIFFERENT nonce (id reused after a tmux restart) → [ORPHAN]", () => {
+    expect(rowState(new Map([["%1", "stranger"]]), meta("%1", "n1"), outbox(), 180)).toBe("[ORPHAN]");
+  });
+  it("live pane carrying no @ap_nonce at all → [ORPHAN]", () => {
+    expect(rowState(new Map([["%1", ""]]), meta("%1", "n1"), outbox(), 180)).toBe("[ORPHAN]");
+  });
+  it("legacy pane.json (no recorded nonce) → [ORPHAN], even against a live id", () => {
+    expect(rowState(new Map([["%1", "n1"]]), meta("%1", ""), outbox(), 180)).toBe("[ORPHAN]");
+  });
+  it("pane gone, and no pane id recorded at all → [ORPHAN]", () => {
+    expect(rowState(new Map(), meta("%1", "n1"), outbox(), 180)).toBe("[ORPHAN]");
+    expect(rowState(new Map([["%1", "n1"]]), meta("", ""), outbox(), 180)).toBe("[ORPHAN]");
   });
 });

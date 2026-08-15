@@ -28,10 +28,13 @@ describe("spawnTally", () => {
 });
 
 describe("parsePanesFile", () => {
-  it("parses TSV agent→pane, skipping #/blank lines", () => {
-    const m = parsePanesFile("# header\nalpha\t%3\n\ncharlie\t%7\n");
-    expect(m.get("alpha")).toBe("%3");
-    expect(m.get("charlie")).toBe("%7");
+  it("parses TSV agent→pane+nonce, skipping #/blank lines", () => {
+    const m = parsePanesFile("# header\nalpha\t%3\tn3\n\ncharlie\t%7\tn7\n");
+    expect(m.get("alpha")).toEqual({ pane: "%3", nonce: "n3" });
+    expect(m.get("charlie")).toEqual({ pane: "%7", nonce: "n7" });
     expect(m.size).toBe(2);
+  });
+  it("a legacy 2-column row parses with an empty (unverifiable) nonce", () => {
+    expect(parsePanesFile("alpha\t%3\n").get("alpha")).toEqual({ pane: "%3", nonce: "" });
   });
 });
