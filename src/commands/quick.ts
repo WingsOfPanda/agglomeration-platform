@@ -19,6 +19,7 @@ import { sendRound, waitRound, type RoundDescriptor, type RoundSendDeps, type Ro
 import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
 import { run as sendRun } from "./send.js";
 import { readIfExists, readIfExistsOrNull, readField, kvField } from "../core/fsread.js";
+import { branchNameFor, readBranchRecord } from "../core/branchRecord.js";
 
 function usage(): number {
   log.error("usage: quick <init|branch|turn-send|turn-wait|detect-test|finish|forensics|summary> ...");
@@ -155,12 +156,16 @@ export async function branchWith(topic: string, target: string, r: Runner, stash
   }
   const snap = preSnapshot(r, "quick", topic);
   if (snap.state === "not-git") { log.error(`quick branch: ${target} is not a git repository`); return 1; }
-  const branch = `feat/quick-${topic}`;
+  const branch = branchNameFor("quick", topic);
   const onBranch = createOrResumeBranch(r, branch);
   atomicWrite(join(exec, "target_cwd.txt"), target + "\n");
   atomicWrite(join(exec, "start-branch.txt"), snap.branch + "\n");
   atomicWrite(join(exec, "branch-base.sha"), snap.baseSha + "\n");
-  atomicWrite(join(exec, "branch.txt"), branch + "\n");
+  // The branch the run is ACTUALLY on, the way implement records its `recorded`: a failed checkout
+  // leaves HEAD on the start branch, and writing the intended name there is what lets a leftover
+  // feat/quick-<topic> from an earlier run pass finish's guard and ship as a PR containing none of
+  // this run's work. The worker's round-1 prompt reads this file too.
+  atomicWrite(join(exec, "branch.txt"), (onBranch ? branch : snap.branch) + "\n");
   if (!onBranch) { log.warn(`quick branch: checkout ${branch} failed; staying on ${snap.branch}`); }
   log.ok(`quick branch: ${branch} (snapshot=${snap.state}, base=${snap.baseSha.slice(0, 8)})`);
   return 0;
@@ -183,7 +188,7 @@ const QUICK_ROUND: RoundDescriptor = {
   bundle: (exec, round) => ({ path: join(exec, `fix-prompt-${round}.md`), missingWording: "fix bundle missing" }),
   composeFirst: ({ art, exec, topic }) => composeRound1Prompt(
     readIfExists(join(art, "task-brief.md")),
-    readField(join(exec, "branch.txt")) || `feat/quick-${topic}`,
+    readField(join(exec, "branch.txt")) || branchNameFor("quick", topic),
   ),
   composeFollowup: composeFixPrompt,
   timeoutS: () => QUICK_TURN_TIMEOUT,
@@ -278,8 +283,9 @@ function restoreStashWip(topic: string, exec: string, r: Runner, startBranch: st
 
 export async function finishWith(topic: string, r: Runner, hasGh: boolean): Promise<number> {
   const exec = quickExecDir(topic);
-  const branch = readField(join(exec, "branch.txt"));
-  const startBranch = readField(join(exec, "start-branch.txt")) || "main";
+  const rec = readBranchRecord("quick", { dir: exec });
+  const branch = rec.branch;
+  const startBranch = rec.startBranch || "main";
   const doFinish = readField(join(exec, "finish.txt")) === "yes";
 
   if (!doFinish) {
@@ -289,18 +295,26 @@ export async function finishWith(topic: string, r: Runner, hasGh: boolean): Prom
     log.ok(`quick finish: branch-only — kept ${branch}, restored ${startBranch}`);
     return 0;
   }
-  // branch.txt carries the INTENDED name even when `quick branch`'s checkout failed (it only warns),
-  // so a finish that trusts it pushes a ref that was never created and records `pr-failed-kept` — a PR
-  // problem, when the truth is there was no branch to act on. Refuse loudly instead, and say so.
+  // branch.txt records the branch the run actually ended on, so a failed checkout arrives here as
+  // `branch === startBranch` and is refused below. The ref probe still earns its place: the branch can
+  // be gone by finish time (deleted by hand, or a state dir carried over from another run), and a
+  // finish that trusts the record would push a ref that does not exist and record `pr-failed-kept` — a
+  // PR problem, when the truth is there was no branch to act on. Refuse loudly instead, and say so.
   if (!hasDistinctBranch(r, branch, startBranch)) {
     const named = branch || "(unrecorded)";
+    // The recover line names a branch to CREATE, and quick has no --branch flag, so that name is
+    // always the topic-derived one: the record either already IS it (its ref went missing) or is the
+    // start branch, and `git checkout -b main` while on main is a dead end.
     log.warn(`quick finish: no branch '${named}' distinct from the start branch '${startBranch}' — NOTHING was pushed and no PR was opened`);
-    log.warn(`  recover: re-run the branch step in the target repo (git checkout -b ${branch || `feat/quick-${topic}`}), commit the work, then finish again`);
+    log.warn(`  recover: re-run the branch step in the target repo (git checkout -b ${branchNameFor("quick", topic)}), commit the work, then finish again`);
     r.run("git", ["checkout", "-q", startBranch]);
     // Where the work actually sits is READ BACK, never assumed: this checkout is best-effort and a
     // dirty tree blocks it silently, so a flag naming the start branch could send the user looking
-    // on a branch the run never reached.
+    // on a branch the run never reached. Recorded for the summary as well, and BEFORE the result:
+    // this refusal covers three shapes (nothing recorded / the record is the start branch / the ref
+    // went away), and the real HEAD is the only pointer true in all three.
     const head = currentBranch(r) || "(detached)";
+    atomicWrite(join(exec, "finish-head.txt"), head + "\n");
     const keptNoBranch = restoreStashWip(topic, exec, r, startBranch);
     atomicWrite(join(exec, "finish-result.txt"), "none\tno-branch\n" + keptNoBranch);
     runFlag("quick", topic, `finish-no-branch: the recorded branch '${named}' is missing or is the start branch '${startBranch}' — nothing was pushed, no PR opened; the work (if any) is on '${head}'`);
@@ -324,6 +338,7 @@ async function summaryRun(rest: string[]): Promise<number> {
   const art = quickArtDir(topic);
   const exec = quickExecDir(topic);
 
+  const rec = readBranchRecord("quick", { dir: exec });
   const started = kvField(join(art, "timing.txt"), "started") || "unknown";
   let ended: string | undefined;
   let duration: number | undefined;
@@ -343,12 +358,14 @@ async function summaryRun(rest: string[]): Promise<number> {
     started, ended, duration,
     provider: readField(join(art, "selected-provider.txt")) || "unknown",
     agent: readField(join(art, "agent.txt")) || "unknown",
-    branch: readField(join(exec, "branch.txt")) || "unknown",
+    branch: rec.branch || "unknown",
     verify: readField(join(exec, "verify-result.txt")) || "unknown",
     diffStats: readField(join(exec, "diff-stats.txt")) || "unknown",
     archived: readField(join(art, "archived-path.txt")) || "(not archived)",
     targetCwd: readField(join(exec, "target_cwd.txt")) || "<target>",
-    branchBase: readField(join(exec, "branch-base.sha")) || "<base>",
+    branchBase: rec.baseSha || "<base>",
+    finishResult: readField(join(exec, "finish-result.txt")),
+    finishHead: readField(join(exec, "finish-head.txt")) || "unknown",
     abortedPhase: aborted ? rest[i + 1] : undefined,
     abortedGate: aborted ? rest[i + 2] : undefined,
     abortedReason: aborted ? rest.slice(i + 3).join(" ") || "unknown" : undefined,
@@ -359,7 +376,7 @@ async function summaryRun(rest: string[]): Promise<number> {
     // An abort leaves a --stash-wip park unrestored (finish never ran), and HEAD may still be on
     // the quick branch — so RESUME points at the stash AND at the checkout that must precede a pop.
     const stashName = readStashMarker(exec, topic)?.message ?? "";
-    const startBranch = readField(join(exec, "start-branch.txt")) || "<start-branch>";
+    const startBranch = rec.startBranch || "<start-branch>";
     atomicWrite(join(art, "RESUME.md"), renderResume({
       topic, branch: facts.branch, artDir: art, phase: facts.abortedPhase ?? "unknown", gate: facts.abortedGate ?? "unknown",
       stashNote: stashName

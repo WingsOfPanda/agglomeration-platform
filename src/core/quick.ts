@@ -82,6 +82,11 @@ export interface SummaryFacts {
   archived: string;
   targetCwd: string;
   branchBase: string;
+  /** The first line of `execute/finish-result.txt` (`<action>\t<outcome>`), as bridge's summary
+   *  reads it — what the run's finish actually did, so the hints below cannot contradict it. */
+  finishResult: string;
+  /** The HEAD `quick finish` read back after a `no-branch` refusal (`execute/finish-head.txt`). */
+  finishHead: string;
   abortedPhase?: string;
   abortedGate?: string;
   abortedReason?: string;
@@ -97,6 +102,15 @@ export function renderSummary(f: SummaryFacts): string {
   ];
   if (f.status === "ok") {
     head.push(`ended: ${f.ended ?? "unknown"}`, `duration_seconds: ${f.duration ?? 0}`, "---", "");
+    // A `no-branch` finish pushed nothing, so a checkout hint could name a branch that does not
+    // exist. It covers three shapes though — nothing recorded, the record IS the start branch, or a
+    // ref that went away — and only ONE of them means no branch was cut (a re-run that started on
+    // feat/quick-<topic> lands here with the branch present and holding the work). So the line claims
+    // nothing about the branch and names the HEAD finish read back. Outcome matched whole, not as a
+    // substring: `branch-only (kept feat/quick-no-branch-x)` is not this case.
+    const whereToLook = f.finishResult.split("\t")[1] === "no-branch"
+      ? `- Nothing was pushed and no PR was opened — HEAD is on \`${f.finishHead}\` in ${f.targetCwd} (diff base: ${f.branchBase})`
+      : `- Review the work: \`git -C ${f.targetCwd} checkout ${f.branch}\` (diff base: ${f.branchBase})`;
     return [
       ...head,
       "## Result",
@@ -107,7 +121,7 @@ export function renderSummary(f: SummaryFacts): string {
       `- Diff: ${f.diffStats}`,
       "",
       "## Where to look",
-      `- Review the work: \`git -C ${f.targetCwd} checkout ${f.branch}\` (diff base: ${f.branchBase})`,
+      whereToLook,
       `- Archived state: ${f.archived}`,
       "",
     ].join("\n");

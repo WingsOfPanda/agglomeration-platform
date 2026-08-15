@@ -72,6 +72,8 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
    clean HEAD and the PR base carries none of your unrelated edits; `quick finish` pops the stash
    back after restoring the start branch. A tree git will not fully stash only warns and falls back
    to today's WIP snapshot commit — the run is never blocked, and nothing is dropped.
+   `branch.txt` records the branch the run is **actually** on, so a checkout that failed ends in
+   finish's `no-branch` refusal rather than a PR containing none of the run's work.
    On **rc 1** (target is not a git repo) → abort:
    `$CS quick summary <SLUG> --aborted build not-a-git-repo "target is not a git repository"`,
    print the SUMMARY, and stop. No worker was spawned, so do **not** run `stop`.

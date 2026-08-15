@@ -116,6 +116,19 @@ describe("bridge branch", () => {
     expect(await branchWith("t", "/abs/repoB", r)).toBe(1);
   });
 
+  it("ALLOWS repo B already on THIS run's branch — single-occupancy must not block a resume", async () => {
+    seedInit("t", "/abs/repoB");
+    const r = fakeRunner({
+      "git rev-parse --git-dir": { code: 0 },
+      "git symbolic-ref --short HEAD": { stdout: "feat/bridge-t\n" },
+      "git rev-parse HEAD": { stdout: "deadbeef\n" },
+      "git status --porcelain": { stdout: "" },
+      "git show-ref": { code: 0 },               // the branch is already there
+    });
+    expect(await branchWith("t", "/abs/repoB", r)).toBe(0);
+    expect(readFileSync(join(bridgeExecDir("t"), "branch.txt"), "utf8").trim()).toBe("feat/bridge-t");
+  });
+
   it("rc 1 when target is not a git repo", async () => {
     seedInit("t", "/abs/repoB");
     const r = fakeRunner({ "git rev-parse --git-dir": { code: 1 } });
@@ -230,5 +243,22 @@ describe("bridge finish", () => {
     const r: Runner = { run: () => ({ code: 0, stdout: "" }) };
     expect(await finishWith("t", r, true)).toBe(0);
     expect(readFileSync(join(exec, "finish-result.txt"), "utf8")).toContain("in-place");
+  });
+});
+
+describe("bridge summary", () => {
+  let h: { home: string; cleanup: () => void };
+  beforeEach(() => { h = freshHome(); });
+  afterEach(() => h.cleanup());
+
+  it("the Mode field echoes mode.txt VERBATIM — a corrupt value must be visible, not normalized", async () => {
+    const exec = bridgeExecDir("t"); mkdirSync(exec, { recursive: true });
+    writeFileSync(join(exec, "mode.txt"), "in-plce\n");   // hand-edited typo: neither branch nor in-place
+    writeFileSync(join(exec, "branch.txt"), "feat/bridge-t\n");
+    writeFileSync(join(bridgeArtDir("t"), "topic-text.txt"), "the task");
+    const { run: bridgeRun } = await import("../src/commands/bridge.js");
+    expect(await bridgeRun(["summary", "t", "--aborted", "build", "spawn-failed", "died"])).toBe(0);
+    expect(readFileSync(join(bridgeArtDir("t"), "SUMMARY.md"), "utf8")).toContain("- Mode: in-plce");
+    expect(readFileSync(join(bridgeArtDir("t"), "RESUME.md"), "utf8")).toContain("(mode: in-plce)");
   });
 });

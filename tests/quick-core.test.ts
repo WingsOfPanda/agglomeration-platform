@@ -96,6 +96,7 @@ const okFacts = {
   ended: "2026-05-29T06:05:00Z", duration: 300, provider: "codex", agent: "bravo",
   branch: "feat/quick-auth", verify: "PASS (npm test)", diffStats: " 2 files changed, 9 insertions(+)",
   archived: "/arch/bravo-codex-...", targetCwd: "/proj", branchBase: "abc123",
+  finishResult: "pr\tpr-opened", finishHead: "main",
 };
 
 describe("renderSummary", () => {
@@ -107,6 +108,24 @@ describe("renderSummary", () => {
     expect(md).toContain("- Branch: feat/quick-auth");
     expect(md).toContain("- Verify: PASS (npm test)");
     expect(md).toContain("git -C /proj checkout feat/quick-auth");
+  });
+  it("after a no-branch finish: points at the HEAD finish read back, keeping the diff base", () => {
+    const md = renderSummary({ ...okFacts, branch: "main", finishResult: "none\tno-branch", finishHead: "main" });
+    expect(md).not.toContain("checkout");
+    expect(md).toContain("- Nothing was pushed and no PR was opened — HEAD is on `main` in /proj (diff base: abc123)");
+  });
+  it("no-branch on a RE-RUN (HEAD already on the feat branch): no false 'nothing was cut' claim", () => {
+    // The branch exists and holds the work — the line may only report what finish read back.
+    const md = renderSummary({ ...okFacts, branch: "feat/quick-auth", finishResult: "none\tno-branch", finishHead: "feat/quick-auth" });
+    expect(md).toContain("HEAD is on `feat/quick-auth`");
+    expect(md).toContain("(diff base: abc123)");
+    expect(md).not.toContain("No branch was cut");
+  });
+  it("branch-only and unfinished runs keep the hint — their branch exists", () => {
+    // The third fixture CONTAINS "no-branch" but is not that outcome: the match is the whole field.
+    for (const finishResult of ["none\tbranch-only (kept feat/quick-auth)", "", "none\tbranch-only (kept feat/quick-no-branch-fix)"]) {
+      expect(renderSummary({ ...okFacts, finishResult })).toContain("git -C /proj checkout feat/quick-auth");
+    }
   });
   it("aborted summary carries the abort fields + RESUME pointer", () => {
     const md = renderSummary({ ...okFacts, status: "aborted", ended: undefined, duration: undefined,
