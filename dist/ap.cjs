@@ -570,13 +570,20 @@ function paneMetaPath(i2, m, t) {
 function workerBusyState(i2, m, t) {
   const sp = statusPath(i2, m, t);
   if (!(0, import_node_fs6.existsSync)(sp)) return null;
-  const match = (0, import_node_fs6.readFileSync)(sp, "utf8").match(/"state"\s*:\s*"([^"]*)"/);
+  let text;
+  try {
+    text = (0, import_node_fs6.readFileSync)(sp, "utf8");
+  } catch {
+    return STATUS_UNREADABLE;
+  }
+  if (text.trim() === "") return STATUS_UNREADABLE;
+  const match = text.match(/"state"\s*:\s*"([^"]*)"/);
   const state = match ? match[1].trim() : "";
   return state && !TERMINAL_WORKER_STATES.has(state.toLowerCase()) ? state : null;
 }
 function workerStatusReport(i2, m, t) {
-  const text = readIfExistsOrNull(statusPath(i2, m, t));
-  if (text === null) return "absent";
+  const text = readOr(statusPath(i2, m, t));
+  if (text.trim() === "") return "absent";
   return /"last_event"\s*:\s*"spawn"/.test(text) ? "seed" : "reported";
 }
 function workerSendGate(i2, m, t, label, unit) {
@@ -766,7 +773,7 @@ function resolveModel(agent, topic) {
   const model = d.name.slice(agent.length + 1);
   return readPaneJson(workerDir(agent, model, topic))?.model ?? model;
 }
-var import_node_fs6, import_node_path3, TERMINAL_WORKER_STATES, SENDER_RE, TERMINAL_EVENTS, realClock;
+var import_node_fs6, import_node_path3, TERMINAL_WORKER_STATES, STATUS_UNREADABLE, SENDER_RE, TERMINAL_EVENTS, realClock;
 var init_ipc = __esm({
   "src/core/ipc.ts"() {
     "use strict";
@@ -778,6 +785,7 @@ var init_ipc = __esm({
     init_fsread();
     init_log();
     TERMINAL_WORKER_STATES = /* @__PURE__ */ new Set(["idle", "done", "complete", "error", "ready"]);
+    STATUS_UNREADABLE = "unreadable";
     SENDER_RE = /^[a-zA-Z0-9_-]+$/;
     TERMINAL_EVENTS = ["done", "error", "question"];
     realClock = {

@@ -15,6 +15,9 @@ Report progress via JSONL events appended to outbox.jsonl. Required event types:
 - `{"event": "error", "message": "...", "fatal": <bool>, "ts": "<iso>"}` — failure
 
 After every event, update status.json with `{"state": "<state>", "updated": "<iso>", "last_event": "<event>"}`.
+Write it **atomically** — a temp file in the same directory, then `mv` it over status.json — never
+`> status.json`, which leaves the file empty for a moment and reads as "busy, cannot tell" if the
+Hub looks (or if you are killed) inside that window.
 
 **Flagging suspicions:** If something looks suspicious, surprising, or wrong while you work — even a
 possible false alarm — emit a progress event whose `note` is prefixed `FLAG:`, e.g.

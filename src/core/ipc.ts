@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { workerDir, topicDir, pluginRoot } from "./paths.js";
 import { atomicWrite } from "./atomic.js";
 import { isoUtc } from "./archive.js";
-import { readIfExists, readIfExistsOrNull } from "./fsread.js";
+import { readIfExists, readOr } from "./fsread.js";
 import { log } from "./log.js";
 
 export function inboxPath(i: string, m: string, t: string) { return join(workerDir(i, m, t), "inbox.md"); }
@@ -22,10 +22,20 @@ export function paneMetaPath(i: string, m: string, t: string) { return join(work
  *  conservative answer for a state we cannot interpret is "do not clobber it". */
 const TERMINAL_WORKER_STATES = new Set(["idle", "done", "complete", "error", "ready"]);
 
+/** The state a status file that EXISTS but yields no content reads as: zero-length (a worker
+ *  SIGKILLed inside the ~16 us open(O_TRUNC)->write window of a `> status.json`, which then blinds
+ *  the gate for good) or unreadable (EACCES/EISDIR, which used to throw out of the read). Truthy and
+ *  outside TERMINAL_WORKER_STATES, so every consumer already treats it as busy through its existing
+ *  message — a status we cannot read is never evidence that the worker is free. */
+export const STATUS_UNREADABLE = "unreadable";
+
 /** The worker's status.json state when it is genuinely busy (a turn/round still in flight), else
- *  null (absent/unreadable status, no state field, empty/whitespace state, or any
- *  TERMINAL_WORKER_STATES value). Uses the non-JSON-tolerant regex read — never JSON.parse —
- *  matching the send-before-dispatch idle gate.
+ *  null (absent status, no state field, empty/whitespace state, or any TERMINAL_WORKER_STATES
+ *  value). An EXISTING but empty or unreadable file is neither: it fails CLOSED as
+ *  STATUS_UNREADABLE. Content that is merely unmatched (a drifted format, a wrong key) still reads
+ *  as idle — a worker whose status FORMAT changed must not be rc-3'd forever (2026-07-31 spec L3).
+ *  Uses the non-JSON-tolerant regex read — never JSON.parse — matching the send-before-dispatch
+ *  idle gate.
  *  Whitespace-tolerant since 2026-07-31: a worker (or a `jq`/pretty-printer) that writes
  *  `{"state": "working"}` used to read as IDLE and let a mid-turn send through. Deliberately
  *  tightens `workerSendGate` (implement's existing gate) the same way — same bug, same fix; the
@@ -33,7 +43,10 @@ const TERMINAL_WORKER_STATES = new Set(["idle", "done", "complete", "error", "re
 export function workerBusyState(i: string, m: string, t: string): string | null {
   const sp = statusPath(i, m, t);
   if (!existsSync(sp)) return null;
-  const match = readFileSync(sp, "utf8").match(/"state"\s*:\s*"([^"]*)"/);
+  let text: string;
+  try { text = readFileSync(sp, "utf8"); } catch { return STATUS_UNREADABLE; }
+  if (text.trim() === "") return STATUS_UNREADABLE;
+  const match = text.match(/"state"\s*:\s*"([^"]*)"/);
   const state = match ? match[1].trim() : "";
   return state && !TERMINAL_WORKER_STATES.has(state.toLowerCase()) ? state : null;
 }
@@ -45,8 +58,12 @@ export function workerBusyState(i: string, m: string, t: string): string | null 
  *  needs positive evidence, and "the worker never said anything" is not evidence of idleness. */
 export type StatusReport = "absent" | "seed" | "reported";
 export function workerStatusReport(i: string, m: string, t: string): StatusReport {
-  const text = readIfExistsOrNull(statusPath(i, m, t));
-  if (text === null) return "absent";
+  // readOr, not readIfExistsOrNull: an unreadable status threw an uncaught EACCES right here, ahead
+  // of the guard's other evidence legs. A read that yields nothing — missing, unreadable, or the
+  // zero-length crash remnant — is silence, and silence gets the same `absent` that denies the
+  // override.
+  const text = readOr(statusPath(i, m, t));
+  if (text.trim() === "") return "absent";
   return /"last_event"\s*:\s*"spawn"/.test(text) ? "seed" : "reported";
 }
 
