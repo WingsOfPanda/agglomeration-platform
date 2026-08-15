@@ -14,7 +14,7 @@ import { scoreWith, liveScoreDeps, type AutoresearchScoreDeps } from "../src/com
 import { type ScoreComputation } from "../src/core/autoresearchScore.js";
 import { monitorRun } from "../src/commands/autoresearch.js";
 import { statusBriefWith } from "../src/commands/autoresearch.js";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { autoresearchArtDir, workerStateDir, experimentDir, workersDir } from "../src/core/autoresearch.js";
 import { workerDir } from "../src/core/paths.js";
@@ -414,6 +414,39 @@ describe("autoresearch experiment-send", () => {
     expect(rc).toBe(3);
     expect(spy).not.toHaveBeenCalled();
     expect(parseLedger(readFileSync(ledgerPath(art), "utf8")).some((e) => e.kind === "dispatch-intent")).toBe(false);
+  });
+
+  it("NO --gen on a resumed campaign (gen > 1) refuses with rc 3 BEFORE any effect", async () => {
+    const h = home();
+    const { art } = scaffold(h);
+    seedLedger(art, 2); // a resume bumped the controller; this hub never re-entered
+    const spy = vi.fn();
+    const rc = await experimentSendWith([TOPIC, INST, "exp-001", "x", "y"], deps(h, { inboxWrite: spy }));
+    expect(rc).toBe(3);
+    expect(spy).not.toHaveBeenCalled();
+    expect(parseLedger(readFileSync(ledgerPath(art), "utf8")).some((e) => e.kind === "dispatch-intent")).toBe(false);
+  });
+
+  it("NO --gen on a never-resumed campaign (gen 1) still dispatches (grandfather clause)", async () => {
+    const h = home();
+    const { art } = scaffold(h);
+    seedLedger(art, 1);
+    const spy = vi.fn();
+    expect(await experimentSendWith([TOPIC, INST, "exp-001", "x", "y"], deps(h, { inboxWrite: spy }))).toBe(0);
+    expect(spy).toHaveBeenCalled();
+    void art;
+  });
+
+  it("a resume landing INSIDE the dispatch window: the fenced append refuses rc 3, not an uncaught throw", async () => {
+    const h = home();
+    const { art } = scaffold(h);
+    seedLedger(art, 1);
+    // The competing hub resumes mid-dispatch, so appendEvent's append-time re-read
+    // fences the delivered event that this (now superseded) hub is about to write.
+    const bump = () => appendFileSync(ledgerPath(art), appendEvent(readFileSync(ledgerPath(art), "utf8"), { gen: 2, ts: "T", kind: "resume" }));
+    const rc = await experimentSendWith([TOPIC, INST, "exp-001", "x", "y"], deps(h, { inboxWrite: bump }));
+    expect(rc).toBe(3);
+    expect(parseLedger(readFileSync(ledgerPath(art), "utf8")).some((e) => e.kind === "dispatch-delivered")).toBe(false);
   });
 
   it("matching --gen dispatches normally (rc 0)", async () => {

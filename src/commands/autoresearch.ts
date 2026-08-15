@@ -645,8 +645,15 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
 
   // Fenced dispatch: a writer holding a stale controller generation refuses LOUDLY
   // (rc 3) before any effect. Old campaigns (no ledger) skip the fence entirely.
+  // Once ANY hub has resumed (gen > 1), --gen is MANDATORY: an omitted flag would
+  // otherwise stamp a superseded hub's writes with the live generation, hiding the
+  // split brain the ledger exists to expose. Gen 1 is grandfathered, so a campaign
+  // that never resumed dispatches exactly as before.
   const hasLedger = existsSync(ledgerPath(art));
   const effGen = hasLedger ? controllerGen(art) : 1;
+  if (hasLedger && effGen > 1 && p.gen === undefined) {
+    return fail(`campaign is on controller generation ${effGen}; pass --gen (re-enter via 'autoresearch resume ${topic}')`, 3);
+  }
   if (hasLedger && p.gen !== undefined && Number(p.gen) !== effGen) {
     return fail(`stale controller generation (--gen ${p.gen}, current ${effGen}); re-enter via 'autoresearch resume ${topic}'`, 3);
   }
@@ -715,14 +722,23 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   // completions are scoped to THIS dispatch without touching the wire protocol. BOTH
   // events carry it: a crash between them leaves resume only the intent, and the
   // previous dispatch's offset would attribute that dispatch's completion to this one.
+  // appendEvent re-reads the ledger at append time, so a resume landing inside this
+  // window makes it throw: that is the same stale-generation refusal (rc 3), not a crash.
+  const fencedAppend = (ev: LedgerEventArgs): number | null => {
+    if (!hasLedger) return null;
+    try { ledgerAppend(art, ev); return null; }
+    catch (e) { return fail(`${(e as Error).message}; re-enter via 'autoresearch resume ${topic}'`, 3); }
+  };
   const preOffset = outboxOffset(outbox);
-  if (hasLedger) ledgerAppend(art, { gen: effGen, ts: deps.now(), kind: "dispatch-intent", agent, exp_id: expId, data: { outboxOffset: preOffset, ...(p.operator !== undefined ? { operator: p.operator } : {}) } });
+  const intentRc = fencedAppend({ gen: effGen, ts: deps.now(), kind: "dispatch-intent", agent, exp_id: expId, data: { outboxOffset: preOffset, ...(p.operator !== undefined ? { operator: p.operator } : {}) } });
+  if (intentRc !== null) return intentRc;
   atomicWrite(join(branchDir, "prompt.md"), prompt);
   if (p.parentId !== undefined) atomicWrite(join(branchDir, "lineage.txt"), `parent_id=${p.parentId}\n`);
   if (p.operator !== undefined) atomicWrite(join(branchDir, "operator.txt"), `operator=${p.operator}\n`);
   (deps.inboxWrite ?? inboxWrite)(agent, model, topic, prompt, { from: "hub", noDoneInstruction: true });
   atomicWrite(stateTxt, buildDispatchState(readFileSync(stateTxt, "utf8"), expId, deps.now()));
-  if (hasLedger) ledgerAppend(art, { gen: effGen, ts: deps.now(), kind: "dispatch-delivered", agent, exp_id: expId, data: { outboxOffset: preOffset } });
+  const deliveredRc = fencedAppend({ gen: effGen, ts: deps.now(), kind: "dispatch-delivered", agent, exp_id: expId, data: { outboxOffset: preOffset } });
+  if (deliveredRc !== null) return deliveredRc;
 
   // Best-effort pane nudge (NON-FATAL; inbox + state already committed).
   if (!deps.dryRun) {

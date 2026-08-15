@@ -470,7 +470,7 @@ For **each** worker with `phase=idle` and no `$ART/halt.flag`:
    ```bash
    $CS autoresearch experiment-send [--parent exp-id] [--operator draft|improve|ablate|replicate] [--gen <GEN>] <TOPIC> <agent> exp-NNN "<approach-label>" "<direction>"
    ```
-   After a resume, always pass `--gen <GEN>` (from the resume output) — a stale generation refuses with rc 3 instead of double-driving the campaign.
+   After a resume, `--gen <GEN>` (from the resume output) is REQUIRED — a resumed campaign refuses an omitted or stale generation with rc 3 instead of double-driving the campaign.
    The verb increments `exp_counter`, sets `phase=working, current_exp_id=exp-NNN`, and nudges the pane.
 
 **NEVER STOP the loop here** — see the frozen NEVER-STOP banner in Step 4. Stop conditions are owned by

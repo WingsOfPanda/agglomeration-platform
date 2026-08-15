@@ -25279,6 +25279,9 @@ async function experimentSendWith(args, deps) {
   if (!(0, import_node_fs45.existsSync)(stateTxt)) return fail(`worker state.txt missing: ${stateTxt}`, 1);
   const hasLedger = (0, import_node_fs45.existsSync)(ledgerPath(art));
   const effGen = hasLedger ? controllerGen(art) : 1;
+  if (hasLedger && effGen > 1 && p.gen === void 0) {
+    return fail(`campaign is on controller generation ${effGen}; pass --gen (re-enter via 'autoresearch resume ${topic}')`, 3);
+  }
   if (hasLedger && p.gen !== void 0 && Number(p.gen) !== effGen) {
     return fail(`stale controller generation (--gen ${p.gen}, current ${effGen}); re-enter via 'autoresearch resume ${topic}'`, 3);
   }
@@ -25340,8 +25343,18 @@ async function experimentSendWith(args, deps) {
     return fail(e.message, 1);
   }
   if (prompt.trim() === "") return fail(`prompt rendered empty (template substitution failed)`, 1);
+  const fencedAppend = (ev) => {
+    if (!hasLedger) return null;
+    try {
+      ledgerAppend(art, ev);
+      return null;
+    } catch (e) {
+      return fail(`${e.message}; re-enter via 'autoresearch resume ${topic}'`, 3);
+    }
+  };
   const preOffset = outboxOffset(outbox);
-  if (hasLedger) ledgerAppend(art, { gen: effGen, ts: deps.now(), kind: "dispatch-intent", agent, exp_id: expId, data: { outboxOffset: preOffset, ...p.operator !== void 0 ? { operator: p.operator } : {} } });
+  const intentRc = fencedAppend({ gen: effGen, ts: deps.now(), kind: "dispatch-intent", agent, exp_id: expId, data: { outboxOffset: preOffset, ...p.operator !== void 0 ? { operator: p.operator } : {} } });
+  if (intentRc !== null) return intentRc;
   atomicWrite((0, import_node_path47.join)(branchDir, "prompt.md"), prompt);
   if (p.parentId !== void 0) atomicWrite((0, import_node_path47.join)(branchDir, "lineage.txt"), `parent_id=${p.parentId}
 `);
@@ -25349,7 +25362,8 @@ async function experimentSendWith(args, deps) {
 `);
   (deps.inboxWrite ?? inboxWrite)(agent, model, topic, prompt, { from: "hub", noDoneInstruction: true });
   atomicWrite(stateTxt, buildDispatchState((0, import_node_fs45.readFileSync)(stateTxt, "utf8"), expId, deps.now()));
-  if (hasLedger) ledgerAppend(art, { gen: effGen, ts: deps.now(), kind: "dispatch-delivered", agent, exp_id: expId, data: { outboxOffset: preOffset } });
+  const deliveredRc = fencedAppend({ gen: effGen, ts: deps.now(), kind: "dispatch-delivered", agent, exp_id: expId, data: { outboxOffset: preOffset } });
+  if (deliveredRc !== null) return deliveredRc;
   if (!deps.dryRun) {
     const pane = paneMetaRead(agent, model, topic);
     if (pane) {
