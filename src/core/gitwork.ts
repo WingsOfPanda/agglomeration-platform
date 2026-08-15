@@ -192,6 +192,9 @@ export function hasDistinctBranch(r: Runner, branch: string, startBranch: string
  *  them (commands/quick.md, implement.md, bridge.md). */
 export type FinishOutcome =
   | "no-branch"
+  // The base checkout was refused, so NOTHING was merged, deleted, or pulled: the work is still on
+  // `branch` and HEAD is still there. Written by the four load-bearing checkouts (see `onBase`).
+  | "base-checkout-failed"
   | "kept" | "merged" | "merge-conflict-left" | "discarded"
   | "pr-opened" | "pr-pushed-no-gh" | "pr-failed-kept"
   | "local-merged-no-remote" | "local-merge-conflict-left"
@@ -237,6 +240,16 @@ function pushAndPr(r: Runner, o: FinishWorkOpts): FinishOutcome {
   return outcome;
 }
 
+/** Check out the base for a step that DECIDES an outcome AFTER it — a merge, a `branch -D`, a gh
+ *  merge + pull. A refusal there (dirty tracked file, base held by another worktree) is not
+ *  cosmetic: what follows runs on the feature branch and is recorded as success — `git merge` merges
+ *  the branch into ITSELF and reads as "merged". So those four sites return `base-checkout-failed`
+ *  and issue nothing. The five restore-only checkouts stay unchecked by design: their outcome is
+ *  already decided and a failure leaves only HEAD wrong. */
+function onBase(r: Runner, o: FinishWorkOpts): boolean {
+  return r.run("git", ["checkout", "-q", o.base]).code === 0;
+}
+
 /** The one finisher: guard the branch, act, restore the base checkout. Every arm is best-effort —
  *  a finish that cannot do its job records what happened instead of failing the run. The three
  *  exported finishers below are wrappers over this; each keeps its own return shape.
@@ -247,11 +260,13 @@ export function finishWork(r: Runner, o: FinishWorkOpts): FinishWorkResult {
   if (action === "auto") action = finishAutoAction(r.run("git", ["remote"]).stdout);
   switch (action) {
     case "merge":
-      r.run("git", ["checkout", "-q", o.base]);
+      if (!onBase(r, o)) return { action: "merge", outcome: "base-checkout-failed" };
       if (r.run("git", ["merge", "--no-edit", "-q", o.branch]).code === 0) { r.run("git", ["branch", "-q", "-D", o.branch]); return { action: "merge", outcome: "merged" }; }
       r.run("git", ["merge", "--abort"]); return { action: "merge", outcome: "merge-conflict-left" };
     case "keep":    r.run("git", ["checkout", "-q", o.base]); return { action: "keep", outcome: "kept" };
-    case "discard": r.run("git", ["checkout", "-q", o.base]); r.run("git", ["branch", "-q", "-D", o.branch]); return { action: "discard", outcome: "discarded" };
+    case "discard":
+      if (!onBase(r, o)) return { action: "discard", outcome: "base-checkout-failed" };
+      r.run("git", ["branch", "-q", "-D", o.branch]); return { action: "discard", outcome: "discarded" };
     case "pr":      return { action: "pr", outcome: pushAndPr(r, o) };
     case "pr-merge": return prMerge(r, o);
     default: return { action: "none", outcome: "no-branch" };
@@ -264,7 +279,7 @@ export function finishWork(r: Runner, o: FinishWorkOpts): FinishWorkResult {
 function prMerge(r: Runner, o: FinishWorkOpts): FinishWorkResult {
   // No remote → integrate locally (the PR path is impossible). Single merge into base.
   if (finishAutoAction(r.run("git", ["remote"]).stdout) === "keep") {
-    r.run("git", ["checkout", "-q", o.base]);
+    if (!onBase(r, o)) return { action: "local-merge", outcome: "base-checkout-failed" };
     if (r.run("git", ["merge", "--no-edit", "-q", o.branch]).code === 0) {
       r.run("git", ["branch", "-q", "-D", o.branch]);
       return { action: "local-merge", outcome: "local-merged-no-remote" };
@@ -293,8 +308,9 @@ function prMerge(r: Runner, o: FinishWorkOpts): FinishWorkResult {
     r.run("git", ["checkout", "-q", o.base]);
     return { action: "pr-merge", outcome: "pr-create-failed" };
   }
-  // Leave the feature branch BEFORE the merge deletes it.
-  r.run("git", ["checkout", "-q", o.base]);
+  // Leave the feature branch BEFORE the merge deletes it — refused, the PR stays open and unmerged
+  // rather than merging with a base this checkout could not reach for the follow-up pull.
+  if (!onBase(r, o)) return { action: "pr-merge", outcome: "base-checkout-failed" };
   if (r.run("gh", ["pr", "merge", o.branch, "--merge", "--delete-branch"]).code !== 0) {
     return { action: "pr-merge", outcome: "pr-open-merge-blocked" };
   }

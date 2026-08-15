@@ -18245,13 +18245,16 @@ function pushAndPr(r, o2) {
   r.run("git", ["checkout", "-q", o2.base]);
   return outcome;
 }
+function onBase(r, o2) {
+  return r.run("git", ["checkout", "-q", o2.base]).code === 0;
+}
 function finishWork(r, o2) {
   if (!hasDistinctBranch(r, o2.branch, o2.base)) return { action: "none", outcome: "no-branch" };
   let action = o2.action;
   if (action === "auto") action = finishAutoAction(r.run("git", ["remote"]).stdout);
   switch (action) {
     case "merge":
-      r.run("git", ["checkout", "-q", o2.base]);
+      if (!onBase(r, o2)) return { action: "merge", outcome: "base-checkout-failed" };
       if (r.run("git", ["merge", "--no-edit", "-q", o2.branch]).code === 0) {
         r.run("git", ["branch", "-q", "-D", o2.branch]);
         return { action: "merge", outcome: "merged" };
@@ -18262,7 +18265,7 @@ function finishWork(r, o2) {
       r.run("git", ["checkout", "-q", o2.base]);
       return { action: "keep", outcome: "kept" };
     case "discard":
-      r.run("git", ["checkout", "-q", o2.base]);
+      if (!onBase(r, o2)) return { action: "discard", outcome: "base-checkout-failed" };
       r.run("git", ["branch", "-q", "-D", o2.branch]);
       return { action: "discard", outcome: "discarded" };
     case "pr":
@@ -18275,7 +18278,7 @@ function finishWork(r, o2) {
 }
 function prMerge(r, o2) {
   if (finishAutoAction(r.run("git", ["remote"]).stdout) === "keep") {
-    r.run("git", ["checkout", "-q", o2.base]);
+    if (!onBase(r, o2)) return { action: "local-merge", outcome: "base-checkout-failed" };
     if (r.run("git", ["merge", "--no-edit", "-q", o2.branch]).code === 0) {
       r.run("git", ["branch", "-q", "-D", o2.branch]);
       return { action: "local-merge", outcome: "local-merged-no-remote" };
@@ -18298,7 +18301,7 @@ function prMerge(r, o2) {
     r.run("git", ["checkout", "-q", o2.base]);
     return { action: "pr-merge", outcome: "pr-create-failed" };
   }
-  r.run("git", ["checkout", "-q", o2.base]);
+  if (!onBase(r, o2)) return { action: "pr-merge", outcome: "base-checkout-failed" };
   if (r.run("gh", ["pr", "merge", o2.branch, "--merge", "--delete-branch"]).code !== 0) {
     return { action: "pr-merge", outcome: "pr-open-merge-blocked" };
   }
@@ -21948,17 +21951,19 @@ async function finishWith2(topic, action, d) {
   }
   const results = (0, import_node_path33.join)(art, "finish-results.tsv");
   (0, import_node_fs38.writeFileSync)(results, "");
-  let n2 = 0, stranded = 0;
+  let n2 = 0, stranded = 0, baseBlocked = 0;
   for (const t of iterTargets(topic)) {
     if (!t.slug || !t.cwd) continue;
     const outcome = applyFinish(art, { slug: t.slug, cwd: t.cwd }, action, d);
     if (outcome === "same-branch") stranded++;
+    else if (outcome === "base-checkout-failed") baseBlocked++;
     (0, import_node_fs38.appendFileSync)(results, `${t.slug}	${action}	${outcome}
 `);
     log.info(`finish: ${t.slug} -> ${action} -> ${outcome}`);
     n2++;
   }
   if (stranded) runFlag("implement", topic, `finish ${action}: same-branch on ${stranded} target(s) \u2014 the work was left on the baseline branch (no distinct branch to act on), nothing merged, pushed, or discarded`);
+  if (baseBlocked) runFlag("implement", topic, `finish ${action}: base-checkout-failed on ${baseBlocked} target(s) \u2014 the checkout of the baseline branch was refused, so NOTHING was merged or discarded; the work is still on the feature branch`);
   log.ok(`implement finish: ${n2} target(s) completed`);
   return 0;
 }
@@ -28792,9 +28797,10 @@ Verify: ${verify}
   });
   atomicWrite((0, import_node_path52.join)(exec, "finish-result.txt"), `${res.action}	${res.outcome}
 `);
-  if (res.outcome === "no-branch") {
+  if (res.outcome === "no-branch" || res.outcome === "base-checkout-failed") {
     const head = currentBranch(r) || "(detached)";
-    runFlag("bridge", topic, `finish-no-branch: the recorded branch '${branch || "(unrecorded)"}' is missing or is the start branch '${startBranch}' \u2014 nothing was pushed, no PR opened; the work (if any) is on '${head}'`);
+    const why = res.outcome === "no-branch" ? `the recorded branch '${branch || "(unrecorded)"}' is missing or is the start branch '${startBranch}' \u2014 nothing was pushed, no PR opened` : `the checkout of the base branch '${startBranch}' was refused \u2014 nothing was merged and the local base was NOT updated; any PR that was opened is still open`;
+    runFlag("bridge", topic, `finish-${res.outcome}: ${why}; the work (if any) is on '${head}'`);
   }
   log.ok(`bridge finish: ${res.action} \u2192 ${res.outcome}`);
   return 0;

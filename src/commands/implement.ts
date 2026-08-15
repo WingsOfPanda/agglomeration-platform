@@ -473,16 +473,20 @@ export async function finishWith(topic: string, action: "merge" | "pr" | "keep" 
   const art = implementArtDir(topic);
   if (!existsSync(art)) { log.error(`implement finish: art-dir missing: ${art}`); return 1; }
   const results = join(art, "finish-results.tsv"); writeFileSync(results, "");
-  let n = 0, stranded = 0;
+  let n = 0, stranded = 0, baseBlocked = 0;
   for (const t of iterTargets(topic)) {
     if (!t.slug || !t.cwd) continue;
     const outcome = applyFinish(art, { slug: t.slug, cwd: t.cwd }, action, d);
     if (outcome === "same-branch") stranded++;
+    else if (outcome === "base-checkout-failed") baseBlocked++;
     appendFileSync(results, `${t.slug}\t${action}\t${outcome}\n`);
     log.info(`finish: ${t.slug} -> ${action} -> ${outcome}`); n++;
   }
   // The defect this outcome exists to catch has to reach /ap:review, not just this session's log.
   if (stranded) runFlag("implement", topic, `finish ${action}: same-branch on ${stranded} target(s) — the work was left on the baseline branch (no distinct branch to act on), nothing merged, pushed, or discarded`);
+  // Same reason, different cause — and a different recovery, so it is counted and worded apart: the
+  // branch exists and holds the work, the finisher just could not get onto the base to act.
+  if (baseBlocked) runFlag("implement", topic, `finish ${action}: base-checkout-failed on ${baseBlocked} target(s) — the checkout of the baseline branch was refused, so NOTHING was merged or discarded; the work is still on the feature branch`);
   log.ok(`implement finish: ${n} target(s) completed`); return 0;
 }
 

@@ -82,6 +82,29 @@ describe("finishBranchPrMerge", () => {
     expect(seq).not.toMatch(/gh pr merge/);
   });
 
+  // The two load-bearing checkouts in this arm: refused, the finisher stops before the step that
+  // would decide an outcome — otherwise `gh pr merge` lands and `git pull --ff-only` fast-forwards
+  // the FEATURE branch, recording pr-merged-pulled over a base that never moved.
+  it("base checkout refused (remote + gh) → base-checkout-failed, no gh pr merge, no pull", () => {
+    const log: string[] = [];
+    const r = fakeRunner({ ...BRANCH_EXISTS, "git remote": { stdout: "origin\n" }, "git remote get-url origin": { stdout: "u\n" }, "git checkout -q main": { code: 1 } }, log);
+    const res = finishBranchPrMerge(r, opts);
+    expect(res).toEqual({ action: "pr-merge", outcome: "base-checkout-failed" });
+    const seq = log.join(" | ");
+    expect(seq).toMatch(/git push -q -u origin feat\/bridge-x/);   // the push and the PR did happen
+    expect(seq).toMatch(/gh pr create /);
+    expect(seq).not.toMatch(/gh pr merge/);
+    expect(seq).not.toMatch(/git pull/);
+  });
+
+  it("base checkout refused (no remote) → base-checkout-failed, nothing merged into base", () => {
+    const log: string[] = [];
+    const r = fakeRunner({ ...BRANCH_EXISTS, "git remote": { stdout: "" }, "git checkout -q main": { code: 1 } }, log);
+    const res = finishBranchPrMerge(r, opts);
+    expect(res).toEqual({ action: "local-merge", outcome: "base-checkout-failed" });
+    expect(log.join(" | ")).not.toMatch(/git merge|git branch/);
+  });
+
   it("pr create fails but a PR already exists → merges it (worker self-created the PR)", () => {
     const log: string[] = [];
     const r = fakeRunner({ ...BRANCH_EXISTS, "git remote": { stdout: "origin\n" }, "git remote get-url origin": { stdout: "u\n" }, "gh pr create": { code: 1 }, "gh pr view": { code: 0 } }, log);

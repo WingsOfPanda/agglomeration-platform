@@ -68,6 +68,32 @@ describe("finishWork arms", () => {
   });
 });
 
+// The base checkout is LOAD-BEARING wherever an outcome is decided after it: refused, HEAD stays on
+// the feature branch, where `git merge` merges the branch into ITSELF and records "merged". These
+// arms must refuse instead and issue nothing. The restore-only checkouts keep their outcome.
+describe("finishWork: a refused base checkout fails closed", () => {
+  const BLOCKED = { ...EXISTS, "git checkout -q main": { code: 1, stdout: "" } };
+
+  it("merge → base-checkout-failed: no merge, no branch -D", () => {
+    const { r, calls } = fakeRunner(BLOCKED);
+    expect(finishWork(r, opts({ action: "merge" }))).toEqual({ action: "merge", outcome: "base-checkout-failed" });
+    expect(calls.some((c) => c[1] === "merge" || c[1] === "branch")).toBe(false);
+  });
+  it("discard → base-checkout-failed: the branch survives, so a resume still finds the work", () => {
+    const { r, calls } = fakeRunner(BLOCKED);
+    expect(finishWork(r, opts({ action: "discard" }))).toEqual({ action: "discard", outcome: "base-checkout-failed" });
+    expect(calls.some((c) => c[1] === "branch")).toBe(false);
+  });
+  it("keep is still kept — its outcome is decided BEFORE the checkout, which is only a restore", () => {
+    const { r } = fakeRunner(BLOCKED);
+    expect(finishWork(r, opts({ action: "keep" }))).toEqual({ action: "keep", outcome: "kept" });
+  });
+  it("the pr arm is still pr-opened — it pushes and opens the PR before the restoring checkout", () => {
+    const { r } = fakeRunner({ ...BLOCKED, "git remote get-url origin": { code: 0, stdout: "u\n" } });
+    expect(finishWork(r, opts({ action: "pr", hasGh: true })).outcome).toBe("pr-opened");
+  });
+});
+
 describe("finishWork pr arm (pushAndPr)", () => {
   const pushable = { ...EXISTS, "git remote get-url origin": { code: 0, stdout: "git@h:o/r.git\n" } };
 

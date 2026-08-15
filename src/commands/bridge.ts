@@ -242,9 +242,15 @@ export async function finishWith(topic: string, r: Runner, hasGh: boolean): Prom
   // `bridge branch` checkout now records — is a silent `none` in the record, so it gets a flag of its
   // own. Where the work actually sits is READ BACK, never assumed: this arm performs no checkout, so
   // HEAD is still wherever the branch step left it.
-  if (res.outcome === "no-branch") {
+  // A refused base checkout is the same shape of silence — the finisher stopped before acting and
+  // recorded it — so it takes the same read-back and flag, with its own cause and consequence: the
+  // branch is real and pushed, and a PR may be open, so only the integration is missing.
+  if (res.outcome === "no-branch" || res.outcome === "base-checkout-failed") {
     const head = currentBranch(r) || "(detached)";
-    runFlag("bridge", topic, `finish-no-branch: the recorded branch '${branch || "(unrecorded)"}' is missing or is the start branch '${startBranch}' — nothing was pushed, no PR opened; the work (if any) is on '${head}'`);
+    const why = res.outcome === "no-branch"
+      ? `the recorded branch '${branch || "(unrecorded)"}' is missing or is the start branch '${startBranch}' — nothing was pushed, no PR opened`
+      : `the checkout of the base branch '${startBranch}' was refused — nothing was merged and the local base was NOT updated; any PR that was opened is still open`;
+    runFlag("bridge", topic, `finish-${res.outcome}: ${why}; the work (if any) is on '${head}'`);
   }
   log.ok(`bridge finish: ${res.action} → ${res.outcome}`);
   return 0;

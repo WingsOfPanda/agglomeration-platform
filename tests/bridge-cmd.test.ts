@@ -400,14 +400,15 @@ function hubFlags(home: string): string[] {
   return readdirSync(root).flatMap((d) => readdirSync(join(root, d)).map((f) => readFileSync(join(root, d, f), "utf8")));
 }
 
-describe("bridge finish: the no-branch refusal is flagged for /ap:review", () => {
+describe("bridge finish: the finisher's refusals are flagged for /ap:review", () => {
   let h: { home: string; cleanup: () => void };
   beforeEach(() => { h = freshHome(); });
   afterEach(() => h.cleanup());
 
   /** `refRc` decides whether the recorded branch still exists; `head` is where the run really is —
-   *  the refusal arm performs no checkout, so this is whatever the branch step left behind. */
-  function seed(branch: string, startBranch: string, refRc: number, head = "main"): { r: Runner; calls: string[][] } {
+   *  the refusal arm performs no checkout, so this is whatever the branch step left behind.
+   *  `checkoutRc` refuses the base checkout, the other way the finisher stops without acting. */
+  function seed(branch: string, startBranch: string, refRc: number, head = "main", checkoutRc = 0): { r: Runner; calls: string[][] } {
     const exec = bridgeExecDir("t"); mkdirSync(exec, { recursive: true });
     writeFileSync(join(exec, "mode.txt"), "branch\n");
     if (branch) writeFileSync(join(exec, "branch.txt"), branch + "\n");
@@ -420,6 +421,7 @@ describe("bridge finish: the no-branch refusal is flagged for /ap:review", () =>
       const k = [cmd, ...args].join(" ");
       if (k.startsWith("git show-ref")) return { code: refRc, stdout: "" };
       if (k === "git symbolic-ref --short HEAD") return head ? { code: 0, stdout: head + "\n" } : { code: 128, stdout: "" };
+      if (k === `git checkout -q ${startBranch}`) return { code: checkoutRc, stdout: "" };
       if (k === "git remote") return { code: 0, stdout: "origin\n" };
       if (k === "git remote get-url origin") return { code: 0, stdout: "git@x:y.git\n" };
       return { code: 0, stdout: "" };
@@ -445,6 +447,18 @@ describe("bridge finish: the no-branch refusal is flagged for /ap:review", () =>
     const { r } = seed("", "main", 1);
     expect(await finishWith("t", r, true)).toBe(0);
     expect(hubFlags(h.home).join("")).toContain("'(unrecorded)'");
+  });
+
+  // The other refusal: the branch is real and pushed, but the base could not be checked out, so the
+  // finisher stops before `gh pr merge` rather than merging over a base it cannot fast-forward.
+  it("the base checkout is refused: its own cause, and the PR is left unmerged", async () => {
+    const { r, calls } = seed("feat/bridge-t", "main", 0, "feat/bridge-t", 1);
+    expect(await finishWith("t", r, true)).toBe(0);
+    expect(readFileSync(join(bridgeExecDir("t"), "finish-result.txt"), "utf8")).toBe("pr-merge\tbase-checkout-failed\n");
+    expect(calls.some((c) => c.join(" ").startsWith("gh pr merge"))).toBe(false);
+    expect(hubFlags(h.home).join("")).toContain(
+      "finish-base-checkout-failed: the checkout of the base branch 'main' was refused — nothing was merged and the local base was NOT updated; any PR that was opened is still open; the work (if any) is on 'feat/bridge-t'",
+    );
   });
 
   it("a healthy pr-merge finish writes NO flag — the refusal is the only flagged outcome", async () => {
