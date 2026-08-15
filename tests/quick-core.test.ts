@@ -96,6 +96,7 @@ const okFacts = {
   ended: "2026-05-29T06:05:00Z", duration: 300, provider: "codex", agent: "bravo",
   branch: "feat/quick-auth", verify: "PASS (npm test)", diffStats: " 2 files changed, 9 insertions(+)",
   archived: "/arch/bravo-codex-...", targetCwd: "/proj", branchBase: "abc123",
+  finishResult: "pr\tpr-opened",
 };
 
 describe("renderSummary", () => {
@@ -107,6 +108,17 @@ describe("renderSummary", () => {
     expect(md).toContain("- Branch: feat/quick-auth");
     expect(md).toContain("- Verify: PASS (npm test)");
     expect(md).toContain("git -C /proj checkout feat/quick-auth");
+  });
+  it("after a no-branch finish: no checkout hint for a branch that was never cut", () => {
+    const md = renderSummary({ ...okFacts, branch: "main", finishResult: "none\tno-branch" });
+    expect(md).not.toContain("checkout");
+    expect(md).toContain("nothing was pushed and no PR was opened");
+    expect(md).toContain("the work, if any, is on `main` in /proj");
+  });
+  it("branch-only and unfinished runs keep the hint — their branch exists", () => {
+    for (const finishResult of ["none\tbranch-only (kept feat/quick-auth)", "(not finished)"]) {
+      expect(renderSummary({ ...okFacts, finishResult })).toContain("git -C /proj checkout feat/quick-auth");
+    }
   });
   it("aborted summary carries the abort fields + RESUME pointer", () => {
     const md = renderSummary({ ...okFacts, status: "aborted", ended: undefined, duration: undefined,

@@ -362,6 +362,7 @@ async function summaryRun(rest: string[]): Promise<number> {
     archived: readField(join(art, "archived-path.txt")) || "(not archived)",
     targetCwd: readField(join(exec, "target_cwd.txt")) || "<target>",
     branchBase: rec.baseSha || "<base>",
+    finishResult: readField(join(exec, "finish-result.txt")) || "(not finished)",
     abortedPhase: aborted ? rest[i + 1] : undefined,
     abortedGate: aborted ? rest[i + 2] : undefined,
     abortedReason: aborted ? rest.slice(i + 3).join(" ") || "unknown" : undefined,

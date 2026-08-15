@@ -840,6 +840,18 @@ describe("quick summary", () => {
     expect(md).toContain("- Branch: feat/quick-auth");
   });
 
+  it("reads the finish record: a no-branch refusal drops the checkout hint", async () => {
+    await scaffold("auth");
+    const exec = quickExecDir("auth");
+    writeFileSync(join(exec, "branch.txt"), "main\n");            // what a failed checkout records
+    writeFileSync(join(exec, "finish-result.txt"), "none\tno-branch\nstash-wip-kept\n");
+    expect(await quickRun(["summary", "auth"])).toBe(0);
+    const md = readFileSync(join(quickArtDir("auth"), "SUMMARY.md"), "utf8");
+    expect(md).not.toContain("checkout");
+    expect(md).toContain("nothing was pushed and no PR was opened");
+    expect(md).toContain("- Branch: main");
+  });
+
   it("aborted summary → SUMMARY.md (aborted) + RESUME.md", async () => {
     await scaffold("auth");
     expect(await quickRun(["summary", "auth", "--aborted", "build", "worker-turn-failed", "turn", "failed", "twice"])).toBe(0);

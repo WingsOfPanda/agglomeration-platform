@@ -82,6 +82,9 @@ export interface SummaryFacts {
   archived: string;
   targetCwd: string;
   branchBase: string;
+  /** The first line of `execute/finish-result.txt` (`<action>\t<outcome>`), as bridge's summary
+   *  reads it — what the run's finish actually did, so the hints below cannot contradict it. */
+  finishResult: string;
   abortedPhase?: string;
   abortedGate?: string;
   abortedReason?: string;
@@ -97,6 +100,11 @@ export function renderSummary(f: SummaryFacts): string {
   ];
   if (f.status === "ok") {
     head.push(`ended: ${f.ended ?? "unknown"}`, `duration_seconds: ${f.duration ?? 0}`, "---", "");
+    // A `no-branch` finish pushed nothing and cut nothing, so a checkout hint would name a branch
+    // that does not exist. The outcome is the record's second field, matched whole.
+    const whereToLook = f.finishResult.split("\t")[1] === "no-branch"
+      ? `- No branch was cut: nothing was pushed and no PR was opened — the work, if any, is on \`${f.branch}\` in ${f.targetCwd}`
+      : `- Review the work: \`git -C ${f.targetCwd} checkout ${f.branch}\` (diff base: ${f.branchBase})`;
     return [
       ...head,
       "## Result",
@@ -107,7 +115,7 @@ export function renderSummary(f: SummaryFacts): string {
       `- Diff: ${f.diffStats}`,
       "",
       "## Where to look",
-      `- Review the work: \`git -C ${f.targetCwd} checkout ${f.branch}\` (diff base: ${f.branchBase})`,
+      whereToLook,
       `- Archived state: ${f.archived}`,
       "",
     ].join("\n");

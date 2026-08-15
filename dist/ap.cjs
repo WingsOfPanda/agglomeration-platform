@@ -18068,6 +18068,7 @@ function renderSummary(f) {
   ];
   if (f.status === "ok") {
     head.push(`ended: ${f.ended ?? "unknown"}`, `duration_seconds: ${f.duration ?? 0}`, "---", "");
+    const whereToLook = f.finishResult.split("	")[1] === "no-branch" ? `- No branch was cut: nothing was pushed and no PR was opened \u2014 the work, if any, is on \`${f.branch}\` in ${f.targetCwd}` : `- Review the work: \`git -C ${f.targetCwd} checkout ${f.branch}\` (diff base: ${f.branchBase})`;
     return [
       ...head,
       "## Result",
@@ -18078,7 +18079,7 @@ function renderSummary(f) {
       `- Diff: ${f.diffStats}`,
       "",
       "## Where to look",
-      `- Review the work: \`git -C ${f.targetCwd} checkout ${f.branch}\` (diff base: ${f.branchBase})`,
+      whereToLook,
       `- Archived state: ${f.archived}`,
       ""
     ].join("\n");
@@ -19120,6 +19121,7 @@ duration=${duration}
     archived: readField((0, import_node_path23.join)(art, "archived-path.txt")) || "(not archived)",
     targetCwd: readField((0, import_node_path23.join)(exec, "target_cwd.txt")) || "<target>",
     branchBase: rec.baseSha || "<base>",
+    finishResult: readField((0, import_node_path23.join)(exec, "finish-result.txt")) || "(not finished)",
     abortedPhase: aborted2 ? rest[i2 + 1] : void 0,
     abortedGate: aborted2 ? rest[i2 + 2] : void 0,
     abortedReason: aborted2 ? rest.slice(i2 + 3).join(" ") || "unknown" : void 0
