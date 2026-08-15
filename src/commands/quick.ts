@@ -302,17 +302,19 @@ export async function finishWith(topic: string, r: Runner, hasGh: boolean): Prom
   // PR problem, when the truth is there was no branch to act on. Refuse loudly instead, and say so.
   if (!hasDistinctBranch(r, branch, startBranch)) {
     const named = branch || "(unrecorded)";
-    // The recover line names a branch to CREATE, so a record that IS the start branch — what a failed
-    // checkout now leaves — falls back to the topic-derived name: `git checkout -b main` while on main
-    // is a dead end.
-    const recreate = branch && branch !== startBranch ? branch : branchNameFor("quick", topic);
+    // The recover line names a branch to CREATE, and quick has no --branch flag, so that name is
+    // always the topic-derived one: the record either already IS it (its ref went missing) or is the
+    // start branch, and `git checkout -b main` while on main is a dead end.
     log.warn(`quick finish: no branch '${named}' distinct from the start branch '${startBranch}' — NOTHING was pushed and no PR was opened`);
-    log.warn(`  recover: re-run the branch step in the target repo (git checkout -b ${recreate}), commit the work, then finish again`);
+    log.warn(`  recover: re-run the branch step in the target repo (git checkout -b ${branchNameFor("quick", topic)}), commit the work, then finish again`);
     r.run("git", ["checkout", "-q", startBranch]);
     // Where the work actually sits is READ BACK, never assumed: this checkout is best-effort and a
     // dirty tree blocks it silently, so a flag naming the start branch could send the user looking
-    // on a branch the run never reached.
+    // on a branch the run never reached. Recorded for the summary as well, and BEFORE the result:
+    // this refusal covers three shapes (nothing recorded / the record is the start branch / the ref
+    // went away), and the real HEAD is the only pointer true in all three.
     const head = currentBranch(r) || "(detached)";
+    atomicWrite(join(exec, "finish-head.txt"), head + "\n");
     const keptNoBranch = restoreStashWip(topic, exec, r, startBranch);
     atomicWrite(join(exec, "finish-result.txt"), "none\tno-branch\n" + keptNoBranch);
     runFlag("quick", topic, `finish-no-branch: the recorded branch '${named}' is missing or is the start branch '${startBranch}' — nothing was pushed, no PR opened; the work (if any) is on '${head}'`);
@@ -362,7 +364,8 @@ async function summaryRun(rest: string[]): Promise<number> {
     archived: readField(join(art, "archived-path.txt")) || "(not archived)",
     targetCwd: readField(join(exec, "target_cwd.txt")) || "<target>",
     branchBase: rec.baseSha || "<base>",
-    finishResult: readField(join(exec, "finish-result.txt")) || "(not finished)",
+    finishResult: readField(join(exec, "finish-result.txt")),
+    finishHead: readField(join(exec, "finish-head.txt")) || "unknown",
     abortedPhase: aborted ? rest[i + 1] : undefined,
     abortedGate: aborted ? rest[i + 2] : undefined,
     abortedReason: aborted ? rest.slice(i + 3).join(" ") || "unknown" : undefined,

@@ -18068,7 +18068,7 @@ function renderSummary(f) {
   ];
   if (f.status === "ok") {
     head.push(`ended: ${f.ended ?? "unknown"}`, `duration_seconds: ${f.duration ?? 0}`, "---", "");
-    const whereToLook = f.finishResult.split("	")[1] === "no-branch" ? `- No branch was cut: nothing was pushed and no PR was opened \u2014 the work, if any, is on \`${f.branch}\` in ${f.targetCwd}` : `- Review the work: \`git -C ${f.targetCwd} checkout ${f.branch}\` (diff base: ${f.branchBase})`;
+    const whereToLook = f.finishResult.split("	")[1] === "no-branch" ? `- Nothing was pushed and no PR was opened \u2014 HEAD is on \`${f.finishHead}\` in ${f.targetCwd} (diff base: ${f.branchBase})` : `- Review the work: \`git -C ${f.targetCwd} checkout ${f.branch}\` (diff base: ${f.branchBase})`;
     return [
       ...head,
       "## Result",
@@ -19055,11 +19055,11 @@ async function finishWith(topic, r, hasGh) {
   }
   if (!hasDistinctBranch(r, branch, startBranch)) {
     const named = branch || "(unrecorded)";
-    const recreate = branch && branch !== startBranch ? branch : branchNameFor("quick", topic);
     log.warn(`quick finish: no branch '${named}' distinct from the start branch '${startBranch}' \u2014 NOTHING was pushed and no PR was opened`);
-    log.warn(`  recover: re-run the branch step in the target repo (git checkout -b ${recreate}), commit the work, then finish again`);
+    log.warn(`  recover: re-run the branch step in the target repo (git checkout -b ${branchNameFor("quick", topic)}), commit the work, then finish again`);
     r.run("git", ["checkout", "-q", startBranch]);
     const head = currentBranch(r) || "(detached)";
+    atomicWrite((0, import_node_path23.join)(exec, "finish-head.txt"), head + "\n");
     const keptNoBranch = restoreStashWip(topic, exec, r, startBranch);
     atomicWrite((0, import_node_path23.join)(exec, "finish-result.txt"), "none	no-branch\n" + keptNoBranch);
     runFlag("quick", topic, `finish-no-branch: the recorded branch '${named}' is missing or is the start branch '${startBranch}' \u2014 nothing was pushed, no PR opened; the work (if any) is on '${head}'`);
@@ -19121,7 +19121,8 @@ duration=${duration}
     archived: readField((0, import_node_path23.join)(art, "archived-path.txt")) || "(not archived)",
     targetCwd: readField((0, import_node_path23.join)(exec, "target_cwd.txt")) || "<target>",
     branchBase: rec.baseSha || "<base>",
-    finishResult: readField((0, import_node_path23.join)(exec, "finish-result.txt")) || "(not finished)",
+    finishResult: readField((0, import_node_path23.join)(exec, "finish-result.txt")),
+    finishHead: readField((0, import_node_path23.join)(exec, "finish-head.txt")) || "unknown",
     abortedPhase: aborted2 ? rest[i2 + 1] : void 0,
     abortedGate: aborted2 ? rest[i2 + 2] : void 0,
     abortedReason: aborted2 ? rest.slice(i2 + 3).join(" ") || "unknown" : void 0
@@ -28794,7 +28795,10 @@ duration=${duration}
     provider: readField((0, import_node_path52.join)(art, "selected-provider.txt")) || "unknown",
     agent: readField((0, import_node_path52.join)(art, "agent.txt")) || "unknown",
     repo: readField((0, import_node_path52.join)(exec, "target_cwd.txt")) || "<repo>",
-    mode: rec.mode,
+    // The RAW mode.txt, not the record's: this field is displayed (SUMMARY's `- Mode:` and RESUME's
+    // restore line), and a hand-edited or corrupt value must show up rather than read as `branch`.
+    // rec.mode is the DECISION (finish's in-place arm), which normalizes on purpose.
+    mode: readField((0, import_node_path52.join)(exec, "mode.txt")) || "branch",
     branch: rec.branch || "(none)",
     rounds,
     verify: readField((0, import_node_path52.join)(exec, "verify-result.txt")) || "unknown",

@@ -571,17 +571,20 @@ describe("quick finish: no-branch guard", () => {
   });
 
   it("the restore checkout failed: the flag names where HEAD actually is, not the start branch", async () => {
-    await scaffold("feat/quick-auth", "main");
+    const exec = await scaffold("feat/quick-auth", "main");
     const { r } = fakeGit(1, "feat/quick-auth");   // checkout blocked by a dirty tree
     expect(await finishWith("auth", r, true)).toBe(0);
     expect(hubFlags().join("")).toContain("the work (if any) is on 'feat/quick-auth'");
+    // The same read-back HEAD is persisted for the summary, which cannot re-probe git.
+    expect(readFileSync(join(exec, "finish-head.txt"), "utf8")).toBe("feat/quick-auth\n");
   });
 
   it("detached HEAD after the refusal: reported as (detached), never as the start branch", async () => {
-    await scaffold("feat/quick-auth", "main");
+    const exec = await scaffold("feat/quick-auth", "main");
     const { r } = fakeGit(1, "");
     expect(await finishWith("auth", r, true)).toBe(0);
     expect(hubFlags().join("")).toContain("the work (if any) is on '(detached)'");
+    expect(readFileSync(join(exec, "finish-head.txt"), "utf8")).toBe("(detached)\n");
   });
 
   it("healthy distinct branch: the guard passes and the finish proceeds", async () => {
@@ -634,6 +637,12 @@ describe("quick branch: branch.txt records the branch the run ACTUALLY ended on"
     expect(rc).toBe(0);
     expect(branchTxt()).toBe("main\n");
     expect(err).toContain("quick branch: checkout feat/quick-auth failed; staying on main");
+  });
+
+  it("the trailing ok line still names the INTENDED branch — deliberately not a third visible change", async () => {
+    const { r } = fakeRepo({ checkoutOk: false });
+    const { err } = await capture(() => branchWith("auth", "/proj", r));
+    expect(err).toContain("quick branch: feat/quick-auth (snapshot=clean");
   });
 
   it("checkout failed from a detached HEAD: recorded as (detached), never as the intended name", async () => {
@@ -787,6 +796,16 @@ describe("quick finish: --stash-wip restore", () => {
     expect(hubFlags()).toEqual([]);
   });
 
+  it("the no-branch REFUSAL also restores the park — the refusal returns early, before the finish path", async () => {
+    const exec = await scaffold("yes", "stash999\tap-quick-auth-wip\n");
+    writeFileSync(join(exec, "branch.txt"), "main\n");   // what a failed checkout records
+    const { r, calls } = fakeGit();
+    expect(await finishWith("auth", r, true)).toBe(0);
+    expect(readFileSync(join(exec, "finish-result.txt"), "utf8")).toBe("none\tno-branch\n");
+    expect(calls).toContainEqual(["git", "stash", "pop", "stash@{0}"]);
+    expect(existsSync(join(exec, "stash-wip.txt"))).toBe(false);
+  });
+
   it("no marker: no stash calls at all (default path untouched)", async () => {
     await scaffold("no");
     const { r, calls } = fakeGit();
@@ -840,16 +859,31 @@ describe("quick summary", () => {
     expect(md).toContain("- Branch: feat/quick-auth");
   });
 
-  it("reads the finish record: a no-branch refusal drops the checkout hint", async () => {
+  it("reads the finish record: a no-branch refusal points at the recorded HEAD, not a checkout hint", async () => {
     await scaffold("auth");
     const exec = quickExecDir("auth");
     writeFileSync(join(exec, "branch.txt"), "main\n");            // what a failed checkout records
     writeFileSync(join(exec, "finish-result.txt"), "none\tno-branch\nstash-wip-kept\n");
+    writeFileSync(join(exec, "finish-head.txt"), "main\n");
     expect(await quickRun(["summary", "auth"])).toBe(0);
     const md = readFileSync(join(quickArtDir("auth"), "SUMMARY.md"), "utf8");
     expect(md).not.toContain("checkout");
-    expect(md).toContain("nothing was pushed and no PR was opened");
+    expect(md).toContain("- Nothing was pushed and no PR was opened — HEAD is on `main` in /proj (diff base: base000)");
     expect(md).toContain("- Branch: main");
+  });
+
+  it("a RE-RUN refused for no-branch: the summary names the feat branch HEAD is really on", async () => {
+    // HEAD was already on feat/quick-auth when the run branched, so the branch EXISTS and holds the
+    // work — the summary must not claim otherwise, and must keep the diff base.
+    await scaffold("auth");
+    const exec = quickExecDir("auth");
+    writeFileSync(join(exec, "start-branch.txt"), "feat/quick-auth\n");
+    writeFileSync(join(exec, "finish-result.txt"), "none\tno-branch\n");
+    writeFileSync(join(exec, "finish-head.txt"), "feat/quick-auth\n");
+    expect(await quickRun(["summary", "auth"])).toBe(0);
+    const md = readFileSync(join(quickArtDir("auth"), "SUMMARY.md"), "utf8");
+    expect(md).toContain("HEAD is on `feat/quick-auth` in /proj (diff base: base000)");
+    expect(md).not.toContain("No branch was cut");
   });
 
   it("aborted summary → SUMMARY.md (aborted) + RESUME.md", async () => {

@@ -74,10 +74,16 @@ So:
     `commands/*`, which is why **`branchMapField` moves into it** (it was private to implement.ts and
     has no other caller once `applyFinish` asks the record) and `readBranchMode` folds into `mode`.
     `kvField` stays in `core/fsread.ts`.
-    Consumers are the three finishes and the three summaries. **`implement scope-check` is NOT one**:
-    it holds no slug (it reads art-level `target_cwd.txt` + `branch-base.sha`) and needs `existsSync`
-    on both for its own error path, so its single `readField(branch-base.sha)` — already exactly what
-    the record would return — stays.
+    Consumers are **five call sites**: bridge ×2 (finish, summary), quick ×2 (finish, summary),
+    implement ×1 (`applyFinish`). Two named in the draft are NOT consumers — **`implement summary`**
+    reads live git plus its own baseline/post TSVs (branch, sha, state, sweep), not the branch record;
+    and **`implement scope-check`** holds no slug (it reads art-level `target_cwd.txt` +
+    `branch-base.sha`) and needs `existsSync` on both for its own error path, so its single
+    `readField(branch-base.sha)` — already exactly what the record would return — stays.
+    One display field deliberately does NOT come from the record: bridge's summary echoes `mode.txt`
+    RAW, because a hand-edited or corrupt value must be visible in `- Mode:` and RESUME rather than
+    normalize to `branch`. `rec.mode` is the DECISION (finish's in-place arm); normalizing there is
+    the point.
 - **`quick branch` records the ACTUAL branch** (the behavior change): write `branch.txt` with the
   branch the run ended on — the created/resumed `feat/quick-<topic>` on success, the current branch
   when `createOrResumeBranch` returns false — mirroring implement's `recorded`. The existing warn
@@ -86,22 +92,37 @@ So:
     `none\tno-branch` + its flag instead of pushing a stale ref;
   - round-1's prompt names the branch the worker is really on;
   - `quick summary`'s Branch line reports reality;
-  - that refusal's recover line follows it: it names a branch to CREATE, so a record that IS the
-    start branch falls back to the topic-derived name (`git checkout -b main` while on main is a dead
-    end). Not in the original draft; added because this change is what routes runs into that line.
+  - that refusal's recover line follows it: it names a branch to CREATE, and since quick has no
+    `--branch` flag that name is always the topic-derived one (`git checkout -b main` while on main is
+    a dead end). Not in the original draft; added because this change is what routes runs into that
+    line. It is a CONSTANT, not a fallback: a record distinct from the start branch can only be the
+    topic-derived name already, so a conditional there would be a dead branch.
+  - on the `finish=no` path a failed checkout now records `none\tbranch-only (kept <start-branch>)`
+    and the summary's checkout hint points at the start branch — which exists, so the hint stays
+    valid; only the wording stops naming a feat branch that was never cut.
   - `quick branch`'s trailing `log.ok` still names the INTENDED branch on a failed checkout — the
     warn line immediately above it already names both, and changing it is a third user-visible change.
-- **`bridge branch` keeps the same lie, deliberately.** It also writes the intended name when
-  `createOrResumeBranch` fails, and its finish reaches the same `hasDistinctBranch` guard through
-  `finishBranchPrMerge`, so it carries the same stale-ref exposure. Fixing it would be a third
-  behavior change, outside the program's declared perimeter — follow-up, not this PR.
+- **DECLARED FOLLOW-UP — `bridge branch` still has the defect quick just closed.** It also writes
+  the intended name when `createOrResumeBranch` fails, and its finish reaches the same
+  `hasDistinctBranch` guard through `finishBranchPrMerge`, so the same leftover `feat/bridge-<topic>`
+  can be acted on. It is arguably WORSE there: bridge's finisher is the PR-**merge** flow, so a stale
+  ref would be merged into the base, not just proposed. Fixing it is a third behavior change, outside
+  this program's declared perimeter — its own PR, not this one.
 - **`quick summary` consumes the finish record**: `SummaryFacts` gains `finishResult` (read from
-  `execute/finish-result.txt` exactly as bridge does), and the "Review the work: checkout <branch>"
-  hint is suppressed/replaced when the outcome is `no-branch`. Renderer change only; no new file.
+  `execute/finish-result.txt` exactly as bridge does) and the "Review the work: checkout <branch>"
+  hint is replaced when the outcome is `no-branch`.
+  The replacement must be true in **all three** shapes the refusal covers, which the first draft of
+  this line got wrong: "no branch was cut" holds only for a failed checkout, while a re-run that
+  started on `feat/quick-<topic>` lands here with the branch PRESENT and holding the work. So the
+  line asserts nothing about the branch — it names the HEAD `finish` read back and keeps the diff
+  base. That needs one additive file, `execute/finish-head.txt` (the spec's "no new file" was wrong):
+  `finishWith` already reads HEAD back for its hub flag, and a summary cannot re-probe git.
+  `finish-result.txt`'s two-field shape is untouched — other readers parse it.
 
 ## Components
 
-- `src/core/branchRecord.ts` (new) · `src/commands/quick.ts` (actual-branch record; summary facts) ·
+- `src/core/branchRecord.ts` (new) · `src/commands/quick.ts` (actual-branch record; the refusal's
+  `execute/finish-head.txt`; summary facts) ·
   `src/core/quick.ts` (`renderSummary` hint) · `src/commands/{bridge,implement}.ts` +
   `src/core/gitwork.ts` (name spellings → `branchNameFor`; `createOrResumeBranch`'s doc comment
   currently says "Create feat/quick-<topic>" though implement and bridge are its other two callers —
@@ -118,7 +139,14 @@ So:
 - **The stale-ref shape specifically**: a pre-existing `feat/quick-<topic>` from an earlier run + a
   failed checkout for THIS run → refusal, not `pr-opened` (the exact A1-review reproduction).
 - Round-1 prompt names the recorded branch; `quick summary` after a `no-branch` finish omits the
-  checkout hint and reports the real branch.
+  checkout hint and names the HEAD finish read back — pinned for BOTH the failed-checkout shape and
+  the re-run shape (HEAD already on `feat/quick-<topic>`, branch present), where the old wording
+  claimed no branch was cut and dropped the diff base.
+- Pins for the decisions that would otherwise survive their own deletion: the refusal path still
+  restores a `--stash-wip` park; the `no-branch` outcome is matched as a WHOLE field (fixture
+  `none\tbranch-only (kept feat/quick-no-branch-fix)` keeps the hint); bridge's occupancy check still
+  ALLOWS the run's own branch (a resume); `quick branch`'s trailing `log.ok` still names the INTENDED
+  branch; bridge's summary echoes a corrupt `mode.txt` verbatim.
 - `branchNameFor`: every call site returns byte-identical names to today (pin all six, plus the
   empty-topic prefix bridge's single-occupancy check matches on).
 - `readBranchRecord`: the three commands' shapes, including implement's per-slug rows, a missing

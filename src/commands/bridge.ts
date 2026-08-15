@@ -263,7 +263,10 @@ async function summaryRun(rest: string[]): Promise<number> {
     provider: readField(join(art, "selected-provider.txt")) || "unknown",
     agent: readField(join(art, "agent.txt")) || "unknown",
     repo: readField(join(exec, "target_cwd.txt")) || "<repo>",
-    mode: rec.mode,
+    // The RAW mode.txt, not the record's: this field is displayed (SUMMARY's `- Mode:` and RESUME's
+    // restore line), and a hand-edited or corrupt value must show up rather than read as `branch`.
+    // rec.mode is the DECISION (finish's in-place arm), which normalizes on purpose.
+    mode: readField(join(exec, "mode.txt")) || "branch",
     branch: rec.branch || "(none)",
     rounds,
     verify: readField(join(exec, "verify-result.txt")) || "unknown",
