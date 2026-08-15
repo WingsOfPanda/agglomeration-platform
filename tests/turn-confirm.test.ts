@@ -59,13 +59,17 @@ function scriptedSleep(steps: Array<() => void>, clock?: { advance: (ms: number)
 }
 
 /** Injected wait: step 1 answers the first leg, later steps answer each re-arm round. Every call's
- *  offset+timeout is recorded, which is how the re-arm's routing through d.wait is pinned. */
-function scriptedWait(steps: Array<{ ev?: OutboxEvent | null; run?: () => void }>) {
+ *  offset+timeout is recorded, which is how the re-arm's routing through d.wait is pinned. With a
+ *  clock, each leg also consumes its own budget, as the real wait would — the pins that must stay
+ *  BOUNDED under a mutation need the deadline to be reachable, or a loop that should have exited
+ *  runs until the suite times out instead of failing an assertion. */
+function scriptedWait(steps: Array<{ ev?: OutboxEvent | null; run?: () => void }>, clock?: { advance: (ms: number) => void }) {
   const calls: Array<{ off: number; to: number }> = [];
   return {
     calls,
     wait: async (_i: string, _m: string, _t: string, off: number, _ev: string[], to: number) => {
       calls.push({ off, to });
+      clock?.advance(to * 1000);
       const step = steps.shift();
       step?.run?.();
       return step?.ev ?? null;
@@ -240,10 +244,13 @@ describe("waitTurnConfirmed", () => {
 
   it("BLOCKER: a real done + one trailing progress accepts promptly (no waiting out the budget)", async () => {
     writeOutbox([DONE1]);
-    const s = scriptedSleep([() => appendOutbox([PROGRESS])]);   // one trailing line, then silence
-    const w = scriptedWait([{ ev: doneEv("premature") }]);       // the re-arm finds nothing
+    // On the fake clock, so the exit under test is the QUIESCENCE guard and not the suite timeout:
+    // every leg consumes its budget, which makes the re-arm deadline reachable in a few rounds.
+    const clock = fakeClock();
+    const s = scriptedSleep([() => appendOutbox([PROGRESS])], clock);   // one trailing line, then silence
+    const w = scriptedWait([{ ev: doneEv("premature") }], clock);       // the re-arm finds nothing
     const flags: string[] = [];
-    const ev = await waitTurnConfirmed(I, M, T, 0, 14_400, deps(w, s, flags));
+    const ev = await waitTurnConfirmed(I, M, T, 0, 14_400, deps(w, s, flags, clock));
     expect(classifyTurn(ev)).toBe("ok");
     expect(ev!.summary).toBe("premature");
     expect(w.calls.length).toBe(2);        // first leg + exactly ONE short re-arm wait

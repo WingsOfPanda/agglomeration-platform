@@ -5,10 +5,11 @@
 // callers, and neither family could use the other's protection. These pins cover each slot alone,
 // NEITHER slot, and — the point of the refactor — BOTH at once on a synthetic ctx, which is what
 // "phase waits confirm too" or "implement's verify report gets grace" would cost: a flag flip.
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
+import { virtualClock } from "./helpers/clock.js";
 import { outboxPath, type OutboxEvent } from "../src/core/ipc.js";
 import { globalRoot } from "../src/core/paths.js";
 import { END_OF_ARTIFACT } from "../src/core/artifact.js";
@@ -68,6 +69,12 @@ const settled = (r: TurnResult | { missingOffset: true }): TurnResult => {
   if ("missingOffset" in r) throw new Error("expected a settled turn, got missingOffset");
   return r;
 };
+
+function captureStderr(): { text: () => string; restore: () => void } {
+  const chunks: string[] = [];
+  const spy = vi.spyOn(process.stderr, "write").mockImplementation(((x: unknown) => { chunks.push(String(x)); return true; }) as never);
+  return { text: () => chunks.join(""), restore: () => spy.mockRestore() };
+}
 
 describe("awaitTurn: offset resolution (owned by the wait, reported to the caller)", () => {
   let h: { home: string; cleanup: () => void };
@@ -142,11 +149,20 @@ describe("awaitTurn: the policy table", () => {
     process.env.AP_ARTIFACT_GRACE_S = "10";
     const artifact = artifactPath();
     const { d, flags } = harness([doneEv("premature")]);
-    const r = settled(await awaitTurn(ctxWith({ artifact: { path: artifact, key: "VS" } }, stateFile()), d));
+    const err = captureStderr();
+    let r: TurnResult;
+    try {
+      r = settled(await awaitTurn(ctxWith({ artifact: { path: artifact, key: "VS" } }, stateFile()), d));
+    } finally { err.restore(); }
     expect(r.accept).toBe("expired");
     expect(flags).toEqual([
       `artifact-incomplete: ${I} ${artifact} done-event without ${END_OF_ARTIFACT} after 10s grace`,
     ]);
+    // The warning names the ROW'S key, not a literal: it is what tells the operator that `VS` still
+    // carries its own classification, so the later phases of THIS chain still dispatch.
+    expect(err.text()).toContain(
+      `explore research-wait: ${I} ${artifact} has no ${END_OF_ARTIFACT} after 10s grace ` +
+      "— recording AC=expired (the validators drop this artifact; VS keeps its own classification so later phases still dispatch)");
   });
 
   it("BOTH slots on one ctx: the window vetoes the premature done AND the grace judges the artifact", async () => {
@@ -206,5 +222,35 @@ describe("awaitTurn: the policy table", () => {
     expect(r.accept).toBe("unchecked");     // the operator turned the check off; the wait says so
     expect(sleeps).toEqual([20_000, 20_000]);
     expect(flags).toEqual([`turn-confirm-veto: ${M} premature done — outbox still active`]);
+  });
+});
+
+// The production wiring itself. Every other test in the suite injects a `wait`, so nothing covered
+// awaitTurn's DEFAULT — the hand-written binding that replaced four point-free `wait: liveOutboxWait`
+// literals, where an argument bug used to be structurally impossible. One test pins all three of the
+// things that binding can get wrong: that it exists, that it passes the ids in order, and that it
+// hands the engine THIS bag's clock.
+describe("awaitTurn: with no wait injected, the default IS the live engine on this bag's clock", () => {
+  let h: { home: string; cleanup: () => void };
+  beforeEach(() => { h = freshHome(); });
+  afterEach(() => { h.cleanup(); });
+
+  it("polls the worker's real outbox, and consumes VIRTUAL time doing it", async () => {
+    writeOutbox([]);                                  // the real outbox for bravo/codex/auth
+    const sf = stateFile();
+    const v = virtualClock();
+    v.at(5_000, () => appendOutbox([DONE2]));         // the worker answers 5 virtual seconds in
+    const t0 = Date.now();
+
+    const r = settled(await awaitTurn(ctxWith({}, sf, 10), { clock: v.clock }));
+
+    // It read the RIGHT worker's outbox: any transposition of the agent/model/topic triple points
+    // the engine at a directory that does not exist, where it finds nothing and returns null at the
+    // budget instead.
+    expect(r.event!.summary).toBe("real");
+    // ...on the clock it was handed. Drop that argument and the engine falls back to the real one,
+    // where the scheduled append never fires and ten REAL seconds pass before a null.
+    expect(v.elapsed()).toBe(5_000);
+    expect(Date.now() - t0).toBeLessThan(2_000);
   });
 });

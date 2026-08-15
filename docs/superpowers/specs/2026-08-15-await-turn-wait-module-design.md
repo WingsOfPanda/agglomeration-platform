@@ -199,7 +199,8 @@ and the liveness extension are exercised by the tests that today mock them away,
   send time, which is a different verb and stays).
 - A future "phase waits confirm too" or "implement's verify report gets grace" is a policy-slot flip
   in one file, not a fourth wrapper — demonstrated by a test that flips a slot on a synthetic ctx.
-- `designTurn.ts` is imported by design code only.
+- `designTurn.ts` no longer carries the shared micro-protocol: implement / quick / bridge stop
+  importing it entirely. (Amended — see A17: "design code only" was never reachable in this PR.)
 - Gate green; 0.5.23; behavior byte-identical, proven by dist-level differential.
 
 ## Amendments (recorded during implementation)
@@ -309,3 +310,21 @@ importantly, that block is now the ONLY thing exercising the DEFAULT clock end t
 virtual-clock test. The virtual block is added alongside, asserting the same budgets EXACTLY (in
 virtual ms) rather than by bracket, plus the new `AP_WAIT_EXTEND_MULT` x deadline-floor interaction.
 The file still costs its original ~10 s.
+
+**A17 (success criteria) — "designTurn.ts is imported by design code only" is not reachable here.**
+What this PR removes is the MICRO-PROTOCOL dependency: `implement.ts`, `quick.ts` and `bridge.ts`
+no longer import `designTurn` at all. Two importers remain and are both pre-existing and
+design-domain: `explore.ts` (which reuses design's `composeVerifyPrompt` for its own cross-verify
+phase) and `phaseTable.ts` (which reads design's `researchState`/`verifyState` classifiers as row
+slots for BOTH commands). Moving those is a different refactor with its own behavior surface, and
+nothing in this PR touched them. The criterion is amended to the achieved, checkable form above.
+
+**A18 (fix round) — the new default wiring needed its own pin.** Commit 3 replaced four point-free
+`wait: liveOutboxWait` dep-bag literals with one hand-written lambda inside `boundWait`. That trades
+a binding where an argument bug was structurally impossible for one where it is merely unlikely, and
+the suite did not cover it: replacing the default with a thrower, or transposing its agent/model
+arguments, both left the whole suite green, as did dropping the clock hand-off. `tests/wait-policy
+.test.ts` now calls `awaitTurn` with `wait` UNSET and only a virtual clock bound, over a real temp
+outbox whose `done` is scheduled in virtual time — one test that fails if the default is missing, if
+the ids are transposed (it reads a directory that does not exist), or if the clock is not passed
+down (the engine falls back to the real one and the scheduled event never fires).

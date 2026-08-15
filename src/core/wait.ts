@@ -144,7 +144,9 @@ export interface TurnResult {
 export interface TurnDeps {
   /** The wait itself. Left unset by every live verb — the default IS the live wait, bound to this
    *  bag's clock, so the one `liveOutboxWait` binding in the codebase is here. Tests that script a
-   *  wait still override it. */
+   *  wait still override it; a test that omits it AND omits `clock` runs the live engine on the
+   *  real one, polling the outbox every second until the budget expires (a hung suite, not a
+   *  failure), so leave it unset only with a virtual clock bound or a real budget in mind. */
   wait?: WaitFn;
   /** The one time source this wait runs on: the confirmation window and deadline here, and the
    *  engine's own poll and liveness extension underneath. Tests bind a virtual clock and get both

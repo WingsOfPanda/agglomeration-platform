@@ -1,7 +1,8 @@
 // tests/helpers/clock.ts — the wait module's injected time source, for tests.
-// The clock is injected at the ENGINE (src/core/ipc.ts), so a test that binds one of these drives
-// the REAL matcher, the REAL shrink handling and the REAL liveness extension over a real temp
-// outbox — instead of mocking the wait away and asserting on the mock.
+// The clock is injected at the ENGINE (src/core/ipc.ts), so a test that binds one of these can run
+// the REAL poll loop — its matcher and its liveness extension — over a real temp outbox, at CPU
+// speed, instead of asserting on a mocked-away wait. Most of the suite still injects a `wait`; what
+// these buy is that the wait module's OWN tests no longer have to choose between the two.
 import type { Clock } from "../../src/core/ipc.js";
 
 /** A clock that never actually sleeps. For the many tests that only care about a wait's VERDICT:

@@ -415,8 +415,8 @@ There are **two roots**:
   other way (another session, its terminal, a file it was asked to read) are flagged and ignored.
 - **One wait for every worker turn.** `src/core/wait.ts` owns it: a turn/round/phase wait resolves
   its offset, picks its terminal event and applies its still-writing protections (`AP_TURN_CONFIRM_S`
-  and `AP_ARTIFACT_GRACE_S`) in one place, with the clock injected at the engine so tests drive the
-  real matcher instead of mocking the wait away.
+  and `AP_ARTIFACT_GRACE_S`) in one place, with the clock injected at the engine so the wait's own
+  tests drive the real poll loop on a virtual clock instead of burning wall time.
 - **A closed provider set** — `codex` / `claude` / `agy` / `opencode`, each a row in
   `config/contracts.yaml` (binary, modes, timeouts, multipliers). A new provider is a config row
   plus a live dogfood, not an open compatibility surface.

@@ -202,10 +202,14 @@ export function outboxEventsSince(i: string, m: string, t: string, offset: numbe
  *  seam sat): the layer that computes a confirmation deadline and the layer that applies
  *  `AP_WAIT_EXTEND_MULT` to a budget must share one clock, or neither can see what the other did
  *  to the quantity it reasons about. Tests bind a virtual one and drive the REAL matcher over a
- *  real temp outbox instead of mocking the wait away. */
+ *  real temp outbox instead of mocking the wait away.
+ *
+ *  Property syntax, not method syntax, and deliberately: every consumer DESTRUCTURES this
+ *  (`const { now, sleep } = clock`), which unbinds `this`. Declared as methods, an implementation
+ *  that closed over `this` would typecheck here and then throw at the first poll. */
 export interface Clock {
-  now(): number;
-  sleep(ms: number): Promise<void>;
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
 }
 
 export const realClock: Clock = {
