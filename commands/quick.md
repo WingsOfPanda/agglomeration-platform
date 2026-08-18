@@ -32,7 +32,9 @@ Two entry paths, decided once before Stage 0 — the same shape `/ap:implement` 
   $CS job start --command quick --args-file <args-path> [--provider p] [--budget-hours N] \
     [--finish keep|pr] [--no-worktree]
   ```
-  Background `$CS job wait <SLUG>`, tell the user `tmux attach -t <SESSION>`,
+  Arm the watch exactly as `/ap:implement`'s launch path does — a persistent **Monitor**
+  wrapping `$CS job wait <SLUG>` (never a plain background shell; see that section for the
+  canonical loop and the monitor-handoff note) — then tell the user `tmux attach -t <SESSION>`,
   `/ap:job status <SLUG>`, and that the run works in the printed `WORKTREE=` so **this checkout
   stays theirs** for the duration, then stop. Handle the returned `JS=` line exactly as
   `/ap:implement`'s launch path does, including decoding `QUESTION=` and answering with

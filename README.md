@@ -214,8 +214,9 @@ relayed to you with verified claims attached.
 An attached run holds your session for its whole duration and dies with it. `--detached` hands the
 **entire pipeline** — not just the worker — to a **job hub**: a `claude` TUI spawned into a
 detached tmux session `ap-<topic>`, which runs the same directive itself and spawns its own worker
-beside it. Your session gets the launch back in about a minute and keeps only a cheap watch; the
-run survives your session's restart.
+beside it. Your session gets the launch back in about a minute and keeps only a cheap watch — a persistent
+monitor, not a shell, so it can be parked and re-armed across your session's restarts while the
+run itself never notices.
 
 ```
 your session (the origin hub)             tmux session ap-<topic> (detached)
