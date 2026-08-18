@@ -29616,6 +29616,11 @@ function startWorktree(root, topic, r) {
     log.error(`job start: ${worktree} already exists \u2014 an earlier run's worktree was KEPT because it had uncommitted work in it (see 'ap job stop'). Archive or commit what is in it, then: git -C ${root} worktree remove ${worktree}  (add --force to discard), and start again.`);
     return null;
   }
+  const baseBranch = `base/${topic}`;
+  if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${baseBranch}`]).code === 0) {
+    log.error(`job start: branch ${baseBranch} already exists \u2014 an earlier run's worktree base branch outlived its worktree (an interrupted 'ap job stop'). Check what is on it, then clear it by hand: git -C ${root} branch -D ${baseBranch}  (and 'git -C ${root} worktree remove ${worktree}' first if that worktree is still registered), and start again.`);
+    return null;
+  }
   (0, import_node_fs50.mkdirSync)((0, import_node_path55.dirname)(worktree), { recursive: true });
   const gi = (0, import_node_path55.join)(root, ".ap", ".gitignore");
   if (!(0, import_node_fs50.existsSync)(gi)) {
@@ -29624,9 +29629,9 @@ function startWorktree(root, topic, r) {
     } catch {
     }
   }
-  const add = r.run("git", ["worktree", "add", "--detach", worktree, baseSha]);
+  const add = r.run("git", ["worktree", "add", "-b", baseBranch, worktree, baseSha]);
   if (add.code !== 0) {
-    log.error(`job start: 'git worktree add --detach ${worktree} ${baseSha.slice(0, 8)}' failed (rc ${add.code}) \u2014 nothing was launched. Check 'git -C ${root} worktree list' for a stale entry ('git worktree prune' clears those), or pass --no-worktree.`);
+    log.error(`job start: 'git worktree add -b ${baseBranch} ${worktree} ${baseSha.slice(0, 8)}' failed (rc ${add.code}) \u2014 nothing was launched. Check 'git -C ${root} worktree list' for a stale entry ('git worktree prune' clears those), or pass --no-worktree.`);
     return null;
   }
   const deps = (0, import_node_path55.join)(root, "node_modules");
@@ -29638,8 +29643,20 @@ function startWorktree(root, topic, r) {
   if (classifyDirty(r.run("git", ["status", "--porcelain"]).stdout)) {
     log.warn(`job start: ${root} has UNCOMMITTED changes and they are NOT in the worktree \u2014 it forks committed HEAD (${baseSha.slice(0, 8)}). Nothing of yours was touched or stashed; the run simply will not see that work.`);
   }
-  log.ok(`job start: worktree ${worktree} detached at ${baseSha.slice(0, 8)}`);
+  log.ok(`job start: worktree ${worktree} on ${baseBranch} at ${baseSha.slice(0, 8)}`);
   return { worktree, baseSha };
+}
+function sweepBaseBranch(rec, root, r) {
+  const branch = `base/${rec.topic}`;
+  if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]).code !== 0) return;
+  const at = r.run("git", ["rev-parse", branch]).stdout.trim();
+  if (!rec.base_sha || at !== rec.base_sha) {
+    log.warn(`job stop: the branch ${branch} has MOVED off the fork base and is being KEPT \u2014 something was committed on the run's base branch rather than on ${branchNameFor(rec.command, rec.topic)}. Inspect: git -C ${root} log ${branch}`);
+    return;
+  }
+  const del = r.run("git", ["branch", "-D", branch]);
+  if (del.code !== 0) log.warn(`job stop: could not delete the run's base branch ${branch} (rc ${del.code}) \u2014 remove it by hand: git -C ${root} branch -D ${branch}`);
+  else log.ok(`job stop: deleted the run's base branch ${branch}`);
 }
 function sweepWorktree(rec, root, r) {
   const wt = rec.worktree ?? "";
@@ -29650,6 +29667,7 @@ function sweepWorktree(rec, root, r) {
   }
   if (!(0, import_node_fs50.existsSync)(wt)) {
     r.run("git", ["worktree", "prune"]);
+    sweepBaseBranch(rec, root, r);
     return true;
   }
   if (classifyDirty(runnerAt(wt).run("git", ["status", "--porcelain"]).stdout)) {
@@ -29664,6 +29682,7 @@ function sweepWorktree(rec, root, r) {
   }
   r.run("git", ["worktree", "prune"]);
   log.ok(`job stop: removed the run's worktree ${wt}`);
+  sweepBaseBranch(rec, root, r);
   return true;
 }
 function finishHint(rec, r) {

@@ -83,8 +83,10 @@ than killed. Confirm with the user first unless they asked for it — a job may 
 
 **The worktree sweep.** A CLEAN worktree is removed (`git worktree remove` + `prune`); a **dirty**
 one is KEPT and named — that is a crashed worker's unarchived work, and it is not ap's to throw
-away. Nothing outside `<repo>/.ap/worktrees/` is ever removed, whatever the record says. The branch
-always survives either way: worktrees share the repo's ref store.
+away. Nothing outside `<repo>/.ap/worktrees/` is ever removed, whatever the record says. The run's
+`feat/...` branch always survives either way: worktrees share the repo's ref store. The `base/<topic>`
+branch the worktree was born on goes with it — unless something was committed on it, which is kept
+and named.
 
 **The FINISH hint.** For a `keep` run whose branch has commits past the fork base, `stop` prints a
 block to stdout before it sweeps:

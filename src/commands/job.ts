@@ -144,8 +144,14 @@ function jobProgressNow(rec: J.JobRecord) {
  *  the index are global to a checkout, so the detached promise never held for the repo itself.
  *
  *  The fork point is COMMITTED HEAD — the operator's uncommitted WIP deliberately stays behind, and
- *  a dirty tree only warns. The add is `--detach` so the ordinary `branch` verb still creates
- *  `feat/<cmd>-<topic>` itself, inside the worktree: the branch flow is unchanged, just re-homed.
+ *  a dirty tree only warns. The worktree is born ON a local base branch `base/<topic>` cut at that
+ *  fork point, not detached: `implement branch` (and quick's) refuses a pre-snapshot with a detached
+ *  HEAD, which has no restorable start branch, and the obvious remedy — check the main checkout's
+ *  branch out here — is impossible, because git refuses to check one branch out in two worktrees.
+ *  Hit live on the first worktree dogfood, where the run's hub had to mint that branch by hand. The
+ *  branch verbs then fork `feat/<cmd>-<topic>` from it unchanged, and `finish keep` has a real start
+ *  branch to restore. The name is DERIVED, never recorded — `start_branch` in the record stays the
+ *  MAIN checkout's branch at fork time — and the sweep in `sweepWorktree` deletes it again.
  *
  *  `null` means ABORT the start. Every failure here is fail-closed: a half-made worktree would send
  *  the worker into the main checkout, which is the exact thing this exists to prevent. */
@@ -161,6 +167,13 @@ export function startWorktree(root: string, topic: string, r: Runner): { worktre
     log.error(`job start: ${worktree} already exists — an earlier run's worktree was KEPT because it had uncommitted work in it (see 'ap job stop'). Archive or commit what is in it, then: git -C ${root} worktree remove ${worktree}  (add --force to discard), and start again.`);
     return null;
   }
+  // Same fail-closed posture as the worktree above: a leftover base branch is an interrupted stop,
+  // and reusing it would silently hand this run someone else's fork point (or fail the add anyway).
+  const baseBranch = `base/${topic}`;
+  if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${baseBranch}`]).code === 0) {
+    log.error(`job start: branch ${baseBranch} already exists — an earlier run's worktree base branch outlived its worktree (an interrupted 'ap job stop'). Check what is on it, then clear it by hand: git -C ${root} branch -D ${baseBranch}  (and 'git -C ${root} worktree remove ${worktree}' first if that worktree is still registered), and start again.`);
+    return null;
+  }
   mkdirSync(dirname(worktree), { recursive: true });
   // `.ap/` is the state root and stateEnsure() gitignores it — but AP_HOME can point the state
   // elsewhere, and then nothing has ever written this file. An un-ignored worktree shows up as
@@ -168,9 +181,9 @@ export function startWorktree(root: string, topic: string, r: Runner): { worktre
   // being committed into somebody's branch.
   const gi = join(root, ".ap", ".gitignore");
   if (!existsSync(gi)) { try { writeFileSync(gi, "*\n"); } catch { /* best effort */ } }
-  const add = r.run("git", ["worktree", "add", "--detach", worktree, baseSha]);
+  const add = r.run("git", ["worktree", "add", "-b", baseBranch, worktree, baseSha]);
   if (add.code !== 0) {
-    log.error(`job start: 'git worktree add --detach ${worktree} ${baseSha.slice(0, 8)}' failed (rc ${add.code}) — nothing was launched. Check 'git -C ${root} worktree list' for a stale entry ('git worktree prune' clears those), or pass --no-worktree.`);
+    log.error(`job start: 'git worktree add -b ${baseBranch} ${worktree} ${baseSha.slice(0, 8)}' failed (rc ${add.code}) — nothing was launched. Check 'git -C ${root} worktree list' for a stale entry ('git worktree prune' clears those), or pass --no-worktree.`);
     return null;
   }
   // node_modules is the one dependency tree worth carrying: a hardlink clone is seconds and costs no
@@ -185,8 +198,26 @@ export function startWorktree(root: string, topic: string, r: Runner): { worktre
   if (classifyDirty(r.run("git", ["status", "--porcelain"]).stdout)) {
     log.warn(`job start: ${root} has UNCOMMITTED changes and they are NOT in the worktree — it forks committed HEAD (${baseSha.slice(0, 8)}). Nothing of yours was touched or stashed; the run simply will not see that work.`);
   }
-  log.ok(`job start: worktree ${worktree} detached at ${baseSha.slice(0, 8)}`);
+  log.ok(`job start: worktree ${worktree} on ${baseBranch} at ${baseSha.slice(0, 8)}`);
   return { worktree, baseSha };
+}
+
+/** Delete the `base/<topic>` branch `startWorktree` cut for a worktree that is now GONE — but only
+ *  while it still points at the fork base. A moved branch is somebody's commits: the worker (or the
+ *  operator) committed on the base branch instead of `feat/<cmd>-<topic>`, and deleting it would be
+ *  the one unrecoverable act in the sweep, so it is kept and named. `-D`, not `-d`: the base sha is
+ *  an ancestor of the run's branch, not necessarily of whatever the checkout's HEAD is now. */
+function sweepBaseBranch(rec: J.JobRecord, root: string, r: Runner): void {
+  const branch = `base/${rec.topic}`;
+  if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]).code !== 0) return;
+  const at = r.run("git", ["rev-parse", branch]).stdout.trim();
+  if (!rec.base_sha || at !== rec.base_sha) {
+    log.warn(`job stop: the branch ${branch} has MOVED off the fork base and is being KEPT — something was committed on the run's base branch rather than on ${branchNameFor(rec.command, rec.topic)}. Inspect: git -C ${root} log ${branch}`);
+    return;
+  }
+  const del = r.run("git", ["branch", "-D", branch]);
+  if (del.code !== 0) log.warn(`job stop: could not delete the run's base branch ${branch} (rc ${del.code}) — remove it by hand: git -C ${root} branch -D ${branch}`);
+  else log.ok(`job stop: deleted the run's base branch ${branch}`);
 }
 
 /** Remove the run's worktree, or say why it is being kept. `true` means the sweep is COMPLETE (the
@@ -194,7 +225,9 @@ export function startWorktree(root: string, topic: string, r: Runner): { worktre
  *  unswept session does — a worktree still on disk is either unarchived work or something ap could
  *  not account for, and both need the operator's eyes before the record that names them is deleted.
  *
- *  The branch itself always survives either way: worktrees share the repo's ref store. */
+ *  The run's `feat/<cmd>-<topic>` branch always survives either way: worktrees share the repo's ref
+ *  store. The `base/<topic>` branch the worktree was born on goes with the worktree (see
+ *  `sweepBaseBranch`); a KEPT worktree still has it checked out, so it is left alone and unmentioned. */
 export function sweepWorktree(rec: J.JobRecord, root: string, r: Runner): boolean {
   const wt = rec.worktree ?? "";
   if (!wt) return true;                                   // --no-worktree, or a pre-0.5.36 record
@@ -204,7 +237,7 @@ export function sweepWorktree(rec: J.JobRecord, root: string, r: Runner): boolea
     log.warn(`job stop: the record names a worktree OUTSIDE ${join(root, ".ap", "worktrees")} (${wt}) — ap will not remove a path it cannot prove it created. Deal with it by hand.`);
     return false;
   }
-  if (!existsSync(wt)) { r.run("git", ["worktree", "prune"]); return true; }
+  if (!existsSync(wt)) { r.run("git", ["worktree", "prune"]); sweepBaseBranch(rec, root, r); return true; }
   // The dirty probe runs INSIDE the worktree, not at the root: they are separate working trees over
   // one ref store, and the root's cleanliness says nothing about what the worker left behind.
   if (classifyDirty(runnerAt(wt).run("git", ["status", "--porcelain"]).stdout)) {
@@ -219,6 +252,7 @@ export function sweepWorktree(rec: J.JobRecord, root: string, r: Runner): boolea
   }
   r.run("git", ["worktree", "prune"]);
   log.ok(`job stop: removed the run's worktree ${wt}`);
+  sweepBaseBranch(rec, root, r);
   return true;
 }
 

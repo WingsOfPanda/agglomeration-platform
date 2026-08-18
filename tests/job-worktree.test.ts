@@ -83,7 +83,7 @@ function seedJob(rec: JobRecord): void {
 }
 
 describe("startWorktree — the run gets its own checkout, the operator keeps theirs", () => {
-  it("forks committed HEAD into <root>/.ap/worktrees/<topic>, DETACHED", async () => {
+  it("forks committed HEAD into <root>/.ap/worktrees/<topic>, on base/<topic>", async () => {
     const root = repo();
     const base = git(root, "rev-parse", "HEAD");
     const wt = (await capture(() => (startWorktree(root, TOPIC, runnerAt(root)) ? 0 : 1))).rc === 0
@@ -91,9 +91,20 @@ describe("startWorktree — the run gets its own checkout, the operator keeps th
     expect(wt).toBe(join(root, ".ap", "worktrees", TOPIC));
     expect(git(wt, "rev-parse", "HEAD")).toBe(base);
     expect(existsSync(join(wt, "README.md"))).toBe(true);
-    // Detached on purpose: the ordinary `branch` verb then creates feat/<cmd>-<topic> INSIDE the
-    // worktree, so the branch flow is unchanged — just re-homed.
-    expect(runnerAt(wt).run("git", ["symbolic-ref", "--short", "HEAD"]).code).not.toBe(0);
+    // Born on a branch, NOT detached (the 0.5.36 assertion this replaces): `implement branch` refuses
+    // a detached-HEAD pre-snapshot, and the main checkout's branch cannot be checked out here.
+    expect(git(wt, "symbolic-ref", "--short", "HEAD")).toBe(`base/${TOPIC}`);
+    expect(git(root, "rev-parse", `base/${TOPIC}`)).toBe(base);
+  });
+
+  it("REFUSES when base/<topic> already exists — an interrupted stop left it behind", async () => {
+    const root = repo();
+    git(root, "branch", `base/${TOPIC}`);
+    const { rc, err } = await capture(() => (startWorktree(root, TOPIC, runnerAt(root)) ? 0 : 1));
+    expect(rc).toBe(1);
+    expect(err).toContain(`branch base/${TOPIC} already exists`);
+    expect(err).toContain(`branch -D base/${TOPIC}`);
+    expect(existsSync(worktreePathFor(root, TOPIC))).toBe(false);
   });
 
   // Success criterion 1, end to end: the worker branches, and the origin's checkout does not move.
@@ -168,6 +179,24 @@ describe("sweepWorktree — clean goes, dirty stays, foreign is never touched", 
     expect(git(root, "worktree", "list")).not.toContain(wt);
     // Worktrees share the ref store, so the work is still reachable after its checkout is gone.
     expect(git(root, "rev-parse", "--verify", "feat/implement-demo")).toMatch(/^[0-9a-f]{40}$/);
+    // The base branch is the worktree's, not the operator's: it goes when the worktree goes.
+    expect(runnerAt(root).run("git", ["show-ref", "--verify", "--quiet", `refs/heads/base/${TOPIC}`]).code).not.toBe(0);
+  });
+
+  // The one unrecoverable act in the sweep, so it is the one thing the sweep refuses to do blind.
+  it("KEEPS a base/<topic> that MOVED — somebody committed on it — and still completes", async () => {
+    const root = repo();
+    await capture(() => (startWorktree(root, TOPIC, runnerAt(root)) ? 0 : 1));
+    const wt = worktreePathFor(root, TOPIC);
+    writeFileSync(join(wt, "on-base.txt"), "committed on the base branch\n");
+    git(wt, "add", "-A"); git(wt, "commit", "-q", "-m", "straight onto base");
+    const moved = git(wt, "rev-parse", "HEAD");
+
+    const { rc, err } = await capture(() => (sweepWorktree(record(root), root, runnerAt(root)) ? 0 : 1));
+    expect(rc).toBe(0);                                   // the worktree is gone; the branch is not the sweep's problem
+    expect(existsSync(wt)).toBe(false);
+    expect(git(root, "rev-parse", `base/${TOPIC}`)).toBe(moved);
+    expect(err).toContain(`the branch base/${TOPIC} has MOVED`);
   });
 
   it("KEEPS a dirty worktree and names it — that is a crashed worker's unarchived work", async () => {

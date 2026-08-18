@@ -227,8 +227,8 @@ your session (the origin hub)             tmux session ap-<topic> (detached)
 
 The unattended envelope is deliberately tighter than an attended run:
 
-- **The run gets its own checkout.** `job start` forks committed HEAD into a detached worktree at
-  `.ap/worktrees/<topic>` (hardlink-cloning `node_modules` when there is one) and points the worker
+- **The run gets its own checkout.** `job start` forks committed HEAD into its own worktree at
+  `.ap/worktrees/<topic>` (on a local `base/<topic>` branch the sweep cleans up again) (hardlink-cloning `node_modules` when there is one) and points the worker
   there, so *your* checkout stays yours for the whole run: edit it, switch branches, start other
   runs — just do not check out the run's own `feat/...` branch, and leave that topic's `.ap` state
   alone. Your uncommitted work stays behind (the launch warns when the tree is dirty), and
