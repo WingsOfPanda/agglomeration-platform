@@ -17932,7 +17932,8 @@ var stop_exports = {};
 __export(stop_exports, {
   GRACEFUL_BATCH_WAIT_MS: () => GRACEFUL_BATCH_WAIT_MS,
   run: () => run5,
-  teardownBatch: () => teardownBatch
+  teardownBatch: () => teardownBatch,
+  teardownTopic: () => teardownTopic
 });
 async function teardownBatch(topic, pairs, d) {
   const pending = [];
@@ -18023,6 +18024,13 @@ function cleanupTopicDir(topic) {
   } catch {
   }
 }
+async function teardownTopic(topic) {
+  await teardownBatch(topic, collectTopicPairs(topic), liveDeps());
+  cleanupTopicDir(topic);
+}
+function jobInFlight(topic) {
+  return (0, import_node_fs21.existsSync)(jobPath(topic));
+}
 async function run5(args) {
   const d = liveDeps();
   const a0 = args[0] ?? "";
@@ -18041,10 +18049,13 @@ async function run5(args) {
       return 0;
     }
     for (const t of (0, import_node_fs21.readdirSync)(repo, { withFileTypes: true })) {
-      if (t.isDirectory()) {
-        await teardownBatch(t.name, collectTopicPairs(t.name), d);
-        cleanupTopicDir(t.name);
+      if (!t.isDirectory()) continue;
+      if (jobInFlight(t.name)) {
+        log.warn(`stop --all: skipping ${t.name} \u2014 a detached job is in flight (${jobPath(t.name)}) and its hub is a worker under that topic; tear that job down with: ap job stop ${t.name}`);
+        continue;
       }
+      await teardownBatch(t.name, collectTopicPairs(t.name), d);
+      cleanupTopicDir(t.name);
     }
     return 0;
   }
@@ -18062,6 +18073,10 @@ async function run5(args) {
     return 0;
   }
   if (args.length === 1) {
+    if (jobInFlight(a0)) {
+      log.error(`stop ${a0}: a detached job is in flight (${jobPath(a0)}) and its hub is a worker under this topic \u2014 tearing the topic down would kill the hub mid-run and the origin would read it as a crash. Nothing was torn down. Tear the whole job down with: ap job stop ${a0} \u2014 or stop ONE worker with: ap stop <agent> ${a0}`);
+      return 1;
+    }
     await teardownBatch(a0, collectTopicPairs(a0), d);
     cleanupTopicDir(a0);
     return 0;
@@ -18088,6 +18103,7 @@ var init_stop = __esm({
     import_node_path18 = require("node:path");
     init_log();
     init_paths();
+    init_job();
     init_archive();
     init_fsread();
     init_ipc();
@@ -21686,12 +21702,18 @@ __export(implement_exports, {
 function workerModel(art) {
   return readIfExists((0, import_node_path34.join)(art, "provider.txt")).trim() || "codex";
 }
+function assertLeadMatches(topic, model, verb) {
+  const spawned = resolveModel(WORKER, topic);
+  if (spawned === null || spawned === model) return true;
+  log.error(`implement ${verb}: provider.txt says '${model}' but the spawned ${WORKER} worker is '${spawned}' \u2014 reconcile with: implement set-provider ${topic} ${spawned}`);
+  return false;
+}
 function latestObjections(stateFile) {
   if (!(0, import_node_fs38.existsSync)(stateFile)) return 0;
   return lastKeyedNumber((0, import_node_fs38.readFileSync)(stateFile, "utf8"), "OBJECTIONS") ?? 0;
 }
 function usage3() {
-  log.error("usage: implement <init|audit|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|verify-tests|summary|finish|forensics|archive|find-latest-doc> ...");
+  log.error("usage: implement <init|audit|set-provider|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|verify-tests|summary|finish|forensics|archive|find-latest-doc> ...");
   return 2;
 }
 async function findLatestDocRun(rest) {
@@ -21766,6 +21788,8 @@ async function run11(args) {
       return initRun3(applyArgsFile(rest));
     case "audit":
       return auditRun(rest);
+    case "set-provider":
+      return setProviderRun(rest);
     case "turn-send":
       return turnSendRun2(rest);
     case "turn-wait":
@@ -21860,6 +21884,29 @@ TARGET_CWD=${targetCwd}
 `);
   return 0;
 }
+async function setProviderRun(rest) {
+  const [topic, provider] = rest;
+  if (!topic || !provider || rest.length !== 2) {
+    log.error("usage: implement set-provider <topic> <provider>");
+    return 2;
+  }
+  if (!assertImplementTopic(topic)) {
+    log.error(`implement set-provider: invalid topic slug '${topic}' (must match ^[a-z0-9][a-z0-9-]{0,31}$, <= 32 chars)`);
+    return 2;
+  }
+  const art = implementArtDir(topic);
+  if (!(0, import_node_fs38.existsSync)(art)) {
+    log.error(`implement set-provider: ${art} not found \u2014 run implement init first`);
+    return 1;
+  }
+  if (!agentBinary(provider)) {
+    log.error(`implement set-provider: unknown provider '${provider}' \u2014 contracts.yaml defines: ${listAgents().join(", ")}`);
+    return 2;
+  }
+  atomicWrite((0, import_node_path34.join)(art, "provider.txt"), provider + "\n");
+  log.ok(`implement set-provider: topic=${topic} provider=${provider}`);
+  return 0;
+}
 async function turnSendRun2(rest) {
   const [topic, roundStr] = rest;
   if (!topic || !roundStr) {
@@ -21879,6 +21926,7 @@ async function turnSendWith2(topic, round, d) {
     return 1;
   }
   const model = workerModel(art);
+  if (!assertLeadMatches(topic, model, "turn-send")) return 1;
   const targetCwd = readIfExists((0, import_node_path34.join)(art, "target_cwd.txt")).trim();
   const testCmd = targetCwd ? detectTestCommand(targetCwd) : "";
   const stateFile = (0, import_node_path34.join)(art, `turn-${WORKER}-${round}.txt`);
@@ -21923,6 +21971,7 @@ async function turnWaitRun2(rest) {
 async function turnWaitWith2(topic, round, d) {
   const art = implementArtDir(topic);
   const model = workerModel(art);
+  if (!assertLeadMatches(topic, model, "turn-wait")) return 1;
   const stateFile = (0, import_node_path34.join)(art, `turn-${WORKER}-${round}.txt`);
   if (!(0, import_node_fs38.existsSync)(stateFile)) {
     log.error(`implement turn-wait: ${stateFile} missing \u2014 run implement turn-send first`);
@@ -29641,7 +29690,7 @@ async function stopJobRun(rest) {
   const evidence = mergePaneEvidence(readPaneEvidence(rec.topic), await ownedPanes(rec.topic));
   atomicWrite(panesEvidencePath(rec.topic), JSON.stringify(evidence) + "\n");
   const recorded = new Map(Object.entries(evidence));
-  const rc = await run5([rec.topic]);
+  await teardownTopic(rec.topic);
   if (await sessionExists(rec.session)) {
     const panes = await sessionPaneIds(rec.session);
     const live = await livePaneNonces();
@@ -29663,7 +29712,7 @@ async function stopJobRun(rest) {
   } catch {
   }
   log.ok(`job stop: ${rec.topic} torn down`);
-  return rc;
+  return 0;
 }
 function readPaneEvidence(topic) {
   try {

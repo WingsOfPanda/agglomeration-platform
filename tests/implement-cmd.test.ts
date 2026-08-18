@@ -7,8 +7,11 @@ import { freshHome } from "./helpers/tmpHome.js";
 import { implementArtDir, implementTopicDir } from "../src/core/implement.js";
 import { formatJob, jobPath } from "../src/core/job.js";
 import type { Runner, RunResult } from "../src/core/gitwork.js";
+import { paneMetaWrite } from "../src/core/ipc.js";
+import { workerDir } from "../src/core/paths.js";
 import {
   preSnapshotWith, branchWith, scopeCheckWith, summaryWith, finishWith, archiveRun, run,
+  turnSendWith, turnWaitWith,
 } from "../src/commands/implement.js";
 
 const TOPIC = "add-oauth";
@@ -487,3 +490,104 @@ async function summaryWith2(topic: string, runnerFor: (cwd: string) => Runner, n
 async function finishWith2(topic: string, action: "merge" | "pr" | "keep" | "discard", runnerFor: (cwd: string) => Runner, hasGh: boolean): Promise<number> {
   return finishWith(topic, action, { runnerFor, hasGh });
 }
+
+// The first detached dogfood repaired provider.txt by hand: init writes ONE detection into
+// provider.txt (routing) + auto_provider.txt (evidence), and every later override — the attached
+// claude-confirm gate, a detached job.json — changed only the SPAWN, so the turn verbs kept routing
+// at a lead-<wrong-model> dir that was never created.
+describe("implement set-provider — the one mechanical way an override reaches provider.txt", () => {
+  let h: { home: string; cleanup: () => void };
+  beforeEach(() => { h = freshHome(); });
+  afterEach(() => { h.cleanup(); });
+
+  it("rewrites provider.txt and leaves auto_provider.txt (the detection record) untouched", async () => {
+    const art = seedArt();
+    writeFileSync(join(art, "provider.txt"), "claude\n");
+    writeFileSync(join(art, "auto_provider.txt"), "claude\n");
+    const { rc } = await capture(() => run(["set-provider", TOPIC, "codex"]));
+    expect(rc).toBe(0);
+    expect(readFileSync(join(art, "provider.txt"), "utf8")).toBe("codex\n");
+    expect(readFileSync(join(art, "auto_provider.txt"), "utf8")).toBe("claude\n");
+  });
+
+  it("a provider with no contracts.yaml entry is rc 2, and provider.txt is left alone", async () => {
+    const art = seedArt();
+    writeFileSync(join(art, "provider.txt"), "codex\n");
+    const { rc, err } = await capture(() => run(["set-provider", TOPIC, "gpt-9"]));
+    expect(rc).toBe(2);
+    expect(err).toContain("unknown provider 'gpt-9'");
+    expect(readFileSync(join(art, "provider.txt"), "utf8")).toBe("codex\n");
+  });
+
+  it("no art dir → rc 1 naming init", async () => {
+    const { rc, err } = await capture(() => run(["set-provider", TOPIC, "codex"]));
+    expect(rc).toBe(1);
+    expect(err).toContain("run implement init first");
+  });
+
+  it("wrong arity is usage (rc 2)", async () => {
+    expect((await capture(() => run(["set-provider", TOPIC]))).rc).toBe(2);
+  });
+});
+
+// The other half of the same dogfood gap: dispatching to a phantom lead-<model> cost a manual
+// repair, so both turn verbs now fail closed BEFORE any send or state write, naming the remedy.
+describe("implement turn-send / turn-wait — provider.txt must match the spawned lead worker", () => {
+  let h: { home: string; cleanup: () => void };
+  beforeEach(() => { h = freshHome(); });
+  afterEach(() => { h.cleanup(); });
+
+  function seedSpawnedLead(model: string): void {
+    mkdirSync(workerDir("lead", model, TOPIC), { recursive: true });
+    paneMetaWrite("lead", model, TOPIC, "%7", "0dd00000-0000-4000-8000-000000000007");
+  }
+  const sendDeps = () => {
+    const sent: string[][] = [];
+    return { sent, d: { offsetFor: () => 0, send: async (a: string[]) => { sent.push(a); return 0; } } };
+  };
+
+  it("turn-send: mismatch → rc 1, the set-provider remedy on stderr, nothing sent, no state file", async () => {
+    const art = seedArt();
+    writeFileSync(join(art, "provider.txt"), "claude\n");
+    seedSpawnedLead("codex");
+    const { sent, d } = sendDeps();
+    const { rc, err } = await capture(() => turnSendWith(TOPIC, 1, d));
+    expect(rc).toBe(1);
+    expect(err).toContain("provider.txt says 'claude' but the spawned lead worker is 'codex'");
+    expect(err).toContain(`implement set-provider ${TOPIC} codex`);
+    expect(sent).toEqual([]);
+    expect(existsSync(join(art, "turn-lead-1.txt"))).toBe(false);
+  });
+
+  it("turn-wait: mismatch → rc 1 with the same remedy, before the wait is armed", async () => {
+    const art = seedArt();
+    writeFileSync(join(art, "provider.txt"), "claude\n");
+    seedSpawnedLead("codex");
+    const { rc, err } = await capture(() => turnWaitWith(TOPIC, 1, {
+      multiplier: () => "1", now: () => 0,
+      wait: async () => { throw new Error("the wait must never be armed on a mismatch"); },
+    }));
+    expect(rc).toBe(1);
+    expect(err).toContain(`implement set-provider ${TOPIC} codex`);
+  });
+
+  it("a matching provider passes the gate — both verbs fail later, for unrelated reasons", async () => {
+    const art = seedArt();
+    writeFileSync(join(art, "provider.txt"), "codex\n");
+    seedSpawnedLead("codex");
+    const send = await capture(() => turnSendWith(TOPIC, 1, sendDeps().d));
+    expect(send.err).not.toContain("provider.txt says");
+    expect(send.err).toContain("outbox not found");          // the send gate, i.e. past the check
+    const wait = await capture(() => turnWaitWith(TOPIC, 1, { multiplier: () => "1", now: () => 0 }));
+    expect(wait.err).not.toContain("provider.txt says");
+    expect(wait.err).toContain("run implement turn-send first");
+    expect(existsSync(join(art, "turn-lead-1.txt"))).toBe(false);
+  });
+
+  it("no worker dir yet (nothing spawned) passes the gate", async () => {
+    const art = seedArt();
+    writeFileSync(join(art, "provider.txt"), "claude\n");
+    const { err } = await capture(() => turnSendWith(TOPIC, 1, sendDeps().d));
+    expect(err).not.toContain("provider.txt says");
+  });
+});

@@ -68,11 +68,12 @@ status to `idle`, and wait for your inbox. Resume from exactly where you parked.
 
 | Stage | Attached | Detached |
 |---|---|---|
-| 0 — claude-confirm gate | AskUserQuestion codex-vs-claude | use `provider` from `job.json`; if it names none, keep the auto-detected one. No question. |
+| 0 — claude-confirm gate | AskUserQuestion codex-vs-claude | use `provider` from `job.json`; if it names none, keep the auto-detected one. No question. When it differs from init's `PROVIDER=` output, run `$CS implement set-provider <TOPIC> <provider>` BEFORE the Stage 1.1 spawn — never edit `$ART/provider.txt` by hand. |
 | 1 — `turn-send` "not idle" | AskUserQuestion wait/force/abort | wait 60s and retry once, then `reset-status` and retry once, then PARK. Never a third silent force. |
 | 1 — `ROUTE=escalate` | AskUserQuestion | PARK, carrying the worker's decoded text verbatim as your `message`. |
 | 4 — scope check `OOS_COUNT > 0` | AskUserQuestion amend/send-back/force-keep | PARK. Never auto-force-keep, never auto-amend. (`SCOPE_DECLARED=0` is still the documented no-op — say so in the parked message.) |
 | 4 — finish menu | AskUserQuestion merge/pr/keep/discard | `$CS implement finish <TOPIC> keep`. Never merge, push, or open a PR — and the gate is **mechanical**: the finish verb refuses `merge`/`pr`/`discard` (rc 2, recorded to the review feed) while a `_job` record exists for the topic. |
+| 5 — teardown | `$CS stop <TOPIC>` | `$CS stop lead <TOPIC>` — the per-agent form ONLY. The topic form REFUSES (rc 1) while the job record exists, deliberately: you are a worker under this topic, so it would tear YOU down mid-run. `job stop` sweeps you and the session later. |
 
 `ROUTE=verify` and `ROUTE=objection` are **not** parked: verify claims against ground truth and
 adjudicate objections exactly as the attached path does. Only decisions that are genuinely the
@@ -179,14 +180,17 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
 >   use claude tokens. Use claude or fall back to codex?"
 > - options: "Use claude (recommended for plugin testing)" / "Fall back to codex (cheaper)"
 >
-> On *Use claude* keep the provider as `claude`; on *Fall back to codex* set the spawn's provider
-> to `codex`. Apply this gate at the Stage 1.1 spawn.
+> On *Use claude* keep the provider as `claude`; on *Fall back to codex* FIRST run
+> `$CS implement set-provider <TOPIC> codex`, then spawn with `codex`. The verb is not optional
+> bookkeeping: `turn-send` and `turn-wait` both route by `$ART/provider.txt`, so a spawn that
+> diverges from it addresses a worker dir that does not exist and the turn fails. Apply this gate at
+> the Stage 1.1 spawn.
 
 ## Stage 1.1 — spawn the worker (single-repo)
 
 First apply the **Claude-confirm gate** (defined after Stage 0): if `PROVIDER=claude`, AskUserQuestion
-as specified there and, on *Fall back to codex*, set `PROVIDER=codex` for this spawn. Then spawn one
-worker in the resolved target cwd:
+as specified there and, on *Fall back to codex*, run `$CS implement set-provider <TOPIC> codex` and
+set `PROVIDER=codex` for this spawn. Then spawn one worker in the resolved target cwd:
 
 ```bash
 $CS spawn lead "$PROVIDER" "$TOPIC" --cwd "$(cat "$ART/target_cwd.txt")"
@@ -379,6 +383,7 @@ Then `ROUND=$((ROUND+1))`, `RETRY=0`, and loop back to Stage 1.
    **Edit/Write tool** to APPEND an idempotent `## Hub reflection` section to that file — 3-5
    short bullets interpreting the mechanical findings.
 5. **Teardown + archive.** `$CS stop <TOPIC>` (closes the worker's pane; prints the **DONE** banner),
-   then `$CS implement archive <TOPIC>`.
+   then `$CS implement archive <TOPIC>`. **Detached:** `$CS stop lead <TOPIC>` instead — the topic
+   form refuses (rc 1) while the job record exists because it would tear down the job hub, i.e. you.
 6. **Final summary.** Print: the branch + commit count (`git -C "$TARGET_CWD" log --oneline
    "$(cat "$ART/branch-base.sha")"..HEAD | wc -l`), the finish outcome, and the archive path.
