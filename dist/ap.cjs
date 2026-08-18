@@ -29426,6 +29426,13 @@ async function ownedPanes(topic) {
   }
   return out;
 }
+function jobProgressNow(rec) {
+  const outbox = readIfExists(outboxPath(rec.hub.agent, rec.hub.model, rec.topic));
+  const events = parseOutbox(outbox);
+  const { last, parked } = jobProgress(events);
+  const stillParked = parked && !questionConsumed(Buffer.byteLength(outbox, "utf8"), readCursor(rec.topic)) ? parked : null;
+  return { events, last, parked: stillParked };
+}
 async function startRun(rest, origCwd) {
   let command = "", argsFile = "", topic = "", provider = "", finish = "keep", hubModel = "claude";
   let budgetHours = 6, maxRounds = 5;
@@ -29524,10 +29531,7 @@ async function statusRun(rest) {
   if (!rec) return 1;
   const live = await livePaneNonces();
   const liveness = classifyJobLiveness(live, paneMetaRead(rec.hub.agent, rec.hub.model, rec.topic));
-  const outbox = readIfExists(outboxPath(rec.hub.agent, rec.hub.model, rec.topic));
-  const events = parseOutbox(outbox);
-  const { last, parked } = jobProgress(events);
-  const stillParked = parked && !questionConsumed(Buffer.byteLength(outbox, "utf8"), readCursor(rec.topic)) ? parked : null;
+  const { events, last, parked: stillParked } = jobProgressNow(rec);
   const now = Date.now();
   const el = elapsedHours(rec.started, now);
   process.stdout.write(
@@ -29598,6 +29602,7 @@ async function relayRun2(rest) {
 function attachRun(rest) {
   const rec = requireJob(rest[0], "attach");
   if (!rec) return 1;
+  const { parked } = jobProgressNow(rec);
   process.stdout.write(
     `TOPIC=${rec.topic}
 SESSION=${rec.session}
@@ -29606,8 +29611,11 @@ WATCH=tmux attach -t ${rec.session}
 STATUS=ap job status ${rec.topic}
 WAIT=ap job wait ${rec.topic}
 OUTBOX=${outboxPath(rec.hub.agent, rec.hub.model, rec.topic)}
+PARKED=${parked ? "yes" : "no"}
 `
   );
+  if (parked) process.stdout.write(`PARKED_MESSAGE=${enc(parked.message ?? parked.note ?? "")}
+`);
   return 0;
 }
 function listRun() {
