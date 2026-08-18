@@ -1,10 +1,11 @@
 // tests/implement-cmd.test.ts — B2b: implement pre-snapshot / branch / scope-check / summary / finish /
 // forensics / archive verbs. Fake Runner injection; AP_HOME temp; byte-exact state-file asserts.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { implementArtDir, implementTopicDir } from "../src/core/implement.js";
+import { formatJob, jobPath } from "../src/core/job.js";
 import type { Runner, RunResult } from "../src/core/gitwork.js";
 import {
   preSnapshotWith, branchWith, scopeCheckWith, summaryWith, finishWith, archiveRun, run,
@@ -351,6 +352,74 @@ describe("implement finish", () => {
     const { rc } = await capture(() => finishWith2(TOPIC, "keep", () => r, false));
     expect(rc).toBe(0);
     expect(readFileSync(join(art, "finish-results.tsv"), "utf8")).toBe("main\tkeep\tsame-branch\n");
+  });
+});
+
+// The detached run's "never merge, never push, never open a PR" was directive prose only. This is
+// its mechanical half: the finish verb itself refuses, whatever a mis-instructed job hub was told.
+describe("implement finish — a detached job in flight allows only 'keep'", () => {
+  let h: { home: string; cleanup: () => void };
+  beforeEach(() => { h = freshHome(); });
+  afterEach(() => { h.cleanup(); });
+
+  function seedJobRecord(): void {
+    const p = jobPath(TOPIC);
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, formatJob({
+      command: "implement", topic: TOPIC, session: `ap-${TOPIC}`,
+      hub: { agent: "alpha", model: "claude" },
+      provider: "codex", finish: "keep", budget_hours: 6, max_rounds: 5,
+      args_file: "/tmp/args", started: "2026-08-18T00:00:00Z",
+    }));
+  }
+  function seedFinish(art: string): void {
+    seedTargetCwd(art, "/repo/main");
+    writeFileSync(join(art, "implement-branches.tsv"), "main\tfeat/implement-foo\n");
+    mkdirSync(join(art, "baselines"), { recursive: true });
+    writeFileSync(join(art, "baselines", "main.tsv"), "slug=main\ncwd=/repo/main\nbranch=main\n");
+  }
+  function hubFlags(): string {
+    const root = join(h.home, "forensics");
+    if (!existsSync(root)) return "";
+    return readdirSync(root).flatMap((d) => readdirSync(join(root, d)).map((f) => readFileSync(join(root, d, f), "utf8"))).join("");
+  }
+
+  for (const action of ["merge", "pr", "discard"] as const) {
+    it(`${action} → rc 2, nothing published, and the refusal reaches the review feed`, async () => {
+      const art = seedArt();
+      seedFinish(art);
+      seedJobRecord();
+      const r = fakeRunner({});
+      const { rc, err } = await capture(() => finishWith2(TOPIC, action, () => r, true));
+      expect(rc).toBe(2);
+      expect(err).toContain("detached job in flight");
+      // The gate sits BEFORE the results file is truncated, so the previous run's record survives.
+      expect(existsSync(join(art, "finish-results.tsv"))).toBe(false);
+      expect(hubFlags()).toContain(`finish ${action}: REFUSED`);
+    });
+  }
+
+  it("keep passes the gate and finishes normally", async () => {
+    const art = seedArt();
+    seedFinish(art);
+    seedJobRecord();
+    const r = fakeRunner({ "git show-ref --verify --quiet refs/heads/feat/implement-foo": { code: 1, stdout: "" } });
+    const { rc } = await capture(() => finishWith2(TOPIC, "keep", () => r, true));
+    expect(rc).toBe(0);
+    expect(readFileSync(join(art, "finish-results.tsv"), "utf8")).toBe("main\tkeep\tsame-branch\n");
+  });
+
+  it("with no job record, merge is untouched by the gate", async () => {
+    const art = seedArt();
+    seedFinish(art);
+    const r = fakeRunner({
+      "git show-ref --verify --quiet refs/heads/feat/implement-foo": { code: 0, stdout: "" },
+      "git checkout -q main": { code: 0, stdout: "" },
+      "git merge --no-edit -q feat/implement-foo": { code: 0, stdout: "" },
+    });
+    const { rc } = await capture(() => finishWith2(TOPIC, "merge", () => r, false));
+    expect(rc).toBe(0);
+    expect(readFileSync(join(art, "finish-results.tsv"), "utf8")).toBe("main\tmerge\tmerged\n");
   });
 });
 

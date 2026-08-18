@@ -7,7 +7,7 @@
 // running worker's inbox task and the worker idles.
 
 import { existsSync, mkdirSync, readdirSync, rmSync, rmdirSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { kvParse } from "../args.js";
 import { log } from "../core/log.js";
 import { atomicWrite } from "../core/atomic.js";
@@ -19,7 +19,7 @@ import { envNum } from "../core/env.js";
 import { pickRandomAgent } from "../core/agents.js";
 import { deriveSlug } from "../core/quick.js";
 import { livePaneNonces, ownsPane, sessionExists, sessionPaneIds, killSession, validSessionName } from "../core/tmux.js";
-import { paneMetaRead, paneMetaReadForDir, outboxPath, outboxOffset, parseEvent, statusPath, type OutboxEvent } from "../core/ipc.js";
+import { paneMetaRead, paneMetaReadForDir, outboxPath, statusPath } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
 import { percentEncode } from "../core/questionCodec.js";
 import * as J from "../core/job.js";
@@ -44,8 +44,29 @@ function usage(): number {
 
 export async function run(args: string[]): Promise<number> {
   const [sub, ...rest] = args;
+  // ONE namespace for the two processes that share a job. Every state path derives from
+  // process.cwd() (paths.ts stateRoot + repoHash), and the job hub is launched with cwd=repoRoot(),
+  // so an origin process invoked from a repo SUBDIRECTORY would resolve a different `_job` tree than
+  // its own hub: same topic, two records. `job mode` then prints DETACHED=0 to the hub, which takes
+  // the directive's "ordinary attached run" branch and finishes by pushing and opening a PR — the
+  // exact thing detachment refuses — and identity/status/inbox split along with it. Outside a git
+  // repo repoRoot() falls back to cwd, so this is a no-op there.
+  const origCwd = process.cwd();
+  const root = repoRoot();
+  if (root !== origCwd) process.chdir(root);
+  try {
+    return await dispatchSub(sub, rest, origCwd);
+  } finally {
+    // One verb per process on the CLI path (src/ap.ts exits right after), but tests import run() and
+    // share a process, so the cwd is restored rather than left moved. A cwd that has since been
+    // removed must not turn a completed verb into a throw.
+    if (root !== origCwd) { try { process.chdir(origCwd); } catch { /* the caller's cwd is gone */ } }
+  }
+}
+
+async function dispatchSub(sub: string, rest: string[], origCwd: string): Promise<number> {
   switch (sub) {
-    case "start":        return startRun(rest);
+    case "start":        return startRun(rest, origCwd);
     case "status":       return statusRun(rest);
     case "wait":         return waitRun(rest);
     case "relay":        return relayRun(rest);
@@ -69,24 +90,27 @@ function requireJob(topic: string, verb: string): J.JobRecord | null {
   if (!rec) { log.error(`job ${verb}: no readable job for topic '${topic}' (looked at ${J.jobPath(topic)})`); return null; }
   return rec;
 }
-function readEvents(path: string): OutboxEvent[] {
-  return readIfExists(path).split("\n").map(parseEvent).filter((e): e is OutboxEvent => e !== null);
+/** The byte offset of the hub's outbox this origin has already consumed (0 when unrecorded). */
+function readCursor(topic: string): number {
+  return Number(readIfExists(J.jobCursorPath(topic)).trim()) || 0;
 }
 function hubState(rec: J.JobRecord): string {
   const m = /"state"\s*:\s*"([^"]*)"/.exec(readIfExists(statusPath(rec.hub.agent, rec.hub.model, rec.topic)));
   return m ? m[1] : "unknown";
 }
-/** Every pane under this topic that ap can PROVE is its own, right now. Collected before teardown,
- *  because teardown archives the pane.json files this reads. */
-async function ownedPanes(topic: string): Promise<Set<string>> {
+/** Every pane under this topic that ap can PROVE is its own right now, WITH the nonce that proved
+ *  it. Collected before teardown, because teardown archives the pane.json files this reads — and the
+ *  nonce is kept rather than discarded because the id alone is not evidence: the kill re-checks it
+ *  against a live snapshot taken at kill time. */
+async function ownedPanes(topic: string): Promise<Map<string, string>> {
   const td = topicDir(topic);
-  const out = new Set<string>();
+  const out = new Map<string, string>();
   if (!existsSync(td)) return out;
   const live = await livePaneNonces();
   for (const e of readdirSync(td, { withFileTypes: true })) {
     if (!e.isDirectory() || isArtifactDir(e.name)) continue;
     const m = paneMetaReadForDir(join(td, e.name));
-    if (m.paneId && ownsPane(live, m.paneId, m.nonce)) out.add(m.paneId);
+    if (m.paneId && ownsPane(live, m.paneId, m.nonce)) out.set(m.paneId, m.nonce);
   }
   return out;
 }
@@ -97,7 +121,7 @@ const enc = (s: unknown): string => percentEncode(typeof s === "string" ? s : ""
 
 // ---------- start ----------
 
-async function startRun(rest: string[]): Promise<number> {
+async function startRun(rest: string[], origCwd: string): Promise<number> {
   let command = "", argsFile = "", topic = "", provider = "", finish = "keep", hubModel = "claude";
   let budgetHours = 6, maxRounds = 5;
   for (let i = 0; i < rest.length; i++) {
@@ -115,6 +139,11 @@ async function startRun(rest: string[]): Promise<number> {
   }
 
   if (!J.isJobCommand(command)) { log.error(`job start: --command must be one of ${J.JOB_COMMANDS.join("|")}; got: '${command}'`); return 2; }
+  // The operator typed this path from wherever they stood, but run() has already moved this process
+  // to the repo root and the job hub reads the record from there — so it is resolved against the
+  // ORIGIN's cwd and recorded absolute. A relative path left as typed would exist for the caller and
+  // be missing for the hub.
+  if (argsFile) argsFile = isAbsolute(argsFile) ? argsFile : resolve(origCwd, argsFile);
   if (!argsFile || !existsSync(argsFile)) { log.error(`job start: --args-file must be an existing path; got: '${argsFile}'`); return 2; }
   if (!J.finishAllowedDetached(finish)) {
     log.error(`job start: --finish ${finish} is refused for a detached run. Nothing merges, pushes, or opens a PR while no one is watching: the run ends on its branch and you decide from there. Use --finish keep.`);
@@ -170,8 +199,14 @@ async function statusRun(rest: string[]): Promise<number> {
   if (!rec) return 1;
   const live = await livePaneNonces();
   const liveness = J.classifyJobLiveness(live, paneMetaRead(rec.hub.agent, rec.hub.model, rec.topic));
-  const events = readEvents(outboxPath(rec.hub.agent, rec.hub.model, rec.topic));
+  const outbox = readIfExists(outboxPath(rec.hub.agent, rec.hub.model, rec.topic));
+  const events = J.parseOutbox(outbox);
   const { last, parked } = J.jobProgress(events);
+  // A question the origin already answered must stop reporting as parked: job.md tells it to relay
+  // whenever PARKED=yes, so a question left standing after its answer is a duplicate-relay loop that
+  // writes the hub's inbox again. The relay's cursor is the byte size of the snapshot it answered,
+  // so a cursor at or past the outbox's current size means this question is inside what it consumed.
+  const stillParked = parked && !J.questionConsumed(Buffer.byteLength(outbox, "utf8"), readCursor(rec.topic)) ? parked : null;
   const now = Date.now();
   const el = J.elapsedHours(rec.started, now);
 
@@ -181,8 +216,8 @@ async function statusRun(rest: string[]): Promise<number> {
     `STARTED=${rec.started}\nELAPSED_H=${el === null ? "?" : el.toFixed(2)}\nBUDGET_H=${rec.budget_hours}\n` +
     `BUDGET=${J.budgetExceeded(rec.started, rec.budget_hours, now) ? "exceeded" : "within"}\n` +
     `FINISH=${rec.finish}\nEVENTS=${events.length}\nLAST_EVENT=${last ? last.event : "none"}\n` +
-    `PARKED=${parked ? "yes" : "no"}\n`);
-  if (parked) process.stdout.write(`PARKED_MESSAGE=${enc(parked.message ?? parked.note ?? "")}\n`);
+    `PARKED=${stillParked ? "yes" : "no"}\n`);
+  if (stillParked) process.stdout.write(`PARKED_MESSAGE=${enc(stillParked.message ?? stillParked.note ?? "")}\n`);
   if (liveness === "dead") {
     process.stdout.write(`NOTE=${enc(`the job hub's pane is gone. Its workers, if any, are now unsupervised: 'ap list ${rec.topic}' shows them, 'ap job stop ${rec.topic}' tears the whole job down. Nothing is auto-respawned — a second hub waking onto a live worker corrupts the run.`)}\n`);
   }
@@ -199,9 +234,8 @@ async function statusRun(rest: string[]): Promise<number> {
 async function waitRun(rest: string[]): Promise<number> {
   const rec = requireJob(rest[0], "wait");
   if (!rec) return 1;
-  const cursor = Number(readIfExists(J.jobCursorPath(rec.topic)).trim()) || 0;
   const budget = envNum("AP_JOB_WAIT_TIMEOUT_S", 3600);
-  const ev = await liveOutboxWait(rec.hub.agent, rec.hub.model, rec.topic, cursor, ["done", "error", "question"], budget);
+  const ev = await liveOutboxWait(rec.hub.agent, rec.hub.model, rec.topic, readCursor(rec.topic), ["done", "error", "question"], budget);
   if (!ev) { process.stdout.write("JS=timeout\n"); return 1; }
   process.stdout.write(`JS=${ev.event}\n`);
   if (ev.event === "question") process.stdout.write(`QUESTION=${enc(ev.message ?? "")}\n`);
@@ -213,11 +247,22 @@ async function relayRun(rest: string[]): Promise<number> {
   if (!rec) return 1;
   const msg = rest.slice(1).join(" ").trim();
   if (!msg) { log.error("job relay: a message (or @file) is required"); return 2; }
+  // ONE read of the outbox settles both halves: whether there is anything to answer, and the offset
+  // this relay may consume up to. The parked check is the ONLY gate here — `send` checks pane
+  // ownership and nothing else (the busy gate lives in other callers, never in send.ts), so without
+  // it a relay onto a working hub overwrites the inbox task it is mid-way through, and a relay onto
+  // a finished one writes a task nobody will ever read.
+  const { last, parked, cursor } = J.relaySnapshot(readIfExists(outboxPath(rec.hub.agent, rec.hub.model, rec.topic)));
+  if (!parked) {
+    log.error(`job relay: nothing is parked (last event: ${last ? last.event : "none"}) — refusing to write the job hub's inbox; a write now would clobber its running or finished task`);
+    return 1;
+  }
   const rc = await sendRun(["--from", "hub", rec.hub.agent, rec.topic, msg]);
   if (rc !== 0) return rc;
-  // Consume everything up to now, so the next `job wait` does not re-report the question just
-  // answered. Taken AFTER the send: the offset is a high-water mark, not a claim about ordering.
-  atomicWrite(J.jobCursorPath(rec.topic), String(outboxOffset(outboxPath(rec.hub.agent, rec.hub.model, rec.topic))) + "\n");
+  // The SNAPSHOT's offset, never a re-stat after the send: the snapshot ends at the question, so an
+  // event the hub appended while the send was in flight stays beyond the cursor and the next
+  // `job wait` still sees it. Re-stating here lost a `done` that landed mid-send.
+  atomicWrite(J.jobCursorPath(rec.topic), String(cursor) + "\n");
   log.ok(`job relay: answer delivered to ${rec.hub.agent} on ${rec.topic}`);
   return 0;
 }
@@ -255,20 +300,55 @@ async function stopJobRun(rest: string[]): Promise<number> {
   const rec = requireJob(rest[0], "stop");
   if (!rec) return 1;
   // Snapshot ownership BEFORE teardown: teardown archives the pane.json files this evidence lives in.
-  const owned = await ownedPanes(rec.topic);
+  // Persist it too, merged over whatever an earlier incomplete stop recorded — without that file a
+  // re-run has no pane.json left to read, so it could never prove the session was ours and could
+  // never finish the sweep.
+  const evidence = J.mergePaneEvidence(readPaneEvidence(rec.topic), await ownedPanes(rec.topic));
+  atomicWrite(J.panesEvidencePath(rec.topic), JSON.stringify(evidence) + "\n");
+  const recorded = new Map(Object.entries(evidence));
   const rc = await stopRun([rec.topic]);
   if (await sessionExists(rec.session)) {
     const panes = await sessionPaneIds(rec.session);
-    if (J.sessionKillable(panes, owned)) { await killSession(rec.session); log.ok(`job stop: killed detached session ${rec.session}`); }
-    else {
-      const strangers = panes.filter((p) => !owned.has(p));
+    // The ownership check is re-run against a snapshot taken NOW, not against the ids collected
+    // before teardown: a pane id is never proof by itself, and a %N the server recycled in between
+    // carries no @ap_nonce and fails closed.
+    const live = await livePaneNonces();
+    if (!J.sessionKillable(panes, recorded, live)) {
+      const strangers = panes.filter((p) => !ownsPane(live, p, recorded.get(p) ?? ""));
       log.warn(`job stop: session ${rec.session} left intact — ${strangers.length ? `it still holds ${strangers.join(", ")}, which ap cannot prove are its own` : "ap could not enumerate its panes"}. Inspect with: tmux list-panes -s -t =${rec.session}`);
+      return keepRecord(rec, "the session was not swept");
     }
+    // The kill's own verdict decides, and it is verified: reporting a teardown ap cannot prove and
+    // then deleting the record would leave the next `job start <topic>` free to adopt (by name) a
+    // session that still holds panes — including strangers'.
+    const killed = await killSession(rec.session);
+    if (!killed || await sessionExists(rec.session)) {
+      log.warn(`job stop: kill-session ${rec.session} did not complete — the session is still there. Inspect with: tmux list-panes -s -t =${rec.session}`);
+      return keepRecord(rec, "the session is still alive");
+    }
+    log.ok(`job stop: killed detached session ${rec.session}`);
   }
   rmSync(jobDir(rec.topic), { recursive: true, force: true });
   try { rmdirSync(topicDir(rec.topic)); } catch { /* tolerate non-empty */ }
   log.ok(`job stop: ${rec.topic} torn down`);
   return rc;
+}
+
+/** The pane evidence an earlier `job stop` persisted; {} for absent or unusable content. */
+function readPaneEvidence(topic: string): Record<string, string> {
+  try {
+    const o = JSON.parse(readIfExists(J.panesEvidencePath(topic))) as Record<string, unknown>;
+    if (!o || typeof o !== "object") return {};
+    return Object.fromEntries(Object.entries(o).filter((e): e is [string, string] => typeof e[1] === "string"));
+  } catch { return {}; }
+}
+
+/** An incomplete teardown KEEPS the job record and says so. The workers are already archived, so a
+ *  re-run is safe and — with the pane evidence persisted next to the record — is the only thing that
+ *  can still finish the kill. Deleting the record here would strand the session unguarded. */
+function keepRecord(rec: J.JobRecord, why: string): number {
+  log.warn(`job stop: ${why}, so the job record is KEPT (${J.jobPath(rec.topic)}). Inspect the session, then re-run 'ap job stop ${rec.topic}' to finish the sweep, or clear ${jobDir(rec.topic)} by hand.`);
+  return 1;
 }
 
 // ---------- mechanical signals the directive branches on ----------
@@ -282,8 +362,18 @@ function modeRun(rest: string[]): number {
 }
 
 function budgetCheckRun(rest: string[]): number {
-  const rec = requireJob(rest[0], "budget-check");
-  if (!rec) return 2;
+  const topic = rest[0];
+  if (!topic || !validateSlug(topic)) { log.error(`job budget-check: topic must match [a-z0-9-]+ and be <= 32 chars; got: '${topic}'`); return 2; }
+  const rec = readJob(topic);
+  // Fail CLOSED toward parking, exactly as budgetExceeded does with a record it cannot interpret:
+  // the job hub branches on 0-vs-1 ("exit 1 means exhausted -> write RESUME.md, park, stop"), so an
+  // unreadable record has to land on the park side. Rc 2 (usage) is kept for a malformed slug only,
+  // because that is the operator's typo, not a running job's state.
+  if (!rec) {
+    process.stdout.write("BUDGET=unknown\n");
+    log.error(`job budget-check: no readable job for topic '${topic}' (looked at ${J.jobPath(topic)}) — treating the budget as exhausted`);
+    return 1;
+  }
   const now = Date.now();
   const el = J.elapsedHours(rec.started, now);
   const exceeded = J.budgetExceeded(rec.started, rec.budget_hours, now);

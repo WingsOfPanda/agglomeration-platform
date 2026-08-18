@@ -185,10 +185,13 @@ export async function sessionPaneIds(session: string): Promise<string[]> {
     return stdout.split("\n").filter(Boolean);
   } catch { return []; }
 }
-/** Kill an entire session. The CALLER must have proven every pane in it is ap's (sessionKillable);
- *  this does not re-check, exactly as killGraceful takes its ownership verdict as an argument. */
-export async function killSession(session: string): Promise<void> {
-  try { await execa("tmux", killSessionArgs(session)); } catch { /* tolerate */ }
+/** Kill an entire session; false on any tmux error (never throws). The CALLER must have proven every
+ *  pane in it is ap's (sessionKillable); this does not re-check, exactly as killGraceful takes its
+ *  ownership verdict as an argument. The boolean is load-bearing, like paneNonceSet's: a caller that
+ *  swallowed the failure would report a teardown it cannot prove and then clear the record that was
+ *  the only evidence of what to finish. */
+export async function killSession(session: string): Promise<boolean> {
+  try { await execa("tmux", killSessionArgs(session)); return true; } catch { return false; }
 }
 
 /** Does this EXACT session exist? Never throws: no tmux server and no tmux binary both answer "no",

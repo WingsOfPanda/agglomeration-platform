@@ -46,7 +46,13 @@ When `PARKED=yes`, decode `PARKED_MESSAGE=` and put it to the user with **AskUse
 their answer with `$CS job relay <TOPIC> "<answer>"` (or `@<file>` for a long one), then re-arm the
 watch: `Bash(command='$CS job wait <TOPIC>', run_in_background: true)`.
 
-Relay bumps the job's cursor past the question, so the next `wait` will not re-report it.
+Relay bumps the job's cursor past the question, so the next `wait` will not re-report it — and
+`status` stops reporting an answered question as `PARKED=yes`, so seeing it again means a genuinely
+new question, never the same one twice.
+
+Relay **refuses (rc 1) when nothing is parked right now** — the hub is working, or it has finished.
+That is the only gate protecting its inbox: a write mid-task overwrites the task it is running. If
+you get that refusal, read `$CS job status <TOPIC>` rather than retrying.
 
 ### `attach <topic>` — after THIS session restarted
 
@@ -66,6 +72,12 @@ same rows plus hub liveness.
 session **only if every pane in it is provably ap's**, then clears the job record. A session holding
 anything ap cannot account for is left intact and named, rather than killed. Confirm with the user
 first unless they asked for it — a job may be hours into real work.
+
+An **incomplete teardown exits 1 and KEEPS the job record** (the session was not swept, or the kill
+did not take). That is deliberate: the record is what stops the next `job start <TOPIC>` from
+adopting a session that still holds panes. Show the user the named panes, and re-run
+`$CS job stop <TOPIC>` once they are dealt with — the workers are already archived, and the pane
+evidence stored beside the record lets the re-run finish the sweep.
 
 ## Reporting
 

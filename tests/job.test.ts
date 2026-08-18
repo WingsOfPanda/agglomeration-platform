@@ -76,19 +76,40 @@ describe("budget", () => {
   });
 });
 
-describe("sessionKillable — fail closed", () => {
-  it("true only when the session holds panes and EVERY one is provably ours", () => {
-    expect(J.sessionKillable(["%1", "%2"], new Set(["%1", "%2", "%3"]))).toBe(true);
+describe("sessionKillable — fail closed, on the LIVE nonce and not on the id", () => {
+  const NONCE2 = "aaaaaaaa-bbbb-4ccc-8ddd-111111111111";
+  const recorded = new Map([["%1", NONCE], ["%2", NONCE2]]);
+  it("true only when the session holds panes and EVERY one still carries the nonce we recorded", () => {
+    expect(J.sessionKillable(["%1", "%2"], recorded, new Map([["%1", NONCE], ["%2", NONCE2], ["%3", "x"]]))).toBe(true);
   });
-  it("one unaccounted-for pane refuses the kill", () => {
-    expect(J.sessionKillable(["%1", "%9"], new Set(["%1"]))).toBe(false);
+  it("a recycled id — live, but carrying a different nonce or none — refuses the kill", () => {
+    expect(J.sessionKillable(["%1", "%2"], recorded, new Map([["%1", NONCE], ["%2", NONCE]]))).toBe(false);
+    expect(J.sessionKillable(["%1"], recorded, new Map([["%1", ""]]))).toBe(false);   // a fresh server's %1
+  });
+  it("a pane the evidence never recorded refuses the kill, however live it is", () => {
+    expect(J.sessionKillable(["%1", "%9"], recorded, new Map([["%1", NONCE], ["%9", "someone-elses"]]))).toBe(false);
   });
   it("an empty listing is 'nothing to kill', NOT 'safe to kill' (it also means tmux errored)", () => {
-    expect(J.sessionKillable([], new Set(["%1"]))).toBe(false);
-    expect(J.sessionKillable([], new Set())).toBe(false);
+    expect(J.sessionKillable([], recorded, new Map([["%1", NONCE]]))).toBe(false);
+    expect(J.sessionKillable([], new Map(), new Map())).toBe(false);
   });
-  it("no owned panes at all refuses the kill", () => {
-    expect(J.sessionKillable(["%1"], new Set())).toBe(false);
+  it("no recorded evidence at all refuses the kill", () => {
+    expect(J.sessionKillable(["%1"], new Map(), new Map([["%1", NONCE]]))).toBe(false);
+  });
+  it("an empty LIVE snapshot (no tmux server) refuses the kill", () => {
+    expect(J.sessionKillable(["%1"], recorded, new Map())).toBe(false);
+  });
+});
+
+describe("mergePaneEvidence — a re-run can still finish an interrupted sweep", () => {
+  it("the current snapshot wins per id, and what only the prior run proved survives", () => {
+    expect(J.mergePaneEvidence({ "%1": "old", "%7": "gone-from-tmux" }, new Map([["%1", NONCE], ["%2", NONCE]])))
+      .toEqual({ "%1": NONCE, "%2": NONCE, "%7": "gone-from-tmux" });
+  });
+  it("either side empty is the other side", () => {
+    expect(J.mergePaneEvidence({}, new Map([["%1", NONCE]]))).toEqual({ "%1": NONCE });
+    expect(J.mergePaneEvidence({ "%1": NONCE }, new Map())).toEqual({ "%1": NONCE });
+    expect(J.mergePaneEvidence({}, new Map())).toEqual({});
   });
 });
 
@@ -103,6 +124,46 @@ describe("jobProgress", () => {
   });
   it("an empty outbox has no last event and nothing parked", () => {
     expect(J.jobProgress([])).toEqual({ last: null, parked: null });
+  });
+});
+
+describe("relaySnapshot — one read decides both the verdict and the offset it was taken at", () => {
+  const line = (o: Record<string, unknown>) => JSON.stringify(o) + "\n";
+  it("a question that is the newest event is parked", () => {
+    const text = line({ event: "progress" }) + line({ event: "question", message: "which provider?" });
+    expect(J.relaySnapshot(text).parked?.message).toBe("which provider?");
+  });
+  it("an ack or a terminal event after the question means it was already answered", () => {
+    expect(J.relaySnapshot(line({ event: "question" }) + line({ event: "ack" })).parked).toBeNull();
+    expect(J.relaySnapshot(line({ event: "question" }) + line({ event: "done" })).parked).toBeNull();
+    expect(J.relaySnapshot(line({ event: "question" }) + line({ event: "ack" })).last?.event).toBe("ack");
+  });
+  it("the cursor is the BYTE size of the snapshot, multibyte text included", () => {
+    const text = line({ event: "question", message: "café — ok?" });
+    expect(J.relaySnapshot(text).cursor).toBe(Buffer.byteLength(text, "utf8"));
+    expect(J.relaySnapshot(text).cursor).toBeGreaterThan(text.length);   // not the character count
+  });
+  it("an empty outbox parks nothing at offset zero", () => {
+    expect(J.relaySnapshot("")).toEqual({ last: null, parked: null, cursor: 0 });
+  });
+  it("non-JSON noise between events is skipped, but still counts toward the offset", () => {
+    const text = "starting up\n" + line({ event: "question" });
+    expect(J.relaySnapshot(text).parked?.event).toBe("question");
+    expect(J.relaySnapshot(text).cursor).toBe(Buffer.byteLength(text, "utf8"));
+  });
+});
+
+describe("questionConsumed — closes the duplicate-relay loop", () => {
+  it("a cursor at or past the outbox's size means the newest question was already answered", () => {
+    expect(J.questionConsumed(196, 196)).toBe(true);
+    expect(J.questionConsumed(196, 300)).toBe(true);   // the hub shrank/rotated its outbox
+  });
+  it("bytes beyond the cursor mean the question is genuinely new", () => {
+    expect(J.questionConsumed(196, 115)).toBe(false);
+    expect(J.questionConsumed(196, 0)).toBe(false);    // nothing relayed yet
+  });
+  it("an empty outbox is consumed by definition (there is nothing to answer)", () => {
+    expect(J.questionConsumed(0, 0)).toBe(true);
   });
 });
 

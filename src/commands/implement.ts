@@ -7,6 +7,7 @@ import { log } from "../core/log.js";
 import { applyArgsFile, kvParse } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
 import { repoRoot, repoStateDir } from "../core/paths.js";
+import { jobPath } from "../core/job.js";
 import { auditDoc } from "../core/audit.js";
 import {
   parseImplementArgs, deriveTopicFromPath, detectProvider,
@@ -472,6 +473,15 @@ function applyFinish(art: string, t: { slug: string; cwd: string }, action: "mer
 export async function finishWith(topic: string, action: "merge" | "pr" | "keep" | "discard", d: FinishDeps): Promise<number> {
   const art = implementArtDir(topic);
   if (!existsSync(art)) { log.error(`implement finish: art-dir missing: ${art}`); return 1; }
+  // The mechanical half of a detached run's "never merge, never push, never open a PR". The
+  // directive says it in prose; this refuses it in code, before the results file is truncated, so a
+  // mis-instructed job hub cannot publish work no operator has seen. Recorded to the review feed as
+  // well as stderr: a hub that got here at all is a defect /ap:review must see.
+  if (existsSync(jobPath(topic)) && action !== "keep") {
+    log.error(`implement finish: detached job in flight (${jobPath(topic)}) — only 'keep' is allowed; ${action} would publish with no one watching`);
+    runFlag("implement", topic, `finish ${action}: REFUSED — a detached job record is in flight for this topic, so only 'keep' is allowed; nothing was merged, pushed, or discarded`);
+    return 2;
+  }
   const results = join(art, "finish-results.tsv"); writeFileSync(results, "");
   let n = 0, stranded = 0, baseBlocked = 0;
   for (const t of iterTargets(topic)) {

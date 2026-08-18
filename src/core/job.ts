@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { jobDir } from "./paths.js";
 import { ownsPane, verifiableNonce } from "./tmux.js";
 import { deriveTopicFromPath } from "./implement.js";
+import { parseEvent } from "./ipc.js";
 import type { OutboxEvent, PaneOwner } from "./ipc.js";
 
 export const JOB_COMMANDS = ["implement", "quick"] as const;
@@ -37,6 +38,10 @@ export function jobPath(topic: string): string { return join(jobDir(topic), "job
  *  from it; `job relay` bumps it past the question it just answered, so the next wait does not
  *  re-report a question that has been dealt with. */
 export function jobCursorPath(topic: string): string { return join(jobDir(topic), "cursor.txt"); }
+/** Pane id -> the ownership nonce that proved it ours, persisted by `job stop` BEFORE teardown
+ *  archives the pane.json files that evidence is read from. A teardown that could not finish keeps
+ *  this next to the record so the re-run still has proof to act on. */
+export function panesEvidencePath(topic: string): string { return join(jobDir(topic), "panes.json"); }
 
 export function formatJob(j: JobRecord): string { return JSON.stringify(j) + "\n"; }
 
@@ -102,13 +107,25 @@ export function budgetExceeded(startedIso: string, hours: number, nowMs: number)
 
 // ---------- teardown ----------
 
-/** May the whole session be killed? Only when it holds at least one pane AND every pane in it is
- *  one ap has proven is its own. An empty list is "nothing to kill" (false), not "safe to kill":
+/** May the whole session be killed? Only when it holds at least one pane AND every pane in it still
+ *  carries, LIVE, the nonce ap recorded for it. A pane id alone is never proof of ownership (0.5.30):
+ *  `recorded` is the evidence persisted before teardown archived the pane.json files it came from,
+ *  and `live` is a snapshot taken at kill time, so a `%N` the tmux server recycled carries no
+ *  @ap_nonce and fails the check. An empty list is "nothing to kill" (false), not "safe to kill":
  *  sessionPaneIds returns empty for a vanished session and for any tmux error alike, and those must
  *  not authorize a kill. In practice this is a safety net rather than the normal path — teardown
  *  kills each worker pane individually, and tmux destroys a session when its last window closes. */
-export function sessionKillable(sessionPanes: string[], owned: Set<string>): boolean {
-  return sessionPanes.length > 0 && sessionPanes.every((p) => owned.has(p));
+export function sessionKillable(sessionPanes: string[], recorded: Map<string, string>, live: Map<string, string>): boolean {
+  return sessionPanes.length > 0 && sessionPanes.every((p) => ownsPane(live, p, recorded.get(p) ?? ""));
+}
+
+/** Fold a fresh ownership snapshot into the evidence a previous `job stop` persisted: `current`
+ *  wins per pane id, entries only `prior` knows about survive. A teardown that could not finish
+ *  (an unaccounted pane, a kill that did not take) leaves the record in place, and by the time the
+ *  operator re-runs `job stop` the workers are archived — their pane.json files gone — so the
+ *  persisted evidence is the only thing that can still prove which panes were ours. */
+export function mergePaneEvidence(prior: Record<string, string>, current: Map<string, string>): Record<string, string> {
+  return { ...prior, ...Object.fromEntries(current) };
 }
 
 // ---------- progress ----------
@@ -122,6 +139,33 @@ export function jobProgress(events: OutboxEvent[]): JobProgress {
   const last = events.length ? events[events.length - 1] : null;
   return { last, parked: last && last.event === "question" ? last : null };
 }
+
+/** Every typed event in an outbox SNAPSHOT (non-JSON lines skipped, the frozen matching mechanism).
+ *  Text rather than a path, so one read serves both the verdict and the byte count taken from it. */
+export function parseOutbox(text: string): OutboxEvent[] {
+  return text.split("\n").map(parseEvent).filter((e): e is OutboxEvent => e !== null);
+}
+
+/** What a relay decides, from ONE read of the hub's outbox: what is parked right now, and the byte
+ *  offset that verdict was computed at.
+ *
+ *  `cursor` is the size of the SNAPSHOT, never a re-stat after the send. The snapshot ends at the
+ *  question, so anything the hub appends afterwards — including a terminal event racing the beat
+ *  inside a send — stays BEYOND the cursor and the next `job wait` still reports it; a cursor taken
+ *  after the send swallowed a `done` that landed mid-send and the wait timed out on a finished job.
+ *  The same single read makes a stale or duplicate relay fail its `parked` check: by then the hub's
+ *  ack (or its terminal event) is the newest event, so `parked` is null. */
+export function relaySnapshot(text: string): { last: OutboxEvent | null; parked: OutboxEvent | null; cursor: number } {
+  const { last, parked } = jobProgress(parseOutbox(text));
+  return { last, parked, cursor: Buffer.byteLength(text, "utf8") };
+}
+
+/** Was the newest question already answered? `cursor` is what a relay recorded (the size of the
+ *  snapshot it answered), `size` the outbox's size now. At or past it means the question sits inside
+ *  what a relay already consumed, so `job status` must stop reporting PARKED=yes: commands/job.md
+ *  tells the origin hub to relay whenever it sees PARKED=yes, and a question that stays parked after
+ *  its answer is a directive-level duplicate-relay loop. */
+export function questionConsumed(size: number, cursor: number): boolean { return cursor >= size; }
 
 // ---------- launch-time gates ----------
 

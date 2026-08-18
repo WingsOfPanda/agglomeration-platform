@@ -38,7 +38,9 @@ Two entry paths, decided once before Stage 0 — the same shape `/ap:implement` 
   no interactive gates, so only two things change:
   - **Finishing is forced to keep.** The default finish — push the branch and open a PR when a
     remote exists — is exactly what an unattended run must not do. Behave as if `--no-finish` were
-    passed: leave the branch local, push nothing, open no PR. The operator finishes it.
+    passed: leave the branch local, push nothing, open no PR. The operator finishes it. This gate is
+    **mechanical**: `quick finish` itself disables publication while a `_job` record exists for the
+    topic and diverts to the branch-only path, so a wrong instruction here cannot push anything.
   - **Budget.** Run `$CS job budget-check <SLUG>` before the verify pass and again before finishing.
     Exit 1 means write `RESUME.md`, PARK a question, and stop.
 

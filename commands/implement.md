@@ -72,7 +72,7 @@ status to `idle`, and wait for your inbox. Resume from exactly where you parked.
 | 1 — `turn-send` "not idle" | AskUserQuestion wait/force/abort | wait 60s and retry once, then `reset-status` and retry once, then PARK. Never a third silent force. |
 | 1 — `ROUTE=escalate` | AskUserQuestion | PARK, carrying the worker's decoded text verbatim as your `message`. |
 | 4 — scope check `OOS_COUNT > 0` | AskUserQuestion amend/send-back/force-keep | PARK. Never auto-force-keep, never auto-amend. (`SCOPE_DECLARED=0` is still the documented no-op — say so in the parked message.) |
-| 4 — finish menu | AskUserQuestion merge/pr/keep/discard | `$CS implement finish <TOPIC> keep`. Never merge, push, or open a PR. |
+| 4 — finish menu | AskUserQuestion merge/pr/keep/discard | `$CS implement finish <TOPIC> keep`. Never merge, push, or open a PR — and the gate is **mechanical**: the finish verb refuses `merge`/`pr`/`discard` (rc 2, recorded to the review feed) while a `_job` record exists for the topic. |
 
 `ROUTE=verify` and `ROUTE=objection` are **not** parked: verify claims against ground truth and
 adjudicate objections exactly as the attached path does. Only decisions that are genuinely the

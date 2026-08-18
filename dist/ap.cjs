@@ -9454,12 +9454,12 @@ var require_isexe = __commonJS({
         if (typeof Promise !== "function") {
           throw new TypeError("callback not provided");
         }
-        return new Promise(function(resolve2, reject) {
+        return new Promise(function(resolve3, reject) {
           isexe(path6, options || {}, function(er, is) {
             if (er) {
               reject(er);
             } else {
-              resolve2(is);
+              resolve3(is);
             }
           });
         });
@@ -9525,27 +9525,27 @@ var require_which = __commonJS({
         opt = {};
       const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
       const found = [];
-      const step = (i2) => new Promise((resolve2, reject) => {
+      const step = (i2) => new Promise((resolve3, reject) => {
         if (i2 === pathEnv.length)
-          return opt.all && found.length ? resolve2(found) : reject(getNotFoundError(cmd));
+          return opt.all && found.length ? resolve3(found) : reject(getNotFoundError(cmd));
         const ppRaw = pathEnv[i2];
         const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
         const pCmd = path6.join(pathPart, cmd);
         const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve2(subStep(p, i2, 0));
+        resolve3(subStep(p, i2, 0));
       });
-      const subStep = (p, i2, ii) => new Promise((resolve2, reject) => {
+      const subStep = (p, i2, ii) => new Promise((resolve3, reject) => {
         if (ii === pathExt.length)
-          return resolve2(step(i2 + 1));
+          return resolve3(step(i2 + 1));
         const ext = pathExt[ii];
         isexe(p + ext, { pathExt: pathExtExe }, (er, is) => {
           if (!er && is) {
             if (opt.all)
               found.push(p + ext);
             else
-              return resolve2(p + ext);
+              return resolve3(p + ext);
           }
-          return resolve2(subStep(p, i2, ii + 1));
+          return resolve3(subStep(p, i2, ii + 1));
         });
       });
       return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
@@ -10625,8 +10625,8 @@ var init_deferred = __esm({
   "node_modules/execa/lib/utils/deferred.js"() {
     createDeferred = () => {
       const methods = {};
-      const promise = new Promise((resolve2, reject) => {
-        Object.assign(methods, { resolve: resolve2, reject });
+      const promise = new Promise((resolve3, reject) => {
+        Object.assign(methods, { resolve: resolve3, reject });
       });
       return Object.assign(promise, methods);
     };
@@ -15919,11 +15919,11 @@ var init_concurrent = __esm({
       const promises = weakMap.get(stream);
       const promise = createDeferred();
       promises.push(promise);
-      const resolve2 = promise.resolve.bind(promise);
-      return { resolve: resolve2, promises };
+      const resolve3 = promise.resolve.bind(promise);
+      return { resolve: resolve3, promises };
     };
-    waitForConcurrentStreams = async ({ resolve: resolve2, promises }, subprocess) => {
-      resolve2();
+    waitForConcurrentStreams = async ({ resolve: resolve3, promises }, subprocess) => {
+      resolve3();
       const [isSubprocessExit] = await Promise.race([
         Promise.allSettled([true, subprocess]),
         Promise.all([false, ...promises])
@@ -16758,7 +16758,9 @@ async function sessionPaneIds(session) {
 async function killSession(session) {
   try {
     await execa("tmux", killSessionArgs(session));
+    return true;
   } catch {
+    return false;
   }
 }
 async function sessionExists(session) {
@@ -17679,6 +17681,9 @@ function jobPath(topic) {
 function jobCursorPath(topic) {
   return (0, import_node_path16.join)(jobDir(topic), "cursor.txt");
 }
+function panesEvidencePath(topic) {
+  return (0, import_node_path16.join)(jobDir(topic), "panes.json");
+}
 function formatJob(j) {
   return JSON.stringify(j) + "\n";
 }
@@ -17724,12 +17729,25 @@ function budgetExceeded(startedIso, hours, nowMs) {
   if (!Number.isFinite(hours) || hours <= 0) return true;
   return nowMs - t > hours * 36e5;
 }
-function sessionKillable(sessionPanes, owned) {
-  return sessionPanes.length > 0 && sessionPanes.every((p) => owned.has(p));
+function sessionKillable(sessionPanes, recorded, live) {
+  return sessionPanes.length > 0 && sessionPanes.every((p) => ownsPane(live, p, recorded.get(p) ?? ""));
+}
+function mergePaneEvidence(prior, current) {
+  return { ...prior, ...Object.fromEntries(current) };
 }
 function jobProgress(events) {
   const last = events.length ? events[events.length - 1] : null;
   return { last, parked: last && last.event === "question" ? last : null };
+}
+function parseOutbox(text) {
+  return text.split("\n").map(parseEvent).filter((e) => e !== null);
+}
+function relaySnapshot(text) {
+  const { last, parked } = jobProgress(parseOutbox(text));
+  return { last, parked, cursor: Buffer.byteLength(text, "utf8") };
+}
+function questionConsumed(size, cursor) {
+  return cursor >= size;
 }
 function finishAllowedDetached(action) {
   return action === "keep";
@@ -17794,6 +17812,7 @@ var init_job = __esm({
     init_paths();
     init_tmux();
     init_implement();
+    init_ipc();
     JOB_COMMANDS = ["implement", "quick"];
   }
 });
@@ -19474,7 +19493,9 @@ async function finishWith(topic, r, hasGh) {
   const rec = readBranchRecord("quick", { dir: exec });
   const branch = rec.branch;
   const startBranch = rec.startBranch || "main";
-  const doFinish = readField((0, import_node_path25.join)(exec, "finish.txt")) === "yes";
+  const detachedJob = (0, import_node_fs30.existsSync)(jobPath(topic));
+  if (detachedJob) log.warn(`quick finish: a detached job record is present (${jobPath(topic)}) \u2014 publication is disabled; the run ends on its branch and the operator finishes it`);
+  const doFinish = readField((0, import_node_path25.join)(exec, "finish.txt")) === "yes" && !detachedJob;
   if (!doFinish) {
     r.run("git", ["checkout", "-q", startBranch]);
     const kept2 = restoreStashWip(topic, exec, r, startBranch);
@@ -19584,6 +19605,7 @@ var init_quick2 = __esm({
     init_atomic();
     init_archive();
     init_paths();
+    init_job();
     init_quick();
     init_forensics();
     init_contracts();
@@ -22291,6 +22313,11 @@ async function finishWith2(topic, action, d) {
     log.error(`implement finish: art-dir missing: ${art}`);
     return 1;
   }
+  if ((0, import_node_fs38.existsSync)(jobPath(topic)) && action !== "keep") {
+    log.error(`implement finish: detached job in flight (${jobPath(topic)}) \u2014 only 'keep' is allowed; ${action} would publish with no one watching`);
+    runFlag("implement", topic, `finish ${action}: REFUSED \u2014 a detached job record is in flight for this topic, so only 'keep' is allowed; nothing was merged, pushed, or discarded`);
+    return 2;
+  }
   const results = (0, import_node_path34.join)(art, "finish-results.tsv");
   (0, import_node_fs38.writeFileSync)(results, "");
   let n2 = 0, stranded = 0, baseBlocked = 0;
@@ -22332,6 +22359,7 @@ var init_implement2 = __esm({
     init_args();
     init_atomic();
     init_paths();
+    init_job();
     init_audit();
     init_implement();
     init_archive();
@@ -29326,9 +29354,24 @@ function usage7() {
 }
 async function run16(args) {
   const [sub, ...rest] = args;
+  const origCwd = process.cwd();
+  const root = repoRoot();
+  if (root !== origCwd) process.chdir(root);
+  try {
+    return await dispatchSub(sub, rest, origCwd);
+  } finally {
+    if (root !== origCwd) {
+      try {
+        process.chdir(origCwd);
+      } catch {
+      }
+    }
+  }
+}
+async function dispatchSub(sub, rest, origCwd) {
   switch (sub) {
     case "start":
-      return startRun(rest);
+      return startRun(rest, origCwd);
     case "status":
       return statusRun(rest);
     case "wait":
@@ -29364,8 +29407,8 @@ function requireJob(topic, verb) {
   }
   return rec;
 }
-function readEvents(path6) {
-  return readIfExists(path6).split("\n").map(parseEvent).filter((e) => e !== null);
+function readCursor(topic) {
+  return Number(readIfExists(jobCursorPath(topic)).trim()) || 0;
 }
 function hubState(rec) {
   const m = /"state"\s*:\s*"([^"]*)"/.exec(readIfExists(statusPath(rec.hub.agent, rec.hub.model, rec.topic)));
@@ -29373,17 +29416,17 @@ function hubState(rec) {
 }
 async function ownedPanes(topic) {
   const td = topicDir(topic);
-  const out = /* @__PURE__ */ new Set();
+  const out = /* @__PURE__ */ new Map();
   if (!(0, import_node_fs49.existsSync)(td)) return out;
   const live = await livePaneNonces();
   for (const e of (0, import_node_fs49.readdirSync)(td, { withFileTypes: true })) {
     if (!e.isDirectory() || isArtifactDir(e.name)) continue;
     const m = paneMetaReadForDir((0, import_node_path54.join)(td, e.name));
-    if (m.paneId && ownsPane(live, m.paneId, m.nonce)) out.add(m.paneId);
+    if (m.paneId && ownsPane(live, m.paneId, m.nonce)) out.set(m.paneId, m.nonce);
   }
   return out;
 }
-async function startRun(rest) {
+async function startRun(rest, origCwd) {
   let command = "", argsFile = "", topic = "", provider = "", finish = "keep", hubModel = "claude";
   let budgetHours = 6, maxRounds = 5;
   for (let i2 = 0; i2 < rest.length; i2++) {
@@ -29410,6 +29453,7 @@ async function startRun(rest) {
     log.error(`job start: --command must be one of ${JOB_COMMANDS.join("|")}; got: '${command}'`);
     return 2;
   }
+  if (argsFile) argsFile = (0, import_node_path54.isAbsolute)(argsFile) ? argsFile : (0, import_node_path54.resolve)(origCwd, argsFile);
   if (!argsFile || !(0, import_node_fs49.existsSync)(argsFile)) {
     log.error(`job start: --args-file must be an existing path; got: '${argsFile}'`);
     return 2;
@@ -29480,8 +29524,10 @@ async function statusRun(rest) {
   if (!rec) return 1;
   const live = await livePaneNonces();
   const liveness = classifyJobLiveness(live, paneMetaRead(rec.hub.agent, rec.hub.model, rec.topic));
-  const events = readEvents(outboxPath(rec.hub.agent, rec.hub.model, rec.topic));
+  const outbox = readIfExists(outboxPath(rec.hub.agent, rec.hub.model, rec.topic));
+  const events = parseOutbox(outbox);
   const { last, parked } = jobProgress(events);
+  const stillParked = parked && !questionConsumed(Buffer.byteLength(outbox, "utf8"), readCursor(rec.topic)) ? parked : null;
   const now = Date.now();
   const el = elapsedHours(rec.started, now);
   process.stdout.write(
@@ -29498,10 +29544,10 @@ BUDGET=${budgetExceeded(rec.started, rec.budget_hours, now) ? "exceeded" : "with
 FINISH=${rec.finish}
 EVENTS=${events.length}
 LAST_EVENT=${last ? last.event : "none"}
-PARKED=${parked ? "yes" : "no"}
+PARKED=${stillParked ? "yes" : "no"}
 `
   );
-  if (parked) process.stdout.write(`PARKED_MESSAGE=${enc(parked.message ?? parked.note ?? "")}
+  if (stillParked) process.stdout.write(`PARKED_MESSAGE=${enc(stillParked.message ?? stillParked.note ?? "")}
 `);
   if (liveness === "dead") {
     process.stdout.write(`NOTE=${enc(`the job hub's pane is gone. Its workers, if any, are now unsupervised: 'ap list ${rec.topic}' shows them, 'ap job stop ${rec.topic}' tears the whole job down. Nothing is auto-respawned \u2014 a second hub waking onto a live worker corrupts the run.`)}
@@ -29518,9 +29564,8 @@ PARKED=${parked ? "yes" : "no"}
 async function waitRun(rest) {
   const rec = requireJob(rest[0], "wait");
   if (!rec) return 1;
-  const cursor = Number(readIfExists(jobCursorPath(rec.topic)).trim()) || 0;
   const budget = envNum("AP_JOB_WAIT_TIMEOUT_S", 3600);
-  const ev = await liveOutboxWait(rec.hub.agent, rec.hub.model, rec.topic, cursor, ["done", "error", "question"], budget);
+  const ev = await liveOutboxWait(rec.hub.agent, rec.hub.model, rec.topic, readCursor(rec.topic), ["done", "error", "question"], budget);
   if (!ev) {
     process.stdout.write("JS=timeout\n");
     return 1;
@@ -29539,9 +29584,14 @@ async function relayRun2(rest) {
     log.error("job relay: a message (or @file) is required");
     return 2;
   }
+  const { last, parked, cursor } = relaySnapshot(readIfExists(outboxPath(rec.hub.agent, rec.hub.model, rec.topic)));
+  if (!parked) {
+    log.error(`job relay: nothing is parked (last event: ${last ? last.event : "none"}) \u2014 refusing to write the job hub's inbox; a write now would clobber its running or finished task`);
+    return 1;
+  }
   const rc = await run(["--from", "hub", rec.hub.agent, rec.topic, msg]);
   if (rc !== 0) return rc;
-  atomicWrite(jobCursorPath(rec.topic), String(outboxOffset(outboxPath(rec.hub.agent, rec.hub.model, rec.topic))) + "\n");
+  atomicWrite(jobCursorPath(rec.topic), String(cursor) + "\n");
   log.ok(`job relay: answer delivered to ${rec.hub.agent} on ${rec.topic}`);
   return 0;
 }
@@ -29580,17 +29630,24 @@ function listRun() {
 async function stopJobRun(rest) {
   const rec = requireJob(rest[0], "stop");
   if (!rec) return 1;
-  const owned = await ownedPanes(rec.topic);
+  const evidence = mergePaneEvidence(readPaneEvidence(rec.topic), await ownedPanes(rec.topic));
+  atomicWrite(panesEvidencePath(rec.topic), JSON.stringify(evidence) + "\n");
+  const recorded = new Map(Object.entries(evidence));
   const rc = await run5([rec.topic]);
   if (await sessionExists(rec.session)) {
     const panes = await sessionPaneIds(rec.session);
-    if (sessionKillable(panes, owned)) {
-      await killSession(rec.session);
-      log.ok(`job stop: killed detached session ${rec.session}`);
-    } else {
-      const strangers = panes.filter((p) => !owned.has(p));
+    const live = await livePaneNonces();
+    if (!sessionKillable(panes, recorded, live)) {
+      const strangers = panes.filter((p) => !ownsPane(live, p, recorded.get(p) ?? ""));
       log.warn(`job stop: session ${rec.session} left intact \u2014 ${strangers.length ? `it still holds ${strangers.join(", ")}, which ap cannot prove are its own` : "ap could not enumerate its panes"}. Inspect with: tmux list-panes -s -t =${rec.session}`);
+      return keepRecord(rec, "the session was not swept");
     }
+    const killed = await killSession(rec.session);
+    if (!killed || await sessionExists(rec.session)) {
+      log.warn(`job stop: kill-session ${rec.session} did not complete \u2014 the session is still there. Inspect with: tmux list-panes -s -t =${rec.session}`);
+      return keepRecord(rec, "the session is still alive");
+    }
+    log.ok(`job stop: killed detached session ${rec.session}`);
   }
   (0, import_node_fs49.rmSync)(jobDir(rec.topic), { recursive: true, force: true });
   try {
@@ -29599,6 +29656,19 @@ async function stopJobRun(rest) {
   }
   log.ok(`job stop: ${rec.topic} torn down`);
   return rc;
+}
+function readPaneEvidence(topic) {
+  try {
+    const o2 = JSON.parse(readIfExists(panesEvidencePath(topic)));
+    if (!o2 || typeof o2 !== "object") return {};
+    return Object.fromEntries(Object.entries(o2).filter((e) => typeof e[1] === "string"));
+  } catch {
+    return {};
+  }
+}
+function keepRecord(rec, why) {
+  log.warn(`job stop: ${why}, so the job record is KEPT (${jobPath(rec.topic)}). Inspect the session, then re-run 'ap job stop ${rec.topic}' to finish the sweep, or clear ${jobDir(rec.topic)} by hand.`);
+  return 1;
 }
 function modeRun(rest) {
   const topic = rest[0];
@@ -29612,8 +29682,17 @@ function modeRun(rest) {
   return on6 ? 0 : 1;
 }
 function budgetCheckRun(rest) {
-  const rec = requireJob(rest[0], "budget-check");
-  if (!rec) return 2;
+  const topic = rest[0];
+  if (!topic || !validateSlug(topic)) {
+    log.error(`job budget-check: topic must match [a-z0-9-]+ and be <= 32 chars; got: '${topic}'`);
+    return 2;
+  }
+  const rec = readJob(topic);
+  if (!rec) {
+    process.stdout.write("BUDGET=unknown\n");
+    log.error(`job budget-check: no readable job for topic '${topic}' (looked at ${jobPath(topic)}) \u2014 treating the budget as exhausted`);
+    return 1;
+  }
   const now = Date.now();
   const el = elapsedHours(rec.started, now);
   const exceeded = budgetExceeded(rec.started, rec.budget_hours, now);

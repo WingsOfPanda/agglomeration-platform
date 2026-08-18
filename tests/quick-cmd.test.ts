@@ -17,6 +17,7 @@ import { freshHome } from "./helpers/tmpHome.js";
 import { captureStdout } from "./helpers/captureStdout.js";
 import { quickArtDir, quickExecDir } from "../src/core/quick.js";
 import { outboxPath } from "../src/core/ipc.js";
+import { formatJob, jobPath } from "../src/core/job.js";
 
 // Build an --args-file the way the dispatcher expects (first line tokenized).
 function argsFile(home: string, line: string): string {
@@ -465,6 +466,31 @@ describe("quick finish (finishWith core)", () => {
     expect(calls.some((c) => c[0] === "gh")).toBe(true);
     const { quickExecDir } = await import("../src/core/quick.js");
     expect(readFileSync(join(quickExecDir("auth"), "finish-result.txt"), "utf8")).toContain("pr-opened");
+  });
+
+  // The detached run's "push nothing, open no PR" was directive prose only; this is its mechanical
+  // half. It DIVERTS to the branch-only arm rather than refusing outright, because that arm is what
+  // restores the start branch and pops a --stash-wip park.
+  it("finish.txt=yes but a detached job record is present → branch-only, nothing pushed", async () => {
+    await scaffold("auth", "yes");
+    const p = jobPath("auth");
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, formatJob({
+      command: "quick", topic: "auth", session: "ap-auth",
+      hub: { agent: "alpha", model: "claude" },
+      provider: "codex", finish: "keep", budget_hours: 6, max_rounds: 5,
+      args_file: "/tmp/args", started: "2026-08-18T00:00:00Z",
+    }));
+    const { calls, r } = fake({
+      "git remote": { code: 0, stdout: "origin\n" },
+      "git remote get-url origin": { code: 0, stdout: "url\n" },
+    });
+    expect(await finishWith("auth", r as any, true)).toBe(0);
+    expect(calls.some((c) => c[1] === "push")).toBe(false);
+    expect(calls.some((c) => c[0] === "gh")).toBe(false);
+    expect(calls).toContainEqual(["git", "checkout", "-q", "main"]);
+    const { quickExecDir } = await import("../src/core/quick.js");
+    expect(readFileSync(join(quickExecDir("auth"), "finish-result.txt"), "utf8")).toContain("branch-only");
   });
 });
 
