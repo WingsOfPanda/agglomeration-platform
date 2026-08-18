@@ -167,31 +167,60 @@ describe("job relay — the parked check is the only gate on the hub's inbox", (
   });
 });
 
-describe("job status — an answered question stops reporting as parked", () => {
+describe("job status / attach — shared parked verdict", () => {
   function seedOutbox(text: string): number {
     const p = outboxPath(REC.hub.agent, REC.hub.model, REC.topic);
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, text);
     return Buffer.byteLength(text, "utf8");
   }
-  const question = JSON.stringify({ event: "question", message: "which provider?" }) + "\n";
+  const question = JSON.stringify({ event: "question", message: "which provider?\none line, please" }) + "\n";
 
-  it("PARKED=yes while the question is beyond the cursor", async () => {
+  it("status and attach report the same unanswered multiline question", async () => {
     home();
     seedJob();
     seedOutbox(question);
-    const { out } = await capture(() => run(["status", "demo"]));
-    expect(out).toContain("PARKED=yes");
-    expect(out).toContain("PARKED_MESSAGE=");
+    const status = (await capture(() => run(["status", "demo"]))).out;
+    const attach = (await capture(() => run(["attach", "demo"]))).out;
+    for (const out of [status, attach]) {
+      expect(out).toContain("PARKED=yes");
+      expect(out).toContain("PARKED_MESSAGE=which provider?%0Aone line%2C please");
+    }
   });
-  it("PARKED=no once a relay's cursor covers it — job.md relays on PARKED=yes, so this closes the loop", async () => {
+  it("status and attach both suppress a question once the relay cursor covers it", async () => {
     home();
     seedJob();
     const size = seedOutbox(question);
     writeFileSync(join(dirname(jobPath(REC.topic)), "cursor.txt"), String(size) + "\n");
-    const { out } = await capture(() => run(["status", "demo"]));
-    expect(out).toContain("PARKED=no");
-    expect(out).not.toContain("PARKED_MESSAGE=");
-    expect(out).toContain("LAST_EVENT=question");   // the event itself is still reported
+    const status = (await capture(() => run(["status", "demo"]))).out;
+    const attach = (await capture(() => run(["attach", "demo"]))).out;
+    for (const out of [status, attach]) {
+      expect(out).toContain("PARKED=no");
+      expect(out).not.toContain("PARKED_MESSAGE=");
+    }
+    expect(status).toContain("LAST_EVENT=question");   // the event itself is still reported
+  });
+
+  it.each([
+    ["no outbox", null, 0, "none"],
+    ["newest ack", question + JSON.stringify({ event: "ack" }) + "\n", 2, "ack"],
+    ["newest done", question + JSON.stringify({ event: "done" }) + "\n", 2, "done"],
+  ])("status and attach report PARKED=no with %s", async (_name, outbox, events, lastEvent) => {
+    home();
+    seedJob();
+    if (outbox !== null) seedOutbox(outbox);
+    const status = (await capture(() => run(["status", "demo"]))).out;
+    const attach = (await capture(() => run(["attach", "demo"]))).out;
+    for (const out of [status, attach]) {
+      expect(out).toContain("PARKED=no");
+      expect(out).not.toContain("PARKED_MESSAGE=");
+    }
+    expect(status).toContain(`EVENTS=${events}`);
+    expect(status).toContain(`LAST_EVENT=${lastEvent}`);
+    if (lastEvent === "none") expect(status).not.toContain("--- recent events ---");
+    else {
+      expect(status).toContain("--- recent events ---\n");
+      expect(status).toContain(`?\t${lastEvent}\t\n`);
+    }
   });
 });
