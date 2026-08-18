@@ -29,18 +29,25 @@ Two entry paths, decided once before Stage 0 — the same shape `/ap:implement` 
 - **Origin hub** — `$ARGUMENTS` contains `--detached`. Mint the args file as usual with `--detached`
   **stripped**, then:
   ```bash
-  $CS job start --command quick --args-file <args-path> [--provider p] [--budget-hours N]
+  $CS job start --command quick --args-file <args-path> [--provider p] [--budget-hours N] \
+    [--finish keep|pr] [--no-worktree]
   ```
-  Background `$CS job wait <SLUG>`, tell the user `tmux attach -t <SESSION>` and
-  `/ap:job status <SLUG>`, and stop. Handle the returned `JS=` line exactly as `/ap:implement`'s
-  launch path does, including decoding `QUESTION=` and answering with `$CS job relay`.
+  Background `$CS job wait <SLUG>`, tell the user `tmux attach -t <SESSION>`,
+  `/ap:job status <SLUG>`, and that the run works in the printed `WORKTREE=` so **this checkout
+  stays theirs** for the duration, then stop. Handle the returned `JS=` line exactly as
+  `/ap:implement`'s launch path does, including decoding `QUESTION=` and answering with
+  `$CS job relay`. `--finish` accepts `keep` (default) and `pr`; `merge`/`discard` are refused.
 - **Job hub** — `$CS job mode <SLUG>` prints `DETACHED=1`. Run the pipeline as written. `quick` has
-  no interactive gates, so only two things change:
-  - **Finishing is forced to keep.** The default finish — push the branch and open a PR when a
-    remote exists — is exactly what an unattended run must not do. Behave as if `--no-finish` were
-    passed: leave the branch local, push nothing, open no PR. The operator finishes it. This gate is
-    **mechanical**: `quick finish` itself disables publication while a `_job` record exists for the
-    topic and diverts to the branch-only path, so a wrong instruction here cannot push anything.
+  no interactive gates, so only these things change:
+  - **The run works in a worktree.** Your inbox task has a WORKTREE paragraph with an absolute path.
+    Pass it as `--target <WORKTREE>` to **both** `$CS quick init` and `$CS quick branch` (init echoes
+    it back as `TARGET=`; branch is what records it). No WORKTREE paragraph — a `--no-worktree` run —
+    means no flag anywhere. Never check a branch out in the operator's own checkout.
+  - **Finishing follows the record, and defaults to keep.** Unless `job.json` records `finish: pr`,
+    behave as if `--no-finish` were passed: leave the branch local, push nothing, open no PR — the
+    operator finishes it. A recorded `pr` takes the ordinary push-and-open-a-PR path. This gate is
+    **mechanical**: `quick finish` reads the record itself and diverts to the branch-only path
+    whenever the record does not say `pr`, so a wrong instruction here cannot push anything.
   - **Budget.** Run `$CS job budget-check <SLUG>` before the verify pass and again before finishing.
     Exit 1 means write `RESUME.md`, PARK a question, and stop.
   - **Teardown stays per-agent.** Stage 3 already tears down with `$CS stop <AGENT> <SLUG>` (the
@@ -72,7 +79,7 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
    AGENT=<agent>
    PROVIDER=<provider>
    FINISH=<yes|no>
-   TARGET=<abs-repo-root>
+   TARGET=<abs target checkout>
    STASH_WIP=<yes|no>
    ```
    Non-zero exit aborts: rc 1 = bad/empty topic, rc 2 = topic already in flight, rc 3 = provider
@@ -104,7 +111,9 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
    back after restoring the start branch. A tree git will not fully stash only warns and falls back
    to today's WIP snapshot commit — the run is never blocked, and nothing is dropped.
    `branch.txt` records the branch the run is **actually** on, so a checkout that failed ends in
-   finish's `no-branch` refusal rather than a PR containing none of the run's work.
+   finish's `no-branch` refusal rather than a PR containing none of the run's work. The verb acts on
+   the repo root unless you pass `--target <abs>` (as a detached run does, with the worktree from its
+   brief); it is this verb that records the target for every later step.
    On **rc 1** (target is not a git repo) → abort:
    `$CS quick summary <SLUG> --aborted build not-a-git-repo "target is not a git repository"`,
    print the SUMMARY, and stop. No worker was spawned, so do **not** run `stop`.

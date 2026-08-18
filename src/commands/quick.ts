@@ -6,13 +6,13 @@ import { applyArgsFile } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
 import { isoUtc } from "../core/archive.js";
 import { repoRoot } from "../core/paths.js";
-import { jobPath } from "../core/job.js";
+import { jobPath, parseJob, finishAllowedDetached } from "../core/job.js";
 import { quickArtDir, quickExecDir, deriveSlug, parseQuickArgs, parseBranchArgs, detectTestCommand, renderSummary, renderResume, type SummaryFacts } from "../core/quick.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { agentBinary } from "../core/contracts.js";
 import { haveCmd } from "../core/deps.js";
 import { pickRandomAgent } from "../core/agents.js";
-import { runnerAt, preSnapshot, createOrResumeBranch, finishBranch, classifyDirty, currentBranch, hasDistinctBranch, stashPush, stashPopOnBranch } from "../core/gitwork.js";
+import { runnerAt, preSnapshot, createOrResumeBranch, finishBranch, classifyDirty, currentBranch, hasDistinctBranch, stashPush, stashPopOnBranch, targetProblem } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
 import { outboxOffset, outboxPath } from "../core/ipc.js";
 import { composeRound1Prompt, composeFixPrompt } from "../core/turn.js";
@@ -61,7 +61,11 @@ async function initRun(tokens: string[]): Promise<number> {
 }
 
 export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
-  const { topicText, provider: provArg, finish, stashWip } = parseQuickArgs(tokens);
+  const { topicText, provider: provArg, finish, stashWip, target: targetArg } = parseQuickArgs(tokens);
+  if (targetArg) {
+    const bad = targetProblem(targetArg);
+    if (bad) { log.error(`quick init: ${bad}`); return 1; }
+  }
   if (!topicText) { log.error("quick init: topic text is empty"); return 1; }
   const slug = deriveSlug(topicText);
   if (!slug) { log.error("quick init: topic produced an empty slug; provide alphanumerics"); return 1; }
@@ -92,15 +96,22 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
   // dir, where a forensics reader can still see the flag was asked for.
   atomicWrite(join(exec, "stash-wip-requested.txt"), (stashWip ? "yes" : "no") + "\n");
 
-  const target = repoRoot();
+  // Echoed, never recorded here: `quick branch` is what writes target_cwd.txt, and it is passed the
+  // same --target. A detached run's target is the isolated worktree `job start` forked, so nothing
+  // in this run touches the checkout the operator is still using.
+  const target = targetArg || repoRoot();
   log.ok(`quick init: topic=${slug} agent=${agent} provider=${provider} finish=${finish ? "yes" : "no"} stash-wip=${stashWip ? "yes" : "no"}`);
   process.stdout.write(`SLUG=${slug}\nAGENT=${agent}\nPROVIDER=${provider}\nFINISH=${finish ? "yes" : "no"}\nTARGET=${target}\nSTASH_WIP=${stashWip ? "yes" : "no"}\n`);
   return 0;
 }
 async function branchRun(rest: string[]): Promise<number> {
-  const { topic, stashWip } = parseBranchArgs(rest);
-  if (!topic) { log.error("usage: quick branch <topic> [--stash-wip]"); return 2; }
-  const target = repoRoot();
+  const { topic, stashWip, target: targetArg } = parseBranchArgs(rest);
+  if (!topic) { log.error("usage: quick branch [--target <abs>] <topic> [--stash-wip]"); return 2; }
+  if (targetArg) {
+    const bad = targetProblem(targetArg);
+    if (bad) { log.error(`quick branch: ${bad}`); return 1; }
+  }
+  const target = targetArg || repoRoot();
   return branchWith(topic, target, runnerAt(target), stashWip);
 }
 
@@ -289,12 +300,20 @@ export async function finishWith(topic: string, r: Runner, hasGh: boolean): Prom
   const startBranch = rec.startBranch || "main";
   // The mechanical half of a detached run's "push nothing, open no PR" — until now that lived only
   // in the directive's prose, and prose does not stop a mis-instructed hub. A `_job` record for this
-  // topic means nobody is watching, so publication is off whatever finish.txt says. It routes to the
-  // branch-only arm below rather than refusing outright: that arm restores the start branch and pops
-  // a --stash-wip park, and a bare refusal here would strand the operator's stashed WIP.
+  // topic means nobody is watching, so publication is off whatever finish.txt says, UNLESS the run
+  // was launched with the sanctioned `--finish pr` opt-in: a PR stays reviewable, so the code still
+  // reaches a human before it reaches the base branch. It routes to the branch-only arm below rather
+  // than refusing outright: that arm restores the start branch and pops a --stash-wip park, and a
+  // bare refusal here would strand the operator's stashed WIP.
+  // The recorded action is re-checked through finishAllowedDetached, never trusted: a hand-edited
+  // `finish: merge` unlocks nothing, and quick's own finisher has no merge arm either way.
   const detachedJob = existsSync(jobPath(topic));
-  if (detachedJob) log.warn(`quick finish: a detached job record is present (${jobPath(topic)}) — publication is disabled; the run ends on its branch and the operator finishes it`);
-  const doFinish = readField(join(exec, "finish.txt")) === "yes" && !detachedJob;
+  const jobRec = detachedJob ? parseJob(readIfExists(jobPath(topic))) : null;
+  const recordedFinish = jobRec && finishAllowedDetached(jobRec.finish) ? jobRec.finish : "keep";
+  const detachedBlocks = detachedJob && recordedFinish !== "pr";
+  if (detachedBlocks) log.warn(`quick finish: a detached job record is present (${jobPath(topic)}) and recorded finish '${recordedFinish}' — publication is disabled; the run ends on its branch and the operator finishes it`);
+  else if (detachedJob) log.warn(`quick finish: the detached job recorded finish 'pr' — publishing as a PR (never a merge), as launched`);
+  const doFinish = readField(join(exec, "finish.txt")) === "yes" && !detachedBlocks;
 
   if (!doFinish) {
     r.run("git", ["checkout", "-q", startBranch]);

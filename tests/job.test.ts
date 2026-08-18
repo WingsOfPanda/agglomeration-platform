@@ -8,6 +8,7 @@ const REC: J.JobRecord = {
   hub: { agent: "alpha", model: "claude" },
   provider: "codex", finish: "keep", budget_hours: 6, max_rounds: 5,
   args_file: "/tmp/args", started: "2026-08-18T00:00:00Z",
+  worktree: "/repo/.ap/worktrees/demo", base_sha: "f00dcafe",
 };
 const owner = (paneId: string, nonce: string): PaneOwner => ({ paneId, nonce });
 
@@ -33,6 +34,48 @@ describe("job record codec", () => {
     expect(r.finish).toBe("keep");
     expect(r.budget_hours).toBe(0);
     expect(r.provider).toBe("");
+  });
+  // A run launched by 0.5.35 can still be in flight when the bundle is upgraded under it. Its record
+  // has neither worktree field, and it must keep reading as a live job — not become uninterpretable,
+  // which for `budget-check` and `mode` would mean parking a healthy run or telling its hub it is
+  // attached.
+  it("a record written before worktrees existed still parses, with empty worktree fields", () => {
+    const old = JSON.stringify({
+      command: "implement", topic: "demo", session: "ap-demo", hub: { agent: "alpha", model: "claude" },
+      provider: "codex", finish: "keep", budget_hours: 6, max_rounds: 5,
+      args_file: "/tmp/args", started: "2026-08-18T00:00:00Z",
+    });
+    const r = J.parseJob(old)!;
+    expect(r.worktree).toBe("");
+    expect(r.base_sha).toBe("");
+    expect(r.topic).toBe("demo");     // and everything else is unchanged
+    expect(r.finish).toBe("keep");
+  });
+  it("a non-string worktree field is read as absent rather than carried through", () => {
+    const r = J.parseJob(JSON.stringify({ ...REC, worktree: 42, base_sha: null }))!;
+    expect(r.worktree).toBe("");
+    expect(r.base_sha).toBe("");
+  });
+});
+
+describe("worktree location + provenance", () => {
+  it("lives under the REPO root's .ap, not the state dir (cp -al needs one filesystem)", () => {
+    expect(J.worktreePathFor("/repo", "demo")).toBe("/repo/.ap/worktrees/demo");
+  });
+  it("a path this platform could have created under the root is provenanced", () => {
+    expect(J.worktreeProvenanced("/repo/.ap/worktrees/demo", "/repo")).toBe(true);
+  });
+  // The pane-ownership rule, applied to directories: `job stop` removes only what it can PROVE it
+  // created. A hand-edited or carried-over record naming any other checkout is a defect to surface,
+  // never a path to rm.
+  it("anything else is NOT — including the worktrees dir itself and a sibling that merely shares the prefix", () => {
+    expect(J.worktreeProvenanced("/repo/.ap/worktrees", "/repo")).toBe(false);
+    expect(J.worktreeProvenanced("/repo/.ap/worktrees/", "/repo")).toBe(false);
+    expect(J.worktreeProvenanced("/repo/.ap/worktrees-evil/demo", "/repo")).toBe(false);
+    expect(J.worktreeProvenanced("/repo/.ap/state/demo", "/repo")).toBe(false);
+    expect(J.worktreeProvenanced("/repo", "/repo")).toBe(false);
+    expect(J.worktreeProvenanced("/elsewhere/.ap/worktrees/demo", "/repo")).toBe(false);
+    expect(J.worktreeProvenanced("", "/repo")).toBe(false);
   });
 });
 
@@ -168,11 +211,15 @@ describe("questionConsumed — closes the duplicate-relay loop", () => {
 });
 
 describe("launch-time gates", () => {
-  it("keep is the ONLY finish action a detached run accepts", () => {
+  // `pr` joined `keep` in 0.5.36: a PR is REVIEWABLE, so the code still reaches a human before it
+  // reaches the base branch. merge and discard stay out — the run cross-verifies against the fork
+  // base while main moves on, and nobody is watching what a discard destroys.
+  it("keep and pr are the finish actions a detached run accepts; merge and discard never are", () => {
     expect(J.finishAllowedDetached("keep")).toBe(true);
+    expect(J.finishAllowedDetached("pr")).toBe(true);
     expect(J.finishAllowedDetached("merge")).toBe(false);
-    expect(J.finishAllowedDetached("pr")).toBe(false);
     expect(J.finishAllowedDetached("discard")).toBe(false);
+    expect(J.finishAllowedDetached("")).toBe(false);
   });
   it("isJobCommand admits only the two wired commands", () => {
     expect(J.isJobCommand("implement")).toBe(true);
@@ -214,5 +261,30 @@ describe("jobBrief", () => {
     expect(b).toContain("never merge, never push, never open a PR");
     expect(b).toContain("6h");
     expect(b).toContain("Never call AskUserQuestion");
+  });
+  // The worktree path is the ONE thing the hub cannot derive: its own state stays keyed to the repo
+  // root, so nothing it reads would ever point at the worker's target.
+  it("names the worktree and the --target flag that re-homes the run", () => {
+    expect(b).toContain("/repo/.ap/worktrees/demo");
+    expect(b).toContain("ap implement init --target /repo/.ap/worktrees/demo");
+    expect(b).toContain("never check out");
+  });
+  it("tells a quick hub to pass --target to BOTH init and branch", () => {
+    const q = J.jobBrief({ ...REC, command: "quick", topic: "demo" });
+    expect(q).toContain("ap quick init --target /repo/.ap/worktrees/demo");
+    expect(q).toContain("ap quick branch --target /repo/.ap/worktrees/demo");
+  });
+  it("says nothing about a worktree for a --no-worktree run (or a pre-0.5.36 record)", () => {
+    const none = J.jobBrief({ ...REC, worktree: "", base_sha: "" });
+    expect(none).not.toContain("WORKTREE");
+    expect(none).not.toContain("--target");
+  });
+  // A brief that promised "never push" under a `pr` run would have the hub fighting its own finish
+  // verb, which is now the thing that ALLOWS the push.
+  it("a --finish pr run is told to push and open a PR, and still never to merge", () => {
+    const pr = J.jobBrief({ ...REC, finish: "pr" });
+    expect(pr).toContain("push the branch and open a PR");
+    expect(pr).toContain("NEVER merge");
+    expect(pr).not.toContain("never merge, never push, never open a PR");
   });
 });

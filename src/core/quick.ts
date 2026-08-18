@@ -17,10 +17,11 @@ export function deriveSlug(text: string): string {
   return s;
 }
 
-export interface QuickArgs { topicText: string; provider?: string; finish: boolean; stashWip: boolean; }
+export interface QuickArgs { topicText: string; provider?: string; finish: boolean; stashWip: boolean; target?: string; }
 
 export function parseQuickArgs(tokens: string[]): QuickArgs {
   let provider: string | undefined;
+  let target: string | undefined;
   let finish = true;
   let stashWip = false;
   const text: string[] = [];
@@ -35,17 +36,40 @@ export function parseQuickArgs(tokens: string[]): QuickArgs {
       continue; // drop the bare --provider token regardless
     }
     if (t.startsWith("--provider=")) { provider = t.slice("--provider=".length); continue; }
+    // Its VALUE must be consumed, not left to fall through: a bare path does not start with `--`,
+    // so an unconsumed one would end up inside the topic text and change the derived slug.
+    if (t === "--target") {
+      const v = tokens[i + 1];
+      if (v && !v.startsWith("--")) { target = v; i++; }
+      continue;
+    }
+    if (t.startsWith("--target=")) { target = t.slice("--target=".length); continue; }
     text.push(t);
   }
-  return { topicText: text.join(" ").trim(), provider, finish, stashWip };
+  return { topicText: text.join(" ").trim(), provider, finish, stashWip, target };
 }
 
-export interface BranchArgs { topic: string; stashWip: boolean; }
+export interface BranchArgs { topic: string; stashWip: boolean; target?: string; }
 
-/** `quick branch [--stash-wip] <topic> [--stash-wip]` — the topic is the first non-flag token, so
- *  the flag parses on either side of it. "" topic when only flags were given (usage rc 2). */
+/** `quick branch [--stash-wip] [--target <abs>] <topic>` — the topic is the first token that is
+ *  neither a flag nor a flag's value, so the flags parse on either side of it. "" topic when only
+ *  flags were given (usage rc 2). Unknown `--flags` are still ignored rather than refused, as they
+ *  always were here; only `--target` also swallows the token after it. */
 export function parseBranchArgs(rest: string[]): BranchArgs {
-  return { topic: rest.find((t) => !t.startsWith("--")) ?? "", stashWip: rest.includes("--stash-wip") };
+  let topic = "", target: string | undefined, stashWip = false;
+  for (let i = 0; i < rest.length; i++) {
+    const t = rest[i];
+    if (t === "--stash-wip") { stashWip = true; continue; }
+    if (t === "--target") {
+      const v = rest[i + 1];
+      if (v && !v.startsWith("--")) { target = v; i++; }
+      continue;
+    }
+    if (t.startsWith("--target=")) { target = t.slice("--target=".length); continue; }
+    if (t.startsWith("--")) continue;
+    if (!topic) topic = t;
+  }
+  return { topic, stashWip, target };
 }
 
 /** Repo test command by file presence (never executes). Precedence:

@@ -6,8 +6,8 @@
 // to the job's WORKERS — only the job hub does, because a second sender mid-run overwrites a
 // running worker's inbox task and the worker idles.
 
-import { existsSync, mkdirSync, readdirSync, rmSync, rmdirSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { existsSync, mkdirSync, readdirSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { kvParse } from "../args.js";
 import { log } from "../core/log.js";
 import { atomicWrite } from "../core/atomic.js";
@@ -22,6 +22,8 @@ import { livePaneNonces, ownsPane, sessionExists, sessionPaneIds, killSession, v
 import { paneMetaRead, paneMetaReadForDir, outboxPath, statusPath } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
 import { percentEncode } from "../core/questionCodec.js";
+import { runnerAt, classifyDirty, type Runner } from "../core/gitwork.js";
+import { branchNameFor } from "../core/branchRecord.js";
 import * as J from "../core/job.js";
 import { run as spawnRun } from "./spawn.js";
 import { run as sendRun } from "./send.js";
@@ -30,7 +32,8 @@ import { teardownTopic } from "./stop.js";
 function usage(): number {
   process.stderr.write(
     "Usage: job start --command <implement|quick> --args-file <path> [--topic slug] [--provider p]\n" +
-    "                 [--finish keep] [--budget-hours N] [--max-rounds N] [--hub-model claude]\n" +
+    "                 [--finish keep|pr] [--budget-hours N] [--max-rounds N] [--hub-model claude]\n" +
+    "                 [--no-worktree]   work in the main checkout, as 0.5.35 did\n" +
     "       job status <topic>          one-screen composite: what was launched, is it alive, where is it\n" +
     "       job wait <topic>            block until the job hub emits done/error/question\n" +
     "       job relay <topic> <msg|@file>   answer a parked question\n" +
@@ -131,15 +134,124 @@ function jobProgressNow(rec: J.JobRecord) {
   return { events, last, parked: stillParked };
 }
 
+// ---------- the isolated worktree a detached run works in ----------
+
+/** Create the worktree the WORKER will run in, and return what the record must carry.
+ *
+ *  Detached runs used to check `feat/<cmd>-<topic>` out in the MAIN checkout, which froze the origin
+ *  session out of its own repo for the run's duration: an edit would have landed inside the worker's
+ *  diff, and a `git checkout main` would have yanked the branch from under it. Branch checkout and
+ *  the index are global to a checkout, so the detached promise never held for the repo itself.
+ *
+ *  The fork point is COMMITTED HEAD — the operator's uncommitted WIP deliberately stays behind, and
+ *  a dirty tree only warns. The add is `--detach` so the ordinary `branch` verb still creates
+ *  `feat/<cmd>-<topic>` itself, inside the worktree: the branch flow is unchanged, just re-homed.
+ *
+ *  `null` means ABORT the start. Every failure here is fail-closed: a half-made worktree would send
+ *  the worker into the main checkout, which is the exact thing this exists to prevent. */
+export function startWorktree(root: string, topic: string, r: Runner): { worktree: string; baseSha: string } | null {
+  const head = r.run("git", ["rev-parse", "HEAD"]);
+  const baseSha = head.stdout.trim();
+  if (head.code !== 0 || !baseSha) {
+    log.error(`job start: could not read HEAD in ${root} — a detached run forks the committed HEAD into its own worktree, so an unborn branch or a non-repo has nothing to fork. Commit something first, or pass --no-worktree to work in the checkout itself.`);
+    return null;
+  }
+  const worktree = J.worktreePathFor(root, topic);
+  if (existsSync(worktree)) {
+    log.error(`job start: ${worktree} already exists — an earlier run's worktree was KEPT because it had uncommitted work in it (see 'ap job stop'). Archive or commit what is in it, then: git -C ${root} worktree remove ${worktree}  (add --force to discard), and start again.`);
+    return null;
+  }
+  mkdirSync(dirname(worktree), { recursive: true });
+  // `.ap/` is the state root and stateEnsure() gitignores it — but AP_HOME can point the state
+  // elsewhere, and then nothing has ever written this file. An un-ignored worktree shows up as
+  // untracked content in the checkout it forked from, which is one WIP-snapshot commit away from
+  // being committed into somebody's branch.
+  const gi = join(root, ".ap", ".gitignore");
+  if (!existsSync(gi)) { try { writeFileSync(gi, "*\n"); } catch { /* best effort */ } }
+  const add = r.run("git", ["worktree", "add", "--detach", worktree, baseSha]);
+  if (add.code !== 0) {
+    log.error(`job start: 'git worktree add --detach ${worktree} ${baseSha.slice(0, 8)}' failed (rc ${add.code}) — nothing was launched. Check 'git -C ${root} worktree list' for a stale entry ('git worktree prune' clears those), or pass --no-worktree.`);
+    return null;
+  }
+  // node_modules is the one dependency tree worth carrying: a hardlink clone is seconds and costs no
+  // disk, and without it the worker's first act is a multi-minute install. Any other ecosystem is
+  // the worker's own problem (D3), and a failure here is never fatal — the worker can still install.
+  const deps = join(root, "node_modules");
+  if (existsSync(deps)) {
+    const cp = r.run("cp", ["-al", deps, join(worktree, "node_modules")]);
+    if (cp.code !== 0) log.warn(`job start: could not hardlink-clone node_modules into ${worktree} (rc ${cp.code}) — the worker will have to install dependencies itself`);
+    else log.ok(`job start: hardlink-cloned node_modules into the worktree`);
+  }
+  if (classifyDirty(r.run("git", ["status", "--porcelain"]).stdout)) {
+    log.warn(`job start: ${root} has UNCOMMITTED changes and they are NOT in the worktree — it forks committed HEAD (${baseSha.slice(0, 8)}). Nothing of yours was touched or stashed; the run simply will not see that work.`);
+  }
+  log.ok(`job start: worktree ${worktree} detached at ${baseSha.slice(0, 8)}`);
+  return { worktree, baseSha };
+}
+
+/** Remove the run's worktree, or say why it is being kept. `true` means the sweep is COMPLETE (the
+ *  worktree is gone, or there was never one to remove); `false` keeps the job record, exactly as an
+ *  unswept session does — a worktree still on disk is either unarchived work or something ap could
+ *  not account for, and both need the operator's eyes before the record that names them is deleted.
+ *
+ *  The branch itself always survives either way: worktrees share the repo's ref store. */
+export function sweepWorktree(rec: J.JobRecord, root: string, r: Runner): boolean {
+  const wt = rec.worktree ?? "";
+  if (!wt) return true;                                   // --no-worktree, or a pre-0.5.36 record
+  // Provenance before removal, the same rule pane ownership follows: ap deletes only what it can
+  // prove it created. A record naming any other path is a defect to surface, never a path to rm.
+  if (!J.worktreeProvenanced(wt, root)) {
+    log.warn(`job stop: the record names a worktree OUTSIDE ${join(root, ".ap", "worktrees")} (${wt}) — ap will not remove a path it cannot prove it created. Deal with it by hand.`);
+    return false;
+  }
+  if (!existsSync(wt)) { r.run("git", ["worktree", "prune"]); return true; }
+  // The dirty probe runs INSIDE the worktree, not at the root: they are separate working trees over
+  // one ref store, and the root's cleanliness says nothing about what the worker left behind.
+  if (classifyDirty(runnerAt(wt).run("git", ["status", "--porcelain"]).stdout)) {
+    log.warn(`job stop: the worktree ${wt} has UNCOMMITTED work in it and is being KEPT — a crashed worker's unarchived changes look exactly like this. Inspect: git -C ${wt} status`);
+    log.warn(`  then either commit them on ${branchNameFor(rec.command, rec.topic)}, or discard: git -C ${root} worktree remove --force ${wt}`);
+    return false;
+  }
+  const rm = r.run("git", ["worktree", "remove", wt]);
+  if (rm.code !== 0 || existsSync(wt)) {
+    log.warn(`job stop: 'git worktree remove ${wt}' did not complete (rc ${rm.code}) — the worktree is still there. Inspect it, then remove it by hand: git -C ${root} worktree remove --force ${wt}`);
+    return false;
+  }
+  r.run("git", ["worktree", "prune"]);
+  log.ok(`job stop: removed the run's worktree ${wt}`);
+  return true;
+}
+
+/** The push+PR commands for a `keep` run that produced commits, plus how far main moved since the
+ *  fork. Printed rather than executed: `keep` means the operator decides, and the drift count is the
+ *  number that decides FOR them — the hub cross-verified against the fork base, so the further main
+ *  has moved, the less that verification says about a merge today. A PR re-tests against current
+ *  main; a local merge does not, which is why only the PR commands are offered. */
+function finishHint(rec: J.JobRecord, r: Runner): void {
+  if (rec.finish !== "keep" || !rec.base_sha) return;
+  const branch = branchNameFor(rec.command, rec.topic);
+  if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]).code !== 0) return;
+  const count = r.run("git", ["rev-list", "--count", `${rec.base_sha}..${branch}`]);
+  const commits = Number(count.stdout.trim());
+  if (count.code !== 0 || !Number.isFinite(commits) || commits <= 0) return;
+  const drift = r.run("git", ["rev-list", "--count", `${rec.base_sha}..main`]);
+  process.stdout.write(
+    `FINISH=pending\nBRANCH=${branch}\nCOMMITS=${commits}\n` +
+    `MAIN_DRIFT=${drift.code === 0 && drift.stdout.trim() ? drift.stdout.trim() : "?"}\n` +
+    `git push -u origin ${branch}\n` +
+    `gh pr create --head ${branch}\n`);
+}
+
 // ---------- start ----------
 
 async function startRun(rest: string[], origCwd: string): Promise<number> {
   let command = "", argsFile = "", topic = "", provider = "", finish = "keep", hubModel = "claude";
-  let budgetHours = 6, maxRounds = 5;
+  let budgetHours = 6, maxRounds = 5, useWorktree = true;
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     const take = (): string => { const r = kvParse(a, rest[i + 1]); i += r.shift - 1; return r.value; };
-    if (a === "--command" || a.startsWith("--command=")) command = take();
+    if (a === "--no-worktree") useWorktree = false;
+    else if (a === "--command" || a.startsWith("--command=")) command = take();
     else if (a === "--args-file" || a.startsWith("--args-file=")) argsFile = take();
     else if (a === "--topic" || a.startsWith("--topic=")) topic = take();
     else if (a === "--provider" || a.startsWith("--provider=")) provider = take();
@@ -158,7 +270,7 @@ async function startRun(rest: string[], origCwd: string): Promise<number> {
   if (argsFile) argsFile = isAbsolute(argsFile) ? argsFile : resolve(origCwd, argsFile);
   if (!argsFile || !existsSync(argsFile)) { log.error(`job start: --args-file must be an existing path; got: '${argsFile}'`); return 2; }
   if (!J.finishAllowedDetached(finish)) {
-    log.error(`job start: --finish ${finish} is refused for a detached run. Nothing merges, pushes, or opens a PR while no one is watching: the run ends on its branch and you decide from there. Use --finish keep.`);
+    log.error(`job start: --finish ${finish} is refused for a detached run; the legal actions are 'keep' (the default — the run ends on its branch and you decide from there) and 'pr' (push + open a PR, which stays reviewable). 'merge' and 'discard' stay out: the run cross-verifies against the fork base while main keeps moving, so a local merge integrates code nobody checked against current main, and a discard destroys work no one has seen.`);
     return 2;
   }
   if (!Number.isFinite(budgetHours) || budgetHours <= 0) { log.error(`job start: --budget-hours must be a positive number; got: '${budgetHours}'`); return 2; }
@@ -183,11 +295,19 @@ async function startRun(rest: string[], origCwd: string): Promise<number> {
   const agent = pickRandomAgent(topic);
   if (!agent) { log.error(`job start: no free agent in the pool for topic '${topic}'`); return 1; }
 
+  // BEFORE the record is written, so an abort here leaves nothing half-launched to clean up. The
+  // hub and every `.ap` path stay keyed to the repo ROOT — moving them into the worktree would
+  // re-open the namespace split 0.5.34 closed. Only the WORKER's target moves.
+  const root = repoRoot();
+  const wt = useWorktree ? startWorktree(root, topic, runnerAt(root)) : null;
+  if (useWorktree && !wt) return 1;
+
   const rec: J.JobRecord = {
     command, topic, session,
     hub: { agent, model: hubModel },
     provider, finish, budget_hours: budgetHours, max_rounds: maxRounds,
     args_file: argsFile, started: isoUtc(),
+    worktree: wt?.worktree ?? "", base_sha: wt?.baseSha ?? "",
   };
   mkdirSync(jobDir(topic), { recursive: true });
   // The record is written BEFORE the spawn on purpose: a spawn that dies half-way leaves evidence
@@ -195,12 +315,15 @@ async function startRun(rest: string[], origCwd: string): Promise<number> {
   // knows the name of.
   atomicWrite(J.jobPath(topic), J.formatJob(rec));
 
-  const rc = await spawnRun([agent, hubModel, topic, "--session", session, "--role", "job-hub", "--cwd", repoRoot(), J.jobBrief(rec)]);
+  const rc = await spawnRun([agent, hubModel, topic, "--session", session, "--role", "job-hub", "--cwd", root, J.jobBrief(rec)]);
   if (rc !== 0) {
-    log.error(`job start: the job hub failed to spawn (rc ${rc}); the record is left at ${J.jobPath(topic)} — clear it with 'ap job stop ${topic}'`);
+    log.error(`job start: the job hub failed to spawn (rc ${rc}); the record is left at ${J.jobPath(topic)} — clear it with 'ap job stop ${topic}'${wt ? ` (which also removes the worktree ${wt.worktree})` : ""}`);
     return rc;
   }
-  process.stdout.write(`TOPIC=${topic}\nSESSION=${session}\nHUB=${agent}-${hubModel}\nJOB=${J.jobPath(topic)}\nATTACH=tmux attach -t ${session}\n`);
+  process.stdout.write(
+    `TOPIC=${topic}\nSESSION=${session}\nHUB=${agent}-${hubModel}\nJOB=${J.jobPath(topic)}\n` +
+    `WORKTREE=${wt ? wt.worktree : "(none — --no-worktree)"}\nBASE=${wt ? wt.baseSha : ""}\n` +
+    `ATTACH=tmux attach -t ${session}\n`);
   return 0;
 }
 
@@ -338,6 +461,12 @@ async function stopJobRun(rest: string[]): Promise<number> {
     }
     log.ok(`job stop: killed detached session ${rec.session}`);
   }
+  // The hint comes BEFORE the sweep so it is printed on both endings: a kept-dirty worktree is
+  // exactly when the operator most needs to be told where the work is and what to run on it.
+  const root = repoRoot();
+  const r = runnerAt(root);
+  finishHint(rec, r);
+  if (!sweepWorktree(rec, root, r)) return keepRecord(rec, "the worktree was not swept");
   rmSync(jobDir(rec.topic), { recursive: true, force: true });
   try { rmdirSync(topicDir(rec.topic)); } catch { /* tolerate non-empty */ }
   log.ok(`job stop: ${rec.topic} torn down`);

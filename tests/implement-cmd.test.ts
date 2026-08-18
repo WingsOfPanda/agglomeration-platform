@@ -365,13 +365,13 @@ describe("implement finish — a detached job in flight allows only 'keep'", () 
   beforeEach(() => { h = freshHome(); });
   afterEach(() => { h.cleanup(); });
 
-  function seedJobRecord(): void {
+  function seedJobRecord(finish = "keep"): void {
     const p = jobPath(TOPIC);
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, formatJob({
       command: "implement", topic: TOPIC, session: `ap-${TOPIC}`,
       hub: { agent: "alpha", model: "claude" },
-      provider: "codex", finish: "keep", budget_hours: 6, max_rounds: 5,
+      provider: "codex", finish, budget_hours: 6, max_rounds: 5,
       args_file: "/tmp/args", started: "2026-08-18T00:00:00Z",
     }));
   }
@@ -410,6 +410,41 @@ describe("implement finish — a detached job in flight allows only 'keep'", () 
     const { rc } = await capture(() => finishWith2(TOPIC, "keep", () => r, true));
     expect(rc).toBe(0);
     expect(readFileSync(join(art, "finish-results.tsv"), "utf8")).toBe("main\tkeep\tsame-branch\n");
+  });
+
+  // D6: the gate reads the action the record NAMES rather than hard-coding keep. `job start --finish
+  // pr` is a legal opt-in — a PR stays reviewable — so a run launched that way must be able to
+  // finish the way it was launched, while merge and discard keep having no path in at all.
+  it("a record naming finish 'pr' lets pr through, and still refuses merge and discard", async () => {
+    const art = seedArt();
+    seedFinish(art);
+    seedJobRecord("pr");
+    const r = fakeRunner({
+      "git show-ref --verify --quiet refs/heads/feat/implement-foo": { code: 0, stdout: "" },
+      "git remote": { code: 0, stdout: "origin\n" },
+      "git push -q -u origin feat/implement-foo": { code: 0, stdout: "" },
+      "git remote get-url origin": { code: 0, stdout: "url\n" },
+    });
+    expect((await capture(() => finishWith2(TOPIC, "pr", () => r, true))).rc).toBe(0);
+    expect(readFileSync(join(art, "finish-results.tsv"), "utf8")).toContain("\tpr\t");
+    for (const action of ["merge", "discard"] as const) {
+      const { rc, err } = await capture(() => finishWith2(TOPIC, action, () => r, true));
+      expect(rc).toBe(2);
+      expect(err).toContain("it recorded finish 'pr'");
+    }
+  });
+
+  // The record is re-checked through the same gate `job start` applies, so a hand-edited or
+  // carried-over `finish: merge` unlocks nothing.
+  it("a record naming an ILLEGAL finish action falls back to keep-only", async () => {
+    const art = seedArt();
+    seedFinish(art);
+    seedJobRecord("merge");
+    const r = fakeRunner({});
+    const { rc, err } = await capture(() => finishWith2(TOPIC, "merge", () => r, true));
+    expect(rc).toBe(2);
+    expect(err).toContain("it recorded finish 'keep'");
+    expect(existsSync(join(art, "finish-results.tsv"))).toBe(false);
   });
 
   it("with no job record, merge is untouched by the gate", async () => {

@@ -70,15 +70,37 @@ same rows plus hub liveness.
 ### `stop <topic>` — tear it down
 
 `$CS job stop <TOPIC>` tears down the hub and its workers (archiving each), then sweeps the detached
-session **only if every pane in it is provably ap's**, then clears the job record. A session holding
-anything ap cannot account for is left intact and named, rather than killed. Confirm with the user
-first unless they asked for it — a job may be hours into real work.
+session **only if every pane in it is provably ap's**, then sweeps the run's worktree, then clears
+the job record. A session holding anything ap cannot account for is left intact and named, rather
+than killed. Confirm with the user first unless they asked for it — a job may be hours into real work.
 
-An **incomplete teardown exits 1 and KEEPS the job record** (the session was not swept, or the kill
-did not take). That is deliberate: the record is what stops the next `job start <TOPIC>` from
-adopting a session that still holds panes. Show the user the named panes, and re-run
-`$CS job stop <TOPIC>` once they are dealt with — the workers are already archived, and the pane
-evidence stored beside the record lets the re-run finish the sweep.
+**The worktree sweep.** A CLEAN worktree is removed (`git worktree remove` + `prune`); a **dirty**
+one is KEPT and named — that is a crashed worker's unarchived work, and it is not ap's to throw
+away. Nothing outside `<repo>/.ap/worktrees/` is ever removed, whatever the record says. The branch
+always survives either way: worktrees share the repo's ref store.
+
+**The FINISH hint.** For a `keep` run whose branch has commits past the fork base, `stop` prints a
+block to stdout before it sweeps:
+
+```
+FINISH=pending
+BRANCH=feat/<command>-<TOPIC>
+COMMITS=<n>            commits the run produced
+MAIN_DRIFT=<n>         commits main gained since the fork ("?" if it could not be counted)
+git push -u origin <branch>
+gh pr create --head <branch>
+```
+
+Relay it as the next step. Say **PR, not local merge**: the run cross-verified against the fork
+base, so the larger `MAIN_DRIFT` is, the less that verification says about merging into main today —
+a PR re-tests against current main, a local merge does not.
+
+An **incomplete teardown exits 1 and KEEPS the job record** (the session was not swept, the kill did
+not take, or the worktree could not be removed). That is deliberate: the record is what stops the
+next `job start <TOPIC>` from adopting a session that still holds panes. Show the user what was
+named — panes, or the kept worktree — and re-run `$CS job stop <TOPIC>` once they are dealt with:
+the workers are already archived, and the pane evidence stored beside the record lets the re-run
+finish the sweep.
 
 ## Reporting
 
