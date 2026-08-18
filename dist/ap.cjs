@@ -17725,11 +17725,12 @@ function parseJob(text) {
     max_rounds: num(o2.max_rounds, 0),
     args_file: str2(o2.args_file),
     started: str2(o2.started),
-    // Soft in BOTH directions: a 0.5.35 record has neither key and must still read as a live job
-    // (an in-flight run must not become uninterpretable across an upgrade), and a `--no-worktree`
-    // run records them empty. Every consumer tests truthiness, so absent and "" behave alike.
+    // Soft in BOTH directions: older records lack these keys and must stay readable across an
+    // upgrade. `--no-worktree` records the first two empty; detached/unreadable HEAD records the
+    // start branch empty. Every consumer tests truthiness, so absent and "" behave alike.
     worktree: str2(o2.worktree),
-    base_sha: str2(o2.base_sha)
+    base_sha: str2(o2.base_sha),
+    start_branch: str2(o2.start_branch)
   };
 }
 function classifyJobLiveness(live, owner) {
@@ -29672,12 +29673,15 @@ function finishHint(rec, r) {
   const count2 = r.run("git", ["rev-list", "--count", `${rec.base_sha}..${branch}`]);
   const commits = Number(count2.stdout.trim());
   if (count2.code !== 0 || !Number.isFinite(commits) || commits <= 0) return;
-  const drift = r.run("git", ["rev-list", "--count", `${rec.base_sha}..main`]);
+  const drift = rec.start_branch ? r.run("git", ["rev-list", "--count", `${rec.base_sha}..refs/heads/${rec.start_branch}`]) : null;
+  const driftCount = drift?.stdout.trim() ?? "";
+  const driftKnown = drift?.code === 0 && !!driftCount;
   process.stdout.write(
     `FINISH=pending
 BRANCH=${branch}
 COMMITS=${commits}
-MAIN_DRIFT=${drift.code === 0 && drift.stdout.trim() ? drift.stdout.trim() : "?"}
+START_BRANCH=${driftKnown ? rec.start_branch : "?"}
+DRIFT=${driftKnown ? driftCount : "?"}
 git push -u origin ${branch}
 gh pr create --head ${branch}
 `
@@ -29689,9 +29693,9 @@ async function startRun(rest, origCwd) {
   for (let i2 = 0; i2 < rest.length; i2++) {
     const a2 = rest[i2];
     const take = () => {
-      const r = kvParse(a2, rest[i2 + 1]);
-      i2 += r.shift - 1;
-      return r.value;
+      const r2 = kvParse(a2, rest[i2 + 1]);
+      i2 += r2.shift - 1;
+      return r2.value;
     };
     if (a2 === "--no-worktree") useWorktree = false;
     else if (a2 === "--command" || a2.startsWith("--command=")) command = take();
@@ -29717,7 +29721,7 @@ async function startRun(rest, origCwd) {
     return 2;
   }
   if (!finishAllowedDetached(finish)) {
-    log.error(`job start: --finish ${finish} is refused for a detached run; the legal actions are 'keep' (the default \u2014 the run ends on its branch and you decide from there) and 'pr' (push + open a PR, which stays reviewable). 'merge' and 'discard' stay out: the run cross-verifies against the fork base while main keeps moving, so a local merge integrates code nobody checked against current main, and a discard destroys work no one has seen.`);
+    log.error(`job start: --finish ${finish} is refused for a detached run; the legal actions are 'keep' (the default \u2014 the run ends on its branch and you decide from there) and 'pr' (push + open a PR, which stays reviewable). 'merge' and 'discard' stay out: the run cross-verifies against the fork base while the starting branch keeps moving, so a local merge integrates code nobody checked against the current starting branch, and a discard destroys work no one has seen.`);
     return 2;
   }
   if (!Number.isFinite(budgetHours) || budgetHours <= 0) {
@@ -29751,7 +29755,9 @@ async function startRun(rest, origCwd) {
     return 1;
   }
   const root = repoRoot();
-  const wt = useWorktree ? startWorktree(root, topic, runnerAt(root)) : null;
+  const r = runnerAt(root);
+  const startBranch = currentBranch(r);
+  const wt = useWorktree ? startWorktree(root, topic, r) : null;
   if (useWorktree && !wt) return 1;
   const rec = {
     command,
@@ -29765,7 +29771,8 @@ async function startRun(rest, origCwd) {
     args_file: argsFile,
     started: isoUtc(),
     worktree: wt?.worktree ?? "",
-    base_sha: wt?.baseSha ?? ""
+    base_sha: wt?.baseSha ?? "",
+    start_branch: startBranch
   };
   (0, import_node_fs50.mkdirSync)(jobDir(topic), { recursive: true });
   atomicWrite(jobPath(topic), formatJob(rec));

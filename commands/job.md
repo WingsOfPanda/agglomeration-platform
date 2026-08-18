@@ -93,14 +93,15 @@ block to stdout before it sweeps:
 FINISH=pending
 BRANCH=feat/<command>-<TOPIC>
 COMMITS=<n>            commits the run produced
-MAIN_DRIFT=<n>         commits main gained since the fork ("?" if it could not be counted)
+START_BRANCH=<name>    branch the run forked from ("?" if it could not be resolved)
+DRIFT=<n>              commits that branch gained since the fork ("?" if it could not be counted)
 git push -u origin <branch>
 gh pr create --head <branch>
 ```
 
 Relay it as the next step. Say **PR, not local merge**: the run cross-verified against the fork
-base, so the larger `MAIN_DRIFT` is, the less that verification says about merging into main today —
-a PR re-tests against current main, a local merge does not.
+base, so the larger `DRIFT` is, the less that verification says about merging into the starting
+branch today — a PR re-tests against the updated starting branch, a local merge does not.
 
 An **incomplete teardown exits 1 and KEEPS the job record** (the session was not swept, the kill did
 not take, or the worktree could not be removed). That is deliberate: the record is what stops the

@@ -22,7 +22,7 @@ import { livePaneNonces, ownsPane, sessionExists, sessionPaneIds, killSession, v
 import { paneMetaRead, paneMetaReadForDir, outboxPath, statusPath } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
 import { percentEncode } from "../core/questionCodec.js";
-import { runnerAt, classifyDirty, type Runner } from "../core/gitwork.js";
+import { runnerAt, classifyDirty, currentBranch, type Runner } from "../core/gitwork.js";
 import { branchNameFor } from "../core/branchRecord.js";
 import * as J from "../core/job.js";
 import { run as spawnRun } from "./spawn.js";
@@ -222,11 +222,11 @@ export function sweepWorktree(rec: J.JobRecord, root: string, r: Runner): boolea
   return true;
 }
 
-/** The push+PR commands for a `keep` run that produced commits, plus how far main moved since the
- *  fork. Printed rather than executed: `keep` means the operator decides, and the drift count is the
- *  number that decides FOR them — the hub cross-verified against the fork base, so the further main
- *  has moved, the less that verification says about a merge today. A PR re-tests against current
- *  main; a local merge does not, which is why only the PR commands are offered. */
+/** The push+PR commands for a `keep` run that produced commits, plus how far its start branch moved
+ *  since the fork. Printed rather than executed: `keep` means the operator decides, and drift is the
+ *  number that decides FOR them — the hub cross-verified against the fork base, so the further that
+ *  branch has moved, the less that verification says about a merge today. A PR re-tests against the
+ *  updated starting branch; a local merge does not, which is why only the PR commands are offered. */
 function finishHint(rec: J.JobRecord, r: Runner): void {
   if (rec.finish !== "keep" || !rec.base_sha) return;
   const branch = branchNameFor(rec.command, rec.topic);
@@ -234,10 +234,15 @@ function finishHint(rec: J.JobRecord, r: Runner): void {
   const count = r.run("git", ["rev-list", "--count", `${rec.base_sha}..${branch}`]);
   const commits = Number(count.stdout.trim());
   if (count.code !== 0 || !Number.isFinite(commits) || commits <= 0) return;
-  const drift = r.run("git", ["rev-list", "--count", `${rec.base_sha}..main`]);
+  const drift = rec.start_branch
+    ? r.run("git", ["rev-list", "--count", `${rec.base_sha}..refs/heads/${rec.start_branch}`])
+    : null;
+  const driftCount = drift?.stdout.trim() ?? "";
+  const driftKnown = drift?.code === 0 && !!driftCount;
   process.stdout.write(
     `FINISH=pending\nBRANCH=${branch}\nCOMMITS=${commits}\n` +
-    `MAIN_DRIFT=${drift.code === 0 && drift.stdout.trim() ? drift.stdout.trim() : "?"}\n` +
+    `START_BRANCH=${driftKnown ? rec.start_branch : "?"}\n` +
+    `DRIFT=${driftKnown ? driftCount : "?"}\n` +
     `git push -u origin ${branch}\n` +
     `gh pr create --head ${branch}\n`);
 }
@@ -270,7 +275,7 @@ async function startRun(rest: string[], origCwd: string): Promise<number> {
   if (argsFile) argsFile = isAbsolute(argsFile) ? argsFile : resolve(origCwd, argsFile);
   if (!argsFile || !existsSync(argsFile)) { log.error(`job start: --args-file must be an existing path; got: '${argsFile}'`); return 2; }
   if (!J.finishAllowedDetached(finish)) {
-    log.error(`job start: --finish ${finish} is refused for a detached run; the legal actions are 'keep' (the default — the run ends on its branch and you decide from there) and 'pr' (push + open a PR, which stays reviewable). 'merge' and 'discard' stay out: the run cross-verifies against the fork base while main keeps moving, so a local merge integrates code nobody checked against current main, and a discard destroys work no one has seen.`);
+    log.error(`job start: --finish ${finish} is refused for a detached run; the legal actions are 'keep' (the default — the run ends on its branch and you decide from there) and 'pr' (push + open a PR, which stays reviewable). 'merge' and 'discard' stay out: the run cross-verifies against the fork base while the starting branch keeps moving, so a local merge integrates code nobody checked against the current starting branch, and a discard destroys work no one has seen.`);
     return 2;
   }
   if (!Number.isFinite(budgetHours) || budgetHours <= 0) { log.error(`job start: --budget-hours must be a positive number; got: '${budgetHours}'`); return 2; }
@@ -299,7 +304,9 @@ async function startRun(rest: string[], origCwd: string): Promise<number> {
   // hub and every `.ap` path stay keyed to the repo ROOT — moving them into the worktree would
   // re-open the namespace split 0.5.34 closed. Only the WORKER's target moves.
   const root = repoRoot();
-  const wt = useWorktree ? startWorktree(root, topic, runnerAt(root)) : null;
+  const r = runnerAt(root);
+  const startBranch = currentBranch(r);
+  const wt = useWorktree ? startWorktree(root, topic, r) : null;
   if (useWorktree && !wt) return 1;
 
   const rec: J.JobRecord = {
@@ -307,7 +314,7 @@ async function startRun(rest: string[], origCwd: string): Promise<number> {
     hub: { agent, model: hubModel },
     provider, finish, budget_hours: budgetHours, max_rounds: maxRounds,
     args_file: argsFile, started: isoUtc(),
-    worktree: wt?.worktree ?? "", base_sha: wt?.baseSha ?? "",
+    worktree: wt?.worktree ?? "", base_sha: wt?.baseSha ?? "", start_branch: startBranch,
   };
   mkdirSync(jobDir(topic), { recursive: true });
   // The record is written BEFORE the spawn on purpose: a spawn that dies half-way leaves evidence

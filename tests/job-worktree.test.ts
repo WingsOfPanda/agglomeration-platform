@@ -72,6 +72,7 @@ function record(root: string, over: Partial<JobRecord> = {}): JobRecord {
     provider: "codex", finish: "keep", budget_hours: 6, max_rounds: 5,
     args_file: "/tmp/args", started: "2026-08-18T00:00:00Z",
     worktree: worktreePathFor(root, TOPIC), base_sha: git(root, "rev-parse", "HEAD"),
+    start_branch: git(root, "symbolic-ref", "--short", "HEAD"),
     ...over,
   };
 }
@@ -208,8 +209,8 @@ describe("sweepWorktree — clean goes, dirty stays, foreign is never touched", 
 });
 
 describe("job stop — the sweep and the FINISH hint, through the verb", () => {
-  /** A run that produced `commits` commits on its branch, with main moved on by `drift`. */
-  async function finishedRun(root: string, commits: number, drift: number): Promise<JobRecord> {
+  /** A run that produced `commits` commits on its branch, with its start branch moved by `drift`. */
+  async function finishedRun(root: string, commits: number, drift: number, beforeDrift?: () => void): Promise<JobRecord> {
     const rec = record(root);
     await capture(() => (startWorktree(root, TOPIC, runnerAt(root)) ? 0 : 1));
     const wt = worktreePathFor(root, TOPIC);
@@ -218,6 +219,7 @@ describe("job stop — the sweep and the FINISH hint, through the verb", () => {
       writeFileSync(join(wt, `w${i}.txt`), "work\n");
       git(wt, "add", "-A"); git(wt, "commit", "-q", "-m", `worker ${i}`);
     }
+    beforeDrift?.();
     for (let i = 0; i < drift; i++) {
       writeFileSync(join(root, `m${i}.txt`), "meanwhile\n");
       git(root, "add", "-A"); git(root, "commit", "-q", "-m", `main ${i}`);
@@ -226,15 +228,17 @@ describe("job stop — the sweep and the FINISH hint, through the verb", () => {
     return rec;
   }
 
-  it("prints the push+PR commands and how far main drifted, then sweeps and clears the record", async () => {
+  it("prints the push+PR commands and how far the start branch drifted, then sweeps and clears the record", async () => {
     const root = repo();
-    await finishedRun(root, 2, 3);
+    git(root, "branch", "-m", "trunk");
+    await finishedRun(root, 2, 3, () => git(root, "tag", "trunk"));
     const { rc, out } = await capture(() => run(["stop", TOPIC]));
     expect(rc).toBe(0);
     expect(out).toContain("FINISH=pending");
     expect(out).toContain("BRANCH=feat/implement-demo");
     expect(out).toContain("COMMITS=2");
-    expect(out).toContain("MAIN_DRIFT=3");
+    expect(out).toContain("START_BRANCH=trunk");
+    expect(out).toContain("DRIFT=3");
     expect(out).toContain("git push -u origin feat/implement-demo");
     expect(out).toContain("gh pr create --head feat/implement-demo");
     expect(existsSync(worktreePathFor(root, TOPIC))).toBe(false);
@@ -250,7 +254,8 @@ describe("job stop — the sweep and the FINISH hint, through the verb", () => {
     const { rc, out, err } = await capture(() => run(["stop", TOPIC]));
     expect(rc).toBe(1);
     expect(out).toContain("BRANCH=feat/implement-demo");
-    expect(out).toContain("MAIN_DRIFT=0");
+    expect(out).toContain("START_BRANCH=main");
+    expect(out).toContain("DRIFT=0");
     expect(existsSync(jobPath(TOPIC))).toBe(true);      // the record is what a re-run acts on
     expect(existsSync(worktreePathFor(root, TOPIC))).toBe(true);
     expect(err).toContain("the job record is KEPT");
@@ -271,6 +276,17 @@ describe("job stop — the sweep and the FINISH hint, through the verb", () => {
     seedJob({ ...rec, finish: "pr" });
     const { out } = await capture(() => run(["stop", TOPIC]));
     expect(out).not.toContain("FINISH=pending");
+  });
+
+  it("a pre-0.5.38 record keeps the hint but reports unknown start-branch drift", async () => {
+    const root = repo();
+    const rec = await finishedRun(root, 1, 0);
+    seedJob({ ...rec, start_branch: undefined });
+    const { rc, out } = await capture(() => run(["stop", TOPIC]));
+    expect(rc).toBe(0);
+    expect(out).toContain("FINISH=pending");
+    expect(out).toContain("START_BRANCH=?");
+    expect(out).toContain("DRIFT=?");
   });
 
   it("a pre-0.5.36 record (no worktree fields) stops exactly as it always did", async () => {
