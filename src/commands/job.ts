@@ -119,6 +119,18 @@ async function ownedPanes(topic: string): Promise<Map<string, string>> {
  *  is the same trick a forged @ap_nonce plays on the pane snapshot. */
 const enc = (s: unknown): string => percentEncode(typeof s === "string" ? s : "");
 
+function jobProgressNow(rec: J.JobRecord) {
+  const outbox = readIfExists(outboxPath(rec.hub.agent, rec.hub.model, rec.topic));
+  const events = J.parseOutbox(outbox);
+  const { last, parked } = J.jobProgress(events);
+  // A question the origin already answered must stop reporting as parked: job.md tells it to relay
+  // whenever PARKED=yes, so a question left standing after its answer is a duplicate-relay loop that
+  // writes the hub's inbox again. The relay's cursor is the byte size of the snapshot it answered,
+  // so a cursor at or past the outbox's current size means this question is inside what it consumed.
+  const stillParked = parked && !J.questionConsumed(Buffer.byteLength(outbox, "utf8"), readCursor(rec.topic)) ? parked : null;
+  return { events, last, parked: stillParked };
+}
+
 // ---------- start ----------
 
 async function startRun(rest: string[], origCwd: string): Promise<number> {
@@ -199,14 +211,7 @@ async function statusRun(rest: string[]): Promise<number> {
   if (!rec) return 1;
   const live = await livePaneNonces();
   const liveness = J.classifyJobLiveness(live, paneMetaRead(rec.hub.agent, rec.hub.model, rec.topic));
-  const outbox = readIfExists(outboxPath(rec.hub.agent, rec.hub.model, rec.topic));
-  const events = J.parseOutbox(outbox);
-  const { last, parked } = J.jobProgress(events);
-  // A question the origin already answered must stop reporting as parked: job.md tells it to relay
-  // whenever PARKED=yes, so a question left standing after its answer is a duplicate-relay loop that
-  // writes the hub's inbox again. The relay's cursor is the byte size of the snapshot it answered,
-  // so a cursor at or past the outbox's current size means this question is inside what it consumed.
-  const stillParked = parked && !J.questionConsumed(Buffer.byteLength(outbox, "utf8"), readCursor(rec.topic)) ? parked : null;
+  const { events, last, parked: stillParked } = jobProgressNow(rec);
   const now = Date.now();
   const el = J.elapsedHours(rec.started, now);
 
@@ -270,10 +275,12 @@ async function relayRun(rest: string[]): Promise<number> {
 function attachRun(rest: string[]): number {
   const rec = requireJob(rest[0], "attach");
   if (!rec) return 1;
+  const { parked } = jobProgressNow(rec);
   process.stdout.write(
     `TOPIC=${rec.topic}\nSESSION=${rec.session}\nHUB=${rec.hub.agent}-${rec.hub.model}\n` +
     `WATCH=tmux attach -t ${rec.session}\nSTATUS=ap job status ${rec.topic}\nWAIT=ap job wait ${rec.topic}\n` +
-    `OUTBOX=${outboxPath(rec.hub.agent, rec.hub.model, rec.topic)}\n`);
+    `OUTBOX=${outboxPath(rec.hub.agent, rec.hub.model, rec.topic)}\nPARKED=${parked ? "yes" : "no"}\n`);
+  if (parked) process.stdout.write(`PARKED_MESSAGE=${enc(parked.message ?? parked.note ?? "")}\n`);
   return 0;
 }
 

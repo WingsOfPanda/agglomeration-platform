@@ -57,7 +57,8 @@ you get that refusal, read `$CS job status <TOPIC>` rather than retrying.
 ### `attach <topic>` — after THIS session restarted
 
 `$CS job attach <TOPIC>` prints the re-arm block (session, hub, outbox path, the exact status and
-wait commands). Nothing about the running job changes. Do two things with it: background
+wait commands), plus `PARKED=yes|no` and an encoded `PARKED_MESSAGE=` when parked. Nothing about the
+running job changes. Do two things with it: background
 `$CS job wait <TOPIC>` again, and show the user `$CS job status <TOPIC>` so they can see what they
 missed. A job survives the origin hub's death; the *watch* does not, and this is what restores it.
 
