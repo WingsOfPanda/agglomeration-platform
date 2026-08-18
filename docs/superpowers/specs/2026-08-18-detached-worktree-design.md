@@ -103,3 +103,28 @@ across the three manifests.
 4. `job stop` prints the push+PR finish hint with the main-drift count for keep-mode runs.
 5. Old `job.json` records (no worktree fields) still parse and behave as before.
 6. Suite green, dist fresh, attached paths byte-identical.
+
+### Amendment: the worktree is born on `base/<topic>` (2026-08-18, post-dogfood)
+
+The `--detach` decision above collided with the branch verbs on the first live worktree run.
+`implement branch` (and quick's) refuses a pre-snapshot that recorded a **detached HEAD** — it has
+no restorable start branch — and the obvious remedy, checking the main checkout's branch out inside
+the worktree, is impossible: git refuses to check one branch out in two worktrees at once. The run's
+hub improvised the right fix by hand (mint a local branch at the fork base inside the worktree);
+this makes it the platform's behavior.
+
+- `startWorktree` creates with `git worktree add -b base/<topic> <worktree> <base-sha>`. `topic` is
+  slug-gated upstream, so the ref name is safe. The branch verbs then fork `feat/<cmd>-<topic>` from
+  it exactly as before, and `finish keep` has a real start branch to return to.
+- The name is **derived, never recorded**. `job.json`'s `start_branch` remains the MAIN checkout's
+  branch at fork time (0.5.38); nothing in the record names `base/<topic>`.
+- `job start` **refuses** when `refs/heads/base/<topic>` already exists — a leftover from an
+  interrupted stop — the same fail-closed posture as the worktree-exists refusal, naming
+  `git branch -D base/<topic>` as the clear-by-hand remedy.
+- `sweepWorktree` deletes the branch after the worktree is gone, but only while it still points at
+  the recorded `base_sha` (`-D`: the fork base need not be an ancestor of the checkout's HEAD). If
+  it has MOVED, somebody committed on it — the branch is KEPT and named in a warning, and the sweep
+  still completes, because the worktree itself is gone. A KEPT (dirty) worktree still has the branch
+  checked out, so that arm says nothing about it.
+- Test consequence (spec-mandated): the 0.5.36 assertion that the worktree is DETACHED at base flips
+  to asserting it is on `base/<topic>` at base.

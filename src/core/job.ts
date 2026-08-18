@@ -37,10 +37,11 @@ export interface JobRecord {
    *  duration — branch checkout and the index are global to a checkout, so "your session is free"
    *  was only ever true of the session, never of the repo. */
   worktree?: string;
-  /** The committed HEAD the worktree forked from. `job stop` measures the branch's commits and
-   *  main's drift against it, which is why it is recorded rather than re-derived: by stop time the
-   *  branch has moved and main has too. */
+  /** The committed HEAD the worktree forked from. `job stop` measures the run branch's commits and
+   *  the starting branch's drift against it, which is why it is recorded rather than re-derived. */
   base_sha?: string;
+  /** The origin checkout's branch when the run forked; "" for detached or unreadable HEAD. */
+  start_branch?: string;
 }
 
 export function jobPath(topic: string): string { return join(jobDir(topic), "job.json"); }
@@ -91,11 +92,12 @@ export function parseJob(text: string): JobRecord | null {
     max_rounds: num(o.max_rounds, 0),
     args_file: str(o.args_file),
     started: str(o.started),
-    // Soft in BOTH directions: a 0.5.35 record has neither key and must still read as a live job
-    // (an in-flight run must not become uninterpretable across an upgrade), and a `--no-worktree`
-    // run records them empty. Every consumer tests truthiness, so absent and "" behave alike.
+    // Soft in BOTH directions: older records lack these keys and must stay readable across an
+    // upgrade. `--no-worktree` records the first two empty; detached/unreadable HEAD records the
+    // start branch empty. Every consumer tests truthiness, so absent and "" behave alike.
     worktree: str(o.worktree),
     base_sha: str(o.base_sha),
+    start_branch: str(o.start_branch),
   };
 }
 
@@ -200,9 +202,9 @@ export function questionConsumed(size: number, cursor: number): boolean { return
 /** The finish actions a detached run accepts. `keep` stays the default — the run ends on its branch
  *  and the operator takes it from there. `pr` is the sanctioned opt-in: a PR is REVIEWABLE, so the
  *  code still reaches a human before it reaches the base branch. `merge` and `discard` stay out for
- *  the reason the multi-hour runs exposed — the hub cross-verifies against the FORK BASE while main
- *  keeps moving, so a local merge integrates code nobody verified against current main, and a
- *  discard destroys unattended work. */
+ *  the reason the multi-hour runs exposed — the hub cross-verifies against the FORK BASE while the
+ *  starting branch keeps moving, so a local merge integrates code nobody verified against the
+ *  current starting branch, and a discard destroys unattended work. */
 export function finishAllowedDetached(action: string): boolean { return action === "keep" || action === "pr"; }
 
 /** Drop flag tokens (and the value of each flag named in `valueFlags`) so what remains is the free

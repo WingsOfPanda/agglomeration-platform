@@ -17725,11 +17725,12 @@ function parseJob(text) {
     max_rounds: num(o2.max_rounds, 0),
     args_file: str2(o2.args_file),
     started: str2(o2.started),
-    // Soft in BOTH directions: a 0.5.35 record has neither key and must still read as a live job
-    // (an in-flight run must not become uninterpretable across an upgrade), and a `--no-worktree`
-    // run records them empty. Every consumer tests truthiness, so absent and "" behave alike.
+    // Soft in BOTH directions: older records lack these keys and must stay readable across an
+    // upgrade. `--no-worktree` records the first two empty; detached/unreadable HEAD records the
+    // start branch empty. Every consumer tests truthiness, so absent and "" behave alike.
     worktree: str2(o2.worktree),
-    base_sha: str2(o2.base_sha)
+    base_sha: str2(o2.base_sha),
+    start_branch: str2(o2.start_branch)
   };
 }
 function classifyJobLiveness(live, owner) {
@@ -29615,6 +29616,11 @@ function startWorktree(root, topic, r) {
     log.error(`job start: ${worktree} already exists \u2014 an earlier run's worktree was KEPT because it had uncommitted work in it (see 'ap job stop'). Archive or commit what is in it, then: git -C ${root} worktree remove ${worktree}  (add --force to discard), and start again.`);
     return null;
   }
+  const baseBranch = `base/${topic}`;
+  if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${baseBranch}`]).code === 0) {
+    log.error(`job start: branch ${baseBranch} already exists \u2014 an earlier run's worktree base branch outlived its worktree (an interrupted 'ap job stop'). Check what is on it, then clear it by hand: git -C ${root} branch -D ${baseBranch}  (and 'git -C ${root} worktree remove ${worktree}' first if that worktree is still registered), and start again.`);
+    return null;
+  }
   (0, import_node_fs50.mkdirSync)((0, import_node_path55.dirname)(worktree), { recursive: true });
   const gi = (0, import_node_path55.join)(root, ".ap", ".gitignore");
   if (!(0, import_node_fs50.existsSync)(gi)) {
@@ -29623,9 +29629,9 @@ function startWorktree(root, topic, r) {
     } catch {
     }
   }
-  const add = r.run("git", ["worktree", "add", "--detach", worktree, baseSha]);
+  const add = r.run("git", ["worktree", "add", "-b", baseBranch, worktree, baseSha]);
   if (add.code !== 0) {
-    log.error(`job start: 'git worktree add --detach ${worktree} ${baseSha.slice(0, 8)}' failed (rc ${add.code}) \u2014 nothing was launched. Check 'git -C ${root} worktree list' for a stale entry ('git worktree prune' clears those), or pass --no-worktree.`);
+    log.error(`job start: 'git worktree add -b ${baseBranch} ${worktree} ${baseSha.slice(0, 8)}' failed (rc ${add.code}) \u2014 nothing was launched. Check 'git -C ${root} worktree list' for a stale entry ('git worktree prune' clears those), or pass --no-worktree.`);
     return null;
   }
   const deps = (0, import_node_path55.join)(root, "node_modules");
@@ -29637,8 +29643,20 @@ function startWorktree(root, topic, r) {
   if (classifyDirty(r.run("git", ["status", "--porcelain"]).stdout)) {
     log.warn(`job start: ${root} has UNCOMMITTED changes and they are NOT in the worktree \u2014 it forks committed HEAD (${baseSha.slice(0, 8)}). Nothing of yours was touched or stashed; the run simply will not see that work.`);
   }
-  log.ok(`job start: worktree ${worktree} detached at ${baseSha.slice(0, 8)}`);
+  log.ok(`job start: worktree ${worktree} on ${baseBranch} at ${baseSha.slice(0, 8)}`);
   return { worktree, baseSha };
+}
+function sweepBaseBranch(rec, root, r) {
+  const branch = `base/${rec.topic}`;
+  if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]).code !== 0) return;
+  const at = r.run("git", ["rev-parse", branch]).stdout.trim();
+  if (!rec.base_sha || at !== rec.base_sha) {
+    log.warn(`job stop: the branch ${branch} has MOVED off the fork base and is being KEPT \u2014 something was committed on the run's base branch rather than on ${branchNameFor(rec.command, rec.topic)}. Inspect: git -C ${root} log ${branch}`);
+    return;
+  }
+  const del = r.run("git", ["branch", "-D", branch]);
+  if (del.code !== 0) log.warn(`job stop: could not delete the run's base branch ${branch} (rc ${del.code}) \u2014 remove it by hand: git -C ${root} branch -D ${branch}`);
+  else log.ok(`job stop: deleted the run's base branch ${branch}`);
 }
 function sweepWorktree(rec, root, r) {
   const wt = rec.worktree ?? "";
@@ -29649,6 +29667,7 @@ function sweepWorktree(rec, root, r) {
   }
   if (!(0, import_node_fs50.existsSync)(wt)) {
     r.run("git", ["worktree", "prune"]);
+    sweepBaseBranch(rec, root, r);
     return true;
   }
   if (classifyDirty(runnerAt(wt).run("git", ["status", "--porcelain"]).stdout)) {
@@ -29663,6 +29682,7 @@ function sweepWorktree(rec, root, r) {
   }
   r.run("git", ["worktree", "prune"]);
   log.ok(`job stop: removed the run's worktree ${wt}`);
+  sweepBaseBranch(rec, root, r);
   return true;
 }
 function finishHint(rec, r) {
@@ -29672,12 +29692,15 @@ function finishHint(rec, r) {
   const count2 = r.run("git", ["rev-list", "--count", `${rec.base_sha}..${branch}`]);
   const commits = Number(count2.stdout.trim());
   if (count2.code !== 0 || !Number.isFinite(commits) || commits <= 0) return;
-  const drift = r.run("git", ["rev-list", "--count", `${rec.base_sha}..main`]);
+  const drift = rec.start_branch ? r.run("git", ["rev-list", "--count", `${rec.base_sha}..refs/heads/${rec.start_branch}`]) : null;
+  const driftCount = drift?.stdout.trim() ?? "";
+  const driftKnown = drift?.code === 0 && !!driftCount;
   process.stdout.write(
     `FINISH=pending
 BRANCH=${branch}
 COMMITS=${commits}
-MAIN_DRIFT=${drift.code === 0 && drift.stdout.trim() ? drift.stdout.trim() : "?"}
+START_BRANCH=${driftKnown ? rec.start_branch : "?"}
+DRIFT=${driftKnown ? driftCount : "?"}
 git push -u origin ${branch}
 gh pr create --head ${branch}
 `
@@ -29689,9 +29712,9 @@ async function startRun(rest, origCwd) {
   for (let i2 = 0; i2 < rest.length; i2++) {
     const a2 = rest[i2];
     const take = () => {
-      const r = kvParse(a2, rest[i2 + 1]);
-      i2 += r.shift - 1;
-      return r.value;
+      const r2 = kvParse(a2, rest[i2 + 1]);
+      i2 += r2.shift - 1;
+      return r2.value;
     };
     if (a2 === "--no-worktree") useWorktree = false;
     else if (a2 === "--command" || a2.startsWith("--command=")) command = take();
@@ -29717,7 +29740,7 @@ async function startRun(rest, origCwd) {
     return 2;
   }
   if (!finishAllowedDetached(finish)) {
-    log.error(`job start: --finish ${finish} is refused for a detached run; the legal actions are 'keep' (the default \u2014 the run ends on its branch and you decide from there) and 'pr' (push + open a PR, which stays reviewable). 'merge' and 'discard' stay out: the run cross-verifies against the fork base while main keeps moving, so a local merge integrates code nobody checked against current main, and a discard destroys work no one has seen.`);
+    log.error(`job start: --finish ${finish} is refused for a detached run; the legal actions are 'keep' (the default \u2014 the run ends on its branch and you decide from there) and 'pr' (push + open a PR, which stays reviewable). 'merge' and 'discard' stay out: the run cross-verifies against the fork base while the starting branch keeps moving, so a local merge integrates code nobody checked against the current starting branch, and a discard destroys work no one has seen.`);
     return 2;
   }
   if (!Number.isFinite(budgetHours) || budgetHours <= 0) {
@@ -29751,7 +29774,9 @@ async function startRun(rest, origCwd) {
     return 1;
   }
   const root = repoRoot();
-  const wt = useWorktree ? startWorktree(root, topic, runnerAt(root)) : null;
+  const r = runnerAt(root);
+  const startBranch = currentBranch(r);
+  const wt = useWorktree ? startWorktree(root, topic, r) : null;
   if (useWorktree && !wt) return 1;
   const rec = {
     command,
@@ -29765,7 +29790,8 @@ async function startRun(rest, origCwd) {
     args_file: argsFile,
     started: isoUtc(),
     worktree: wt?.worktree ?? "",
-    base_sha: wt?.baseSha ?? ""
+    base_sha: wt?.baseSha ?? "",
+    start_branch: startBranch
   };
   (0, import_node_fs50.mkdirSync)(jobDir(topic), { recursive: true });
   atomicWrite(jobPath(topic), formatJob(rec));

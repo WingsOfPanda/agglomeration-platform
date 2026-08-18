@@ -8,7 +8,7 @@ const REC: J.JobRecord = {
   hub: { agent: "alpha", model: "claude" },
   provider: "codex", finish: "keep", budget_hours: 6, max_rounds: 5,
   args_file: "/tmp/args", started: "2026-08-18T00:00:00Z",
-  worktree: "/repo/.ap/worktrees/demo", base_sha: "f00dcafe",
+  worktree: "/repo/.ap/worktrees/demo", base_sha: "f00dcafe", start_branch: "main",
 };
 const owner = (paneId: string, nonce: string): PaneOwner => ({ paneId, nonce });
 
@@ -48,13 +48,15 @@ describe("job record codec", () => {
     const r = J.parseJob(old)!;
     expect(r.worktree).toBe("");
     expect(r.base_sha).toBe("");
+    expect(r.start_branch).toBe("");
     expect(r.topic).toBe("demo");     // and everything else is unchanged
     expect(r.finish).toBe("keep");
   });
-  it("a non-string worktree field is read as absent rather than carried through", () => {
-    const r = J.parseJob(JSON.stringify({ ...REC, worktree: 42, base_sha: null }))!;
+  it("non-string worktree fields are read as absent rather than carried through", () => {
+    const r = J.parseJob(JSON.stringify({ ...REC, worktree: 42, base_sha: null, start_branch: false }))!;
     expect(r.worktree).toBe("");
     expect(r.base_sha).toBe("");
+    expect(r.start_branch).toBe("");
   });
 });
 
