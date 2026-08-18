@@ -6,6 +6,7 @@ import { applyArgsFile } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
 import { isoUtc } from "../core/archive.js";
 import { repoRoot } from "../core/paths.js";
+import { jobPath } from "../core/job.js";
 import { quickArtDir, quickExecDir, deriveSlug, parseQuickArgs, parseBranchArgs, detectTestCommand, renderSummary, renderResume, type SummaryFacts } from "../core/quick.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { agentBinary } from "../core/contracts.js";
@@ -286,7 +287,14 @@ export async function finishWith(topic: string, r: Runner, hasGh: boolean): Prom
   const rec = readBranchRecord("quick", { dir: exec });
   const branch = rec.branch;
   const startBranch = rec.startBranch || "main";
-  const doFinish = readField(join(exec, "finish.txt")) === "yes";
+  // The mechanical half of a detached run's "push nothing, open no PR" — until now that lived only
+  // in the directive's prose, and prose does not stop a mis-instructed hub. A `_job` record for this
+  // topic means nobody is watching, so publication is off whatever finish.txt says. It routes to the
+  // branch-only arm below rather than refusing outright: that arm restores the start branch and pops
+  // a --stash-wip park, and a bare refusal here would strand the operator's stashed WIP.
+  const detachedJob = existsSync(jobPath(topic));
+  if (detachedJob) log.warn(`quick finish: a detached job record is present (${jobPath(topic)}) — publication is disabled; the run ends on its branch and the operator finishes it`);
+  const doFinish = readField(join(exec, "finish.txt")) === "yes" && !detachedJob;
 
   if (!doFinish) {
     r.run("git", ["checkout", "-q", startBranch]);

@@ -10,13 +10,19 @@ describe("parseSpawnArgs", () => {
   it("takes the three positionals and defaults every flag to empty", () => {
     expect(parseSpawnArgs(["alpha", "codex", "demo"])).toEqual({
       agent: "alpha", model: "codex", topic: "demo",
-      mode: "", cwd: "", targetPane: "", preflightArtDir: "", session: "", initial: "",
+      mode: "", cwd: "", targetPane: "", preflightArtDir: "", session: "", role: "", initial: "",
     });
   });
 
   it("parses --session in both the space and the = form", () => {
     expect(parseSpawnArgs(["a", "codex", "t", "--session", "ap-t"]).session).toBe("ap-t");
     expect(parseSpawnArgs(["a", "codex", "t", "--session=ap-t"]).session).toBe("ap-t");
+  });
+
+  it("parses --role in both forms", () => {
+    expect(parseSpawnArgs(["a", "claude", "t", "--role", "job-hub"]).role).toBe("job-hub");
+    expect(parseSpawnArgs(["a", "claude", "t", "--role=job-hub"]).role).toBe("job-hub");
+    expect(parseSpawnArgs(["a", "claude", "t"]).role).toBe("");
   });
 
   it("keeps the pre-existing flags working alongside --session", () => {
@@ -55,6 +61,12 @@ describe("spawn placement flags — rejections (no pane is ever created)", () =>
   it("refuses a flag-like session name", async () => {
     home();
     expect(await run(["alpha", "codex", "demo", "--session", "-ap"])).toBe(2);
+  });
+
+  it("refuses an unknown --role rather than falling back to the permissive template", async () => {
+    home();
+    expect(await run(["alpha", "claude", "demo", "--role", "superuser"])).toBe(2);
+    expect(await run(["alpha", "claude", "demo", "--role", "hub"])).toBe(2);
   });
 
   it("still refuses a bad topic before it ever looks at placement", async () => {

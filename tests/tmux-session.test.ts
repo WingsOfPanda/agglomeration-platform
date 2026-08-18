@@ -52,6 +52,35 @@ describe("detached session placement — pure arg builders", () => {
   });
 });
 
+describe("detached session teardown — pure arg builders", () => {
+  it("killSessionArgs uses the exact-match target", () => {
+    expect(T.killSessionArgs("ap-foo")).toEqual(["kill-session", "-t", "=ap-foo"]);
+  });
+  it("sessionPanesArgs scopes to the SESSION with -s, not the current window", () => {
+    expect(T.sessionPanesArgs("ap-foo")).toEqual(["list-panes", "-s", "-t", "=ap-foo", "-F", "#{pane_id}"]);
+  });
+  it("both teardown targets are '='-prefixed — a kill must never hit a prefix match", () => {
+    for (const args of [T.killSessionArgs("ap-foo"), T.sessionPanesArgs("ap-foo")]) {
+      expect(args[args.indexOf("-t") + 1]).toBe("=ap-foo");
+    }
+  });
+});
+
+describe("verifiableNonce", () => {
+  it("accepts exactly the shape randomUUID mints", () => {
+    expect(T.verifiableNonce("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")).toBe(true);
+  });
+  it("rejects everything a recorded nonce could otherwise be, so those read as UNKNOWN", () => {
+    expect(T.verifiableNonce("")).toBe(false);            // pre-nonce pane.json
+    expect(T.verifiableNonce("not-a-uuid")).toBe(false);
+    expect(T.verifiableNonce("AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE")).toBe(false);  // uppercase is not what we mint
+  });
+  it("agrees with ownsPane: an unverifiable nonce can never own a pane", () => {
+    expect(T.ownsPane(new Map([["%1", ""]]), "%1", "")).toBe(false);
+    expect(T.ownsPane(new Map([["%1", "not-a-uuid"]]), "%1", "not-a-uuid")).toBe(false);
+  });
+});
+
 describe("validSessionName", () => {
   it("accepts the names ap actually mints", () => {
     expect(T.validSessionName("ap-foo")).toBe(true);

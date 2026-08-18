@@ -353,3 +353,59 @@ Both are additive.
   is the first thing to touch tmux. Without the retry after `new-session`, every detached worker
   would lose its border label and the first call would emit a spurious warning. `spawn` now withholds
   the warning on the `--session` path and retries once the session has started a server.
+
+### PR 2 amendments
+
+- **The session sweep lives in `job stop`, not `stop.ts`.** The Components list put it in
+  `src/commands/stop.ts`. In practice teardown kills every worker pane individually and tmux destroys
+  a session once its last window closes, so the sweep is a **safety net for the case where a pane was
+  deliberately NOT killed** (unprovable ownership) — never the normal path. Extending `StopDeps` with
+  tmux session calls to serve an almost-always no-op was not worth the surface; `/ap:stop <topic>`
+  leaves nothing behind either way. Both branches are verified: all-panes-ours kills the session, and
+  one unaccountable pane leaves it intact and names the pane.
+- **`job stop` deletes the job record rather than archiving it.** The per-worker archives already
+  carry the outbox, the identity, and everything forensics reads; `archiveTopic`'s suite parameter is
+  a closed enum that a new `_job` member would have to join for no gain.
+- **`spawn --role worker|job-hub` is how the template gets selected.** The spec said `identityWrite`
+  takes a role but not how a spawn expresses one. An unknown role is refused (rc 2) rather than
+  falling back to the permissive template.
+- **`job start` derives the topic from the args file** using the same `deriveTopicFromPath` /
+  `--topic` precedence `implement init` uses, so the job record and the run it launches cannot
+  disagree about which topic they are. `--topic` overrides; an underivable topic is refused with a
+  message naming the flag.
+- **`AP_JOB_WAIT_TIMEOUT_S`** (default 3600) bounds one `job wait`. A timeout is not a failure — the
+  origin hub re-arms — so it is deliberately long and deliberately not fatal.
+
+### Adversarial-review hardening (pre-merge, 2026-08-18)
+
+- **The origin and its hub must resolve ONE namespace.** VERIFIED by execution: every state path
+  derives from `process.cwd()` (`paths.ts` `stateRoot` + `repoHash`) while the job hub is launched
+  with `cwd=repoRoot()`, so a record written from `docs/` read `DETACHED=1` in `docs/` and
+  `DETACHED=0` at the root — the hub then takes the directive's "ordinary attached run" branch and
+  finishes by pushing and opening a PR. `job run()` now normalizes to `repoRoot()` before dispatch
+  (restoring the caller's cwd afterwards) and `--args-file` is resolved absolute against the origin's
+  cwd. `budget-check` was hardened the same way: an unreadable record prints `BUDGET=unknown` and
+  exits **1** (park), not 2 — the hub branches on 0-vs-1, so it has to fail closed toward parking.
+- **"No push, no PR" is now mechanical, not prose.** VERIFIED: `quick finish`'s single publication
+  switch was `finish.txt == yes`, and `implement finish` gated nothing at all — neither read the job
+  record. `quick finish` now disables publication whenever a `_job` record exists and diverts to the
+  branch-only arm (which restores the start branch and pops a `--stash-wip` park, so nothing is
+  stranded); `implement finish` refuses `merge`/`pr`/`discard` with rc 2 before it truncates its
+  results file, and records the refusal to the review feed so `/ap:review` sees a mis-instructed hub.
+- **Relay is gated, and its cursor is taken from the snapshot it answered.** VERIFIED: `send` checks
+  pane ownership and nothing else, so `relay` was free to overwrite a working hub's inbox task or
+  write into a finished one; and taking the cursor AFTER the send swallowed a `done` that landed
+  during the send's beat, so `job wait` timed out on a finished job. One read now settles both —
+  `relaySnapshot` returns the parked verdict with the byte offset it was computed at; nothing parked
+  is a refusal (rc 1), and the recorded cursor is the snapshot's, never a re-stat. `status` suppresses
+  a question the cursor already covers (`questionConsumed`), closing the duplicate-relay loop
+  `commands/job.md`'s "relay whenever `PARKED=yes`" would otherwise drive.
+- **Teardown reports only what it can prove.** VERIFIED (swallowed kill, erased record; the stale-id
+  kill contrived but doctrine-violating): `ownedPanes` proved the nonce and then discarded it, and
+  the session kill compared bare ids against a snapshot already seconds stale — the one destructive
+  site here that never re-read ownership at kill time. `killSession` now returns a boolean,
+  `sessionKillable(panes, recorded, live)` re-checks each pane's nonce against a snapshot taken at
+  kill time, and the proven pane evidence is persisted to `_job/panes.json` before teardown archives
+  the `pane.json` files it came from. An unswept session or an unverified kill exits 1 and KEEPS the
+  record — deleting it would leave the next `job start <topic>` free to adopt, by name, a session
+  still holding stranger panes — and a re-run can finish the sweep from the persisted evidence.
