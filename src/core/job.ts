@@ -7,7 +7,7 @@
 // record says what was LAUNCHED and nothing else; liveness comes from the pane nonce, progress from
 // the outbox, and the hub's own state from its status.json. Four independent reads, no inference.
 
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { jobDir } from "./paths.js";
 import { ownsPane, verifiableNonce } from "./tmux.js";
 import { deriveTopicFromPath } from "./implement.js";
@@ -31,9 +31,32 @@ export interface JobRecord {
   max_rounds: number;
   args_file: string;
   started: string;   // ISO-8601 UTC
+  /** Absolute path of the isolated worktree the WORKER runs in; "" when `--no-worktree` was given
+   *  (and absent entirely in records written before 0.5.36). Both dogfoods checked the run's branch
+   *  out in the MAIN checkout, which froze the origin session out of its own repo for the run's
+   *  duration — branch checkout and the index are global to a checkout, so "your session is free"
+   *  was only ever true of the session, never of the repo. */
+  worktree?: string;
+  /** The committed HEAD the worktree forked from. `job stop` measures the branch's commits and
+   *  main's drift against it, which is why it is recorded rather than re-derived: by stop time the
+   *  branch has moved and main has too. */
+  base_sha?: string;
 }
 
 export function jobPath(topic: string): string { return join(jobDir(topic), "job.json"); }
+/** Where a detached run's worktree lives. Under the REPO root, not the state dir: `cp -al` of
+ *  node_modules only works on the same filesystem, and `.ap/` is already git-ignored so the
+ *  worktree never shows up as untracked content in the checkout it forked from. `root` is passed in
+ *  rather than resolved here — the state dir follows AP_HOME, this must not. */
+export function worktreePathFor(root: string, topic: string): string {
+  return join(root, ".ap", "worktrees", topic);
+}
+/** Is `path` a worktree THIS platform could have created under `root`? The same rule pane ownership
+ *  follows: teardown removes only what ap can prove is its own, so a hand-edited (or carried-over)
+ *  record naming some other checkout is never a path `job stop` will delete. */
+export function worktreeProvenanced(path: string, root: string): boolean {
+  return path.startsWith(join(root, ".ap", "worktrees") + sep) && path.length > join(root, ".ap", "worktrees").length + sep.length;
+}
 /** Byte offset into the hub's outbox that the origin hub has already consumed. `job wait` resumes
  *  from it; `job relay` bumps it past the question it just answered, so the next wait does not
  *  re-report a question that has been dealt with. */
@@ -68,6 +91,11 @@ export function parseJob(text: string): JobRecord | null {
     max_rounds: num(o.max_rounds, 0),
     args_file: str(o.args_file),
     started: str(o.started),
+    // Soft in BOTH directions: a 0.5.35 record has neither key and must still read as a live job
+    // (an in-flight run must not become uninterpretable across an upgrade), and a `--no-worktree`
+    // run records them empty. Every consumer tests truthiness, so absent and "" behave alike.
+    worktree: str(o.worktree),
+    base_sha: str(o.base_sha),
   };
 }
 
@@ -169,10 +197,13 @@ export function questionConsumed(size: number, cursor: number): boolean { return
 
 // ---------- launch-time gates ----------
 
-/** The only finish action a detached run accepts. Merging, pushing, or opening a PR while nobody is
- *  watching is the one thing detachment must not buy: the run ends on its branch and the operator
- *  takes it from there. */
-export function finishAllowedDetached(action: string): boolean { return action === "keep"; }
+/** The finish actions a detached run accepts. `keep` stays the default — the run ends on its branch
+ *  and the operator takes it from there. `pr` is the sanctioned opt-in: a PR is REVIEWABLE, so the
+ *  code still reaches a human before it reaches the base branch. `merge` and `discard` stay out for
+ *  the reason the multi-hour runs exposed — the hub cross-verifies against the FORK BASE while main
+ *  keeps moving, so a local merge integrates code nobody verified against current main, and a
+ *  discard destroys unattended work. */
+export function finishAllowedDetached(action: string): boolean { return action === "keep" || action === "pr"; }
 
 /** Drop flag tokens (and the value of each flag named in `valueFlags`) so what remains is the free
  *  text a slug can be derived from. */
@@ -202,6 +233,41 @@ export function topicFromImplementArgs(text: string): string {
 
 // ---------- the job hub's brief ----------
 
+/** How the recorded finish action reads in the brief. The two legal actions describe genuinely
+ *  different endings, and a brief that promised "never push" under a `pr` run would have the hub
+ *  fighting its own finish verb. */
+function finishLine(finish: string): string {
+  return finish === "pr"
+    ? `    finish      pr — at the end, push the branch and open a PR. NEVER merge it yourself.`
+    : `    finish      ${finish} — never merge, never push, never open a PR`;
+}
+
+/** The worktree paragraph, empty for a `--no-worktree` run (and for a record written before 0.5.36).
+ *  The path is the ONE thing the hub cannot derive: the state dir is keyed to the repo root, and
+ *  only the WORKER's target moves. */
+function worktreeLines(j: JobRecord): string[] {
+  if (!j.worktree) return [];
+  const target = j.command === "quick"
+    ? [`    ap quick init --target ${j.worktree} ...`,
+       `    ap quick branch --target ${j.worktree} <SLUG>    <- BOTH verbs, not just init`]
+    : [`    ap implement init --target ${j.worktree} ...`,
+       `    (every later verb reads target_cwd.txt, so init is the only place it is passed)`];
+  return [
+    ``,
+    `WORKTREE. This run works in an ISOLATED git worktree, not the main checkout:`,
+    ``,
+    `    ${j.worktree}`,
+    ``,
+    `Pass it as \`--target\` wherever the directive inits the run:`,
+    ``,
+    ...target,
+    ``,
+    `The main checkout belongs to the operator for the whole run — the worker must never check out`,
+    `a branch there. Your own state (\`.ap/state/...\`, this record, your inbox/outbox) stays keyed`,
+    `to the repo ROOT and is unaffected; only the worker's target moves.`,
+  ];
+}
+
 /** The inbox task the job hub receives. It names the directive to run, the mechanical detached-mode
  *  signal, and the parameters that are NOT the hub's to change. Pure, so its wording is testable. */
 export function jobBrief(j: JobRecord): string {
@@ -219,10 +285,11 @@ export function jobBrief(j: JobRecord): string {
     `Stage 0 and follow it wherever it redefines a gate. The mechanical check is:`,
     ``,
     `    ap job mode ${j.topic}          -> prints DETACHED=1 and exits 0`,
+    ...worktreeLines(j),
     ``,
     `Run parameters. These are settled and are NOT yours to change:`,
     `    provider    ${j.provider || "(directive default)"}`,
-    `    finish      ${j.finish} — never merge, never push, never open a PR`,
+    finishLine(j.finish),
     `    max rounds  ${j.max_rounds}`,
     `    budget      ${j.budget_hours}h — check at EVERY round boundary with:`,
     `                    ap job budget-check ${j.topic}`,

@@ -492,6 +492,49 @@ describe("quick finish (finishWith core)", () => {
     const { quickExecDir } = await import("../src/core/quick.js");
     expect(readFileSync(join(quickExecDir("auth"), "finish-result.txt"), "utf8")).toContain("branch-only");
   });
+
+  /** A detached record for `auth` with whatever finish action it was launched (or tampered) with. */
+  function seedJobFinish(finish: string): void {
+    const p = jobPath("auth");
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, formatJob({
+      command: "quick", topic: "auth", session: "ap-auth",
+      hub: { agent: "alpha", model: "claude" },
+      provider: "codex", finish, budget_hours: 6, max_rounds: 5,
+      args_file: "/tmp/args", started: "2026-08-18T00:00:00Z",
+    }));
+  }
+
+  // D6: the gate became "the action the record names", not a hard-coded keep. A PR stays reviewable,
+  // so the code still reaches a human before it reaches the base branch — that is what earns it the
+  // exemption a merge never gets.
+  it("a record naming finish 'pr' takes the normal push/PR arm", async () => {
+    await scaffold("auth", "yes");
+    seedJobFinish("pr");
+    const { calls, r } = fake({
+      "git remote": { code: 0, stdout: "origin\n" },
+      "git push -q -u origin feat/quick-auth": { code: 0, stdout: "" },
+      "git remote get-url origin": { code: 0, stdout: "url\n" },
+    });
+    expect(await finishWith("auth", r as any, true)).toBe(0);
+    expect(calls.some((c) => c[0] === "gh")).toBe(true);
+    const { quickExecDir } = await import("../src/core/quick.js");
+    expect(readFileSync(join(quickExecDir("auth"), "finish-result.txt"), "utf8")).toContain("pr-opened");
+  });
+
+  // The recorded action is re-checked, never trusted: `job start` can only write keep or pr, so a
+  // record naming anything else was hand-edited or carried over, and unlocks nothing.
+  it("a record naming an ILLEGAL finish action still diverts to branch-only", async () => {
+    await scaffold("auth", "yes");
+    seedJobFinish("merge");
+    const { calls, r } = fake({
+      "git remote": { code: 0, stdout: "origin\n" },
+      "git remote get-url origin": { code: 0, stdout: "url\n" },
+    });
+    expect(await finishWith("auth", r as any, true)).toBe(0);
+    expect(calls.some((c) => c[1] === "push")).toBe(false);
+    expect(calls.some((c) => c[0] === "gh")).toBe(false);
+  });
 });
 
 // capture process.stdout.write + process.stderr.write for the duration of fn() (the log module

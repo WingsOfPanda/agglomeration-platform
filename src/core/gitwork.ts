@@ -1,5 +1,7 @@
 // src/core/gitwork.ts
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { isAbsolute } from "node:path";
 
 export interface RunResult { code: number; stdout: string; }
 export interface Runner { run(cmd: string, args: string[]): RunResult; }
@@ -17,6 +19,17 @@ export function runnerAt(cwd: string): Runner {
       }
     },
   };
+}
+
+/** Why `p` is unusable as a `--target` checkout, or "" when it is fine. One reader for both commands
+ *  so `implement init --target` and `quick init/branch --target` cannot drift apart on what they
+ *  accept. Absolute is required because the value is RECORDED (target_cwd.txt) and later read by a
+ *  different process with a different cwd — the same reason `job start` resolves its args file. */
+export function targetProblem(p: string): string {
+  if (!isAbsolute(p)) return `--target must be an absolute path; got: '${p}'`;
+  if (!existsSync(p)) return `--target does not exist: ${p}`;
+  if (runnerAt(p).run("git", ["rev-parse", "--is-inside-work-tree"]).code !== 0) return `--target is not inside a git work tree: ${p}`;
+  return "";
 }
 
 export function classifyDirty(porcelain: string): boolean { return porcelain.trim().length > 0; }

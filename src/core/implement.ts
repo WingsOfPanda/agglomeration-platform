@@ -41,6 +41,10 @@ export interface ImplementArgs {
   branchMode: "branch" | "no-branch";
   branchName?: string;
   topic?: string;
+  /** An explicit target checkout, overriding the repo root. A detached run's `job start` creates an
+   *  isolated worktree and passes it here, so the worker never checks a branch out in the main
+   *  checkout the operator is still using. */
+  target?: string;
   force: boolean;
 }
 
@@ -52,6 +56,7 @@ export function parseImplementArgs(tokens: string[]): ImplementArgs {
   let branchMode: "branch" | "no-branch" = "branch";
   let branchName: string | undefined;
   let topic: string | undefined;
+  let target: string | undefined;
   let force = false;
   const rest: string[] = [];
   for (let i = 0; i < tokens.length; i++) {
@@ -67,10 +72,13 @@ export function parseImplementArgs(tokens: string[]): ImplementArgs {
     if (t === "--topic" || t.startsWith("--topic=")) {
       const { value, shift } = kvParse(t, tokens[i + 1]); topic = value; if (shift === 2) i++; continue;
     }
+    if (t === "--target" || t.startsWith("--target=")) {
+      const { value, shift } = kvParse(t, tokens[i + 1]); target = value; if (shift === 2) i++; continue;
+    }
     if (t.startsWith("-")) throw new ImplementArgError(`implement init: unknown flag '${t}'`);
     rest.push(t);
   }
-  return { rest: rest.join(" "), branchMode, branchName, topic, force };
+  return { rest: rest.join(" "), branchMode, branchName, topic, target, force };
 }
 
 /** Port of deploy_detect_provider. plugin.json present -> claude; else codex. (The --provider override

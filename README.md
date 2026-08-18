@@ -226,9 +226,21 @@ your session (the origin hub)             tmux session ap-<topic> (detached)
 
 The unattended envelope is deliberately tighter than an attended run:
 
-- **Nothing merges, pushes, or opens a PR while nobody is watching.** The finish action is locked
-  to `keep` — mechanically, in the finish verbs, not just in prose — so the run ends on its
-  `feat/...` branch and *you* run the finish menu afterwards.
+- **The run gets its own checkout.** `job start` forks committed HEAD into a detached worktree at
+  `.ap/worktrees/<topic>` (hardlink-cloning `node_modules` when there is one) and points the worker
+  there, so *your* checkout stays yours for the whole run: edit it, switch branches, start other
+  runs — just do not check out the run's own `feat/...` branch, and leave that topic's `.ap` state
+  alone. Your uncommitted work stays behind (the launch warns when the tree is dirty), and
+  `job stop` removes the worktree when it is clean, keeps and names it when it is not. `--no-worktree`
+  opts out, for a repo whose suite only runs in the blessed checkout.
+- **Nothing merges while nobody is watching.** The finish action is `keep` by default —
+  mechanically, in the finish verbs, not just in prose — so the run ends on its `feat/...` branch
+  and *you* run the finish menu afterwards. `--finish pr` is the one opt-in: it pushes and opens a
+  **PR**, which is still reviewable. `merge` and `discard` are refused at launch and at the finish
+  verbs. The reason is stale base, not squeamishness: the hub cross-verifies against the commit the
+  run forked from, and main keeps moving under a multi-hour job — a PR re-tests against current
+  main, a local merge integrates code nobody checked against it. `job stop` prints the exact
+  push + `gh pr create` commands along with how far main has drifted since the fork.
 - **`--budget-hours` (default 6)** is checked at every round boundary; an exhausted budget writes
   `RESUME.md` and **parks** rather than continuing or discarding.
 - **Park-and-relay instead of questions.** Where the attached run would ask you, the job hub
@@ -258,8 +270,9 @@ implement/quick, not here.
   parked — the hub is working or finished, and a write then would clobber its task.
 - **`list`** — every job in this repo (also appended to `/ap:list` as a `DETACHED JOBS` section).
 - **`stop <topic>`** — tear down the hub and its workers, sweep the `ap-<topic>` session
-  (ownership-gated), clear the record. An incomplete teardown exits 1 and **keeps** the record —
-  it is the guard that stops the next `job start` from adopting a leftover session by name.
+  (ownership-gated), print the finish hint, sweep the run's worktree (clean ones only), clear the
+  record. An incomplete teardown exits 1 and **keeps** the record — it is the guard that stops the
+  next `job start` from adopting a leftover session by name.
 
 ### `/ap:autoresearch`
 
