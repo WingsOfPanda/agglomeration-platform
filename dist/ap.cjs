@@ -16650,6 +16650,27 @@ function respawnArgs(pane, launch, cwd) {
   a2.push(launch);
   return a2;
 }
+function sessionTarget(session) {
+  return `=${session}`;
+}
+function validSessionName(s) {
+  return SESSION_NAME_RE.test(s);
+}
+function newSessionArgs(session, launch, cwd) {
+  const a2 = ["new-session", "-P", "-F", "#{pane_id}", "-d", "-s", session];
+  if (cwd) a2.push("-c", cwd);
+  a2.push(launch);
+  return a2;
+}
+function newWindowArgs(session, launch, cwd) {
+  const a2 = ["new-window", "-P", "-F", "#{pane_id}", "-d", "-t", `${sessionTarget(session)}:`];
+  if (cwd) a2.push("-c", cwd);
+  a2.push(launch);
+  return a2;
+}
+function hasSessionArgs(session) {
+  return ["has-session", "-t", sessionTarget(session)];
+}
 function setOptionArgs(pane, opt, val) {
   return ["set-option", "-p", "-t", pane, opt, val];
 }
@@ -16712,6 +16733,14 @@ function sentinelCommand(coloredLabel) {
 async function tmux(args) {
   const { stdout } = await execa("tmux", args);
   return stdout.trim();
+}
+async function sessionExists(session) {
+  try {
+    await execa("tmux", hasSessionArgs(session));
+    return true;
+  } catch {
+    return false;
+  }
 }
 async function ensurePaneBorders() {
   const rs = await Promise.all(paneBorderArgs().map(async (a2) => {
@@ -16848,7 +16877,7 @@ async function preflightLayout(topic, list, opts) {
     throw e;
   }
 }
-var import_node_crypto3, import_node_os5, import_node_fs15, import_node_path12, PANE_ID_RE, NONCE_RE, splitRight, splitDown, respawn;
+var import_node_crypto3, import_node_os5, import_node_fs15, import_node_path12, SESSION_NAME_RE, PANE_ID_RE, NONCE_RE, splitRight, splitDown, respawn, newSession, newWindow;
 var init_tmux = __esm({
   "src/core/tmux.ts"() {
     "use strict";
@@ -16858,6 +16887,7 @@ var init_tmux = __esm({
     import_node_fs15 = require("node:fs");
     import_node_path12 = require("node:path");
     init_colors();
+    SESSION_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
     PANE_ID_RE = /^%\d+$/;
     NONCE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     splitRight = (launch, target, cwd) => tmux(splitRightArgs(launch, target, cwd));
@@ -16866,6 +16896,8 @@ var init_tmux = __esm({
       await tmux(respawnArgs(pane, launch, cwd));
       return pane;
     };
+    newSession = (session, launch, cwd) => tmux(newSessionArgs(session, launch, cwd));
+    newWindow = (session, launch, cwd) => tmux(newWindowArgs(session, launch, cwd));
   }
 });
 
@@ -17211,6 +17243,7 @@ var init_forensics = __esm({
 // src/commands/spawn.ts
 var spawn_exports = {};
 __export(spawn_exports, {
+  parseSpawnArgs: () => parseSpawnArgs,
   prepareWorkerState: () => prepareWorkerState,
   resolveMode: () => resolveMode,
   run: () => run2,
@@ -17219,27 +17252,10 @@ __export(spawn_exports, {
 function resolveMode(explicit, dflt) {
   return explicit || dflt || "full";
 }
-async function stampOrFail(pane, nonce, agent, model, topic) {
-  if (await paneNonceSet(pane, nonce)) return true;
-  captureSpawnFailure({ agent, model, topic, reason: "pane_failed", detail: `could not stamp @ap_nonce on ${pane}` });
-  await killNow(pane);
-  log.error(`could not stamp the ownership nonce on ${pane} (tmux unreachable?); the pane was torn down rather than left unownable \u2014 check for a stray pane with: tmux list-panes -a`);
-  return false;
-}
-function prepareWorkerState(agent, model, topic) {
-  stateInit(agent, model, topic);
-  identityWrite(agent, model, topic);
-  seedWorkerStatus(agent, model, topic);
-}
-async function run2(args) {
-  if (args.length < 3) {
-    log.error("usage: spawn <agent|random> <model> <topic> [--mode m] [--cwd abs] [--target-pane id] [initial-prompt]");
-    return 2;
-  }
-  let agent = args[0];
-  const [, model, topic] = args;
-  let i2 = 3, mode = "", cwd = "", targetPane = "", preflightArtDir = "", initial = "";
-  for (; i2 < args.length; i2++) {
+function parseSpawnArgs(args) {
+  const [agent, model, topic] = args;
+  let mode = "", cwd = "", targetPane = "", preflightArtDir = "", session = "", initial = "";
+  for (let i2 = 3; i2 < args.length; i2++) {
     const a2 = args[i2];
     if (a2 === "--mode" || a2.startsWith("--mode=")) {
       const r = kvParse(a2, args[i2 + 1]);
@@ -17257,11 +17273,38 @@ async function run2(args) {
       const r = kvParse(a2, args[i2 + 1]);
       preflightArtDir = r.value;
       i2 += r.shift - 1;
+    } else if (a2 === "--session" || a2.startsWith("--session=")) {
+      const r = kvParse(a2, args[i2 + 1]);
+      session = r.value;
+      i2 += r.shift - 1;
     } else {
       initial = args.slice(i2).join(" ");
       break;
     }
   }
+  return { agent, model, topic, mode, cwd, targetPane, preflightArtDir, session, initial };
+}
+async function stampOrFail(pane, nonce, agent, model, topic) {
+  if (await paneNonceSet(pane, nonce)) return true;
+  captureSpawnFailure({ agent, model, topic, reason: "pane_failed", detail: `could not stamp @ap_nonce on ${pane}` });
+  await killNow(pane);
+  log.error(`could not stamp the ownership nonce on ${pane} (tmux unreachable?); the pane was torn down rather than left unownable \u2014 check for a stray pane with: tmux list-panes -a`);
+  return false;
+}
+function prepareWorkerState(agent, model, topic) {
+  stateInit(agent, model, topic);
+  identityWrite(agent, model, topic);
+  seedWorkerStatus(agent, model, topic);
+}
+async function run2(args) {
+  if (args.length < 3) {
+    log.error("usage: spawn <agent|random> <model> <topic> [--mode m] [--cwd abs] [--target-pane id] [--session name] [initial-prompt]");
+    return 2;
+  }
+  const parsed = parseSpawnArgs(args);
+  let agent = parsed.agent;
+  let initial = parsed.initial;
+  const { model, topic, mode, cwd, targetPane, preflightArtDir, session } = parsed;
   if (!validateSlug(topic)) {
     log.error(`topic must match [a-z0-9-]+ and be <= 32 chars; got: '${topic}'`);
     return 2;
@@ -17274,8 +17317,16 @@ async function run2(args) {
     log.error(`spawn --cwd must be an existing absolute path: ${cwd}`);
     return 1;
   }
-  if (!inTmuxSession()) {
-    log.error("must run inside a tmux session");
+  if (session && targetPane) {
+    log.error("spawn: --session and --target-pane are mutually exclusive (--target-pane respawns a reserved preflight pane; --session places the worker in a detached session of its own)");
+    return 2;
+  }
+  if (session && !validSessionName(session)) {
+    log.error(`spawn --session must be a tmux-safe name (letter or digit first, then letters/digits/_/-, at most 64 chars, no '.' or ':'); got: '${session}'`);
+    return 2;
+  }
+  if (!session && !inTmuxSession()) {
+    log.error("must run inside a tmux session (or pass --session <name> to place the worker in a detached session)");
     return 1;
   }
   const tmuxVer = tmuxVersionString();
@@ -17287,7 +17338,8 @@ async function run2(args) {
     log.error("tmux >= 3.0 required");
     return 1;
   }
-  if (!await ensurePaneBorders()) log.warn("could not set pane-border globals; worker labels may not render");
+  const bordersOk = await ensurePaneBorders();
+  if (!bordersOk && !session) log.warn("could not set pane-border globals; worker labels may not render");
   if (agent === "random") {
     const pick = pickRandomAgent(topic);
     if (!pick) {
@@ -17349,6 +17401,12 @@ async function run2(args) {
       pane = await respawn(targetPane, launch, startDir);
       if (!await stampOrFail(pane, nonce, agent, model, topic)) return 1;
       await paneLabelSet(pane, agent, model, topic);
+    } else if (session) {
+      nonce = (0, import_node_crypto4.randomUUID)();
+      pane = await sessionExists(session) ? await newWindow(session, launch, startDir) : await newSession(session, launch, startDir);
+      if (!await stampOrFail(pane, nonce, agent, model, topic)) return 1;
+      await paneLabelSet(pane, agent, model, topic);
+      if (!bordersOk && !await ensurePaneBorders()) log.warn("could not set pane-border globals; worker labels may not render");
     } else {
       const lastFile = (0, import_node_path14.join)(topicDir(topic), ".last_pane");
       const prior = parseLastPane(readIfExists(lastFile));
@@ -17398,10 +17456,12 @@ ${ob}
       await paneSend(pane, taskNudge(inboxPath(agent, model, topic), model));
       log.info(`use: ap collect ${agent} ${topic}  (to wait for {done})`);
     }
+    const sessionLine = session ? `  session: ${session}  (tmux attach -t ${session})
+` : "";
     process.stdout.write(`
   worker:    ${labelFor(agent, model, topic)}
   pane:    ${pane}
-  state:   ${workerDir(agent, model, topic)}
+${sessionLine}  state:   ${workerDir(agent, model, topic)}
   ready:   yes
 `);
     return 0;
