@@ -13,7 +13,9 @@ The platform agglomerates agents: the orchestrating session is the **hub**, each
 **agent**, a spawned agent working a task is a **worker**, and agents are grouped into color-coded
 **clusters** (azure / sage / amber / slate / ivory / violet) so concurrent panes stay visually
 distinguishable. The commands are plain verbs — `quick`, `explore`, `design`, `implement`,
-`autoresearch`, `review`.
+`autoresearch`, `review` — and an `implement` or `quick` run can go **detached**: the whole
+pipeline drives itself in its own tmux session while your Claude Code session stays free
+([details below](#detached-jobs---detached)).
 
 > agglomeration-platform is a TypeScript rewrite of an earlier Bash plugin. The packaging changed
 > (one committed `dist/ap.cjs`, zero-build install); the wire protocol, state layout, and tmux
@@ -66,7 +68,7 @@ flowchart LR
     B["/ap:bridge<br/>same, but in another repo"] -.-> PR2[(PR in repo B)]
 ```
 
-`check` / `list` / `review` / `stop` are the operational glue around all of it.
+`check` / `list` / `job` / `review` / `stop` are the operational glue around all of it.
 
 ---
 
@@ -85,7 +87,9 @@ To update later: `/plugin marketplace update`, then re-install/upgrade. There is
 ### Requirements
 
 - **Claude Code** — the hub runs as a Claude Code session.
-- **tmux ≥ 3.0**, and the hub session must run **inside tmux** — every worker is a real pane.
+- **tmux ≥ 3.0**. Attached runs split the hub's own pane, so the hub session must run **inside
+  tmux**; a `--detached` launch creates its own session, so for those the hub only needs the tmux
+  binary on `PATH`.
 - **At least one model CLI on `PATH`** — `codex`, `claude`, `agy`, or `opencode`. Run `/ap:check`
   to detect what is available and pick your active set.
 
@@ -117,6 +121,7 @@ When the task needs research before code, use the pipeline instead:
 | To survey SOTA / think from multiple angles, **without** committing to a plan | [`/ap:explore`](#apexplore) |
 | A buildable, audited design doc ("design X", "should we adopt X?") | [`/ap:design`](#apdesign) |
 | To turn a design doc into code, cross-verified, on a branch | [`/ap:implement`](#apimplement) |
+| An implement/quick run that takes **hours** — without holding your session hostage | [`--detached`](#detached-jobs---detached) + [`/ap:job`](#apjob) |
 | A metric-driven experiment loop that never touches real code | [`/ap:autoresearch`](#apautoresearch) |
 | The same orchestration, but the work belongs in a *different* repo | [`/ap:bridge`](#apbridge) |
 | Health check + pick which model CLIs to use | [`/ap:check`](#apcheck) |
@@ -130,7 +135,7 @@ When the task needs research before code, use the pipeline instead:
 ### `/ap:quick`
 
 ```
-/ap:quick "<task text>" [--provider codex|claude|agy|opencode] [--no-finish] [--stash-wip]
+/ap:quick "<task text>" [--detached] [--provider codex|claude|agy|opencode] [--no-finish] [--stash-wip]
 ```
 
 The light pipeline: **one worker implements a clear single-repo change unattended** on its own
@@ -190,7 +195,7 @@ walks the six sections with you interactively.
 ### `/ap:implement`
 
 ```
-/ap:implement [<design-doc-path>] [--no-branch] [--topic <slug>] [--max-rounds N]
+/ap:implement [<design-doc-path>] [--detached] [--no-branch] [--topic <slug>] [--max-rounds N]
 ```
 
 Turns a deploy-schema design doc into code, single-repo. The doc is **audited first** (schema
@@ -203,6 +208,58 @@ relayed to you with verified claims attached.
 - Ends with a finish menu — **merge / push+PR / keep / discard** — then scope-conformance check,
   forensics, teardown, archive.
 - The worker pane stays attached the whole run; `tmux select-pane` to watch it code.
+
+### Detached jobs: `--detached`
+
+An attached run holds your session for its whole duration and dies with it. `--detached` hands the
+**entire pipeline** — not just the worker — to a **job hub**: a `claude` TUI spawned into a
+detached tmux session `ap-<topic>`, which runs the same directive itself and spawns its own worker
+beside it. Your session gets the launch back in about a minute and keeps only a cheap watch; the
+run survives your session's restart.
+
+```
+your session (the origin hub)             tmux session ap-<topic> (detached)
+  /ap:implement <doc> --detached  ──▶     window 0: claude TUI — the job hub, runs the pipeline
+  /ap:job status|attach|relay             window 1: codex/claude TUI — the worker
+  …free for other work…                   (tmux attach -t ap-<topic> to watch either, live)
+```
+
+The unattended envelope is deliberately tighter than an attended run:
+
+- **Nothing merges, pushes, or opens a PR while nobody is watching.** The finish action is locked
+  to `keep` — mechanically, in the finish verbs, not just in prose — so the run ends on its
+  `feat/...` branch and *you* run the finish menu afterwards.
+- **`--budget-hours` (default 6)** is checked at every round boundary; an exhausted budget writes
+  `RESUME.md` and **parks** rather than continuing or discarding.
+- **Park-and-relay instead of questions.** Where the attached run would ask you, the job hub
+  appends a `question` event and waits. Your session surfaces it (`job wait` / `job status` /
+  `job attach` all show it) and `/ap:job relay` delivers your answer; the run resumes where it
+  parked.
+- Whole-topic `ap stop <topic>` **refuses** while a job is in flight (it would kill the job hub —
+  a worker under its own topic); `ap job stop` is the whole-job teardown, and it sweeps the
+  detached session only when every pane in it is provably the platform's.
+
+### `/ap:job`
+
+```
+/ap:job status|attach|relay|list|stop <topic> [message]
+```
+
+The origin session's view of a detached run. Jobs are **started** by `--detached` on
+implement/quick, not here.
+
+- **`status <topic>`** — one screen: what was launched, hub liveness (three-valued: `alive` /
+  `dead` / **`unknown`** — an unverifiable pane is never reported dead), elapsed vs budget, the
+  event tail, and any **parked question**.
+- **`attach <topic>`** — after your session restarted: prints the re-arm block (watch command,
+  wait command, outbox path) plus the parked state, so a job waiting on you is the first thing
+  you see. The job itself never noticed your restart.
+- **`relay <topic> "<answer>"`** — answer a parked question. Refuses (rc 1) when nothing is
+  parked — the hub is working or finished, and a write then would clobber its task.
+- **`list`** — every job in this repo (also appended to `/ap:list` as a `DETACHED JOBS` section).
+- **`stop <topic>`** — tear down the hub and its workers, sweep the `ap-<topic>` session
+  (ownership-gated), clear the record. An incomplete teardown exits 1 and **keeps** the record —
+  it is the guard that stops the next `job start` from adopting a leftover session by name.
 
 ### `/ap:autoresearch`
 
@@ -267,7 +324,9 @@ topic. Read-only; flags a `working` worker as `stale` after prolonged outbox sil
 ```
 
 Gracefully end workers — each pane gets a `DONE` banner — and archive their state under the
-global archive root.
+global archive root. The whole-topic form **refuses while a detached job is in flight** on that
+topic (its job hub is a worker under the very topic being torn down); use `/ap:job stop <topic>`
+for the whole job, or the per-agent form for one worker.
 
 ### `/ap:review`
 
@@ -353,6 +412,7 @@ prefix a single command. They survive plugin updates (unlike editing the shipped
 | `AP_AUTORESEARCH_SIZE_WARN_GB` | art-dir size warning threshold | `2` |
 | `AP_PROBE_S` / `AP_STUCK_S` / `AP_RESCAN_EVERY_S` | autoresearch liveness monitor cadence (explicit `0` honored here) | `900` / `1800` / `30` |
 | `AP_STALE_THRESHOLD_S` | `/ap:list` stale-worker threshold | `180` |
+| `AP_JOB_WAIT_TIMEOUT_S` | one `job wait` blocking budget (a timeout is not a failure — re-arm) | `3600` |
 | `AP_BANNER_FAST` | skip the DONE-banner countdown | unset |
 
 ### Where your state lives
@@ -365,6 +425,7 @@ There are **two roots**:
     <agent>-<provider>/              # one worker: identity.md, inbox.md, outbox.jsonl,
     _quick/ _design/ _implement/     #   status.json, pane.json
     _explore/ _autoresearch/ _bridge/    (per-command art dirs)
+    _job/                            # detached-job record: job.json, cursor.txt, panes.json
 
 ~/.ap/                               # GLOBAL, survives teardown
   archive/<repo-hash>/<topic>/…      # archived workers + run dirs
@@ -394,6 +455,14 @@ There are **two roots**:
   "check this run by hand".
 - **A wait outlived its budget but the pane is alive** — that's `AP_WAIT_EXTEND_MULT` extending;
   a dead pane fails fast instead.
+- **`stop <topic>` refuses: "a detached job is in flight"** — intentional, not stuck: the topic
+  form would kill the job hub mid-run. The message names both remedies (`ap job stop <topic>` /
+  per-agent stop).
+- **`job relay` refuses: "nothing is parked"** — intentional: the hub is mid-task or already
+  finished, and the parked check is the only gate protecting its inbox from a clobbering write.
+- **`job status` says `LIVENESS=unknown`** — the platform cannot prove the hub's pane either way
+  (e.g. no ownership nonce). Unknown is **not** dead: check `tmux attach -t ap-<topic>` before
+  concluding anything.
 
 ---
 
@@ -426,7 +495,7 @@ There are **two roots**:
 
 ```
 npm run typecheck   # tsc --noEmit
-npm run test        # vitest run   (1,910 tests)
+npm run test        # vitest run   (2,434 tests)
 npm run lint        # eslint
 npm run build       # esbuild -> dist/ap.cjs  (commit the result)
 ```
