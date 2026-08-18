@@ -88,7 +88,7 @@ away. Nothing outside `<repo>/.ap/worktrees/` is ever removed, whatever the reco
 branch the worktree was born on goes with it — unless something was committed on it, which is kept
 and named.
 
-**The FINISH hint.** For a `keep` run whose branch has commits past the fork base, `stop` prints a
+**The FINISH hint.** For a run whose branch has commits past the fork base, `stop` prints a
 block to stdout before it sweeps:
 
 ```

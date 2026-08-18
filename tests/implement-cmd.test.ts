@@ -412,38 +412,19 @@ describe("implement finish — a detached job in flight allows only 'keep'", () 
     expect(readFileSync(join(art, "finish-results.tsv"), "utf8")).toBe("main\tkeep\tsame-branch\n");
   });
 
-  // D6: the gate reads the action the record NAMES rather than hard-coding keep. `job start --finish
-  // pr` is a legal opt-in — a PR stays reviewable — so a run launched that way must be able to
-  // finish the way it was launched, while merge and discard keep having no path in at all.
-  it("a record naming finish 'pr' lets pr through, and still refuses merge and discard", async () => {
+  // `--finish` was removed 2026-08-18, taking the recorded-action indirection with it: the gate is a
+  // literal `keep` again, so what a record NAMES — an older ap's 'pr', or a hand-edited 'merge' —
+  // unlocks nothing.
+  it("a record naming any other finish action still allows only keep", async () => {
     const art = seedArt();
     seedFinish(art);
     seedJobRecord("pr");
-    const r = fakeRunner({
-      "git show-ref --verify --quiet refs/heads/feat/implement-foo": { code: 0, stdout: "" },
-      "git remote": { code: 0, stdout: "origin\n" },
-      "git push -q -u origin feat/implement-foo": { code: 0, stdout: "" },
-      "git remote get-url origin": { code: 0, stdout: "url\n" },
-    });
-    expect((await capture(() => finishWith2(TOPIC, "pr", () => r, true))).rc).toBe(0);
-    expect(readFileSync(join(art, "finish-results.tsv"), "utf8")).toContain("\tpr\t");
-    for (const action of ["merge", "discard"] as const) {
+    const r = fakeRunner({});
+    for (const action of ["pr", "merge", "discard"] as const) {
       const { rc, err } = await capture(() => finishWith2(TOPIC, action, () => r, true));
       expect(rc).toBe(2);
-      expect(err).toContain("it recorded finish 'pr'");
+      expect(err).toContain("only 'keep' is allowed");
     }
-  });
-
-  // The record is re-checked through the same gate `job start` applies, so a hand-edited or
-  // carried-over `finish: merge` unlocks nothing.
-  it("a record naming an ILLEGAL finish action falls back to keep-only", async () => {
-    const art = seedArt();
-    seedFinish(art);
-    seedJobRecord("merge");
-    const r = fakeRunner({});
-    const { rc, err } = await capture(() => finishWith2(TOPIC, "merge", () => r, true));
-    expect(rc).toBe(2);
-    expect(err).toContain("it recorded finish 'keep'");
     expect(existsSync(join(art, "finish-results.tsv"))).toBe(false);
   });
 

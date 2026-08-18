@@ -505,35 +505,20 @@ describe("quick finish (finishWith core)", () => {
     }));
   }
 
-  // D6: the gate became "the action the record names", not a hard-coded keep. A PR stays reviewable,
-  // so the code still reaches a human before it reaches the base branch — that is what earns it the
-  // exemption a merge never gets.
-  it("a record naming finish 'pr' takes the normal push/PR arm", async () => {
-    await scaffold("auth", "yes");
-    seedJobFinish("pr");
-    const { calls, r } = fake({
-      "git remote": { code: 0, stdout: "origin\n" },
-      "git push -q -u origin feat/quick-auth": { code: 0, stdout: "" },
-      "git remote get-url origin": { code: 0, stdout: "url\n" },
-    });
-    expect(await finishWith("auth", r as any, true)).toBe(0);
-    expect(calls.some((c) => c[0] === "gh")).toBe(true);
-    const { quickExecDir } = await import("../src/core/quick.js");
-    expect(readFileSync(join(quickExecDir("auth"), "finish-result.txt"), "utf8")).toContain("pr-opened");
-  });
-
-  // The recorded action is re-checked, never trusted: `job start` can only write keep or pr, so a
-  // record naming anything else was hand-edited or carried over, and unlocks nothing.
-  it("a record naming an ILLEGAL finish action still diverts to branch-only", async () => {
-    await scaffold("auth", "yes");
-    seedJobFinish("merge");
-    const { calls, r } = fake({
-      "git remote": { code: 0, stdout: "origin\n" },
-      "git remote get-url origin": { code: 0, stdout: "url\n" },
-    });
-    expect(await finishWith("auth", r as any, true)).toBe(0);
-    expect(calls.some((c) => c[1] === "push")).toBe(false);
-    expect(calls.some((c) => c[0] === "gh")).toBe(false);
+  // `--finish` was removed 2026-08-18: the diversion is unconditional again, so what a record NAMES
+  // — an older ap's 'pr', or a hand-edited 'merge' — never re-enables publication.
+  it("a record naming any other finish action still diverts to branch-only", async () => {
+    for (const finish of ["pr", "merge"]) {
+      await scaffold("auth", "yes");
+      seedJobFinish(finish);
+      const { calls, r } = fake({
+        "git remote": { code: 0, stdout: "origin\n" },
+        "git remote get-url origin": { code: 0, stdout: "url\n" },
+      });
+      expect(await finishWith("auth", r as any, true)).toBe(0);
+      expect(calls.some((c) => c[1] === "push")).toBe(false);
+      expect(calls.some((c) => c[0] === "gh")).toBe(false);
+    }
   });
 });
 

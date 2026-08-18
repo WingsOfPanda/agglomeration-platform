@@ -32,7 +32,7 @@ import { teardownTopic } from "./stop.js";
 function usage(): number {
   process.stderr.write(
     "Usage: job start --command <implement|quick> --args-file <path> [--topic slug] [--provider p]\n" +
-    "                 [--finish keep|pr] [--budget-hours N] [--max-rounds N] [--hub-model claude]\n" +
+    "                 [--budget-hours N] [--max-rounds N] [--hub-model claude]\n" +
     "                 [--no-worktree]   work in the main checkout, as 0.5.35 did\n" +
     "       job status <topic>          one-screen composite: what was launched, is it alive, where is it\n" +
     "       job wait <topic>            block until the job hub emits done/error/question\n" +
@@ -256,13 +256,14 @@ export function sweepWorktree(rec: J.JobRecord, root: string, r: Runner): boolea
   return true;
 }
 
-/** The push+PR commands for a `keep` run that produced commits, plus how far its start branch moved
- *  since the fork. Printed rather than executed: `keep` means the operator decides, and drift is the
- *  number that decides FOR them — the hub cross-verified against the fork base, so the further that
- *  branch has moved, the less that verification says about a merge today. A PR re-tests against the
- *  updated starting branch; a local merge does not, which is why only the PR commands are offered. */
+/** The push+PR commands for a run that produced commits, plus how far its start branch moved since
+ *  the fork. Printed rather than executed: every detached run ends `keep`, so the operator decides,
+ *  and drift is the number that decides FOR them — the hub cross-verified against the fork base, so
+ *  the further that branch has moved, the less that verification says about a merge today. A PR
+ *  re-tests against the updated starting branch; a local merge does not, which is why only the PR
+ *  commands are offered. */
 function finishHint(rec: J.JobRecord, r: Runner): void {
-  if (rec.finish !== "keep" || !rec.base_sha) return;
+  if (!rec.base_sha) return;
   const branch = branchNameFor(rec.command, rec.topic);
   if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]).code !== 0) return;
   const count = r.run("git", ["rev-list", "--count", `${rec.base_sha}..${branch}`]);
@@ -284,7 +285,7 @@ function finishHint(rec: J.JobRecord, r: Runner): void {
 // ---------- start ----------
 
 async function startRun(rest: string[], origCwd: string): Promise<number> {
-  let command = "", argsFile = "", topic = "", provider = "", finish = "keep", hubModel = "claude";
+  let command = "", argsFile = "", topic = "", provider = "", hubModel = "claude";
   let budgetHours = 6, maxRounds = 5, useWorktree = true;
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
@@ -294,7 +295,6 @@ async function startRun(rest: string[], origCwd: string): Promise<number> {
     else if (a === "--args-file" || a.startsWith("--args-file=")) argsFile = take();
     else if (a === "--topic" || a.startsWith("--topic=")) topic = take();
     else if (a === "--provider" || a.startsWith("--provider=")) provider = take();
-    else if (a === "--finish" || a.startsWith("--finish=")) finish = take();
     else if (a === "--hub-model" || a.startsWith("--hub-model=")) hubModel = take();
     else if (a === "--budget-hours" || a.startsWith("--budget-hours=")) budgetHours = Number(take());
     else if (a === "--max-rounds" || a.startsWith("--max-rounds=")) maxRounds = Number(take());
@@ -308,10 +308,6 @@ async function startRun(rest: string[], origCwd: string): Promise<number> {
   // be missing for the hub.
   if (argsFile) argsFile = isAbsolute(argsFile) ? argsFile : resolve(origCwd, argsFile);
   if (!argsFile || !existsSync(argsFile)) { log.error(`job start: --args-file must be an existing path; got: '${argsFile}'`); return 2; }
-  if (!J.finishAllowedDetached(finish)) {
-    log.error(`job start: --finish ${finish} is refused for a detached run; the legal actions are 'keep' (the default — the run ends on its branch and you decide from there) and 'pr' (push + open a PR, which stays reviewable). 'merge' and 'discard' stay out: the run cross-verifies against the fork base while the starting branch keeps moving, so a local merge integrates code nobody checked against the current starting branch, and a discard destroys work no one has seen.`);
-    return 2;
-  }
   if (!Number.isFinite(budgetHours) || budgetHours <= 0) { log.error(`job start: --budget-hours must be a positive number; got: '${budgetHours}'`); return 2; }
   if (!Number.isInteger(maxRounds) || maxRounds <= 0) { log.error(`job start: --max-rounds must be a positive integer; got: '${maxRounds}'`); return 2; }
 
@@ -346,7 +342,10 @@ async function startRun(rest: string[], origCwd: string): Promise<number> {
   const rec: J.JobRecord = {
     command, topic, session,
     hub: { agent, model: hubModel },
-    provider, finish, budget_hours: budgetHours, max_rounds: maxRounds,
+    // Literal, never an option: a detached run has exactly one legal ending — it stops on its
+    // branch and the OPERATOR finishes it. The `pr` opt-in was removed 2026-08-18 having never run
+    // live, so `--finish` now falls into the unknown-argument refusal above.
+    provider, finish: "keep", budget_hours: budgetHours, max_rounds: maxRounds,
     args_file: argsFile, started: isoUtc(),
     worktree: wt?.worktree ?? "", base_sha: wt?.baseSha ?? "", start_branch: startBranch,
   };
