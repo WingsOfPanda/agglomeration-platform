@@ -30,6 +30,40 @@ export function respawnArgs(pane: string, launch: string, cwd?: string): string[
   a.push(launch);
   return a;
 }
+// ---------- detached session placement (pure builders) ----------
+/** Exact-match tmux target. A BARE session name is PREFIX-matched: verified against tmux 3.x, with
+ *  only `ap-foobar` on the server, `has-session -t ap-foo` exits 0 and `new-window -t ap-foo:` opens
+ *  its window INSIDE `ap-foobar`. That is a worker silently placed in a stranger's session, so every
+ *  session-scoped target ap builds goes through this `=` form, which matches nothing but the exact
+ *  name. `new-session -s` is deliberately NOT wrapped: it names the session being created. */
+export function sessionTarget(session: string): string { return `=${session}`; }
+
+/** tmux forbids `.` and `:` in a session name (both are target separators), and a leading `-` would
+ *  parse as a flag. `ap-<topic>` always passes, topic being slug-gated upstream, but `--session` is
+ *  an operator argument and is gated here rather than trusted. */
+const SESSION_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+export function validSessionName(s: string): boolean { return SESSION_NAME_RE.test(s); }
+
+/** First worker into a detached session: create it. `-d` so it never steals the caller's terminal;
+ *  `-P -F #{pane_id}` so this returns the same thing the split builders return. */
+export function newSessionArgs(session: string, launch: string, cwd?: string): string[] {
+  const a = ["new-session", "-P", "-F", "#{pane_id}", "-d", "-s", session];
+  if (cwd) a.push("-c", cwd);
+  a.push(launch);
+  return a;
+}
+/** Every later worker into an EXISTING detached session: its own window, so `tmux attach` shows one
+ *  window per worker instead of a shrinking grid of splits. */
+export function newWindowArgs(session: string, launch: string, cwd?: string): string[] {
+  const a = ["new-window", "-P", "-F", "#{pane_id}", "-d", "-t", `${sessionTarget(session)}:`];
+  if (cwd) a.push("-c", cwd);
+  a.push(launch);
+  return a;
+}
+export function hasSessionArgs(session: string): string[] {
+  return ["has-session", "-t", sessionTarget(session)];
+}
+
 export function setOptionArgs(pane: string, opt: string, val: string): string[] {
   return ["set-option", "-p", "-t", pane, opt, val];
 }
@@ -127,6 +161,14 @@ export const respawn = async (pane: string, launch: string, cwd?: string): Promi
   await tmux(respawnArgs(pane, launch, cwd));
   return pane;
 };
+
+export const newSession = (session: string, launch: string, cwd?: string) => tmux(newSessionArgs(session, launch, cwd));
+export const newWindow = (session: string, launch: string, cwd?: string) => tmux(newWindowArgs(session, launch, cwd));
+/** Does this EXACT session exist? Never throws: no tmux server and no tmux binary both answer "no",
+ *  which is the create-it direction, and the same fail-quiet posture livePaneNonces takes. */
+export async function sessionExists(session: string): Promise<boolean> {
+  try { await execa("tmux", hasSessionArgs(session)); return true; } catch { return false; }
+}
 
 /** Apply the orchestra pane-border config (idempotent `set -g`) so worker labels render on the
  *  border instead of the raw TUI title. Called from spawn; tolerant of tmux errors. Returns

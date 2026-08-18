@@ -13,13 +13,36 @@ import { identityWrite, identityPath, seedWorkerStatus, writeWorkerStatus, inbox
 import { paneNonceFor } from "../core/roster.js";
 import { pickRandomAgent, agentInUse, formatCollisionError } from "../core/agents.js";
 import { agentBinary, agentDefaultMode, agentModeArgs, agentReadyTimeout, agentBootstrapSleep } from "../core/contracts.js";
-import { wrapLaunch, splitRight, splitDown, respawn, paneOwned, paneNonceSet, paneLabelSet, paneSend, killNow, capturePane, ensurePaneBorders, ensureWindowBorderStatus } from "../core/tmux.js";
+import { wrapLaunch, splitRight, splitDown, respawn, paneOwned, paneNonceSet, paneLabelSet, paneSend, killNow, capturePane, ensurePaneBorders, ensureWindowBorderStatus, sessionExists, newSession, newWindow, validSessionName } from "../core/tmux.js";
 import { labelFor } from "../core/colors.js";
 import { taskNudge } from "./send.js";
 import { captureFailure, captureSpawnFailure, bootstrapFailureArgs } from "../core/forensics.js";
 
 export { validateSlug };
 export function resolveMode(explicit: string | undefined, dflt: string | undefined): string { return explicit || dflt || "full"; }
+
+/** The parsed `spawn` argv. Extracted from run() so the flag grammar — in particular the placement
+ *  flags, which are mutually exclusive — is testable without spawning a pane. */
+export interface SpawnArgs {
+  agent: string; model: string; topic: string;
+  mode: string; cwd: string; targetPane: string; preflightArtDir: string; session: string; initial: string;
+}
+/** Positional `<agent> <model> <topic>`, then flags until the first non-flag token, which begins the
+ *  initial prompt (the rest of argv, joined). Faithful to the loop this replaced. */
+export function parseSpawnArgs(args: string[]): SpawnArgs {
+  const [agent, model, topic] = args;
+  let mode = "", cwd = "", targetPane = "", preflightArtDir = "", session = "", initial = "";
+  for (let i = 3; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--mode" || a.startsWith("--mode=")) { const r = kvParse(a, args[i + 1]); mode = r.value; i += r.shift - 1; }
+    else if (a === "--cwd" || a.startsWith("--cwd=")) { const r = kvParse(a, args[i + 1]); cwd = r.value; i += r.shift - 1; }
+    else if (a === "--target-pane" || a.startsWith("--target-pane=")) { const r = kvParse(a, args[i + 1]); targetPane = r.value; i += r.shift - 1; }
+    else if (a === "--preflight-art-dir" || a.startsWith("--preflight-art-dir=")) { const r = kvParse(a, args[i + 1]); preflightArtDir = r.value; i += r.shift - 1; }
+    else if (a === "--session" || a.startsWith("--session=")) { const r = kvParse(a, args[i + 1]); session = r.value; i += r.shift - 1; }
+    else { initial = args.slice(i).join(" "); break; }
+  }
+  return { agent, model, topic, mode, cwd, targetPane, preflightArtDir, session, initial };
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -44,28 +67,33 @@ export function prepareWorkerState(agent: string, model: string, topic: string):
 }
 
 export async function run(args: string[]): Promise<number> {
-  if (args.length < 3) { log.error("usage: spawn <agent|random> <model> <topic> [--mode m] [--cwd abs] [--target-pane id] [initial-prompt]"); return 2; }
-  let agent = args[0];
-  const [, model, topic] = args;
-  let i = 3, mode = "", cwd = "", targetPane = "", preflightArtDir = "", initial = "";
-  for (; i < args.length; i++) {
-    const a = args[i];
-    if (a === "--mode" || a.startsWith("--mode=")) { const r = kvParse(a, args[i + 1]); mode = r.value; i += r.shift - 1; }
-    else if (a === "--cwd" || a.startsWith("--cwd=")) { const r = kvParse(a, args[i + 1]); cwd = r.value; i += r.shift - 1; }
-    else if (a === "--target-pane" || a.startsWith("--target-pane=")) { const r = kvParse(a, args[i + 1]); targetPane = r.value; i += r.shift - 1; }
-    else if (a === "--preflight-art-dir" || a.startsWith("--preflight-art-dir=")) { const r = kvParse(a, args[i + 1]); preflightArtDir = r.value; i += r.shift - 1; }
-    else { initial = args.slice(i).join(" "); break; }
-  }
+  if (args.length < 3) { log.error("usage: spawn <agent|random> <model> <topic> [--mode m] [--cwd abs] [--target-pane id] [--session name] [initial-prompt]"); return 2; }
+  const parsed = parseSpawnArgs(args);
+  let agent = parsed.agent;
+  let initial = parsed.initial;
+  const { model, topic, mode, cwd, targetPane, preflightArtDir, session } = parsed;
 
   if (!validateSlug(topic)) { log.error(`topic must match [a-z0-9-]+ and be <= 32 chars; got: '${topic}'`); return 2; }
   if (agent !== "random" && !validateSlug(agent)) { log.error(`agent must match [a-z0-9-]+ and be <= 32 chars (or 'random'); got: '${agent}'`); return 2; }
   if (cwd && (!cwd.startsWith("/") || !existsSync(cwd))) { log.error(`spawn --cwd must be an existing absolute path: ${cwd}`); return 1; }
+  // Placement is a three-way choice and exactly one may be named: --target-pane RESPAWNS a reserved
+  // preflight pane, --session creates/uses a detached session, and neither given means split the
+  // caller's pane. Silently preferring one would put the worker somewhere the caller did not ask for.
+  if (session && targetPane) { log.error("spawn: --session and --target-pane are mutually exclusive (--target-pane respawns a reserved preflight pane; --session places the worker in a detached session of its own)"); return 2; }
+  if (session && !validSessionName(session)) { log.error(`spawn --session must be a tmux-safe name (letter or digit first, then letters/digits/_/-, at most 64 chars, no '.' or ':'); got: '${session}'`); return 2; }
 
-  if (!inTmuxSession()) { log.error("must run inside a tmux session"); return 1; }
+  // --session creates its OWN session, so the caller need not be inside tmux at all: this gate exists
+  // only because the other two placements split the CALLER's pane.
+  if (!session && !inTmuxSession()) { log.error("must run inside a tmux session (or pass --session <name> to place the worker in a detached session)"); return 1; }
   const tmuxVer = tmuxVersionString(); // one `tmux -V` for both checks (tmuxVersionOk() would re-run it)
   if (!tmuxVer) { log.error("tmux not on PATH"); return 1; }
   if (!tmuxVersionOk(tmuxVer)) { log.error("tmux >= 3.0 required"); return 1; }
-  if (!(await ensurePaneBorders())) log.warn("could not set pane-border globals; worker labels may not render"); // render @ap_ worker labels on pane borders (not the raw TUI title)
+  // Render @ap_ worker labels on pane borders (not the raw TUI title). These are `set -g` globals and
+  // need a RUNNING server: on the detached path there may not be one yet (`tmux set-option -g` exits
+  // 1 with "error connecting to ..." against a cold server), so the warn is withheld there and the
+  // retry below — after new-session has started a server — is the one that counts.
+  const bordersOk = await ensurePaneBorders();
+  if (!bordersOk && !session) log.warn("could not set pane-border globals; worker labels may not render");
 
   if (agent === "random") {
     const pick = pickRandomAgent(topic);
@@ -118,6 +146,17 @@ export async function run(args: string[]): Promise<number> {
       // could not put on the pane. (stampOrFail kills the pane it just took over.)
       if (!(await stampOrFail(pane, nonce, agent, model, topic))) return 1;
       await paneLabelSet(pane, agent, model, topic);
+    } else if (session) {
+      // Detached placement: the worker gets its own window in `session`, created on first use. No
+      // .last_pane write — that file is the ATTACHED layout's split-target memory, and a detached
+      // session has no split geometry to remember.
+      nonce = randomUUID();
+      pane = (await sessionExists(session))
+        ? await newWindow(session, launch, startDir)
+        : await newSession(session, launch, startDir);
+      if (!(await stampOrFail(pane, nonce, agent, model, topic))) return 1;
+      await paneLabelSet(pane, agent, model, topic);
+      if (!bordersOk && !(await ensurePaneBorders())) log.warn("could not set pane-border globals; worker labels may not render");
     } else {
       const lastFile = join(topicDir(topic), ".last_pane");
       // .last_pane records `<pane>\t<nonce>` for the same reason pane.json does: it survives a tmux
@@ -175,7 +214,8 @@ export async function run(args: string[]): Promise<number> {
       log.info(`use: ap collect ${agent} ${topic}  (to wait for {done})`);
     }
 
-    process.stdout.write(`\n  worker:    ${labelFor(agent, model, topic)}\n  pane:    ${pane}\n  state:   ${workerDir(agent, model, topic)}\n  ready:   yes\n`);
+    const sessionLine = session ? `  session: ${session}  (tmux attach -t ${session})\n` : "";
+    process.stdout.write(`\n  worker:    ${labelFor(agent, model, topic)}\n  pane:    ${pane}\n${sessionLine}  state:   ${workerDir(agent, model, topic)}\n  ready:   yes\n`);
     return 0;
   } catch (e) {
     captureSpawnFailure({ agent, model, topic, reason: "spawn_error", detail: String((e as Error)?.message ?? e) });
