@@ -43,6 +43,10 @@ Two entry paths, decided once before Stage 0 — the same shape `/ap:implement` 
     topic and diverts to the branch-only path, so a wrong instruction here cannot push anything.
   - **Budget.** Run `$CS job budget-check <SLUG>` before the verify pass and again before finishing.
     Exit 1 means write `RESUME.md`, PARK a question, and stop.
+  - **Teardown stays per-agent.** Stage 3 already tears down with `$CS stop <AGENT> <SLUG>` (the
+    `AGENT=` line from Stage 0 `init`); keep it that way and never reach for `$CS stop <SLUG>`. The
+    topic form REFUSES (rc 1) while the job record exists, deliberately: you are a worker under this
+    topic, so it would tear YOU down mid-run. `job stop` sweeps you and the session later.
 
   Never call AskUserQuestion. If something genuinely needs deciding, PARK it — append
   `{"event":"question","message":"...","ts":"<iso>"}` to your outbox, set status `idle`, wait for

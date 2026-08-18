@@ -25,7 +25,7 @@ import { percentEncode } from "../core/questionCodec.js";
 import * as J from "../core/job.js";
 import { run as spawnRun } from "./spawn.js";
 import { run as sendRun } from "./send.js";
-import { run as stopRun } from "./stop.js";
+import { teardownTopic } from "./stop.js";
 
 function usage(): number {
   process.stderr.write(
@@ -313,7 +313,10 @@ async function stopJobRun(rest: string[]): Promise<number> {
   const evidence = J.mergePaneEvidence(readPaneEvidence(rec.topic), await ownedPanes(rec.topic));
   atomicWrite(J.panesEvidencePath(rec.topic), JSON.stringify(evidence) + "\n");
   const recorded = new Map(Object.entries(evidence));
-  const rc = await stopRun([rec.topic]);
+  // The UNGATED teardown, deliberately: `stop <topic>` itself now REFUSES while this record exists
+  // (it would kill the job hub mid-run), and this verb is the caller that has already accounted for
+  // the hub — the pane evidence above, the session sweep below.
+  await teardownTopic(rec.topic);
   if (await sessionExists(rec.session)) {
     const panes = await sessionPaneIds(rec.session);
     // The ownership check is re-run against a snapshot taken NOW, not against the ids collected
@@ -338,7 +341,7 @@ async function stopJobRun(rest: string[]): Promise<number> {
   rmSync(jobDir(rec.topic), { recursive: true, force: true });
   try { rmdirSync(topicDir(rec.topic)); } catch { /* tolerate non-empty */ }
   log.ok(`job stop: ${rec.topic} torn down`);
-  return rc;
+  return 0;
 }
 
 /** The pane evidence an earlier `job stop` persisted; {} for absent or unusable content. */

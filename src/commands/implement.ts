@@ -23,7 +23,7 @@ import { extractQuestionPayload, parseQuestionPayload } from "../core/questionCo
 import { outboxOffset, outboxPath, statusPath, workerSendGate, resolveModel, type Clock } from "../core/ipc.js";
 import { kvField, readField, readIfExists, readIfExistsOrNull } from "../core/fsread.js";
 import { branchNameFor, readBranchRecord } from "../core/branchRecord.js";
-import { agentTimeoutMultiplier } from "../core/contracts.js";
+import { agentBinary, agentTimeoutMultiplier, listAgents } from "../core/contracts.js";
 import { awaitTurn, scaledTimeout, lastKeyedNumber, recordWaitOutcome, type WaitFn } from "../core/wait.js";
 import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
 import { run as sendRun } from "./send.js";
@@ -37,6 +37,19 @@ const IMPLEMENT_TURN_TIMEOUT = (): number => envNum("AP_IMPLEMENT_TURN_TIMEOUT_S
 function workerModel(art: string): string {
   return readIfExists(join(art, "provider.txt")).trim() || "codex";
 }
+/** Does the lead worker that actually got spawned carry the model provider.txt names? An override
+ *  changes only the SPAWN's provider — the claude-confirm gate's "fall back to codex", a detached
+ *  job.json naming a provider — so provider.txt keeps naming the auto-detected one and both turn
+ *  verbs then address a `lead-<wrong-model>` dir that was never created. The first detached dogfood
+ *  hit exactly that and cost a hand-edit of provider.txt mid-run; failing closed here, before any
+ *  send or state write, with the one verb that reconciles it is the fix. `null` (no worker dir yet)
+ *  passes: the spawn simply has not happened. */
+function assertLeadMatches(topic: string, model: string, verb: string): boolean {
+  const spawned = resolveModel(WORKER, topic);
+  if (spawned === null || spawned === model) return true;
+  log.error(`implement ${verb}: provider.txt says '${model}' but the spawned ${WORKER} worker is '${spawned}' — reconcile with: implement set-provider ${topic} ${spawned}`);
+  return false;
+}
 /** The LAST `OBJECTIONS=<n>` count persisted in a per-dispatch state file (0 if absent). The
  *  objection cap reads + increments this on every re-arm so the count survives the background-task
  *  re-entry that drives the re-armed wait. Latest-line-wins, mirroring parseLatestOffset. */
@@ -45,7 +58,7 @@ function latestObjections(stateFile: string): number {
   return lastKeyedNumber(readFileSync(stateFile, "utf8"), "OBJECTIONS") ?? 0;
 }
 function usage(): number {
-  log.error("usage: implement <init|audit|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|verify-tests|summary|finish|forensics|archive|find-latest-doc> ...");
+  log.error("usage: implement <init|audit|set-provider|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|verify-tests|summary|finish|forensics|archive|find-latest-doc> ...");
   return 2;
 }
 
@@ -96,6 +109,7 @@ export async function run(args: string[]): Promise<number> {
   switch (verb) {
     case "init":      return initRun(applyArgsFile(rest));
     case "audit":     return auditRun(rest);
+    case "set-provider": return setProviderRun(rest);
     case "turn-send": return turnSendRun(rest);
     case "turn-wait": return turnWaitRun(rest);
     case "reset-status": return resetStatusRun(rest);
@@ -154,6 +168,25 @@ export async function initWith(tokens: string[], d: ImplementInitDeps): Promise<
   return 0;
 }
 
+// ---- set-provider — the ONE mechanical way an override reaches the file the turn verbs route by ----
+// `init` writes provider.txt (routing) and auto_provider.txt (detection evidence) from one detection.
+// Every override after that — the claude-confirm gate's "fall back to codex", a detached job.json
+// naming a provider — used to change only the SPAWN, leaving provider.txt naming a model no worker
+// dir exists for, so turn-send dispatched at a phantom `lead-<model>` and failed (the first detached
+// dogfood repaired it by hand-editing the file). auto_provider.txt is deliberately NOT touched: it
+// records what detection SAID, this records what was CHOSEN, and one fact belongs in one file.
+async function setProviderRun(rest: string[]): Promise<number> {
+  const [topic, provider] = rest;
+  if (!topic || !provider || rest.length !== 2) { log.error("usage: implement set-provider <topic> <provider>"); return 2; }
+  if (!assertImplementTopic(topic)) { log.error(`implement set-provider: invalid topic slug '${topic}' (must match ^[a-z0-9][a-z0-9-]{0,31}$, <= 32 chars)`); return 2; }
+  const art = implementArtDir(topic);
+  if (!existsSync(art)) { log.error(`implement set-provider: ${art} not found — run implement init first`); return 1; }
+  if (!agentBinary(provider)) { log.error(`implement set-provider: unknown provider '${provider}' — contracts.yaml defines: ${listAgents().join(", ")}`); return 2; }
+  atomicWrite(join(art, "provider.txt"), provider + "\n");
+  log.ok(`implement set-provider: topic=${topic} provider=${provider}`);
+  return 0;
+}
+
 // ---- turn-send (deploy-turn-send.sh) — offset-before-send dispatch ----
 export interface ImplementSendDeps { offsetFor(i: string, m: string, t: string): number; send(args: string[]): Promise<number>; }
 const liveSendDeps: ImplementSendDeps = { offsetFor: (i, m, t) => outboxOffset(outboxPath(i, m, t)), send: sendRun };
@@ -167,6 +200,7 @@ export async function turnSendWith(topic: string, round: number, d: ImplementSen
   const art = implementArtDir(topic);
   if (!existsSync(art)) { log.error(`implement turn-send: ${art} not found — run implement init first`); return 1; }
   const model = workerModel(art);
+  if (!assertLeadMatches(topic, model, "turn-send")) return 1;
   const targetCwd = readIfExists(join(art, "target_cwd.txt")).trim();
   const testCmd = targetCwd ? detectTestCommand(targetCwd) : "";
   const stateFile = join(art, `turn-${WORKER}-${round}.txt`);
@@ -196,6 +230,7 @@ async function turnWaitRun(rest: string[]): Promise<number> {
 export async function turnWaitWith(topic: string, round: number, d: ImplementWaitDeps): Promise<number> {
   const art = implementArtDir(topic);
   const model = workerModel(art);
+  if (!assertLeadMatches(topic, model, "turn-wait")) return 1;
   const stateFile = join(art, `turn-${WORKER}-${round}.txt`);
   if (!existsSync(stateFile)) { log.error(`implement turn-wait: ${stateFile} missing — run implement turn-send first`); return 1; }
   const timeout = scaledTimeout(IMPLEMENT_TURN_TIMEOUT(), d.multiplier(model));

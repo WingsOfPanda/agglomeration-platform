@@ -409,3 +409,37 @@ Both are additive.
   the `pane.json` files it came from. An unswept session or an unverified kill exits 1 and KEEPS the
   record — deleting it would leave the next `job start <topic>` free to adopt, by name, a session
   still holding stranger panes — and a re-run can finish the sweep from the persisted evidence.
+
+### Post-dogfood hardening (2026-08-18)
+
+The first live detached run (topic `job-attach-parked`) reached `done`, but surfaced two gaps that
+the pre-merge review could not have caught without a pane.
+
+- **The chosen provider is now STAMPED, and the turn verbs cross-check it.** `implement init` writes
+  one detection into two files — `provider.txt` (what the turn verbs route by) and
+  `auto_provider.txt` (what detection said). Every override after that changed only the SPAWN: the
+  attached claude-confirm gate's "fall back to codex", and a detached `job.json` naming a provider.
+  Nothing rewrote `provider.txt`, so `workerModel` kept resolving the auto-detected model and
+  `turn-send` dispatched at a `lead-<wrong-model>` dir that was never created (rc 1); the dogfood hub
+  repaired it by hand-editing the file mid-run. New verb `implement set-provider <topic> <provider>`
+  is the ONE mechanical way an override reaches that file (topic slug validated, art dir required,
+  provider validated against `contracts.yaml`, atomic write), and `auto_provider.txt` is deliberately
+  left untouched — it records what detection SAID, `provider.txt` what was CHOSEN, one fact per file.
+  Both turn verbs now refuse (rc 1, before any send or state write) when the spawned `lead` worker's
+  model disagrees, naming `set-provider` as the remedy; no spawned worker yet passes. **Rejected:**
+  making `resolveModel` the routing source instead of `provider.txt`. It is first-match over the
+  topic dir with no uniqueness check and no archived-dir guard, so a leftover or second `lead-*` dir
+  would silently redirect the run — a weaker source of truth than the file, not a stronger one.
+- **The topic form of `stop` REFUSES while a job record exists, and `job stop` owns the ungated
+  path.** A detached job's hub is mechanically an ordinary worker whose state dir sits under the same
+  topic, so `stop <topic>` — from implement.md's Stage 5, a mis-instructed hub, or an operator's
+  habit — tears down the CONTROLLER: its outbox is archived before `done` reaches the origin's
+  `job wait`, which then reports a synthetic pane death and the run reads as a crash. `stop.ts` now
+  exports `teardownTopic(topic)` (the old topic-form body) as the ungated path `job stop` calls, and
+  gates the public forms on a readable job record: `stop <topic>` refuses with rc 1 naming both
+  remedies (`ap job stop <topic>`, `ap stop <agent> <topic>`) and tears down NOTHING; `--all` skips
+  such a topic with a loud per-topic warning. The per-agent forms (`stop <agent> <topic>`,
+  `--pairs`) stay ungated — they name specific agents, which is the sanctioned detached teardown.
+  **Rejected:** silently excluding the hub's own worker dir from the topic teardown. It would leave a
+  live supervisor standing over its own dead workers and report success, which is a worse lie than a
+  refusal; and directive prose alone protects only the obedient path.

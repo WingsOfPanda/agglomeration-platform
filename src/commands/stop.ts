@@ -2,6 +2,7 @@ import { existsSync, readdirSync, rmSync, rmdirSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
 import { topicDir, repoStateDir, isArtifactDir, pluginRoot } from "../core/paths.js";
+import { jobPath } from "../core/job.js";
 import { stateArchive } from "../core/archive.js";
 import { readIfExists } from "../core/fsread.js";
 import { paneMetaRead, paneMetaReadForDir, parseLastPane, type PaneOwner } from "../core/ipc.js";
@@ -112,6 +113,24 @@ function cleanupTopicDir(topic: string): void {
   try { rmdirSync(td); } catch { /* tolerate non-empty */ }
 }
 
+/** Tear down EVERY worker under a topic, then the topic dir — the UNGATED path, which `job stop`
+ *  owns. It is the one caller entitled to it: it has already accounted for the job hub (persisting
+ *  the pane evidence, then sweeping the session), whereas the public `stop <topic>` form refuses
+ *  while a job record exists rather than calling this. */
+export async function teardownTopic(topic: string): Promise<void> {
+  await teardownBatch(topic, collectTopicPairs(topic), liveDeps());
+  cleanupTopicDir(topic);
+}
+
+/** The refusal a public whole-topic teardown gets while a detached job is in flight. A job hub is
+ *  mechanically an ordinary worker whose state dir sits under the very topic being torn down, so the
+ *  topic form archives the CONTROLLER's outbox before its `done` reaches the origin's `job wait`,
+ *  which then reports a synthetic pane death — the run looks like it crashed. The directives already
+ *  say "per-agent while detached" in prose; prose only protects the obedient path. Silently sparing
+ *  the hub was rejected too: a topic teardown that quietly left a live supervisor over its dead
+ *  workers is a worse lie than a refusal. */
+function jobInFlight(topic: string): boolean { return existsSync(jobPath(topic)); }
+
 export async function run(args: string[]): Promise<number> {
   const d = liveDeps();
   const a0 = args[0] ?? "";
@@ -127,7 +146,14 @@ export async function run(args: string[]): Promise<number> {
     const repo = repoStateDir();
     if (!existsSync(repo)) { log.info("no state dirs to tear down"); return 0; }
     for (const t of readdirSync(repo, { withFileTypes: true })) {
-      if (t.isDirectory()) { await teardownBatch(t.name, collectTopicPairs(t.name), d); cleanupTopicDir(t.name); }
+      if (!t.isDirectory()) continue;
+      // LOUD skip, never silent: the sweep is exactly where an operator stops reading per-topic
+      // detail, so a topic it declined to touch has to name itself and its own teardown verb.
+      if (jobInFlight(t.name)) {
+        log.warn(`stop --all: skipping ${t.name} — a detached job is in flight (${jobPath(t.name)}) and its hub is a worker under that topic; tear that job down with: ap job stop ${t.name}`);
+        continue;
+      }
+      await teardownBatch(t.name, collectTopicPairs(t.name), d); cleanupTopicDir(t.name);
     }
     return 0;
   }
@@ -141,7 +167,13 @@ export async function run(args: string[]): Promise<number> {
     cleanupTopicDir(topic);
     return 0;
   }
-  if (args.length === 1) { await teardownBatch(a0, collectTopicPairs(a0), d); cleanupTopicDir(a0); return 0; }
+  if (args.length === 1) {
+    if (jobInFlight(a0)) {
+      log.error(`stop ${a0}: a detached job is in flight (${jobPath(a0)}) and its hub is a worker under this topic — tearing the topic down would kill the hub mid-run and the origin would read it as a crash. Nothing was torn down. Tear the whole job down with: ap job stop ${a0} — or stop ONE worker with: ap stop <agent> ${a0}`);
+      return 1;
+    }
+    await teardownBatch(a0, collectTopicPairs(a0), d); cleanupTopicDir(a0); return 0;
+  }
   if (args.length === 2) {
     const [agent, topic] = args;
     const pairs = collectAgentPairs(topic, [agent]);
