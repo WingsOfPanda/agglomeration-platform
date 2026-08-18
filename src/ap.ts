@@ -12,6 +12,7 @@ const LOADERS: Record<string, () => Promise<{ run: Handler }>> = {
   preflight: () => import("./commands/preflight.js"), hook: () => import("./commands/hook.js"), quick: () => import("./commands/quick.js"),
   design: () => import("./commands/design.js"), implement: () => import("./commands/implement.js"), review: () => import("./commands/review.js"),
   autoresearch: () => import("./commands/autoresearch.js"), explore: () => import("./commands/explore.js"), bridge: () => import("./commands/bridge.js"),
+  job: () => import("./commands/job.js"),
 };
 
 async function banner(label: string, color: string): Promise<number> {

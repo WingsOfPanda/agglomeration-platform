@@ -64,6 +64,12 @@ export function workerDir(agent: string, model: string, topic: string, opts?: { 
   return join(topicDir(topic, opts), `${assertSlug("agent", agent)}-${model}`);
 }
 
+/** The detached-job art dir. `_job` is an art dir like `_implement`/`_quick`, so isArtifactDir
+ *  already keeps every worker scan (list, stop, archive) from mistaking it for a worker. */
+export function jobDir(topic: string, opts?: { home?: string; cwd?: string }): string {
+  return join(topicDir(topic, opts), "_job");
+}
+
 export function repoRoot(cwd: string = process.cwd()): string {
   try {
     return execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8" }).trim();

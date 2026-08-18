@@ -63,6 +63,13 @@ export function newWindowArgs(session: string, launch: string, cwd?: string): st
 export function hasSessionArgs(session: string): string[] {
   return ["has-session", "-t", sessionTarget(session)];
 }
+export function killSessionArgs(session: string): string[] {
+  return ["kill-session", "-t", sessionTarget(session)];
+}
+/** `-s` scopes the listing to the SESSION (all of its windows), not the current window. */
+export function sessionPanesArgs(session: string): string[] {
+  return ["list-panes", "-s", "-t", sessionTarget(session), "-F", "#{pane_id}"];
+}
 
 export function setOptionArgs(pane: string, opt: string, val: string): string[] {
   return ["set-option", "-p", "-t", pane, opt, val];
@@ -115,6 +122,11 @@ export function parsePaneNonces(stdout: string, realIds?: Set<string>): Map<stri
 export function ownsPane(snapshot: Map<string, string>, pane: string, nonce: string): boolean {
   return NONCE_RE.test(nonce) && snapshot.get(pane) === nonce;
 }
+/** Is this RECORDED nonce one a tmux answer could ever settle? Callers that must distinguish "the
+ *  pane is gone" from "we could never have proven it either way" need this: ownsPane collapses both
+ *  into false, and reading that false as a death verdict is exactly the 0.5.30 bug. The generator
+ *  (randomUUID) and NONCE_RE change together, so this is the shape's only public reader. */
+export function verifiableNonce(nonce: string): boolean { return NONCE_RE.test(nonce); }
 export function sendKeysLiteralArgs(pane: string, line: string): string[] {
   return ["send-keys", "-t", pane, "-l", line];
 }
@@ -164,6 +176,21 @@ export const respawn = async (pane: string, launch: string, cwd?: string): Promi
 
 export const newSession = (session: string, launch: string, cwd?: string) => tmux(newSessionArgs(session, launch, cwd));
 export const newWindow = (session: string, launch: string, cwd?: string) => tmux(newWindowArgs(session, launch, cwd));
+/** Every pane id currently in `session`, across all of its windows. Empty on ANY tmux error, which
+ *  includes "the session is already gone" — the reading that matters to a teardown caller, and the
+ *  one that makes sessionKillable answer "nothing to kill" rather than "kill it". */
+export async function sessionPaneIds(session: string): Promise<string[]> {
+  try {
+    const { stdout } = await execa("tmux", sessionPanesArgs(session));
+    return stdout.split("\n").filter(Boolean);
+  } catch { return []; }
+}
+/** Kill an entire session. The CALLER must have proven every pane in it is ap's (sessionKillable);
+ *  this does not re-check, exactly as killGraceful takes its ownership verdict as an argument. */
+export async function killSession(session: string): Promise<void> {
+  try { await execa("tmux", killSessionArgs(session)); } catch { /* tolerate */ }
+}
+
 /** Does this EXACT session exist? Never throws: no tmux server and no tmux binary both answer "no",
  *  which is the create-it direction, and the same fail-quiet posture livePaneNonces takes. */
 export async function sessionExists(session: string): Promise<boolean> {

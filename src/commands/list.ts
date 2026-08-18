@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { repoStateDir, isArtifactDir } from "../core/paths.js";
+import { parseJob, jobPath, classifyJobLiveness } from "../core/job.js";
 import { readIfExists } from "../core/fsread.js";
 import { paneMetaReadForDir, outboxPath, parseEvent, type PaneMeta } from "../core/ipc.js";
 import { livePaneNonces, ownsPane } from "../core/tmux.js";
@@ -64,5 +65,29 @@ export async function run(args: string[]): Promise<number> {
       process.stdout.write(`${W(meta.agent, 32)} ${W(meta.model, 8)} ${W(t.name, 12)} ${W(pane, 9)} ${state}\n`);
     }
   }
+  writeJobsSection(repo, live, filter, W);
   return 0;
+}
+
+/** The DETACHED JOBS section. Printed after the worker table and only when this repo has at least
+ *  one job record, so an operator who has never run a detached job sees exactly what they see today.
+ *  Liveness is the job module's three-valued verdict, not the worker table's `[ORPHAN]`: a job hub
+ *  whose nonce cannot be verified is UNKNOWN, and calling that dead would tell an operator their
+ *  multi-hour run had died when it is running fine. */
+function writeJobsSection(repo: string, live: Map<string, string>, filter: string | undefined, W: (s: string, n: number) => string): void {
+  const rows: string[] = [];
+  for (const t of readdirSync(repo, { withFileTypes: true })) {
+    if (!t.isDirectory()) continue;
+    if (filter && t.name !== filter) continue;
+    const rec = parseJob(readIfExists(jobPath(t.name)));
+    if (!rec) continue;
+    const hub = `${rec.hub.agent}-${rec.hub.model}`;
+    const liveness = classifyJobLiveness(live, paneMetaReadForDir(join(repo, t.name, hub)));
+    rows.push(`${W(rec.topic, 24)} ${W(rec.command, 10)} ${W(hub, 20)} ${W(rec.session, 24)} ${liveness}`);
+  }
+  if (rows.length === 0) return;
+  process.stdout.write(`\nDETACHED JOBS\n`);
+  process.stdout.write(`${W("TOPIC", 24)} ${W("COMMAND", 10)} ${W("HUB", 20)} ${W("SESSION", 24)} HUB-LIVENESS\n`);
+  process.stdout.write(`${"-".repeat(24)} ${"-".repeat(10)} ${"-".repeat(20)} ${"-".repeat(24)} ------------\n`);
+  for (const r of rows) process.stdout.write(r + "\n");
 }

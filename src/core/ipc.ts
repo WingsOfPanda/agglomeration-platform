@@ -96,9 +96,15 @@ export function inboxWrite(i: string, m: string, t: string, task: string, opts?:
   atomicWrite(inboxPath(i, m, t), body);
 }
 
-export function identityWrite(i: string, m: string, t: string): void {
+/** A spawned pane is either an ordinary worker or the job hub of a detached run. The role picks the
+ *  identity template, and nothing else: the two differ only in the authority they grant (see
+ *  config/prompt-templates/job-hub.md), never in the wire protocol. */
+export type WorkerRole = "worker" | "job-hub";
+
+export function identityWrite(i: string, m: string, t: string, opts?: { role?: WorkerRole }): void {
   const root = pluginRoot();
-  const tplPath = join(root, "config", "prompt-templates", "identity.md");
+  const tplName = opts?.role === "job-hub" ? "job-hub.md" : "identity.md";
+  const tplPath = join(root, "config", "prompt-templates", tplName);
   if (!existsSync(tplPath)) {
     throw new Error(
       `identityWrite: identity template not found at ${tplPath} (resolved pluginRoot=${root}). ` +

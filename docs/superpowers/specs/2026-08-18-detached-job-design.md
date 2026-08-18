@@ -353,3 +353,25 @@ Both are additive.
   is the first thing to touch tmux. Without the retry after `new-session`, every detached worker
   would lose its border label and the first call would emit a spurious warning. `spawn` now withholds
   the warning on the `--session` path and retries once the session has started a server.
+
+### PR 2 amendments
+
+- **The session sweep lives in `job stop`, not `stop.ts`.** The Components list put it in
+  `src/commands/stop.ts`. In practice teardown kills every worker pane individually and tmux destroys
+  a session once its last window closes, so the sweep is a **safety net for the case where a pane was
+  deliberately NOT killed** (unprovable ownership) — never the normal path. Extending `StopDeps` with
+  tmux session calls to serve an almost-always no-op was not worth the surface; `/ap:stop <topic>`
+  leaves nothing behind either way. Both branches are verified: all-panes-ours kills the session, and
+  one unaccountable pane leaves it intact and names the pane.
+- **`job stop` deletes the job record rather than archiving it.** The per-worker archives already
+  carry the outbox, the identity, and everything forensics reads; `archiveTopic`'s suite parameter is
+  a closed enum that a new `_job` member would have to join for no gain.
+- **`spawn --role worker|job-hub` is how the template gets selected.** The spec said `identityWrite`
+  takes a role but not how a spawn expresses one. An unknown role is refused (rc 2) rather than
+  falling back to the permissive template.
+- **`job start` derives the topic from the args file** using the same `deriveTopicFromPath` /
+  `--topic` precedence `implement init` uses, so the job record and the run it launches cannot
+  disagree about which topic they are. `--topic` overrides; an underivable topic is refused with a
+  message naming the flag.
+- **`AP_JOB_WAIT_TIMEOUT_S`** (default 3600) bounds one `job wait`. A timeout is not a failure — the
+  origin hub re-arms — so it is deliberately long and deliberately not fatal.

@@ -1,7 +1,7 @@
 ---
 description: Light pipeline — one worker implements a clear single-repo change unattended on its own branch; the conductor briefs, verifies, and finishes by default. No research, no design doc, no gates.
-argument-hint: <topic-text> [--provider codex|claude|agy|opencode] [--no-finish] [--stash-wip]
-allowed-tools: Bash, Write, Read, Edit
+argument-hint: <topic-text> [--detached] [--provider codex|claude|agy|opencode] [--no-finish] [--stash-wip]
+allowed-tools: Bash, Write, Read, Edit, AskUserQuestion
 ---
 
 # /ap:quick
@@ -21,6 +21,31 @@ Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
 > opts into Claude Code's multi-agent Workflow orchestration (deeper work, more tokens; a harmless
 > no-op without the Workflows feature). For a lean run, prefix every worker dispatch with
 > `AP_ULTRACODE=0`.
+
+## DETACHED MODE
+
+Two entry paths, decided once before Stage 0 — the same shape `/ap:implement` documents.
+
+- **Origin hub** — `$ARGUMENTS` contains `--detached`. Mint the args file as usual with `--detached`
+  **stripped**, then:
+  ```bash
+  $CS job start --command quick --args-file <args-path> [--provider p] [--budget-hours N]
+  ```
+  Background `$CS job wait <SLUG>`, tell the user `tmux attach -t <SESSION>` and
+  `/ap:job status <SLUG>`, and stop. Handle the returned `JS=` line exactly as `/ap:implement`'s
+  launch path does, including decoding `QUESTION=` and answering with `$CS job relay`.
+- **Job hub** — `$CS job mode <SLUG>` prints `DETACHED=1`. Run the pipeline as written. `quick` has
+  no interactive gates, so only two things change:
+  - **Finishing is forced to keep.** The default finish — push the branch and open a PR when a
+    remote exists — is exactly what an unattended run must not do. Behave as if `--no-finish` were
+    passed: leave the branch local, push nothing, open no PR. The operator finishes it.
+  - **Budget.** Run `$CS job budget-check <SLUG>` before the verify pass and again before finishing.
+    Exit 1 means write `RESUME.md`, PARK a question, and stop.
+
+  Never call AskUserQuestion. If something genuinely needs deciding, PARK it — append
+  `{"event":"question","message":"...","ts":"<iso>"}` to your outbox, set status `idle`, wait for
+  your inbox — rather than guessing or aborting.
+- **Neither** — an ordinary attached run; ignore this section.
 
 ## Flagging suspicions
 

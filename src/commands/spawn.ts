@@ -9,7 +9,7 @@ import { stateInit, stateArchive, isoUtc } from "../core/archive.js";
 import { readIfExists } from "../core/fsread.js";
 import { atomicWrite } from "../core/atomic.js";
 import { validateSlug } from "../core/slug.js";
-import { identityWrite, identityPath, seedWorkerStatus, writeWorkerStatus, inboxWrite, inboxPath, paneMetaWrite, outboxWait, outboxDump, parseLastPane, formatLastPane } from "../core/ipc.js";
+import { identityWrite, identityPath, seedWorkerStatus, writeWorkerStatus, inboxWrite, inboxPath, paneMetaWrite, outboxWait, outboxDump, parseLastPane, formatLastPane, type WorkerRole } from "../core/ipc.js";
 import { paneNonceFor } from "../core/roster.js";
 import { pickRandomAgent, agentInUse, formatCollisionError } from "../core/agents.js";
 import { agentBinary, agentDefaultMode, agentModeArgs, agentReadyTimeout, agentBootstrapSleep } from "../core/contracts.js";
@@ -25,13 +25,13 @@ export function resolveMode(explicit: string | undefined, dflt: string | undefin
  *  flags, which are mutually exclusive — is testable without spawning a pane. */
 export interface SpawnArgs {
   agent: string; model: string; topic: string;
-  mode: string; cwd: string; targetPane: string; preflightArtDir: string; session: string; initial: string;
+  mode: string; cwd: string; targetPane: string; preflightArtDir: string; session: string; role: string; initial: string;
 }
 /** Positional `<agent> <model> <topic>`, then flags until the first non-flag token, which begins the
  *  initial prompt (the rest of argv, joined). Faithful to the loop this replaced. */
 export function parseSpawnArgs(args: string[]): SpawnArgs {
   const [agent, model, topic] = args;
-  let mode = "", cwd = "", targetPane = "", preflightArtDir = "", session = "", initial = "";
+  let mode = "", cwd = "", targetPane = "", preflightArtDir = "", session = "", role = "", initial = "";
   for (let i = 3; i < args.length; i++) {
     const a = args[i];
     if (a === "--mode" || a.startsWith("--mode=")) { const r = kvParse(a, args[i + 1]); mode = r.value; i += r.shift - 1; }
@@ -39,9 +39,10 @@ export function parseSpawnArgs(args: string[]): SpawnArgs {
     else if (a === "--target-pane" || a.startsWith("--target-pane=")) { const r = kvParse(a, args[i + 1]); targetPane = r.value; i += r.shift - 1; }
     else if (a === "--preflight-art-dir" || a.startsWith("--preflight-art-dir=")) { const r = kvParse(a, args[i + 1]); preflightArtDir = r.value; i += r.shift - 1; }
     else if (a === "--session" || a.startsWith("--session=")) { const r = kvParse(a, args[i + 1]); session = r.value; i += r.shift - 1; }
+    else if (a === "--role" || a.startsWith("--role=")) { const r = kvParse(a, args[i + 1]); role = r.value; i += r.shift - 1; }
     else { initial = args.slice(i).join(" "); break; }
   }
-  return { agent, model, topic, mode, cwd, targetPane, preflightArtDir, session, initial };
+  return { agent, model, topic, mode, cwd, targetPane, preflightArtDir, session, role, initial };
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -60,18 +61,18 @@ async function stampOrFail(pane: string, nonce: string, agent: string, model: st
 
 /** The three pre-tmux state writes every spawn path crosses: a fresh state dir, the identity file,
  *  and a seeded status.json. Extracted so this wiring is unit-testable without spawning a pane. */
-export function prepareWorkerState(agent: string, model: string, topic: string): void {
+export function prepareWorkerState(agent: string, model: string, topic: string, role?: WorkerRole): void {
   stateInit(agent, model, topic);
-  identityWrite(agent, model, topic);
+  identityWrite(agent, model, topic, { role });
   seedWorkerStatus(agent, model, topic);
 }
 
 export async function run(args: string[]): Promise<number> {
-  if (args.length < 3) { log.error("usage: spawn <agent|random> <model> <topic> [--mode m] [--cwd abs] [--target-pane id] [--session name] [initial-prompt]"); return 2; }
+  if (args.length < 3) { log.error("usage: spawn <agent|random> <model> <topic> [--mode m] [--cwd abs] [--target-pane id] [--session name] [--role worker|job-hub] [initial-prompt]"); return 2; }
   const parsed = parseSpawnArgs(args);
   let agent = parsed.agent;
   let initial = parsed.initial;
-  const { model, topic, mode, cwd, targetPane, preflightArtDir, session } = parsed;
+  const { model, topic, mode, cwd, targetPane, preflightArtDir, session, role } = parsed;
 
   if (!validateSlug(topic)) { log.error(`topic must match [a-z0-9-]+ and be <= 32 chars; got: '${topic}'`); return 2; }
   if (agent !== "random" && !validateSlug(agent)) { log.error(`agent must match [a-z0-9-]+ and be <= 32 chars (or 'random'); got: '${agent}'`); return 2; }
@@ -81,6 +82,9 @@ export async function run(args: string[]): Promise<number> {
   // caller's pane. Silently preferring one would put the worker somewhere the caller did not ask for.
   if (session && targetPane) { log.error("spawn: --session and --target-pane are mutually exclusive (--target-pane respawns a reserved preflight pane; --session places the worker in a detached session of its own)"); return 2; }
   if (session && !validSessionName(session)) { log.error(`spawn --session must be a tmux-safe name (letter or digit first, then letters/digits/_/-, at most 64 chars, no '.' or ':'); got: '${session}'`); return 2; }
+  // The role selects the identity template, i.e. how much authority the pane is granted. An unknown
+  // value must never silently fall back to the permissive one.
+  if (role && role !== "worker" && role !== "job-hub") { log.error(`spawn --role must be 'worker' or 'job-hub'; got: '${role}'`); return 2; }
 
   // --session creates its OWN session, so the caller need not be inside tmux at all: this gate exists
   // only because the other two placements split the CALLER's pane.
@@ -112,7 +116,7 @@ export async function run(args: string[]): Promise<number> {
 
   log.info(`preparing state for ${agent}-${model} on ${topic}`);
   try {
-    prepareWorkerState(agent, model, topic);
+    prepareWorkerState(agent, model, topic, (role || "worker") as WorkerRole);
 
     const launch = wrapLaunch([binary, ...modeArgs].join(" "));
     const startDir = cwd || repoRoot();
