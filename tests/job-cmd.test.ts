@@ -202,15 +202,25 @@ describe("job status / attach — shared parked verdict", () => {
   });
 
   it.each([
-    ["no outbox", null],
-    ["newest ack", question + JSON.stringify({ event: "ack" }) + "\n"],
-    ["newest done", question + JSON.stringify({ event: "done" }) + "\n"],
-  ])("attach reports PARKED=no with %s", async (_name, outbox) => {
+    ["no outbox", null, 0, "none"],
+    ["newest ack", question + JSON.stringify({ event: "ack" }) + "\n", 2, "ack"],
+    ["newest done", question + JSON.stringify({ event: "done" }) + "\n", 2, "done"],
+  ])("status and attach report PARKED=no with %s", async (_name, outbox, events, lastEvent) => {
     home();
     seedJob();
     if (outbox !== null) seedOutbox(outbox);
-    const { out } = await capture(() => run(["attach", "demo"]));
-    expect(out).toContain("PARKED=no");
-    expect(out).not.toContain("PARKED_MESSAGE=");
+    const status = (await capture(() => run(["status", "demo"]))).out;
+    const attach = (await capture(() => run(["attach", "demo"]))).out;
+    for (const out of [status, attach]) {
+      expect(out).toContain("PARKED=no");
+      expect(out).not.toContain("PARKED_MESSAGE=");
+    }
+    expect(status).toContain(`EVENTS=${events}`);
+    expect(status).toContain(`LAST_EVENT=${lastEvent}`);
+    if (lastEvent === "none") expect(status).not.toContain("--- recent events ---");
+    else {
+      expect(status).toContain("--- recent events ---\n");
+      expect(status).toContain(`?\t${lastEvent}\t\n`);
+    }
   });
 });
