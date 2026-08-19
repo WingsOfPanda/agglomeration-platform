@@ -52,7 +52,9 @@ describe("tmux arg builders", () => {
   it("sentinelCommand holds pane open with colored label", () => {
     const c = T.sentinelCommand("#[fg=colour110,bold]azure-bravo#[default]");
     expect(c).toContain("reserved — awaiting spawn");
-    expect(c).toContain("sleep infinity");
+    // bounded-sleep loop, not `sleep infinity` — BSD sleep (macOS) rejects "infinity" (#143)
+    expect(c).toContain("while :; do sleep 3600; done");
+    expect(c).not.toContain("sleep infinity");
   });
   it("windowBorderStatusArgs sets pane-border-status top on the target window", () => {
     expect(T.windowBorderStatusArgs("%5")).toEqual(["set-option", "-w", "-t", "%5", "pane-border-status", "top"]);
