@@ -234,14 +234,14 @@ The unattended envelope is deliberately tighter than an attended run:
   alone. Your uncommitted work stays behind (the launch warns when the tree is dirty), and
   `job stop` removes the worktree when it is clean, keeps and names it when it is not. `--no-worktree`
   opts out, for a repo whose suite only runs in the blessed checkout.
-- **Nothing merges while nobody is watching.** The finish action is `keep` by default —
-  mechanically, in the finish verbs, not just in prose — so the run ends on its `feat/...` branch
-  and *you* run the finish menu afterwards. `--finish pr` is the one opt-in: it pushes and opens a
-  **PR**, which is still reviewable. `merge` and `discard` are refused at launch and at the finish
-  verbs. The reason is stale base, not squeamishness: the hub cross-verifies against the commit the
-  run forked from, and main keeps moving under a multi-hour job — a PR re-tests against current
-  main, a local merge integrates code nobody checked against it. `job stop` prints the exact
-  push + `gh pr create` commands along with how far main has drifted since the fork.
+- **Nothing merges or publishes while nobody is watching.** The finish action is locked to `keep` —
+  mechanically, in the finish verbs, not just in prose, and with no flag to loosen it — so the run
+  ends on its `feat/...` branch and *you* run the finish menu afterwards. When you do, integrate
+  through a **PR, never a local merge**. The reason is stale base, not squeamishness: the hub
+  cross-verifies against the commit the run forked from, and main keeps moving under a multi-hour
+  job — a PR re-tests against current main, a local merge integrates code nobody checked against it.
+  `job stop` prints the exact push + `gh pr create` commands along with how far main has drifted
+  since the fork.
 - **`--budget-hours` (default 6)** is checked at every round boundary; an exhausted budget writes
   `RESUME.md` and **parks** rather than continuing or discarding.
 - **Park-and-relay instead of questions.** Where the attached run would ask you, the job hub

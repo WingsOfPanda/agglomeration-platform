@@ -298,13 +298,16 @@ describe("job stop — the sweep and the FINISH hint, through the verb", () => {
     expect(out).not.toContain("FINISH=pending");
   });
 
-  // `--finish pr` publishes itself; telling the operator to push is then just noise.
-  it("prints no hint for a --finish pr run", async () => {
+  // The hint no longer consults the recorded action: `--finish` was removed 2026-08-18, so every
+  // detached run ends `keep` and a record naming anything else (an older ap's, or a hand-edited one)
+  // still gets told where its commits are.
+  it("prints the hint whatever the record's finish action says", async () => {
     const root = repo();
     const rec = await finishedRun(root, 2, 0);
     seedJob({ ...rec, finish: "pr" });
     const { out } = await capture(() => run(["stop", TOPIC]));
-    expect(out).not.toContain("FINISH=pending");
+    expect(out).toContain("FINISH=pending");
+    expect(out).toContain("COMMITS=2");
   });
 
   it("a pre-0.5.38 record keeps the hint but reports unknown start-branch drift", async () => {

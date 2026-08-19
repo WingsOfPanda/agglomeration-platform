@@ -30,7 +30,7 @@ Two entry paths, decided once before Stage 0 — the same shape `/ap:implement` 
   **stripped**, then:
   ```bash
   $CS job start --command quick --args-file <args-path> [--provider p] [--budget-hours N] \
-    [--finish keep|pr] [--no-worktree]
+    [--no-worktree]
   ```
   Arm the watch exactly as `/ap:implement`'s launch path does — a persistent **Monitor**
   wrapping `$CS job wait <SLUG>` (never a plain background shell; see that section for the
@@ -38,18 +38,19 @@ Two entry paths, decided once before Stage 0 — the same shape `/ap:implement` 
   `/ap:job status <SLUG>`, and that the run works in the printed `WORKTREE=` so **this checkout
   stays theirs** for the duration, then stop. Handle the returned `JS=` line exactly as
   `/ap:implement`'s launch path does, including decoding `QUESTION=` and answering with
-  `$CS job relay`. `--finish` accepts `keep` (default) and `pr`; `merge`/`discard` are refused.
+  `$CS job relay`. A detached run always ends `keep` — on its branch, nothing pushed; the user
+  finishes it from the push+PR commands `job stop` prints.
 - **Job hub** — `$CS job mode <SLUG>` prints `DETACHED=1`. Run the pipeline as written. `quick` has
   no interactive gates, so only these things change:
   - **The run works in a worktree.** Your inbox task has a WORKTREE paragraph with an absolute path.
     Pass it as `--target <WORKTREE>` to **both** `$CS quick init` and `$CS quick branch` (init echoes
     it back as `TARGET=`; branch is what records it). No WORKTREE paragraph — a `--no-worktree` run —
     means no flag anywhere. Never check a branch out in the operator's own checkout.
-  - **Finishing follows the record, and defaults to keep.** Unless `job.json` records `finish: pr`,
-    behave as if `--no-finish` were passed: leave the branch local, push nothing, open no PR — the
-    operator finishes it. A recorded `pr` takes the ordinary push-and-open-a-PR path. This gate is
-    **mechanical**: `quick finish` reads the record itself and diverts to the branch-only path
-    whenever the record does not say `pr`, so a wrong instruction here cannot push anything.
+  - **Finishing is forced to keep.** The default finish — push the branch and open a PR when a
+    remote exists — is exactly what an unattended run must not do. Behave as if `--no-finish` were
+    passed: leave the branch local, push nothing, open no PR. The operator finishes it. This gate is
+    **mechanical**: `quick finish` itself disables publication while a `_job` record exists for the
+    topic, so a wrong instruction here cannot push anything.
   - **Budget.** Run `$CS job budget-check <SLUG>` before the verify pass and again before finishing.
     Exit 1 means write `RESUME.md`, PARK a question, and stop.
   - **Teardown stays per-agent.** Stage 3 already tears down with `$CS stop <AGENT> <SLUG>` (the

@@ -6,7 +6,7 @@ import { applyArgsFile } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
 import { isoUtc } from "../core/archive.js";
 import { repoRoot } from "../core/paths.js";
-import { jobPath, parseJob, finishAllowedDetached } from "../core/job.js";
+import { jobPath } from "../core/job.js";
 import { quickArtDir, quickExecDir, deriveSlug, parseQuickArgs, parseBranchArgs, detectTestCommand, renderSummary, renderResume, type SummaryFacts } from "../core/quick.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { agentBinary } from "../core/contracts.js";
@@ -298,22 +298,16 @@ export async function finishWith(topic: string, r: Runner, hasGh: boolean): Prom
   const rec = readBranchRecord("quick", { dir: exec });
   const branch = rec.branch;
   const startBranch = rec.startBranch || "main";
-  // The mechanical half of a detached run's "push nothing, open no PR" — until now that lived only
-  // in the directive's prose, and prose does not stop a mis-instructed hub. A `_job` record for this
-  // topic means nobody is watching, so publication is off whatever finish.txt says, UNLESS the run
-  // was launched with the sanctioned `--finish pr` opt-in: a PR stays reviewable, so the code still
-  // reaches a human before it reaches the base branch. It routes to the branch-only arm below rather
-  // than refusing outright: that arm restores the start branch and pops a --stash-wip park, and a
-  // bare refusal here would strand the operator's stashed WIP.
-  // The recorded action is re-checked through finishAllowedDetached, never trusted: a hand-edited
-  // `finish: merge` unlocks nothing, and quick's own finisher has no merge arm either way.
+  // The mechanical half of a detached run's "push nothing, open no PR" — the directive's prose does
+  // not stop a mis-instructed hub. A `_job` record for this topic means nobody is watching, so
+  // publication is off whatever finish.txt says: the run ends on its branch and the OPERATOR
+  // finishes it (the `--finish pr` opt-in was removed 2026-08-18, taking the recorded-action
+  // indirection with it). It routes to the branch-only arm below rather than refusing outright: that
+  // arm restores the start branch and pops a --stash-wip park, and a bare refusal here would strand
+  // the operator's stashed WIP.
   const detachedJob = existsSync(jobPath(topic));
-  const jobRec = detachedJob ? parseJob(readIfExists(jobPath(topic))) : null;
-  const recordedFinish = jobRec && finishAllowedDetached(jobRec.finish) ? jobRec.finish : "keep";
-  const detachedBlocks = detachedJob && recordedFinish !== "pr";
-  if (detachedBlocks) log.warn(`quick finish: a detached job record is present (${jobPath(topic)}) and recorded finish '${recordedFinish}' — publication is disabled; the run ends on its branch and the operator finishes it`);
-  else if (detachedJob) log.warn(`quick finish: the detached job recorded finish 'pr' — publishing as a PR (never a merge), as launched`);
-  const doFinish = readField(join(exec, "finish.txt")) === "yes" && !detachedBlocks;
+  if (detachedJob) log.warn(`quick finish: a detached job record is present (${jobPath(topic)}) — publication is disabled; the run ends on its branch and the operator finishes it`);
+  const doFinish = readField(join(exec, "finish.txt")) === "yes" && !detachedJob;
 
   if (!doFinish) {
     r.run("git", ["checkout", "-q", startBranch]);

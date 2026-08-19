@@ -128,3 +128,14 @@ this makes it the platform's behavior.
   checked out, so that arm says nothing about it.
 - Test consequence (spec-mandated): the 0.5.36 assertion that the worktree is DETACHED at base flips
   to asserting it is on `base/<topic>` at base.
+
+### Amendment: `--finish` removed (2026-08-18, same day)
+
+D6's run-side `pr` opt-in is **removed** on operator feedback, before it ever ran live: `ap job start`
+no longer parses `--finish` at all (it falls into the unknown-argument refusal, rc 2), the record is
+written with a literal `finish: "keep"`, and both finish gates are hard-coded to `keep` again — a
+detached run has exactly one legal ending, and few optionals is always better than an option nobody
+exercised. The PR-not-merge doctrine is unchanged; it simply lives entirely on the OPERATOR's side of
+the handoff, in the `job stop` hint that prints the push + `gh pr create` commands and the `DRIFT=`
+count that argues for them. `finishAllowedDetached` is deleted; `JobRecord.finish` stays (record-shape
+stability, `job status` still prints `FINISH=`) and a record naming anything else unlocks nothing.

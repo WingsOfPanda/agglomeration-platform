@@ -7,7 +7,7 @@ import { log } from "../core/log.js";
 import { applyArgsFile, kvParse } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
 import { repoRoot, repoStateDir } from "../core/paths.js";
-import { jobPath, parseJob, finishAllowedDetached } from "../core/job.js";
+import { jobPath } from "../core/job.js";
 import { auditDoc } from "../core/audit.js";
 import {
   parseImplementArgs, deriveTopicFromPath, detectProvider,
@@ -520,19 +520,13 @@ export async function finishWith(topic: string, action: "merge" | "pr" | "keep" 
   // directive says it in prose; this refuses it in code, before the results file is truncated, so a
   // mis-instructed job hub cannot publish work no operator has seen. Recorded to the review feed as
   // well as stderr: a hub that got here at all is a defect /ap:review must see.
-  if (existsSync(jobPath(topic))) {
-    // The gate is the RECORDED action, not a hard-coded "keep": `job start --finish pr` is a legal
-    // opt-in, and a run launched that way must be able to finish the way it was launched. The record
-    // is re-checked through finishAllowedDetached rather than trusted, so a hand-edited or
-    // carried-over `finish: merge` cannot unlock a merge here — merge and discard have no path in.
-    const rec = parseJob(readIfExists(jobPath(topic)));
-    const recorded = rec && finishAllowedDetached(rec.finish) ? rec.finish : "keep";
-    if (action !== "keep" && action !== recorded) {
-      const allowed = recorded === "keep" ? "'keep'" : `'keep' and '${recorded}'`;
-      log.error(`implement finish: detached job in flight (${jobPath(topic)}) — it recorded finish '${recorded}', so only ${allowed} ${recorded === "keep" ? "is" : "are"} allowed; ${action} would publish with no one watching`);
-      runFlag("implement", topic, `finish ${action}: REFUSED — a detached job record is in flight for this topic and recorded finish '${recorded}', so only ${allowed} allowed; nothing was merged, pushed, or discarded`);
-      return 2;
-    }
+  // `keep` is the ONLY ending a detached run has while its record exists — the recorded-action
+  // indirection left with the `--finish pr` opt-in (removed 2026-08-18), so the gate is a literal
+  // again: the operator finishes the branch themselves.
+  if (existsSync(jobPath(topic)) && action !== "keep") {
+    log.error(`implement finish: detached job in flight (${jobPath(topic)}) — only 'keep' is allowed; ${action} would publish with no one watching`);
+    runFlag("implement", topic, `finish ${action}: REFUSED — a detached job record is in flight for this topic, so only 'keep' is allowed; nothing was merged, pushed, or discarded`);
+    return 2;
   }
   const results = join(art, "finish-results.tsv"); writeFileSync(results, "");
   let n = 0, stranded = 0, baseBlocked = 0;

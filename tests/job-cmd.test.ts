@@ -39,22 +39,17 @@ describe("job start — launch-time refusals (nothing is spawned)", () => {
     home();
     expect(await run(["start", "--command", "implement", "--args-file", "/nope/args"])).toBe(2);
   });
-  it("REFUSES --finish merge and --finish discard — neither has a reviewer", async () => {
+  // `--finish` is gone (removed 2026-08-18, having never run live): a detached run has exactly one
+  // legal ending, so even `--finish keep` is now just an unknown argument. Nothing is spawned and no
+  // worktree is made — the refusal is the first thing the parse loop does.
+  it("REFUSES --finish in every form, as an unknown argument", async () => {
     home();
     const f = argsFile("docs/x-design.md");
-    expect(await run(["start", "--command", "implement", "--args-file", f, "--finish", "merge"])).toBe(2);
-    expect(await run(["start", "--command", "implement", "--args-file", f, "--finish", "discard"])).toBe(2);
-  });
-  // `pr` became legal in 0.5.36. Proven by the refusal that comes AFTER it: the in-flight check is
-  // downstream of the finish gate, so reaching it means `--finish pr` was accepted — and this stops
-  // short of ever creating a worktree or a pane.
-  it("ACCEPTS --finish pr — the run gets past the finish gate to the in-flight check", async () => {
-    home();
-    seedJob({ ...REC, topic: "x", session: "ap-x" });
-    const { rc, err } = await capture(() => run(["start", "--command", "implement", "--args-file", argsFile("docs/x-design.md"), "--finish", "pr"]));
-    expect(rc).toBe(2);
-    expect(err).toContain("already has a job in flight");
-    expect(err).not.toContain("--finish pr is refused");
+    for (const action of ["keep", "pr", "merge", "discard"]) {
+      const { rc, err } = await capture(() => run(["start", "--command", "implement", "--args-file", f, "--finish", action]));
+      expect(rc).toBe(2);
+      expect(err).toContain("unknown argument '--finish'");
+    }
   });
   it("refuses a non-positive budget or round count", async () => {
     home();

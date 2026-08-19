@@ -34,18 +34,15 @@ This command has two entry paths. Which one you are on is decided **once**, befo
 2. Launch:
    ```bash
    $CS job start --command implement --args-file <args-path> \
-     [--provider codex|claude] [--budget-hours N] [--max-rounds N] \
-     [--finish keep|pr] [--no-worktree]
+     [--provider codex|claude] [--budget-hours N] [--max-rounds N] [--no-worktree]
    ```
    It prints `TOPIC=`, `SESSION=`, `HUB=`, `JOB=`, `WORKTREE=`, `BASE=`, `ATTACH=`.
-   - `--finish` defaults to `keep` and also accepts `pr` (push + open a PR at the end — still
-     reviewable). `merge` and `discard` are refused (rc 2): the run cross-verifies against the fork
-     base while main keeps moving, so a local merge integrates code nobody checked against current
-     main. Pass `--finish pr` only when the user asked for it.
+   - A detached run always ends `keep` — on its branch, nothing pushed, nothing published. There is
+     no flag for it: the user finishes it themselves from the push+PR commands `job stop` prints.
    - The run gets its **own worktree** at `WORKTREE=` (forked from the committed HEAD at `BASE=`),
      so the user keeps their checkout for the whole run. `--no-worktree` opts out — only for a repo
      whose suite genuinely cannot run outside the blessed checkout.
-   - **rc 2** — a launch-time refusal (bad finish action, topic already in flight, unreadable args
+   - **rc 2** — a launch-time refusal (unknown argument, topic already in flight, unreadable args
      file). Surface it and stop.
    - **rc 1** — no free agent, the worktree could not be created, or the job hub failed to
      bootstrap. Surface it; if a record was left behind, `/ap:job stop <TOPIC>` clears it.
@@ -91,7 +88,7 @@ status to `idle`, and wait for your inbox. Resume from exactly where you parked.
 | 1 — `turn-send` "not idle" | AskUserQuestion wait/force/abort | wait 60s and retry once, then `reset-status` and retry once, then PARK. Never a third silent force. |
 | 1 — `ROUTE=escalate` | AskUserQuestion | PARK, carrying the worker's decoded text verbatim as your `message`. |
 | 4 — scope check `OOS_COUNT > 0` | AskUserQuestion amend/send-back/force-keep | PARK. Never auto-force-keep, never auto-amend. (`SCOPE_DECLARED=0` is still the documented no-op — say so in the parked message.) |
-| 4 — finish menu | AskUserQuestion merge/pr/keep/discard | run the action `job.json` recorded, and nothing else: `$CS implement finish <TOPIC> keep` for a `keep` run (the default), `$CS implement finish <TOPIC> pr` when the record says `finish: pr`. Never merge, never discard. The gate is **mechanical**: the finish verb allows only `keep` plus the recorded action, and refuses anything else (rc 2, recorded to the review feed) while a `_job` record exists for the topic. |
+| 4 — finish menu | AskUserQuestion merge/pr/keep/discard | `$CS implement finish <TOPIC> keep`. Never merge, never push, never open a PR — the operator finishes the branch. The gate is **mechanical**: the finish verb refuses `merge`/`pr`/`discard` (rc 2, recorded to the review feed) while a `_job` record exists for the topic. |
 | 5 — teardown | `$CS stop <TOPIC>` | `$CS stop lead <TOPIC>` — the per-agent form ONLY. The topic form REFUSES (rc 1) while the job record exists, deliberately: you are a worker under this topic, so it would tear YOU down mid-run. `job stop` sweeps you and the session later. |
 
 `ROUTE=verify` and `ROUTE=objection` are **not** parked: verify claims against ground truth and

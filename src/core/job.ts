@@ -199,14 +199,6 @@ export function questionConsumed(size: number, cursor: number): boolean { return
 
 // ---------- launch-time gates ----------
 
-/** The finish actions a detached run accepts. `keep` stays the default — the run ends on its branch
- *  and the operator takes it from there. `pr` is the sanctioned opt-in: a PR is REVIEWABLE, so the
- *  code still reaches a human before it reaches the base branch. `merge` and `discard` stay out for
- *  the reason the multi-hour runs exposed — the hub cross-verifies against the FORK BASE while the
- *  starting branch keeps moving, so a local merge integrates code nobody verified against the
- *  current starting branch, and a discard destroys unattended work. */
-export function finishAllowedDetached(action: string): boolean { return action === "keep" || action === "pr"; }
-
 /** Drop flag tokens (and the value of each flag named in `valueFlags`) so what remains is the free
  *  text a slug can be derived from. */
 export function stripFlags(text: string, valueFlags: Set<string>): string {
@@ -234,15 +226,6 @@ export function topicFromImplementArgs(text: string): string {
 }
 
 // ---------- the job hub's brief ----------
-
-/** How the recorded finish action reads in the brief. The two legal actions describe genuinely
- *  different endings, and a brief that promised "never push" under a `pr` run would have the hub
- *  fighting its own finish verb. */
-function finishLine(finish: string): string {
-  return finish === "pr"
-    ? `    finish      pr — at the end, push the branch and open a PR. NEVER merge it yourself.`
-    : `    finish      ${finish} — never merge, never push, never open a PR`;
-}
 
 /** The worktree paragraph, empty for a `--no-worktree` run (and for a record written before 0.5.36).
  *  The path is the ONE thing the hub cannot derive: the state dir is keyed to the repo root, and
@@ -291,7 +274,7 @@ export function jobBrief(j: JobRecord): string {
     ``,
     `Run parameters. These are settled and are NOT yours to change:`,
     `    provider    ${j.provider || "(directive default)"}`,
-    finishLine(j.finish),
+    `    finish      keep — never merge, never push, never open a PR`,
     `    max rounds  ${j.max_rounds}`,
     `    budget      ${j.budget_hours}h — check at EVERY round boundary with:`,
     `                    ap job budget-check ${j.topic}`,

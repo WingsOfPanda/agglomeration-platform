@@ -17768,9 +17768,6 @@ function relaySnapshot(text) {
 function questionConsumed(size, cursor) {
   return cursor >= size;
 }
-function finishAllowedDetached(action) {
-  return action === "keep" || action === "pr";
-}
 function stripFlags(text, valueFlags) {
   const toks = text.split(/\s+/).filter(Boolean);
   const out = [];
@@ -17792,9 +17789,6 @@ function topicFromImplementArgs(text) {
   if (eq) return eq.slice("--topic=".length);
   const doc = toks.find((t) => !t.startsWith("-") && t.endsWith(".md"));
   return doc ? deriveTopicFromPath(doc) : "";
-}
-function finishLine(finish) {
-  return finish === "pr" ? `    finish      pr \u2014 at the end, push the branch and open a PR. NEVER merge it yourself.` : `    finish      ${finish} \u2014 never merge, never push, never open a PR`;
 }
 function worktreeLines(j) {
   if (!j.worktree) return [];
@@ -17839,7 +17833,7 @@ function jobBrief(j) {
     ``,
     `Run parameters. These are settled and are NOT yours to change:`,
     `    provider    ${j.provider || "(directive default)"}`,
-    finishLine(j.finish),
+    `    finish      keep \u2014 never merge, never push, never open a PR`,
     `    max rounds  ${j.max_rounds}`,
     `    budget      ${j.budget_hours}h \u2014 check at EVERY round boundary with:`,
     `                    ap job budget-check ${j.topic}`,
@@ -19614,12 +19608,8 @@ async function finishWith(topic, r, hasGh) {
   const branch = rec.branch;
   const startBranch = rec.startBranch || "main";
   const detachedJob = (0, import_node_fs31.existsSync)(jobPath(topic));
-  const jobRec = detachedJob ? parseJob(readIfExists(jobPath(topic))) : null;
-  const recordedFinish = jobRec && finishAllowedDetached(jobRec.finish) ? jobRec.finish : "keep";
-  const detachedBlocks = detachedJob && recordedFinish !== "pr";
-  if (detachedBlocks) log.warn(`quick finish: a detached job record is present (${jobPath(topic)}) and recorded finish '${recordedFinish}' \u2014 publication is disabled; the run ends on its branch and the operator finishes it`);
-  else if (detachedJob) log.warn(`quick finish: the detached job recorded finish 'pr' \u2014 publishing as a PR (never a merge), as launched`);
-  const doFinish = readField((0, import_node_path26.join)(exec, "finish.txt")) === "yes" && !detachedBlocks;
+  if (detachedJob) log.warn(`quick finish: a detached job record is present (${jobPath(topic)}) \u2014 publication is disabled; the run ends on its branch and the operator finishes it`);
+  const doFinish = readField((0, import_node_path26.join)(exec, "finish.txt")) === "yes" && !detachedJob;
   if (!doFinish) {
     r.run("git", ["checkout", "-q", startBranch]);
     const kept2 = restoreStashWip(topic, exec, r, startBranch);
@@ -22477,15 +22467,10 @@ async function finishWith2(topic, action, d) {
     log.error(`implement finish: art-dir missing: ${art}`);
     return 1;
   }
-  if ((0, import_node_fs39.existsSync)(jobPath(topic))) {
-    const rec = parseJob(readIfExists(jobPath(topic)));
-    const recorded = rec && finishAllowedDetached(rec.finish) ? rec.finish : "keep";
-    if (action !== "keep" && action !== recorded) {
-      const allowed = recorded === "keep" ? "'keep'" : `'keep' and '${recorded}'`;
-      log.error(`implement finish: detached job in flight (${jobPath(topic)}) \u2014 it recorded finish '${recorded}', so only ${allowed} ${recorded === "keep" ? "is" : "are"} allowed; ${action} would publish with no one watching`);
-      runFlag("implement", topic, `finish ${action}: REFUSED \u2014 a detached job record is in flight for this topic and recorded finish '${recorded}', so only ${allowed} allowed; nothing was merged, pushed, or discarded`);
-      return 2;
-    }
+  if ((0, import_node_fs39.existsSync)(jobPath(topic)) && action !== "keep") {
+    log.error(`implement finish: detached job in flight (${jobPath(topic)}) \u2014 only 'keep' is allowed; ${action} would publish with no one watching`);
+    runFlag("implement", topic, `finish ${action}: REFUSED \u2014 a detached job record is in flight for this topic, so only 'keep' is allowed; nothing was merged, pushed, or discarded`);
+    return 2;
   }
   const results = (0, import_node_path35.join)(art, "finish-results.tsv");
   (0, import_node_fs39.writeFileSync)(results, "");
@@ -29519,7 +29504,7 @@ __export(job_exports, {
 });
 function usage7() {
   process.stderr.write(
-    "Usage: job start --command <implement|quick> --args-file <path> [--topic slug] [--provider p]\n                 [--finish keep|pr] [--budget-hours N] [--max-rounds N] [--hub-model claude]\n                 [--no-worktree]   work in the main checkout, as 0.5.35 did\n       job status <topic>          one-screen composite: what was launched, is it alive, where is it\n       job wait <topic>            block until the job hub emits done/error/question\n       job relay <topic> <msg|@file>   answer a parked question\n       job attach <topic>          re-arm block, after the origin hub restarted\n       job list                    every job in this repo\n       job stop <topic>            tear down, sweep the session, clear the record\n       job mode <topic>            DETACHED=1 (exit 0) / DETACHED=0 (exit 1)\n       job budget-check <topic>    BUDGET=within (exit 0) / exceeded (exit 1)\n"
+    "Usage: job start --command <implement|quick> --args-file <path> [--topic slug] [--provider p]\n                 [--budget-hours N] [--max-rounds N] [--hub-model claude]\n                 [--no-worktree]   work in the main checkout, as 0.5.35 did\n       job status <topic>          one-screen composite: what was launched, is it alive, where is it\n       job wait <topic>            block until the job hub emits done/error/question\n       job relay <topic> <msg|@file>   answer a parked question\n       job attach <topic>          re-arm block, after the origin hub restarted\n       job list                    every job in this repo\n       job stop <topic>            tear down, sweep the session, clear the record\n       job mode <topic>            DETACHED=1 (exit 0) / DETACHED=0 (exit 1)\n       job budget-check <topic>    BUDGET=within (exit 0) / exceeded (exit 1)\n"
   );
   return 2;
 }
@@ -29686,7 +29671,7 @@ function sweepWorktree(rec, root, r) {
   return true;
 }
 function finishHint(rec, r) {
-  if (rec.finish !== "keep" || !rec.base_sha) return;
+  if (!rec.base_sha) return;
   const branch = branchNameFor(rec.command, rec.topic);
   if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]).code !== 0) return;
   const count2 = r.run("git", ["rev-list", "--count", `${rec.base_sha}..${branch}`]);
@@ -29707,7 +29692,7 @@ gh pr create --head ${branch}
   );
 }
 async function startRun(rest, origCwd) {
-  let command = "", argsFile = "", topic = "", provider = "", finish = "keep", hubModel = "claude";
+  let command = "", argsFile = "", topic = "", provider = "", hubModel = "claude";
   let budgetHours = 6, maxRounds = 5, useWorktree = true;
   for (let i2 = 0; i2 < rest.length; i2++) {
     const a2 = rest[i2];
@@ -29721,7 +29706,6 @@ async function startRun(rest, origCwd) {
     else if (a2 === "--args-file" || a2.startsWith("--args-file=")) argsFile = take();
     else if (a2 === "--topic" || a2.startsWith("--topic=")) topic = take();
     else if (a2 === "--provider" || a2.startsWith("--provider=")) provider = take();
-    else if (a2 === "--finish" || a2.startsWith("--finish=")) finish = take();
     else if (a2 === "--hub-model" || a2.startsWith("--hub-model=")) hubModel = take();
     else if (a2 === "--budget-hours" || a2.startsWith("--budget-hours=")) budgetHours = Number(take());
     else if (a2 === "--max-rounds" || a2.startsWith("--max-rounds=")) maxRounds = Number(take());
@@ -29737,10 +29721,6 @@ async function startRun(rest, origCwd) {
   if (argsFile) argsFile = (0, import_node_path55.isAbsolute)(argsFile) ? argsFile : (0, import_node_path55.resolve)(origCwd, argsFile);
   if (!argsFile || !(0, import_node_fs50.existsSync)(argsFile)) {
     log.error(`job start: --args-file must be an existing path; got: '${argsFile}'`);
-    return 2;
-  }
-  if (!finishAllowedDetached(finish)) {
-    log.error(`job start: --finish ${finish} is refused for a detached run; the legal actions are 'keep' (the default \u2014 the run ends on its branch and you decide from there) and 'pr' (push + open a PR, which stays reviewable). 'merge' and 'discard' stay out: the run cross-verifies against the fork base while the starting branch keeps moving, so a local merge integrates code nobody checked against the current starting branch, and a discard destroys work no one has seen.`);
     return 2;
   }
   if (!Number.isFinite(budgetHours) || budgetHours <= 0) {
@@ -29783,8 +29763,11 @@ async function startRun(rest, origCwd) {
     topic,
     session,
     hub: { agent, model: hubModel },
+    // Literal, never an option: a detached run has exactly one legal ending — it stops on its
+    // branch and the OPERATOR finishes it. The `pr` opt-in was removed 2026-08-18 having never run
+    // live, so `--finish` now falls into the unknown-argument refusal above.
     provider,
-    finish,
+    finish: "keep",
     budget_hours: budgetHours,
     max_rounds: maxRounds,
     args_file: argsFile,

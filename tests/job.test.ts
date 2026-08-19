@@ -213,16 +213,6 @@ describe("questionConsumed — closes the duplicate-relay loop", () => {
 });
 
 describe("launch-time gates", () => {
-  // `pr` joined `keep` in 0.5.36: a PR is REVIEWABLE, so the code still reaches a human before it
-  // reaches the base branch. merge and discard stay out — the run cross-verifies against the fork
-  // base while main moves on, and nobody is watching what a discard destroys.
-  it("keep and pr are the finish actions a detached run accepts; merge and discard never are", () => {
-    expect(J.finishAllowedDetached("keep")).toBe(true);
-    expect(J.finishAllowedDetached("pr")).toBe(true);
-    expect(J.finishAllowedDetached("merge")).toBe(false);
-    expect(J.finishAllowedDetached("discard")).toBe(false);
-    expect(J.finishAllowedDetached("")).toBe(false);
-  });
   it("isJobCommand admits only the two wired commands", () => {
     expect(J.isJobCommand("implement")).toBe(true);
     expect(J.isJobCommand("quick")).toBe(true);
@@ -281,12 +271,11 @@ describe("jobBrief", () => {
     expect(none).not.toContain("WORKTREE");
     expect(none).not.toContain("--target");
   });
-  // A brief that promised "never push" under a `pr` run would have the hub fighting its own finish
-  // verb, which is now the thing that ALLOWS the push.
-  it("a --finish pr run is told to push and open a PR, and still never to merge", () => {
-    const pr = J.jobBrief({ ...REC, finish: "pr" });
-    expect(pr).toContain("push the branch and open a PR");
-    expect(pr).toContain("NEVER merge");
-    expect(pr).not.toContain("never merge, never push, never open a PR");
+  // The finish line is a literal, not a rendering of the record: `--finish` was removed 2026-08-18,
+  // so a record carrying any other action (hand-edited, or written by an older ap) still briefs the
+  // hub with the one legal ending.
+  it("always briefs the single legal ending, whatever the record says", () => {
+    expect(J.jobBrief({ ...REC, finish: "pr" })).toContain("finish      keep — never merge, never push, never open a PR");
+    expect(J.jobBrief({ ...REC, finish: "pr" })).not.toContain("open a PR. NEVER merge");
   });
 });
