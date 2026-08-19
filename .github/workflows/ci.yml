@@ -24,3 +24,20 @@ jobs:
       # enforces the same invariant locally; this is the clean CI-level signal.)
       - name: dist/ap.cjs is in sync with src
         run: git diff --exit-code -- dist/ap.cjs
+
+  # The second platform ap actually runs on (issue #143). Same gate, minus the dist-sync diff:
+  # esbuild byte-determinism across platforms is not a bet worth making a merge depend on, and the
+  # ubuntu job above already holds that line. No tmux needed — the suite never spawns live panes.
+  check-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run build

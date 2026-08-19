@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync, existsSync as exists } from "node:fs";
+import { chmodSync, mkdtempSync, writeFileSync, existsSync as exists } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
@@ -48,5 +48,46 @@ describe("check ensures global config root", () => {
     } finally {
       cleanup();
     }
+  });
+});
+
+// A4: check probed tmux and nothing else, so it reported OK on the box (issue #143) where every hub
+// test re-run was silently degrading. PATH is replaced with a directory holding only the binaries
+// each case is about, so all three branches are deterministic on any platform.
+describe("check names the timeout tooling the hub's test re-run depends on", () => {
+  async function checkWithPath(bins: string[]): Promise<string> {
+    const env = freshHome();
+    const dir = mkdtempSync(join(tmpdir(), "ap-path-"));
+    for (const b of bins) {
+      writeFileSync(join(dir, b), "#!/bin/sh\nexit 0\n");
+      chmodSync(join(dir, b), 0o755);
+    }
+    const path0 = process.env.PATH;
+    const se = process.stderr.write.bind(process.stderr);
+    const err: string[] = [];
+    process.env.PATH = dir;
+    process.env.CLAUDE_PLUGIN_ROOT = process.cwd();
+    process.stderr.write = ((x: string | Uint8Array) => { err.push(String(x)); return true; }) as typeof process.stderr.write;
+    try { await check([]); } finally {
+      process.stderr.write = se;
+      process.env.PATH = path0;
+      env.cleanup();
+    }
+    return err.join("");
+  }
+
+  it("GNU timeout on PATH -> named as OK", async () => {
+    expect(await checkWithPath(["timeout"])).toContain("timeout: GNU timeout");
+  });
+
+  it("only gtimeout (Homebrew coreutils) -> named as OK too", async () => {
+    expect(await checkWithPath(["gtimeout"])).toContain("timeout: gtimeout (Homebrew coreutils)");
+  });
+
+  it("neither -> WARNS, naming the degradation instead of reporting a clean box", async () => {
+    const err = await checkWithPath([]);
+    expect(err).toContain("no timeout binary on PATH");
+    expect(err).toContain("kills only the direct child");
+    expect(err).toContain("brew install coreutils");
   });
 });

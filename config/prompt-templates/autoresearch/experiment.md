@@ -144,10 +144,14 @@ In ONE turn, do all of the following:
    - ~50-200 LoC is the sweet spot; less if the approach is small.
    - Choose a reasonable scaffold (Python script, shell pipeline, etc.).
 
-2. Run the implementation. Wrap with `timeout {{TIME_BUDGET_S}}s` so the
-   run cannot exceed the per-experiment wall-clock budget. Tee output to
-   ./stdout.log and ./stderr.log. Capture wall-clock seconds for the run
-   itself.
+2. Run the implementation, bounded so it cannot exceed the per-experiment
+   wall-clock budget of {{TIME_BUDGET_S}}s. Use whichever bound this machine
+   has: `timeout {{TIME_BUDGET_S}}s <cmd>` where a timeout binary exists
+   (`gtimeout {{TIME_BUDGET_S}}s <cmd>` on macOS with Homebrew coreutils —
+   stock macOS ships neither), else
+   `perl -e 'alarm shift; exec @ARGV' {{TIME_BUDGET_S}} <cmd>`, which needs
+   nothing you do not already have. Tee output to ./stdout.log and
+   ./stderr.log. Capture wall-clock seconds for the run itself.
 
 3. Compute the primary metric from the run's output.
 
