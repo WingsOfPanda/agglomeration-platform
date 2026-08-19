@@ -156,8 +156,10 @@ export function wrapLaunch(launch: string, hasBashrc: boolean = existsSync(join(
   return hasBashrc ? `bash -ic 'exec ${launch}'` : launch;
 }
 export function sentinelCommand(coloredLabel: string): string {
-  // printf the colored label + reserved notice, then hold the pane open.
-  return `printf '%s\\n  preflight pane reserved — awaiting spawn...\\n' ${JSON.stringify(coloredLabel)}; sleep infinity`;
+  // printf the colored label + reserved notice, then hold the pane open. The hold-open loop uses
+  // bounded sleeps: BSD sleep (macOS) rejects `sleep infinity`, which killed the pane before
+  // preflight could stamp its nonce (#143).
+  return `printf '%s\\n  preflight pane reserved — awaiting spawn...\\n' ${JSON.stringify(coloredLabel)}; while :; do sleep 3600; done`;
 }
 
 // ---------- execa wrappers (live tmux) ----------

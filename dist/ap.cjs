@@ -16741,7 +16741,7 @@ function wrapLaunch(launch, hasBashrc = (0, import_node_fs15.existsSync)((0, imp
   return hasBashrc ? `bash -ic 'exec ${launch}'` : launch;
 }
 function sentinelCommand(coloredLabel) {
-  return `printf '%s\\n  preflight pane reserved \u2014 awaiting spawn...\\n' ${JSON.stringify(coloredLabel)}; sleep infinity`;
+  return `printf '%s\\n  preflight pane reserved \u2014 awaiting spawn...\\n' ${JSON.stringify(coloredLabel)}; while :; do sleep 3600; done`;
 }
 async function tmux(args) {
   const { stdout } = await execa("tmux", args);
