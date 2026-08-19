@@ -17,12 +17,6 @@ distinguishable. The commands are plain verbs — `quick`, `explore`, `design`, 
 pipeline drives itself in its own tmux session while your Claude Code session stays free
 ([details below](#detached-jobs---detached)).
 
-> agglomeration-platform is a TypeScript rewrite of an earlier Bash plugin. The packaging changed
-> (one committed `dist/ap.cjs`, zero-build install); the wire protocol, state layout, and tmux
-> mechanics are byte-compatible so the model binaries are drop-in. Historical specs and plans under
-> `docs/` predate a project rename and are kept as a dated record — the shipped code is the source
-> of truth.
-
 ---
 
 ## The picture
@@ -81,7 +75,7 @@ agglomeration-platform ships as a Claude Code plugin via its own marketplace:
 /plugin install ap@agglomeration-platform
 ```
 
-To update later: `/plugin marketplace update`, then re-install/upgrade. There is no build step —
+To update later: `/plugin` → update `ap`, then `/reload-plugins`. There is no build step —
 `dist/ap.cjs` is committed.
 
 ### Requirements
@@ -90,8 +84,10 @@ To update later: `/plugin marketplace update`, then re-install/upgrade. There is
 - **tmux ≥ 3.0**. Attached runs split the hub's own pane, so the hub session must run **inside
   tmux**; a `--detached` launch creates its own session, so for those the hub only needs the tmux
   binary on `PATH`.
-- **At least one model CLI on `PATH`** — `codex`, `claude`, `agy`, or `opencode`. Run `/ap:check`
-  to detect what is available and pick your active set.
+- **At least one model CLI on `PATH`, installed *and logged in*** — `codex`, `claude`, `agy`, or
+  `opencode`. Workers inherit your existing CLI auth; a CLI that is installed but not authenticated
+  shows up as a worker that never reports ready (a bootstrap timeout), not as a clear error. Run
+  `/ap:check` to detect what is available and pick your active set.
 
 > **Security posture, stated plainly:** in the default `full` mode, workers are launched with
 > their CLI's permission-bypassing flag (e.g. `codex --dangerously-bypass-approvals-and-sandbox`,
@@ -105,11 +101,15 @@ To update later: `/plugin marketplace update`, then re-install/upgrade. There is
 2. `/ap:check` — verifies tmux/state/config, detects model CLIs, lets you pick the provider set.
 3. `/ap:quick "rename FooService to BarService and fix all call sites"` — one worker implements
    it unattended on its own branch; the hub briefs, verifies, and (by default) pushes + opens a PR.
+   For a first try on a repo you care about, add `--no-finish` — the branch stays local and nothing
+   is pushed until you say so.
 4. Watch it live: the worker is a tmux pane — click into it or `tmux select-pane`.
 5. `/ap:list` shows active workers; `/ap:stop <topic>` tears down and archives.
 
 When the task needs research before code, use the pipeline instead:
-`/ap:explore` → `/ap:design` → `/ap:implement` (worked example below).
+`/ap:explore` → `/ap:design` → `/ap:implement` (worked example below). When a run will take
+hours, add `--detached` — it moves the whole pipeline into its own tmux session and gives you
+your session (and your checkout) back ([details](#detached-jobs---detached)).
 
 ---
 
@@ -147,6 +147,9 @@ brief, waits, verifies, and finishes.
 - `--stash-wip` parks any pre-existing uncommitted WIP in an identity-checked git stash before the
   branch forks, so the PR carries only the worker's commits, and restores it at finish.
 - You get: the branch/PR, a `SUMMARY.md`, archived worker state, and forensics for `/ap:review`.
+
+`--detached` runs the whole thing as a background job in its own tmux session and worktree —
+see [Detached jobs](#detached-jobs---detached).
 
 When the task is fuzzy, contested, or architectural — don't `quick` it; run the pipeline.
 
@@ -227,13 +230,14 @@ your session (the origin hub)             tmux session ap-<topic> (detached)
 
 The unattended envelope is deliberately tighter than an attended run:
 
-- **The run gets its own checkout.** `job start` forks committed HEAD into its own worktree at
-  `.ap/worktrees/<topic>` (on a local `base/<topic>` branch the sweep cleans up again) (hardlink-cloning `node_modules` when there is one) and points the worker
-  there, so *your* checkout stays yours for the whole run: edit it, switch branches, start other
-  runs — just do not check out the run's own `feat/...` branch, and leave that topic's `.ap` state
-  alone. Your uncommitted work stays behind (the launch warns when the tree is dirty), and
-  `job stop` removes the worktree when it is clean, keeps and names it when it is not. `--no-worktree`
-  opts out, for a repo whose suite only runs in the blessed checkout.
+- **The run gets its own checkout.** `job start` forks your committed HEAD into a worktree at
+  `.ap/worktrees/<topic>` and points the worker there (born on a throwaway `base/<topic>` branch;
+  `node_modules` is hardlink-cloned when present, so the suite runs immediately). *Your* checkout
+  stays yours for the whole run: edit it, switch branches, start other runs — just don't check out
+  the run's own `feat/...` branch, and leave that topic's `.ap` state alone. Your uncommitted work
+  stays behind (the launch warns when the tree is dirty). `job stop` removes the worktree — and its
+  base branch — when clean, and keeps and names it when not. `--no-worktree` opts out, for a repo
+  whose suite only runs in the blessed checkout.
 - **Nothing merges or publishes while nobody is watching.** The finish action is locked to `keep` —
   mechanically, in the finish verbs, not just in prose, and with no flag to loosen it — so the run
   ends on its `feat/...` branch and *you* run the finish menu afterwards. When you do, integrate
@@ -440,6 +444,7 @@ There are **two roots**:
     _quick/ _design/ _implement/     #   status.json, pane.json
     _explore/ _autoresearch/ _bridge/    (per-command art dirs)
     _job/                            # detached-job record: job.json, cursor.txt, panes.json
+  worktrees/<topic>/                 # a detached run's isolated checkout (job stop removes it when clean)
 
 ~/.ap/                               # GLOBAL, survives teardown
   archive/<repo-hash>/<topic>/…      # archived workers + run dirs
@@ -489,8 +494,9 @@ There are **two roots**:
 - **The `/ap:*` commands themselves are markdown directives** (`commands/*.md`) that Claude Code
   executes; the CLI verbs they call are the mechanical layer. The verb decides, the directive
   narrates — enforcement lives in code, never only in prose.
-- **tmux is the only subprocess surface** (via `execa`); tmux calls are built as pure arg arrays
-  and unit-tested without spawning panes.
+- **External processes are limited to tmux and git** (plus `cp -al` for the worktree's
+  dependency clone); tmux calls are built as pure arg arrays and unit-tested without spawning
+  panes, and git runs through injectable runners the tests fake.
 - **File-based IPC with atomic writes** (tmp-in-same-dir + rename), JSONL events
   (`ready`/`ack`/`progress`/`done`/`error`/`question`), an `END_OF_INSTRUCTION` sentinel on inbox
   messages and `END_OF_ARTIFACT` on artifacts. The wire protocol is **frozen** so external model
@@ -509,7 +515,7 @@ There are **two roots**:
 
 ```
 npm run typecheck   # tsc --noEmit
-npm run test        # vitest run   (2,434 tests)
+npm run test        # vitest run   (2,475 tests)
 npm run lint        # eslint
 npm run build       # esbuild -> dist/ap.cjs  (commit the result)
 ```
@@ -517,6 +523,10 @@ npm run build       # esbuild -> dist/ap.cjs  (commit the result)
 Contributor guidance lives in `CLAUDE.md` (conventions, the frozen-protocol wall, phase guard);
 `MIGRATION.md` is the architecture/phasing reference; `docs/superpowers/specs/` holds the dated
 design record.
+
+> Lineage, for the curious: agglomeration-platform is a TypeScript rewrite of an earlier Bash
+> plugin, under an earlier name. Historical specs and plans under `docs/` predate the rename and
+> are kept as a dated record — the shipped code is the source of truth.
 
 ---
 
