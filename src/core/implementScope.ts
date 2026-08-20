@@ -1,7 +1,7 @@
 // src/core/implementScope.ts
 //
 // SCOPE-CONFORMANCE guard for `implement` Phase A. Port of the prior bash plugin's scope-conformance
-// helpers (deploy-scope), EXTENDED in ap (deliberate divergence) twice:
+// helpers (deploy-scope), EXTENDED in ap (deliberate divergence) three times:
 //   - docs/superpowers/specs/2026-06-10-perform-scope-bullets-design.md — extractComponentsPaths also
 //     reads bullet-list Components, not only markdown table rows.
 //   - docs/superpowers/specs/2026-06-19-implement-scope-prose-and-sibling-design.md — extraction also
@@ -9,23 +9,28 @@
 //     matchDiffAgainstComponents tolerates a declared bare filename (basename match) and a
 //     same-directory sibling of a declared file (one directory level), so a worker that renames or
 //     splits a module in place is not flagged out-of-scope.
-// A third addition (2026-08-14-components-path-lint-design.md) sits beside the guard rather than in
+//   - docs/superpowers/specs/2026-08-20-scope-testing-paths-design.md — scope checks treat paths
+//     named in `## Testing` as declared scope with the same matching semantics as Components.
+// A separate addition (2026-08-14-components-path-lint-design.md) sits beside the guard rather than in
 // it: lintComponentsPaths, the warn-only authoring-time check that every declared path exists in the
 // checkout unless its line is tagged [on-box]. It never feeds the scope verdict.
 // deploy_extract_components_paths -> extractComponentsPaths,
 // deploy_match_diff_against_components -> matchDiffAgainstComponents. The Bash helpers read files via
 // awk; the TS ports take the already-read strings (file IO is the caller's concern). Table-row
 // first-cell extraction, section bounds, separator/header skip, the path heuristic, and the exact /
-// dir-prefix match rules are preserved; the prose/bullet token scan and the bare-name/sibling rules
-// are the documented divergences. All new rules STRICTLY WIDEN in-scope — they can only suppress an
-// OOS warning, never invent one, so they cannot turn a passing scope-check into a failing one.
+// dir-prefix match rules are preserved; the prose/bullet token scan, the Testing-section scope rule,
+// and the bare-name/sibling rules are the documented divergences. All new rules STRICTLY WIDEN
+// in-scope — they can only suppress an OOS warning, never invent one, so they cannot turn a passing
+// scope-check into a failing one.
 
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
 const COMPONENTS_HEADER = /^## Components[ \t]*$/;
+const TESTING_HEADER = /^## Testing[ \t]*$/;
 const OTHER_H2 = /^## [^ ]/;
 const ANY_COMPONENTS_PREFIX = /^## Components/;
+const ANY_TESTING_PREFIX = /^## Testing/;
 const TABLE_ROW = /^[ \t]*\|/;
 const SEPARATOR_ROW = /^[ \t]*\|([ \t]*[:-]+[ \t]*\|)+[ \t]*$/;
 const BULLET_MARKER = /^[ \t]*[-*+][ \t]+/;
@@ -55,15 +60,14 @@ function pathTokensFrom(text: string): string[] {
   return out;
 }
 
-/** The `## Components` walk shared by extraction and the path lint: every source line in the section
- *  that yields path-like tokens, paired with the tokens it yielded, in document order. Extraction
- *  concatenates the tokens; the lint needs the source LINE too (the `[on-box]` tag is line-level). */
-function componentsPathsByLine(docText: string): { line: string; paths: string[] }[] {
+/** Walk one H2 section: every source line that yields path-like tokens, paired with the tokens it
+ *  yielded, in document order. */
+function sectionPathsByLine(docText: string, header: RegExp, prefix: RegExp): { line: string; paths: string[] }[] {
   const out: { line: string; paths: string[] }[] = [];
   let inSection = false;
   for (const record of docText.split("\n")) {
-    if (COMPONENTS_HEADER.test(record)) { inSection = true; continue; }
-    if (OTHER_H2.test(record) && !ANY_COMPONENTS_PREFIX.test(record)) { inSection = false; continue; }
+    if (header.test(record)) { inSection = true; continue; }
+    if (OTHER_H2.test(record) && !prefix.test(record)) { inSection = false; continue; }
     if (!inSection) continue;
     if (TABLE_ROW.test(record)) {
       if (SEPARATOR_ROW.test(record)) continue;
@@ -86,6 +90,12 @@ function componentsPathsByLine(docText: string): { line: string; paths: string[]
   return out;
 }
 
+/** The Components walk shared by extraction and the path lint. The lint needs the source line too
+ *  because the `[on-box]` tag is line-level. */
+function componentsPathsByLine(docText: string): { line: string; paths: string[] }[] {
+  return sectionPathsByLine(docText, COMPONENTS_HEADER, ANY_COMPONENTS_PREFIX);
+}
+
 /** Port of deploy_extract_components_paths (deploy-scope:26-55), extended (2026-06-10, 2026-06-19).
  *  Locates the `## Components` section and extracts: the first cell of every markdown table row, AND
  *  every path-like token of every NON-table line within it (bullets AND prose) — backticks stripped,
@@ -95,6 +105,13 @@ function componentsPathsByLine(docText: string): { line: string; paths: string[]
 export function extractComponentsPaths(docText: string): string[] {
   const out: string[] = [];
   for (const rec of componentsPathsByLine(docText)) out.push(...rec.paths);
+  return out;
+}
+
+/** Extract path-like tokens from the design's `## Testing` section with Components semantics. */
+export function extractTestingPaths(docText: string): string[] {
+  const out: string[] = [];
+  for (const rec of sectionPathsByLine(docText, TESTING_HEADER, ANY_TESTING_PREFIX)) out.push(...rec.paths);
   return out;
 }
 

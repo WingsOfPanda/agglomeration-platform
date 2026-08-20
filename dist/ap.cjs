@@ -20034,15 +20034,15 @@ function pathTokensFrom(text) {
   }
   return out;
 }
-function componentsPathsByLine(docText) {
+function sectionPathsByLine(docText, header, prefix) {
   const out = [];
   let inSection = false;
   for (const record of docText.split("\n")) {
-    if (COMPONENTS_HEADER.test(record)) {
+    if (header.test(record)) {
       inSection = true;
       continue;
     }
-    if (OTHER_H2.test(record) && !ANY_COMPONENTS_PREFIX.test(record)) {
+    if (OTHER_H2.test(record) && !prefix.test(record)) {
       inSection = false;
       continue;
     }
@@ -20064,9 +20064,17 @@ function componentsPathsByLine(docText) {
   }
   return out;
 }
+function componentsPathsByLine(docText) {
+  return sectionPathsByLine(docText, COMPONENTS_HEADER, ANY_COMPONENTS_PREFIX);
+}
 function extractComponentsPaths(docText) {
   const out = [];
   for (const rec of componentsPathsByLine(docText)) out.push(...rec.paths);
+  return out;
+}
+function extractTestingPaths(docText) {
+  const out = [];
+  for (const rec of sectionPathsByLine(docText, TESTING_HEADER, ANY_TESTING_PREFIX)) out.push(...rec.paths);
   return out;
 }
 function lintComponentsPaths(docText, root) {
@@ -20117,15 +20125,17 @@ function matchDiffAgainstComponents(diffPaths, compPaths) {
   }
   return out;
 }
-var import_node_fs34, import_node_path29, COMPONENTS_HEADER, OTHER_H2, ANY_COMPONENTS_PREFIX, TABLE_ROW, SEPARATOR_ROW, BULLET_MARKER, HEADER_CELL, HAS_SLASH, ENDS_WITH_EXT, ON_BOX_TAG;
+var import_node_fs34, import_node_path29, COMPONENTS_HEADER, TESTING_HEADER, OTHER_H2, ANY_COMPONENTS_PREFIX, ANY_TESTING_PREFIX, TABLE_ROW, SEPARATOR_ROW, BULLET_MARKER, HEADER_CELL, HAS_SLASH, ENDS_WITH_EXT, ON_BOX_TAG;
 var init_implementScope = __esm({
   "src/core/implementScope.ts"() {
     "use strict";
     import_node_fs34 = require("node:fs");
     import_node_path29 = require("node:path");
     COMPONENTS_HEADER = /^## Components[ \t]*$/;
+    TESTING_HEADER = /^## Testing[ \t]*$/;
     OTHER_H2 = /^## [^ ]/;
     ANY_COMPONENTS_PREFIX = /^## Components/;
+    ANY_TESTING_PREFIX = /^## Testing/;
     TABLE_ROW = /^[ \t]*\|/;
     SEPARATOR_ROW = /^[ \t]*\|([ \t]*[:-]+[ \t]*\|)+[ \t]*$/;
     BULLET_MARKER = /^[ \t]*[-*+][ \t]+/;
@@ -22334,14 +22344,19 @@ async function scopeCheckWith(topic, d) {
   const base = readField(baseFile);
   const diffPaths = d.runnerFor(targetCwd).run("git", ["diff", "--name-only", `${base}..HEAD`]).stdout.split("\n").filter((x) => x.length > 0);
   atomicWrite((0, import_node_path35.join)(art, "diff-paths.txt"), diffPaths.length ? diffPaths.join("\n") + "\n" : "");
-  const compPaths = extractComponentsPaths((0, import_node_fs39.readFileSync)(designFile, "utf8"));
+  const design = (0, import_node_fs39.readFileSync)(designFile, "utf8");
+  const compPaths = extractComponentsPaths(design);
+  const testingPaths = extractTestingPaths(design);
   atomicWrite((0, import_node_path35.join)(art, "components-paths.txt"), compPaths.length ? compPaths.join("\n") + "\n" : "");
-  if (compPaths.length === 0) log.warn("scope conformance: design declared 0 parseable component paths; ALL changed files flagged by default (guard no-op)");
-  const oos = matchDiffAgainstComponents(diffPaths, compPaths);
+  atomicWrite((0, import_node_path35.join)(art, "testing-paths.txt"), testingPaths.length ? testingPaths.join("\n") + "\n" : "");
+  const declaredPaths = [.../* @__PURE__ */ new Set([...compPaths, ...testingPaths])];
+  if (declaredPaths.length === 0) log.warn("scope conformance: design declared 0 parseable scope paths; ALL changed files flagged by default (guard no-op)");
+  const oos = matchDiffAgainstComponents(diffPaths, declaredPaths);
   const oosPath = (0, import_node_path35.join)(art, "scope-out-of-scope.txt");
   atomicWrite(oosPath, oos.length ? oos.join("\n") + "\n" : "");
   if (oos.length > 0) log.warn(`scope conformance: ${oos.length} out-of-scope path(s) detected`);
-  process.stdout.write(`SCOPE_DECLARED=${compPaths.length}
+  process.stdout.write(`SCOPE_DECLARED=${declaredPaths.length}
+TESTING_DECLARED=${testingPaths.length}
 OOS_COUNT=${oos.length}
 OOS_PATH=${oosPath}
 `);

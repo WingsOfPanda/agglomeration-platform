@@ -14,7 +14,7 @@ import {
   implementArtDir, iterTargets, assertImplementTopic, ImplementArgError,
 } from "../core/implement.js";
 import { isoUtc, archiveTopic } from "../core/archive.js";
-import { extractComponentsPaths, lintComponentsPaths, matchDiffAgainstComponents } from "../core/implementScope.js";
+import { extractComponentsPaths, extractTestingPaths, lintComponentsPaths, matchDiffAgainstComponents } from "../core/implementScope.js";
 import { runnerAt, preSnapshot, createOrResumeBranch, currentBranch, shortstat, finishBranchAction, hasDistinctBranch, targetProblem, type Runner } from "../core/gitwork.js";
 import { runForensics, runFlag, recordHubFlag } from "../core/forensics.js";
 import { haveCmd } from "../core/deps.js";
@@ -360,7 +360,7 @@ export interface ScopeDeps { runnerFor(cwd: string): Runner; }
 const liveScopeDeps: ScopeDeps = { runnerFor: runnerAt };
 async function scopeCheckRun(rest: string[]): Promise<number> { const topic = rest[0]; if (!topic) { log.error("usage: implement scope-check <topic>"); return 2; } return scopeCheckWith(topic, liveScopeDeps); }
 /**
- * Scope conformance: collect the diff path set, then match it against the design's Components
+ * Scope conformance: collect the diff path set, then match it against the design's declared scope
  * paths. Single-repo: the diff comes from `target_cwd.txt` + `branch-base.sha`.
  */
 export async function scopeCheckWith(topic: string, d: ScopeDeps): Promise<number> {
@@ -373,14 +373,18 @@ export async function scopeCheckWith(topic: string, d: ScopeDeps): Promise<numbe
   const base = readField(baseFile);
   const diffPaths = d.runnerFor(targetCwd).run("git", ["diff", "--name-only", `${base}..HEAD`]).stdout.split("\n").filter((x) => x.length > 0);
   atomicWrite(join(art, "diff-paths.txt"), diffPaths.length ? diffPaths.join("\n") + "\n" : "");
-  const compPaths = extractComponentsPaths(readFileSync(designFile, "utf8"));
+  const design = readFileSync(designFile, "utf8");
+  const compPaths = extractComponentsPaths(design);
+  const testingPaths = extractTestingPaths(design);
   atomicWrite(join(art, "components-paths.txt"), compPaths.length ? compPaths.join("\n") + "\n" : "");
-  if (compPaths.length === 0) log.warn("scope conformance: design declared 0 parseable component paths; ALL changed files flagged by default (guard no-op)");
-  const oos = matchDiffAgainstComponents(diffPaths, compPaths);
+  atomicWrite(join(art, "testing-paths.txt"), testingPaths.length ? testingPaths.join("\n") + "\n" : "");
+  const declaredPaths = [...new Set([...compPaths, ...testingPaths])];
+  if (declaredPaths.length === 0) log.warn("scope conformance: design declared 0 parseable scope paths; ALL changed files flagged by default (guard no-op)");
+  const oos = matchDiffAgainstComponents(diffPaths, declaredPaths);
   const oosPath = join(art, "scope-out-of-scope.txt");
   atomicWrite(oosPath, oos.length ? oos.join("\n") + "\n" : "");
   if (oos.length > 0) log.warn(`scope conformance: ${oos.length} out-of-scope path(s) detected`);
-  process.stdout.write(`SCOPE_DECLARED=${compPaths.length}\nOOS_COUNT=${oos.length}\nOOS_PATH=${oosPath}\n`); return 0;
+  process.stdout.write(`SCOPE_DECLARED=${declaredPaths.length}\nTESTING_DECLARED=${testingPaths.length}\nOOS_COUNT=${oos.length}\nOOS_PATH=${oosPath}\n`); return 0;
 }
 
 // ---- verify-tests (v1 hub-side independent test re-run, IN-PLACE in target_cwd) ----

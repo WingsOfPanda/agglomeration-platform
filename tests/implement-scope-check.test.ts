@@ -32,9 +32,11 @@ describe("implement scope-check (single-repo path locked)", () => {
         run: (_c: string, _a: string[]): RunResult => ({ code: 0, stdout: "src/a.ts\nelsewhere/rogue.ts\n" }),
       }),
     };
-    const rc = await scopeCheckWith("scope-s", deps);
+    const { rc, out } = await capture(() => scopeCheckWith("scope-s", deps));
     expect(rc).toBe(0);
+    expect(out).toContain("SCOPE_DECLARED=1\nTESTING_DECLARED=0\nOOS_COUNT=1\n");
     expect(readFileSync(join(art, "diff-paths.txt"), "utf8")).toBe("src/a.ts\nelsewhere/rogue.ts\n");
+    expect(readFileSync(join(art, "testing-paths.txt"), "utf8")).toBe("");
     expect(readFileSync(join(art, "scope-out-of-scope.txt"), "utf8")).toBe("elsewhere/rogue.ts\n");
     h.cleanup();
   });
@@ -49,21 +51,45 @@ describe("implement scope-check (single-repo path locked)", () => {
     h.cleanup();
   });
 
-  it("emits SCOPE_DECLARED=<n> on stdout when the design declares component paths", async () => {
+  it("unions Components and Testing paths, dedupes the count, and writes separate artifacts", async () => {
     const h = freshHome();
     const art = implementArtDir("scope-decl");
     mkdirSync(art, { recursive: true });
     writeFileSync(join(art, "target_cwd.txt"), "/repo/main\n");
     writeFileSync(join(art, "branch-base.sha"), "BASE\n");
-    writeFileSync(join(art, "design.md"), "# d\n\n## Components\n\n- `src/a.ts` — edit\n");
-    const deps = { runnerFor: (_cwd: string): Runner => ({ run: (): RunResult => ({ code: 0, stdout: "src/a.ts\n" }) }) };
+    writeFileSync(join(art, "design.md"),
+      "# d\n\n## Components\n\n- `src/a.ts` — edit\n\n## Testing\n\n- `src/a.ts` — shared\n- `tests/a.test.ts` — add\n");
+    const deps = { runnerFor: (_cwd: string): Runner => ({ run: (): RunResult => ({ code: 0, stdout: "tests/a.test.ts\n" }) }) };
     const { rc, out, err } = await capture(() => scopeCheckWith("scope-decl", deps));
     expect(rc).toBe(0);
-    expect(out).toContain("SCOPE_DECLARED=1\n");
+    expect(out).toContain("SCOPE_DECLARED=2\nTESTING_DECLARED=2\n");
     expect(out).toContain("OOS_COUNT=0\n");
+    expect(readFileSync(join(art, "components-paths.txt"), "utf8")).toBe("src/a.ts\n");
+    expect(readFileSync(join(art, "testing-paths.txt"), "utf8")).toBe("src/a.ts\ntests/a.test.ts\n");
+    expect(readFileSync(join(art, "scope-out-of-scope.txt"), "utf8")).toBe("");
     // The path lint lives at assemble/audit time only: scope-check never lints, even though this
     // design's `src/a.ts` does not exist in the checkout.
     expect(err).not.toContain("not found in this checkout");
+    h.cleanup();
+  });
+
+  it("Testing-only scope suppresses the zero-path warning and keeps the diff in scope", async () => {
+    const h = freshHome();
+    const art = implementArtDir("scope-testing-only");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "target_cwd.txt"), "/repo/main\n");
+    writeFileSync(join(art, "branch-base.sha"), "BASE\n");
+    writeFileSync(join(art, "design.md"),
+      "# d\n\n## Components\n\n## Testing\n\n- `tests/a.test.ts` — add\n");
+    const deps = { runnerFor: (_cwd: string): Runner => ({ run: (): RunResult => ({ code: 0, stdout: "tests/a.test.ts\n" }) }) };
+    const { rc, out, err } = await capture(() => scopeCheckWith("scope-testing-only", deps));
+    expect(rc).toBe(0);
+    expect(out).toContain("SCOPE_DECLARED=1\nTESTING_DECLARED=1\nOOS_COUNT=0\n");
+    expect(readFileSync(join(art, "diff-paths.txt"), "utf8")).toBe("tests/a.test.ts\n");
+    expect(readFileSync(join(art, "components-paths.txt"), "utf8")).toBe("");
+    expect(readFileSync(join(art, "testing-paths.txt"), "utf8")).toBe("tests/a.test.ts\n");
+    expect(readFileSync(join(art, "scope-out-of-scope.txt"), "utf8")).toBe("");
+    expect(err).toBe("");
     h.cleanup();
   });
 
@@ -78,8 +104,10 @@ describe("implement scope-check (single-repo path locked)", () => {
     const { rc, out, err } = await capture(() => scopeCheckWith("scope-empty", deps));
     expect(rc).toBe(0);
     expect(out).toContain("SCOPE_DECLARED=0\n");
+    expect(out).toContain("TESTING_DECLARED=0\n");
     expect(out).toContain("OOS_COUNT=1\n");
-    expect(err).toContain("0 parseable component paths");
+    expect(readFileSync(join(art, "testing-paths.txt"), "utf8")).toBe("");
+    expect(err).toContain("0 parseable scope paths");
     h.cleanup();
   });
 

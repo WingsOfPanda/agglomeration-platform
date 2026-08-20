@@ -3,7 +3,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { extractComponentsPaths, lintComponentsPaths, matchDiffAgainstComponents } from "../src/core/implementScope.js";
+import { extractComponentsPaths, extractTestingPaths, lintComponentsPaths, matchDiffAgainstComponents } from "../src/core/implementScope.js";
 
 function doc(...lines: string[]): string { return lines.join("\n") + "\n"; }
 
@@ -110,6 +110,33 @@ describe("extractComponentsPaths", () => {
   });
 });
 
+describe("extractTestingPaths", () => {
+  it("extracts Testing bullets, including directory form", () => {
+    const d = doc("## Testing", "- `tests/unit/a.test.ts` — run", "- `tests/rehearsal/` — run all");
+    expect(extractTestingPaths(d)).toEqual(["tests/unit/a.test.ts", "tests/rehearsal/"]);
+  });
+  it("extracts backticked and bare paths from Testing prose in document order", () => {
+    const d = doc("## Testing", "Run `tests/a.test.ts` before tests/b.test.ts.");
+    expect(extractTestingPaths(d)).toEqual(["tests/a.test.ts", "tests/b.test.ts"]);
+  });
+  it("extracts only the first cell of Testing table rows", () => {
+    const d = doc("## Testing", "| File | Note |", "| --- | --- |", "| `tests/a.test.ts` | not docs/ignored.md |");
+    expect(extractTestingPaths(d)).toEqual(["tests/a.test.ts"]);
+  });
+  it("accepts trailing heading whitespace and stops at the next H2", () => {
+    const d = doc("## Testing   ", "- tests/in.test.ts", "## Success Criteria", "- tests/out.test.ts");
+    expect(extractTestingPaths(d)).toEqual(["tests/in.test.ts"]);
+  });
+  it("returns [] when there is no Testing section", () => {
+    expect(extractTestingPaths(doc("## Components", "- src/a.ts"))).toEqual([]);
+  });
+  it("keeps Components extraction unchanged in a mixed document", () => {
+    const d = doc("## Components", "- src/a.ts", "## Testing", "- tests/a.test.ts");
+    expect(extractComponentsPaths(d)).toEqual(["src/a.ts"]);
+    expect(extractTestingPaths(d)).toEqual(["tests/a.test.ts"]);
+  });
+});
+
 describe("matchDiffAgainstComponents", () => {
   it("empty output when every diff path matches a comp path exactly", () => {
     expect(matchDiffAgainstComponents(["src/a.ts", "src/b.ts"], ["src/a.ts", "src/b.ts"])).toEqual([]);
@@ -154,6 +181,19 @@ describe("matchDiffAgainstComponents", () => {
   it("extension-less comp stays an implicit DIRECTORY, so a clean sibling FILE is still out of scope", () => {
     // 'src/core' has no extension -> rules 4/5 are gated off; rule 3 (implicit dir) governs.
     expect(matchDiffAgainstComponents(["src/other.ts"], ["src/core"])).toEqual(["src/other.ts"]);
+  });
+  it("Testing dir plus named files covers the xjp nine-path diff shape", () => {
+    const declared = extractTestingPaths(doc("## Testing",
+      "- `tests/rehearsal/`",
+      "- `tests/rehearsal-cmd.test.ts` and `tests/rehearsal-core.test.ts`",
+      "- `tests/rehearsal-result.test.ts` and `tests/rehearsal-inspector.test.ts`",
+      "- `tests/rehearsal-metric.test.ts` and `tests/rehearsal-template.test.ts`"));
+    const diff = [
+      "tests/rehearsal/a.test.ts", "tests/rehearsal/b.test.ts", "tests/rehearsal/deep/c.test.ts",
+      "tests/rehearsal-cmd.test.ts", "tests/rehearsal-core.test.ts", "tests/rehearsal-result.test.ts",
+      "tests/rehearsal-inspector.test.ts", "tests/rehearsal-metric.test.ts", "tests/rehearsal-template.test.ts",
+    ];
+    expect(matchDiffAgainstComponents(diff, declared)).toEqual([]);
   });
 });
 
