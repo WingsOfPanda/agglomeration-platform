@@ -379,7 +379,7 @@ export async function scopeCheckWith(topic: string, d: ScopeDeps): Promise<numbe
   atomicWrite(join(art, "components-paths.txt"), compPaths.length ? compPaths.join("\n") + "\n" : "");
   atomicWrite(join(art, "testing-paths.txt"), testingPaths.length ? testingPaths.join("\n") + "\n" : "");
   const declaredPaths = [...new Set([...compPaths, ...testingPaths])];
-  if (declaredPaths.length === 0) log.warn("scope conformance: design declared 0 parseable component paths; ALL changed files flagged by default (guard no-op)");
+  if (declaredPaths.length === 0) log.warn("scope conformance: design declared 0 parseable scope paths; ALL changed files flagged by default (guard no-op)");
   const oos = matchDiffAgainstComponents(diffPaths, declaredPaths);
   const oosPath = join(art, "scope-out-of-scope.txt");
   atomicWrite(oosPath, oos.length ? oos.join("\n") + "\n" : "");

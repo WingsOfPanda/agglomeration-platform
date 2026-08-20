@@ -107,7 +107,7 @@ describe("implement scope-check (single-repo path locked)", () => {
     expect(out).toContain("TESTING_DECLARED=0\n");
     expect(out).toContain("OOS_COUNT=1\n");
     expect(readFileSync(join(art, "testing-paths.txt"), "utf8")).toBe("");
-    expect(err).toContain("0 parseable component paths");
+    expect(err).toContain("0 parseable scope paths");
     h.cleanup();
   });
 
