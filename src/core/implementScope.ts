@@ -1,7 +1,7 @@
 // src/core/implementScope.ts
 //
 // SCOPE-CONFORMANCE guard for `implement` Phase A. Port of the prior bash plugin's scope-conformance
-// helpers (deploy-scope), EXTENDED in ap (deliberate divergence) twice:
+// helpers (deploy-scope), EXTENDED in ap (deliberate divergence) three times:
 //   - docs/superpowers/specs/2026-06-10-perform-scope-bullets-design.md — extractComponentsPaths also
 //     reads bullet-list Components, not only markdown table rows.
 //   - docs/superpowers/specs/2026-06-19-implement-scope-prose-and-sibling-design.md — extraction also
@@ -9,16 +9,19 @@
 //     matchDiffAgainstComponents tolerates a declared bare filename (basename match) and a
 //     same-directory sibling of a declared file (one directory level), so a worker that renames or
 //     splits a module in place is not flagged out-of-scope.
-// A third addition (2026-08-14-components-path-lint-design.md) sits beside the guard rather than in
+//   - docs/superpowers/specs/2026-08-20-scope-testing-paths-design.md — scope checks treat paths
+//     named in `## Testing` as declared scope with the same matching semantics as Components.
+// A separate addition (2026-08-14-components-path-lint-design.md) sits beside the guard rather than in
 // it: lintComponentsPaths, the warn-only authoring-time check that every declared path exists in the
 // checkout unless its line is tagged [on-box]. It never feeds the scope verdict.
 // deploy_extract_components_paths -> extractComponentsPaths,
 // deploy_match_diff_against_components -> matchDiffAgainstComponents. The Bash helpers read files via
 // awk; the TS ports take the already-read strings (file IO is the caller's concern). Table-row
 // first-cell extraction, section bounds, separator/header skip, the path heuristic, and the exact /
-// dir-prefix match rules are preserved; the prose/bullet token scan and the bare-name/sibling rules
-// are the documented divergences. All new rules STRICTLY WIDEN in-scope — they can only suppress an
-// OOS warning, never invent one, so they cannot turn a passing scope-check into a failing one.
+// dir-prefix match rules are preserved; the prose/bullet token scan, the Testing-section scope rule,
+// and the bare-name/sibling rules are the documented divergences. All new rules STRICTLY WIDEN
+// in-scope — they can only suppress an OOS warning, never invent one, so they cannot turn a passing
+// scope-check into a failing one.
 
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
