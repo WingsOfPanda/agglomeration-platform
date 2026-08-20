@@ -1,6 +1,6 @@
 // tests/quick-gitwork.test.ts
 import { describe, it, expect } from "vitest";
-import { classifyDirty, finishAutoAction } from "../src/core/gitwork.js";
+import { classifyDirty, finishAutoAction, currentBranch } from "../src/core/gitwork.js";
 import { preSnapshot, createOrResumeBranch, shortstat } from "../src/core/gitwork.js";
 import { finishBranch, stashPush, stashPopByMessage, stashPopOnBranch, findStashRef } from "../src/core/gitwork.js";
 import type { Runner, RunResult } from "../src/core/gitwork.js";
@@ -27,11 +27,30 @@ describe("gitwork pure decisions", () => {
   });
 });
 
+describe("currentBranch", () => {
+  const HEAD = "git symbolic-ref HEAD";
+  // The FULL ref, never `--short`: with a TAG of the same name in the repo, `--short` disambiguates
+  // by printing `heads/<name>`, and callers record that name or hand it back as `refs/heads/<name>`.
+  it("reads the full ref and strips its one refs/heads/ prefix", () => {
+    const { r, calls } = fakeRunner({ [HEAD]: { code: 0, stdout: "refs/heads/main\n" } });
+    expect(currentBranch(r)).toBe("main");
+    expect(calls).toEqual([["git", "symbolic-ref", "HEAD"]]);
+  });
+  it("a branch literally named heads/x keeps its name — only ONE prefix comes off", () => {
+    const { r } = fakeRunner({ [HEAD]: { code: 0, stdout: "refs/heads/heads/x\n" } });
+    expect(currentBranch(r)).toBe("heads/x");
+  });
+  it("any non-zero rc is the empty string: a detached HEAD reads as an unreadable repo", () => {
+    expect(currentBranch(fakeRunner({ [HEAD]: { code: 1, stdout: "" } }).r)).toBe("");
+    expect(currentBranch(fakeRunner({ [HEAD]: { code: 128, stdout: "" } }).r)).toBe("");
+  });
+});
+
 describe("preSnapshot", () => {
   it("clean tree: records branch + HEAD, no commit", () => {
     const { r, calls } = fakeRunner({
       "git rev-parse --git-dir": { code: 0, stdout: ".git\n" },
-      "git symbolic-ref --short HEAD": { code: 0, stdout: "main\n" },
+      "git symbolic-ref HEAD": { code: 0, stdout: "refs/heads/main\n" },
       "git rev-parse HEAD": { code: 0, stdout: "base111\n" },
       "git status --porcelain": { code: 0, stdout: "" },
     });
@@ -44,7 +63,7 @@ describe("preSnapshot", () => {
       run(cmd, args) {
         const k = [cmd, ...args].join(" ");
         if (k === "git rev-parse --git-dir") return { code: 0, stdout: ".git" };
-        if (k === "git symbolic-ref --short HEAD") return { code: 0, stdout: "main" };
+        if (k === "git symbolic-ref HEAD") return { code: 0, stdout: "refs/heads/main" };
         if (k === "git rev-parse HEAD") return { code: 0, stdout: head };
         if (k === "git status --porcelain") return { code: 0, stdout: " M a.ts" };
         if (k === "git add -A") return { code: 0, stdout: "" };
@@ -57,7 +76,7 @@ describe("preSnapshot", () => {
   it("hook-blocked: commit fails, falls back to pre-attempt HEAD, not fatal", () => {
     const { r } = fakeRunner({
       "git rev-parse --git-dir": { code: 0, stdout: ".git" },
-      "git symbolic-ref --short HEAD": { code: 0, stdout: "main" },
+      "git symbolic-ref HEAD": { code: 0, stdout: "refs/heads/main" },
       "git rev-parse HEAD": { code: 0, stdout: "pre999" },
       "git status --porcelain": { code: 0, stdout: " M a.ts" },
       "git commit -q -m chore: WIP before quick auth": { code: 1, stdout: "" },
@@ -67,7 +86,7 @@ describe("preSnapshot", () => {
   it("threads the command label into the WIP message (implement)", () => {
     const { r } = fakeRunner({
       "git rev-parse --git-dir": { code: 0, stdout: ".git" },
-      "git symbolic-ref --short HEAD": { code: 0, stdout: "main" },
+      "git symbolic-ref HEAD": { code: 0, stdout: "refs/heads/main" },
       "git rev-parse HEAD": { code: 0, stdout: "pre999" },
       "git status --porcelain": { code: 0, stdout: " M a.ts" },
       "git commit -q -m chore: WIP before implement auth": { code: 1, stdout: "" },
@@ -205,11 +224,11 @@ describe("stashPush / findStashRef / stashPopByMessage", () => {
   });
 
   describe("stashPopOnBranch (the HEAD precondition)", () => {
-    const HEAD = "git symbolic-ref --short HEAD";
-    const onMain = { [HEAD]: { code: 0, stdout: "main\n" }, [LIST]: { code: 0, stdout: ENTRY }, "git rev-parse stash@{0}": { code: 0, stdout: "d00a77d\n" } };
+    const HEAD = "git symbolic-ref HEAD";
+    const onMain = { [HEAD]: { code: 0, stdout: "refs/heads/main\n" }, [LIST]: { code: 0, stdout: ENTRY }, "git rev-parse stash@{0}": { code: 0, stdout: "d00a77d\n" } };
 
     it("HEAD is another branch: wrong-head, the stash list is never even read", () => {
-      const { r, calls } = fakeRunner({ ...onMain, [HEAD]: { code: 0, stdout: "feat/quick-auth\n" } });
+      const { r, calls } = fakeRunner({ ...onMain, [HEAD]: { code: 0, stdout: "refs/heads/feat/quick-auth\n" } });
       expect(stashPopOnBranch(r, "ap-quick-auth-wip", "d00a77d", "main")).toEqual({ outcome: "wrong-head", head: "feat/quick-auth" });
       expect(calls.some((c) => c[1] === "stash")).toBe(false);
     });

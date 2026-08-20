@@ -52,7 +52,12 @@ Two entry paths, decided once before Stage 0 — the same shape `/ap:implement` 
     **mechanical**: `quick finish` itself disables publication while a `_job` record exists for the
     topic, so a wrong instruction here cannot push anything.
   - **Budget.** Run `$CS job budget-check <SLUG>` before the verify pass and again before finishing.
-    Exit 1 means write `RESUME.md`, PARK a question, and stop.
+    Exit 1 means write `RESUME.md`, PARK a question, and stop. Run it as its **own** command and
+    branch on its rc before any `quick turn-send` or `send`: chained into one compound command that
+    also dispatches, the dispatch escapes before the verdict can stop it. And every flag, parked
+    message, or `RESUME.md` line that cites a budget number pastes the verb's raw `BUDGET=` /
+    `ELAPSED_H=` / `BUDGET_H=` lines verbatim — your paraphrase of a verb's output is not evidence
+    of what the verb said.
   - **Teardown stays per-agent.** Stage 3 already tears down with `$CS stop <AGENT> <SLUG>` (the
     `AGENT=` line from Stage 0 `init`); keep it that way and never reach for `$CS stop <SLUG>`. The
     topic form REFUSES (rc 1) while the job record exists, deliberately: you are a worker under this

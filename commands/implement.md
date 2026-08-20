@@ -99,7 +99,14 @@ Two further rules:
 
 - **Budget.** At every round boundary, `$CS job budget-check <TOPIC>`. Exit 1 means exhausted: write
   `$ART/RESUME.md`, PARK with a message naming the round reached and the last verdict, and stop.
-  Never continue past it; never discard the branch because of it.
+  Never continue past it; never discard the branch because of it. Two rules keep that gate real:
+  - Run it as its **own** command and branch on its rc before any `turn-send` or `send`. Chained
+    into one compound command that also dispatches (`$CS job budget-check <TOPIC> && $CS implement
+    turn-send ...`), the dispatch escapes before the verdict can stop it: the next round is already
+    running by the time you read `exceeded`.
+  - Every flag, parked message, and `RESUME.md` line that cites a budget number pastes the verb's
+    raw `BUDGET=` / `ELAPSED_H=` / `BUDGET_H=` lines verbatim. Your paraphrase of a verb's output is
+    not evidence of what the verb said.
 - **Rounds exhausted.** Stage 2's `VERDICT: FAIL` with `ROUND > MAX_ROUNDS` writes `RESUME.md` and
   PARKS rather than aborting — the branch and its work survive for the operator.
 

@@ -18696,8 +18696,8 @@ function finishAutoAction(remotes) {
   return remotes.trim().length > 0 ? "pr" : "keep";
 }
 function currentBranch(r) {
-  const head = r.run("git", ["symbolic-ref", "--short", "HEAD"]);
-  return head.code === 0 ? head.stdout.trim() : "";
+  const head = r.run("git", ["symbolic-ref", "HEAD"]);
+  return head.code === 0 ? head.stdout.trim().replace(/^refs\/heads\//, "") : "";
 }
 function preSnapshot(r, command, topic) {
   if (r.run("git", ["rev-parse", "--git-dir"]).code !== 0) return { branch: "", baseSha: "", state: "not-git" };
@@ -29525,6 +29525,7 @@ var init_bridge2 = __esm({
 // src/commands/job.ts
 var job_exports = {};
 __export(job_exports, {
+  finishHint: () => finishHint,
   run: () => run16,
   startWorktree: () => startWorktree,
   sweepWorktree: () => sweepWorktree
@@ -29714,13 +29715,14 @@ function finishHint(rec, r) {
   const commits = Number(count2.stdout.trim());
   if (count2.code !== 0 || !Number.isFinite(commits) || commits <= 0) return;
   const drift = rec.start_branch ? r.run("git", ["rev-list", "--count", `${rec.base_sha}..refs/heads/${rec.start_branch}`]) : null;
-  const driftCount = drift?.stdout.trim() ?? "";
-  const driftKnown = drift?.code === 0 && !!driftCount;
+  const driftText = drift?.stdout.trim() ?? "";
+  const driftCount = driftText === "" ? NaN : Number(driftText);
+  const driftKnown = drift?.code === 0 && Number.isFinite(driftCount);
   process.stdout.write(
     `FINISH=pending
 BRANCH=${branch}
 COMMITS=${commits}
-START_BRANCH=${driftKnown ? rec.start_branch : "?"}
+START_BRANCH=${rec.start_branch || "?"}
 DRIFT=${driftKnown ? driftCount : "?"}
 git push -u origin ${branch}
 gh pr create --head ${branch}

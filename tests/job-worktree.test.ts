@@ -10,9 +10,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
-import { run, startWorktree, sweepWorktree } from "../src/commands/job.js";
+import { finishHint, run, startWorktree, sweepWorktree } from "../src/commands/job.js";
 import { formatJob, jobPath, worktreePathFor, type JobRecord } from "../src/core/job.js";
-import { runnerAt, type Runner } from "../src/core/gitwork.js";
+import { currentBranch, runnerAt, type Runner } from "../src/core/gitwork.js";
 
 const TOPIC = "demo";
 
@@ -88,7 +88,7 @@ function record(root: string, over: Partial<JobRecord> = {}): JobRecord {
     provider: "codex", finish: "keep", budget_hours: 6, max_rounds: 5,
     args_file: "/tmp/args", started: "2026-08-18T00:00:00Z",
     worktree: worktreePathFor(root, TOPIC), base_sha: git(root, "rev-parse", "HEAD"),
-    start_branch: git(root, "symbolic-ref", "--short", "HEAD"),
+    start_branch: currentBranch(runnerAt(root)),
     ...over,
   };
 }
@@ -370,6 +370,54 @@ describe("job stop — the sweep and the FINISH hint, through the verb", () => {
     const { out } = await capture(() => run(["stop", TOPIC]));
     expect(out).toContain("FINISH=pending");
     expect(out).toContain("COMMITS=2");
+  });
+
+  // A TAG sharing the start branch's name is what `git symbolic-ref --short HEAD` disambiguates
+  // into `heads/<name>`. Recorded, that name sends the drift count at `refs/heads/heads/<name>` —
+  // a ref no repo has — and the hint degrades to `?` on a perfectly countable run.
+  it("a tag shadowing the start branch: the name is recorded clean and drift still counts", async () => {
+    const root = repo();
+    git(root, "branch", "-m", "trunk");
+    git(root, "tag", "trunk");
+    expect(git(root, "symbolic-ref", "--short", "HEAD")).toBe("heads/trunk");   // what ap must NOT record
+    const rec = await finishedRun(root, 2, 3);
+    expect(rec.start_branch).toBe("trunk");
+    const { rc, out } = await capture(() => run(["stop", TOPIC]));
+    expect(rc).toBe(0);
+    expect(out).toContain("START_BRANCH=trunk");
+    expect(out).toContain("DRIFT=3");
+  });
+
+  // The two lines degrade INDEPENDENTLY, as `commands/job.md` documents them: the name is known
+  // from the record alone, so a count that cannot be taken must not also erase it.
+  it("the drift count fails but the branch was recorded: the name still prints, the count is ?", async () => {
+    const root = repo();
+    const rec = await finishedRun(root, 2, 0);
+    seedJob({ ...rec, start_branch: "deleted-since" });      // rev-list on a ref that is gone exits non-zero
+    const { rc, out } = await capture(() => run(["stop", TOPIC]));
+    expect(rc).toBe(0);
+    expect(out).toContain("START_BRANCH=deleted-since");
+    expect(out).toContain("DRIFT=?");
+  });
+
+  // rc 0 is not the same as a number: git can succeed and put something else on stdout. `COMMITS`
+  // has always parsed rather than echoed; `DRIFT` does now too.
+  it("a rc-0 count that is not a number prints ?, and so does an empty one", async () => {
+    const root = repo();
+    const rec = await finishedRun(root, 2, 0);
+    const real = runnerAt(root);
+    const driftSays = (stdout: string): Runner => ({
+      run(cmd, args) {
+        if (args[0] === "rev-list" && args[2]?.includes("..refs/heads/")) return { code: 0, stdout };
+        return real.run(cmd, args);
+      },
+    });
+    for (const stdout of ["warning: something\n", "  \n"]) {
+      const { out } = await capture(() => { finishHint(rec, driftSays(stdout)); return 0; });
+      expect(out).toContain("COMMITS=2");
+      expect(out).toContain("START_BRANCH=main");
+      expect(out).toContain("DRIFT=?");
+    }
   });
 
   it("a pre-0.5.38 record keeps the hint but reports unknown start-branch drift", async () => {

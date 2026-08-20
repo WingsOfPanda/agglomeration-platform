@@ -93,7 +93,7 @@ describe("bridge branch", () => {
     seedInit("t", "/abs/repoB");
     const r = fakeRunner({
       "git rev-parse --git-dir": { code: 0 },
-      "git symbolic-ref --short HEAD": { stdout: "main\n" },
+      "git symbolic-ref HEAD": { stdout: "refs/heads/main\n" },
       "git rev-parse HEAD": { stdout: "deadbeef\n" },
       "git status --porcelain": { stdout: "" },
       "git show-ref": { code: 1 },              // branch doesn't exist yet
@@ -109,7 +109,7 @@ describe("bridge branch", () => {
     seedInit("t", "/abs/repoB");
     const r = fakeRunner({
       "git rev-parse --git-dir": { code: 0 },
-      "git symbolic-ref --short HEAD": { stdout: "feat/bridge-other\n" },
+      "git symbolic-ref HEAD": { stdout: "refs/heads/feat/bridge-other\n" },
       "git rev-parse HEAD": { stdout: "deadbeef\n" },
       "git status --porcelain": { stdout: "" },
     });
@@ -120,7 +120,7 @@ describe("bridge branch", () => {
     seedInit("t", "/abs/repoB");
     const r = fakeRunner({
       "git rev-parse --git-dir": { code: 0 },
-      "git symbolic-ref --short HEAD": { stdout: "feat/bridge-t\n" },
+      "git symbolic-ref HEAD": { stdout: "refs/heads/feat/bridge-t\n" },
       "git rev-parse HEAD": { stdout: "deadbeef\n" },
       "git status --porcelain": { stdout: "" },
       "git show-ref": { code: 0 },               // the branch is already there
@@ -288,7 +288,7 @@ describe("bridge branch: branch.txt records the branch the run ACTUALLY ended on
       calls.push([cmd, ...args]);
       const k = [cmd, ...args].join(" ");
       if (k === "git rev-parse --git-dir") return { code: 0, stdout: ".git" };
-      if (k === "git symbolic-ref --short HEAD") return head ? { code: 0, stdout: head } : { code: 128, stdout: "" };
+      if (k === "git symbolic-ref HEAD") return head ? { code: 0, stdout: `refs/heads/${head}` } : { code: 128, stdout: "" };
       if (k === "git rev-parse HEAD") return { code: 0, stdout: "base000" };
       if (k === "git status --porcelain") return { code: 0, stdout: "" };
       if (k === "git show-ref --verify --quiet refs/heads/feat/bridge-t") return { code: o.refExists ? 0 : 1, stdout: "" };
@@ -420,7 +420,7 @@ describe("bridge finish: the finisher's refusals are flagged for /ap:review", ()
       calls.push([cmd, ...args]);
       const k = [cmd, ...args].join(" ");
       if (k.startsWith("git show-ref")) return { code: refRc, stdout: "" };
-      if (k === "git symbolic-ref --short HEAD") return head ? { code: 0, stdout: head + "\n" } : { code: 128, stdout: "" };
+      if (k === "git symbolic-ref HEAD") return head ? { code: 0, stdout: `refs/heads/${head}\n` } : { code: 128, stdout: "" };
       if (k === `git checkout -q ${startBranch}`) return { code: checkoutRc, stdout: "" };
       if (k === "git remote") return { code: 0, stdout: "origin\n" };
       if (k === "git remote get-url origin") return { code: 0, stdout: "git@x:y.git\n" };

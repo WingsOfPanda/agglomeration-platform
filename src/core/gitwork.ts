@@ -43,10 +43,15 @@ export interface SnapshotResult {
 
 /** The checked-out branch, "" when there is none to name — a detached HEAD (symbolic-ref exits
  *  non-zero) reads the same as an unreadable repo. Each caller supplies its own wording for "",
- *  which is why this returns the empty string rather than picking one. */
+ *  which is why this returns the empty string rather than picking one.
+ *  The FULL ref is read and its one `refs/heads/` prefix stripped here rather than asking for
+ *  `--short`: when a TAG shares the branch's name, `--short` disambiguates by printing
+ *  `heads/<name>`, and every caller stores that name or hands it back to git as
+ *  `refs/heads/<name>` — which then resolves to nothing. A branch literally named `heads/x` still
+ *  reads as `heads/x`. */
 export function currentBranch(r: Runner): string {
-  const head = r.run("git", ["symbolic-ref", "--short", "HEAD"]);
-  return head.code === 0 ? head.stdout.trim() : "";
+  const head = r.run("git", ["symbolic-ref", "HEAD"]);
+  return head.code === 0 ? head.stdout.trim().replace(/^refs\/heads\//, "") : "";
 }
 
 /** Capture branch + base SHA; if the tree is dirty, commit a WIP snapshot on the current branch. */

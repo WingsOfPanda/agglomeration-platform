@@ -65,7 +65,7 @@ describe("implement pre-snapshot", () => {
     // status --porcelain (empty=clean) → state clean, baseSha = preSha.
     const r = fakeRunner({
       "git rev-parse --git-dir": { code: 0, stdout: ".git\n" },
-      "git symbolic-ref --short HEAD": { code: 0, stdout: "main\n" },
+      "git symbolic-ref HEAD": { code: 0, stdout: "refs/heads/main\n" },
       "git rev-parse HEAD": { code: 0, stdout: "ABC123\n" },
       "git status --porcelain": { code: 0, stdout: "" },
     });
