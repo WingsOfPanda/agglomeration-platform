@@ -22263,7 +22263,7 @@ async function branchWith2(a2, opts, runnerFor) {
     const r = runnerFor(cwd);
     let recorded;
     if (a2.noBranch) {
-      recorded = r.run("git", ["symbolic-ref", "--short", "HEAD"]).stdout.trim() || "(detached)";
+      recorded = currentBranch(r) || "(detached)";
       log.info(`branch: (--no-branch) staying on ${recorded} in ${cwd}`);
     } else if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${defaultBranch}`]).code === 0) {
       createOrResumeBranch(r, defaultBranch);
@@ -22273,7 +22273,7 @@ async function branchWith2(a2, opts, runnerFor) {
       log.info(`branch: created ${defaultBranch} in ${cwd}`);
       recorded = defaultBranch;
     } else {
-      recorded = r.run("git", ["symbolic-ref", "--short", "HEAD"]).stdout.trim() || "(detached)";
+      recorded = currentBranch(r) || "(detached)";
       log.warn(`branch: checkout -b failed in ${cwd}; staying on current branch`);
     }
     rows.push(`${slug}	${recorded}`);
@@ -22422,7 +22422,7 @@ async function summaryWith(topic, d) {
 }
 function postSweep(r, topic, baseline, post, ts) {
   const slug = kvField(baseline, "slug"), cwd = kvField(baseline, "cwd"), base = kvField(baseline, "branch");
-  const postBranch = r.run("git", ["symbolic-ref", "--short", "HEAD"]).stdout.trim() || "(detached)";
+  const postBranch = currentBranch(r) || "(detached)";
   const dirty = r.run("git", ["status", "--porcelain"]).stdout.trim();
   let state;
   if (!dirty) state = "no-leftovers";

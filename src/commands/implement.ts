@@ -15,7 +15,7 @@ import {
 } from "../core/implement.js";
 import { isoUtc, archiveTopic } from "../core/archive.js";
 import { extractComponentsPaths, lintComponentsPaths, matchDiffAgainstComponents } from "../core/implementScope.js";
-import { runnerAt, preSnapshot, createOrResumeBranch, shortstat, finishBranchAction, hasDistinctBranch, targetProblem, type Runner } from "../core/gitwork.js";
+import { runnerAt, preSnapshot, createOrResumeBranch, currentBranch, shortstat, finishBranchAction, hasDistinctBranch, targetProblem, type Runner } from "../core/gitwork.js";
 import { runForensics, runFlag, recordHubFlag } from "../core/forensics.js";
 import { haveCmd } from "../core/deps.js";
 import { implementState, composeRound1Prompt, composeFixPrompt } from "../core/implementTurn.js";
@@ -340,10 +340,10 @@ export async function branchWith(a: { topic: string; noBranch: boolean; branchNa
   for (const { slug, cwd } of iterTargets(a.topic, opts)) {
     if (!slug || !cwd) continue;
     const r = runnerFor(cwd); let recorded: string;
-    if (a.noBranch) { recorded = r.run("git", ["symbolic-ref", "--short", "HEAD"]).stdout.trim() || "(detached)"; log.info(`branch: (--no-branch) staying on ${recorded} in ${cwd}`); }
+    if (a.noBranch) { recorded = currentBranch(r) || "(detached)"; log.info(`branch: (--no-branch) staying on ${recorded} in ${cwd}`); }
     else if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${defaultBranch}`]).code === 0) { createOrResumeBranch(r, defaultBranch); log.info(`branch: resumed ${defaultBranch} in ${cwd}`); recorded = defaultBranch; }
     else if (createOrResumeBranch(r, defaultBranch)) { log.info(`branch: created ${defaultBranch} in ${cwd}`); recorded = defaultBranch; }
-    else { recorded = r.run("git", ["symbolic-ref", "--short", "HEAD"]).stdout.trim() || "(detached)"; log.warn(`branch: checkout -b failed in ${cwd}; staying on current branch`); }
+    else { recorded = currentBranch(r) || "(detached)"; log.warn(`branch: checkout -b failed in ${cwd}; staying on current branch`); }
     rows.push(`${slug}\t${recorded}`);
     const baseline = join(art, "baselines", `${slug}.tsv`);
     if (existsSync(baseline)) { const m = readFileSync(baseline, "utf8").match(/^baseline_sha=(.*)$/m); if (m) atomicWrite(join(art, "branch-base.sha"), m[1] + "\n"); }
@@ -451,7 +451,7 @@ export async function summaryWith(topic: string, d: SummaryDeps): Promise<number
 }
 function postSweep(r: Runner, topic: string, baseline: string, post: string, ts: string): void {
   const slug = kvField(baseline, "slug"), cwd = kvField(baseline, "cwd"), base = kvField(baseline, "branch");
-  const postBranch = r.run("git", ["symbolic-ref", "--short", "HEAD"]).stdout.trim() || "(detached)";
+  const postBranch = currentBranch(r) || "(detached)";
   const dirty = r.run("git", ["status", "--porcelain"]).stdout.trim();
   let state: string;
   if (!dirty) state = "no-leftovers";

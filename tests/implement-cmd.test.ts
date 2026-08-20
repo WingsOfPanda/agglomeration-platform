@@ -144,7 +144,7 @@ describe("implement branch", () => {
     seedTargetCwd(art, "/repo/main");
     mkdirSync(join(art, "baselines"), { recursive: true });
     writeFileSync(join(art, "baselines", "main.tsv"), "slug=main\nbranch=feat/implement-add-oauth\n");
-    const r = fakeRunner({ "git symbolic-ref --short HEAD": { code: 0, stdout: "feat/implement-add-oauth\n" } });
+    const r = fakeRunner({ "git symbolic-ref HEAD": { code: 0, stdout: "refs/heads/feat/implement-add-oauth\n" } });
     const { rc } = await capture(() => branchWith({ topic: TOPIC, noBranch: true }, {}, () => r));
     expect(rc).toBe(0);
     expect(readFileSync(join(art, "branch-mode.txt"), "utf8")).toBe("no-branch\n");
@@ -158,7 +158,7 @@ describe("implement branch", () => {
       run(cmd, args) {
         const key = [cmd, ...args].join(" ");
         if (key === "git checkout -q -b feat/implement-add-oauth") sawCheckoutB = true;
-        if (key === "git symbolic-ref --short HEAD") return { code: 0, stdout: "develop\n" };
+        if (key === "git symbolic-ref HEAD") return { code: 0, stdout: "refs/heads/develop\n" };
         return { code: 0, stdout: "" };
       },
     };
@@ -480,7 +480,7 @@ describe("implement summary", () => {
     writeFileSync(join(art, "baselines", "main.tsv"),
       `slug=main\ncwd=${cwd}\nbranch=main\nbaseline_sha=ABC\nstate=clean\nsnapshot_ts=2026-05-30T00:00:00Z\n`);
     const r = fakeRunner({
-      "git symbolic-ref --short HEAD": { code: 0, stdout: "main\n" },
+      "git symbolic-ref HEAD": { code: 0, stdout: "refs/heads/main\n" },
       "git status --porcelain": { code: 0, stdout: "" },          // empty → no-leftovers
       "git rev-parse HEAD": { code: 0, stdout: "DEF\n" },
       "git diff --shortstat ABC..HEAD": { code: 0, stdout: "" },

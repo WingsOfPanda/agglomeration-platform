@@ -33,9 +33,12 @@ verb's raw lines, not paraphrases.
 
 - **A1** (`src/core/gitwork.ts` `currentBranch`): derive from the FULL ref — `git symbolic-ref
   HEAD` — and strip one leading `refs/heads/`. Detached HEAD / error stays `""` (rc non-zero, same
-  as today). This fixes the tag-shadow class for every caller (all callers want the branch name;
-  none wants `--short`'s disambiguation prefix). A branch literally named `heads/x` now records
-  correctly as `heads/x`.
+  as today). A branch literally named `heads/x` now records correctly as `heads/x`.
+  **Amendment (implementation-time enumeration):** three call sites in `src/commands/implement.ts`
+  invoked `symbolic-ref --short` DIRECTLY (the two `recorded` fallbacks in the branch verb and
+  `postSweep`'s `postBranch`) and carried the same class; they are routed through `currentBranch(r)
+  || "(detached)"` so the fix closes the class everywhere. (The spec's original "every caller"
+  claim assumed all callers went through `currentBranch` — enumerate, don't assert.)
 - **A2** (`src/commands/job.ts` `finishHint`): print `START_BRANCH=${rec.start_branch || "?"}`
   independently of the drift computation. Compute `DRIFT=` as: `drift?.code === 0` AND the trimmed
   stdout parses `Number.isFinite` → the number; else `?`. (Matches the `COMMITS` discipline and
