@@ -397,9 +397,10 @@ Then `ROUND=$((ROUND+1))`, `RETRY=0`, and loop back to Stage 1.
 ## Stage 4 — scope check + summary + finish + teardown
 
 1. **Scope conformance.** `$CS implement scope-check <TOPIC>` (writes `scope-out-of-scope.txt`, prints
-   `SCOPE_DECLARED=`/`OOS_COUNT=`/`OOS_PATH=`). If `SCOPE_DECLARED=0`, the design declared no
-   parseable component paths, so the OOS list is the entire diff — a guard **no-op**, not a real
-   finding; prefer *Amend* (add a real Components table) and do NOT *Force-keep* the no-op. Otherwise,
+   `SCOPE_DECLARED=`/`TESTING_DECLARED=`/`OOS_COUNT=`/`OOS_PATH=`). Paths named in the design's
+   Testing section count as declared scope alongside Components paths. If `SCOPE_DECLARED=0`, the
+   design declared no parseable scope paths, so the OOS list is the entire diff — a guard **no-op**,
+   not a real finding; prefer *Amend* (add a real Components table) and do NOT *Force-keep* the no-op. Otherwise,
    if `OOS_COUNT > 0`, read the file and **AskUserQuestion** ("Amend the design / Send back to the
    worker / Force-keep"):
    - *Amend* — draft the new Components-table rows, present them, **Edit** `$ART/design.md` to insert

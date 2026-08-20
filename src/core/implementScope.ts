@@ -24,8 +24,10 @@ import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
 const COMPONENTS_HEADER = /^## Components[ \t]*$/;
+const TESTING_HEADER = /^## Testing[ \t]*$/;
 const OTHER_H2 = /^## [^ ]/;
 const ANY_COMPONENTS_PREFIX = /^## Components/;
+const ANY_TESTING_PREFIX = /^## Testing/;
 const TABLE_ROW = /^[ \t]*\|/;
 const SEPARATOR_ROW = /^[ \t]*\|([ \t]*[:-]+[ \t]*\|)+[ \t]*$/;
 const BULLET_MARKER = /^[ \t]*[-*+][ \t]+/;
@@ -55,15 +57,14 @@ function pathTokensFrom(text: string): string[] {
   return out;
 }
 
-/** The `## Components` walk shared by extraction and the path lint: every source line in the section
- *  that yields path-like tokens, paired with the tokens it yielded, in document order. Extraction
- *  concatenates the tokens; the lint needs the source LINE too (the `[on-box]` tag is line-level). */
-function componentsPathsByLine(docText: string): { line: string; paths: string[] }[] {
+/** Walk one H2 section: every source line that yields path-like tokens, paired with the tokens it
+ *  yielded, in document order. */
+function sectionPathsByLine(docText: string, header: RegExp, prefix: RegExp): { line: string; paths: string[] }[] {
   const out: { line: string; paths: string[] }[] = [];
   let inSection = false;
   for (const record of docText.split("\n")) {
-    if (COMPONENTS_HEADER.test(record)) { inSection = true; continue; }
-    if (OTHER_H2.test(record) && !ANY_COMPONENTS_PREFIX.test(record)) { inSection = false; continue; }
+    if (header.test(record)) { inSection = true; continue; }
+    if (OTHER_H2.test(record) && !prefix.test(record)) { inSection = false; continue; }
     if (!inSection) continue;
     if (TABLE_ROW.test(record)) {
       if (SEPARATOR_ROW.test(record)) continue;
@@ -86,6 +87,12 @@ function componentsPathsByLine(docText: string): { line: string; paths: string[]
   return out;
 }
 
+/** The Components walk shared by extraction and the path lint. The lint needs the source line too
+ *  because the `[on-box]` tag is line-level. */
+function componentsPathsByLine(docText: string): { line: string; paths: string[] }[] {
+  return sectionPathsByLine(docText, COMPONENTS_HEADER, ANY_COMPONENTS_PREFIX);
+}
+
 /** Port of deploy_extract_components_paths (deploy-scope:26-55), extended (2026-06-10, 2026-06-19).
  *  Locates the `## Components` section and extracts: the first cell of every markdown table row, AND
  *  every path-like token of every NON-table line within it (bullets AND prose) — backticks stripped,
@@ -95,6 +102,13 @@ function componentsPathsByLine(docText: string): { line: string; paths: string[]
 export function extractComponentsPaths(docText: string): string[] {
   const out: string[] = [];
   for (const rec of componentsPathsByLine(docText)) out.push(...rec.paths);
+  return out;
+}
+
+/** Extract path-like tokens from the design's `## Testing` section with Components semantics. */
+export function extractTestingPaths(docText: string): string[] {
+  const out: string[] = [];
+  for (const rec of sectionPathsByLine(docText, TESTING_HEADER, ANY_TESTING_PREFIX)) out.push(...rec.paths);
   return out;
 }
 
