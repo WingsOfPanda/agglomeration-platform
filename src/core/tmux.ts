@@ -44,6 +44,18 @@ export function sessionTarget(session: string): string { return `=${session}`; }
 const SESSION_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 export function validSessionName(s: string): boolean { return SESSION_NAME_RE.test(s); }
 
+export function displayMessageArgs(fmt: string): string[] { return ["display-message", "-p", fmt]; }
+
+/** What `display-message -p '#S'` said, reduced to a session name ap will RECORD: its first line,
+ *  trimmed, and only when tmux itself would accept it as a name. Anything else is "". The value is
+ *  interpolated into the job hub's brief, so a multi-line or exotic answer must not be carried
+ *  through — and an empty answer is a first-class outcome here (the hub simply skips its hint),
+ *  never an error. */
+export function parseSessionName(stdout: string): string {
+  const first = (stdout.split("\n")[0] ?? "").trim();
+  return validSessionName(first) ? first : "";
+}
+
 /** First worker into a detached session: create it. `-d` so it never steals the caller's terminal;
  *  `-P -F #{pane_id}` so this returns the same thing the split builders return. */
 export function newSessionArgs(session: string, launch: string, cwd?: string): string[] {
@@ -194,6 +206,16 @@ export async function sessionPaneIds(session: string): Promise<string[]> {
  *  the only evidence of what to finish. */
 export async function killSession(session: string): Promise<boolean> {
   try { await execa("tmux", killSessionArgs(session)); return true; } catch { return false; }
+}
+
+/** The tmux session THIS process is running inside, "" when there is none to name. Guarded by
+ *  `$TMUX` rather than asked unconditionally: outside tmux the server answers for whatever session
+ *  is current on it, which would record a stranger's name as the origin. Never throws — no server,
+ *  no binary, and an unusable answer all read as "no return address", which is exactly the state
+ *  the job hub is told to skip its completion hint on. */
+export async function currentSessionName(): Promise<string> {
+  if (!process.env.TMUX) return "";
+  try { return parseSessionName(await tmux(displayMessageArgs("#S"))); } catch { return ""; }
 }
 
 /** Does this EXACT session exist? Never throws: no tmux server and no tmux binary both answer "no",

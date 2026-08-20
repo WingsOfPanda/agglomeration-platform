@@ -81,6 +81,28 @@ describe("verifiableNonce", () => {
   });
 });
 
+describe("the origin session's own name — pure builder + parser", () => {
+  it("displayMessageArgs asks tmux to print one format, nothing else", () => {
+    expect(T.displayMessageArgs("#S")).toEqual(["display-message", "-p", "#S"]);
+  });
+
+  it("parseSessionName takes the first line, trimmed", () => {
+    expect(T.parseSessionName("ap-origin\n")).toBe("ap-origin");
+    expect(T.parseSessionName("  ap-origin  ")).toBe("ap-origin");
+    expect(T.parseSessionName("ap-origin\nsecond line\n")).toBe("ap-origin");
+  });
+
+  // This value is interpolated into the job hub's brief, so a name ap cannot vouch for is dropped
+  // rather than carried through: "" costs only the hint, and the hub is told to skip it.
+  it("anything tmux itself would not accept as a name reads as no return address", () => {
+    expect(T.parseSessionName("")).toBe("");
+    expect(T.parseSessionName("\n")).toBe("");
+    expect(T.parseSessionName("my session")).toBe("");
+    expect(T.parseSessionName("ORIGIN_SESSION=x")).toBe("");
+    expect(T.parseSessionName("-flaggy")).toBe("");
+  });
+});
+
 describe("validSessionName", () => {
   it("accepts the names ap actually mints", () => {
     expect(T.validSessionName("ap-foo")).toBe(true);

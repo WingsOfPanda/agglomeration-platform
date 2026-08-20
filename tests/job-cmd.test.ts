@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
@@ -73,11 +73,12 @@ describe("job verbs on a topic with no job", () => {
     home();
     expect(await run(["mode", "nosuch"])).toBe(1);
   });
-  it("status / attach / wait / relay all refuse a topic with no record", async () => {
+  // `wait` is deliberately NOT in this list: a watcher polls it, so a missing record is a
+  // stand-down it must SAY out loud (rc 0, JS=standdown) rather than a stderr-only refusal.
+  it("status / attach / relay all refuse a topic with no record", async () => {
     home();
     expect(await run(["status", "nosuch"])).toBe(1);
     expect(await run(["attach", "nosuch"])).toBe(1);
-    expect(await run(["wait", "nosuch"])).toBe(1);
     expect(await run(["relay", "nosuch", "hi"])).toBe(1);
   });
   // The hub branches on 0-vs-1 ("exit 1 means exhausted -> park"), so a record it cannot read has to
@@ -116,6 +117,142 @@ async function capture(fn: () => Promise<number>): Promise<{ rc: number; out: st
   try { const rc = await fn(); return { rc, out: out.join(""), err: err.join("") }; }
   finally { process.stdout.write = so; process.stderr.write = se; }
 }
+
+// The watcher's whole contract. A poll loop cannot tell "the run finished" from "I could not
+// execute" unless every answer is a line: on xjp a watcher whose claude binary had been replaced
+// mid-run spun silently for 22 minutes past the hub's `done`. So every path through the verb prints
+// exactly one JS= line, and the loop turns the one remaining silence — ap never ran — into
+// JS=unreachable.
+describe("job wait always speaks — exactly one JS= line per invocation", () => {
+  function seedOutbox(lines: Array<Record<string, unknown>>): void {
+    const p = outboxPath(REC.hub.agent, REC.hub.model, REC.topic);
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, lines.map((o) => JSON.stringify(o)).join("\n") + "\n");
+  }
+  const JS = (out: string): string[] => out.split("\n").filter((l) => l.startsWith("JS="));
+
+  it("no record: JS=standdown and rc 0 — from a watcher's seat the run is over", async () => {
+    home();
+    const { rc, out } = await capture(() => run(["wait", "nosuch"]));
+    expect(rc).toBe(0);
+    expect(JS(out)).toEqual(["JS=standdown"]);
+  });
+
+  it("a record that is present but unparseable: JS=torn, rc 1, and it names the file", async () => {
+    home();
+    const p = jobPath("demo");
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, "{half-writ");
+    const { rc, out, err } = await capture(() => run(["wait", "demo"]));
+    expect(rc).toBe(1);
+    expect(JS(out)).toEqual(["JS=torn"]);
+    expect(err).toContain(p);
+  });
+
+  // Fail closed, the 0.5.31 doctrine: an empty file is mid-write or truncated, never a stand-down.
+  it("an EMPTY record file is torn, not standdown", async () => {
+    home();
+    const p = jobPath("demo");
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, "");
+    const { rc, out } = await capture(() => run(["wait", "demo"]));
+    expect(rc).toBe(1);
+    expect(JS(out)).toEqual(["JS=torn"]);
+  });
+
+  it("a mistyped topic is torn too — a typo must never read as a finished run", async () => {
+    home();
+    const { rc, out } = await capture(() => run(["wait", "BAD TOPIC"]));
+    expect(rc).toBe(1);
+    expect(JS(out)).toEqual(["JS=torn"]);
+  });
+
+  it("a terminal event already in the outbox: JS=<event>, rc 0, question carrying its payload", async () => {
+    home();
+    seedJob();
+    seedOutbox([{ event: "done", summary: "shipped" }]);
+    const done = await capture(() => run(["wait", "demo"]));
+    expect(done.rc).toBe(0);
+    expect(JS(done.out)).toEqual(["JS=done"]);
+    seedOutbox([{ event: "question", message: "merge or keep?\nsay which" }]);
+    const q = await capture(() => run(["wait", "demo"]));
+    expect(q.rc).toBe(0);
+    expect(JS(q.out)).toEqual(["JS=question"]);
+    // percent-encoded, so the payload can never forge a second KV line at the watcher
+    expect(q.out).toContain("QUESTION=merge or keep?%0Asay which");
+  });
+
+  it("nothing to report before the budget expires: JS=timeout, rc 1", async () => {
+    home();
+    seedJob();
+    const prev = process.env.AP_JOB_WAIT_TIMEOUT_S;
+    process.env.AP_JOB_WAIT_TIMEOUT_S = "1";
+    try {
+      const { rc, out } = await capture(() => run(["wait", "demo"]));
+      expect(rc).toBe(1);
+      expect(JS(out)).toEqual(["JS=timeout"]);
+    } finally {
+      if (prev === undefined) delete process.env.AP_JOB_WAIT_TIMEOUT_S; else process.env.AP_JOB_WAIT_TIMEOUT_S = prev;
+    }
+  });
+});
+
+// Producer<->consumer contract: the watcher loop lives in prose, in two files, and the tokens it
+// branches on are printed by the verb above. Both must move together, and the loop itself must stay
+// one text — a fix applied to one directive and not the other is how the pair silently diverges.
+describe("job wait tokens <-> the directives' canonical loop", () => {
+  const md = (p: string) => readFileSync(join(process.cwd(), "commands", p), "utf8");
+  const implement = md("implement.md");
+  const quick = md("quick.md");
+  const LOOP = `   \`\`\`
+   Monitor(persistent: true, description: 'detached job <TOPIC>', command: '
+     while :; do
+       OUT=$($CS job wait <TOPIC> 2>/dev/null)
+       case "$OUT" in
+         *"JS=done"*|*"JS=error"*|*"JS=question"*) printf "%s\\n" "$OUT"; exit 0;;
+         *"JS=standdown"*) printf "JS=standdown\\n"; exit 0;;
+         *"JS=timeout"*) ;;
+         *) printf "JS=unreachable\\n%s\\n" "$OUT"; exit 1;;
+       esac
+     done')
+   \`\`\``;
+
+  it("both directives carry the loop, byte for byte", () => {
+    expect(implement, "implement.md's Monitor loop drifted from the canonical text").toContain(LOOP);
+    expect(quick, "quick.md's Monitor loop drifted from the canonical text").toContain(LOOP);
+  });
+
+  // The loop ran through `grep -E` until 0.5.43. On the box this fix comes from, grep resolved
+  // through the same shimmed binary that had broken — one dependency the watch does not need.
+  it("the loop shells out to nothing but ap itself", () => {
+    expect(LOOP).not.toContain("grep");
+    expect(LOOP).not.toContain("job mode");
+    // and the pre-0.5.43 shape is gone from both files, not merely joined by the new one
+    for (const text of [implement, quick]) {
+      expect(text).not.toContain("| grep -E");
+      expect(text).not.toContain("$CS job mode <TOPIC> >/dev/null");
+    }
+  });
+
+  it("every JS= token the verb can print is a documented branch in both directives", () => {
+    for (const tok of ["JS=done", "JS=error", "JS=question", "JS=timeout", "JS=standdown", "JS=torn", "JS=unreachable"]) {
+      // `JS=torn` reaches a reader only through the loop's catch-all, so it is the ONE token the
+      // prose need not name; the others are branches an origin hub has to know by name.
+      if (tok === "JS=torn") continue;
+      expect(implement, `implement.md documents no ${tok} branch`).toContain(tok);
+      expect(quick, `quick.md documents no ${tok} branch`).toContain(tok);
+    }
+  });
+
+  it("both carry the untrusted-hint rule for a push from the job hub", () => {
+    for (const [name, text] of [["implement.md", implement], ["quick.md", quick]] as const) {
+      expect(text, `${name} lost the hint rule`).toContain("HINT, never a verdict");
+      expect(text, `${name} must send the reader to the mechanical check`).toContain("job status");
+    }
+    expect(implement).toContain("implement flag");
+    expect(quick).toContain("quick flag");
+  });
+});
 
 describe("one namespace for the origin and its hub", () => {
   // Every state path derives from process.cwd(); the job hub is launched with cwd=repoRoot(). An
