@@ -191,9 +191,19 @@ export function startWorktree(root: string, topic: string, r: Runner): { worktre
   // the worker's own problem (D3), and a failure here is never fatal — the worker can still install.
   const deps = join(root, "node_modules");
   if (existsSync(deps)) {
-    const cp = r.run("cp", ["-al", deps, join(worktree, "node_modules")]);
-    if (cp.code !== 0) log.warn(`job start: could not hardlink-clone node_modules into ${worktree} (rc ${cp.code}) — the worker will have to install dependencies itself`);
-    else log.ok(`job start: hardlink-cloned node_modules into the worktree`);
+    const dest = join(worktree, "node_modules");
+    // First success wins, cheapest first. `cp -al` is GNU's hardlink clone and stays the ONLY call
+    // made on Linux; BSD cp (stock macOS) has no -l at all, so it falls through to `-c` (APFS
+    // clonefile: copy-on-write, as cheap as the hardlink) and then to a plain recursive copy. A
+    // failed attempt can leave a partial tree behind, which would make the next one copy INTO it.
+    const modes: Array<[string, string]> = [["-al", "hardlink-cloned"], ["-cR", "clone-copied"], ["-R", "copied"]];
+    let mode = "";
+    for (const [flag, label] of modes) {
+      if (r.run("cp", [flag, deps, dest]).code === 0) { mode = label; break; }
+      rmSync(dest, { recursive: true, force: true });
+    }
+    if (mode) log.ok(`job start: ${mode} node_modules into the worktree`);
+    else log.warn(`job start: could not clone node_modules into ${worktree} (cp -al, -cR and -R all failed) — the worker will have to install dependencies itself`);
   }
   if (classifyDirty(r.run("git", ["status", "--porcelain"]).stdout)) {
     log.warn(`job start: ${root} has UNCOMMITTED changes and they are NOT in the worktree — it forks committed HEAD (${baseSha.slice(0, 8)}). Nothing of yours was touched or stashed; the run simply will not see that work.`);

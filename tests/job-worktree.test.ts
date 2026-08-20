@@ -6,13 +6,13 @@
 // earlier on PATH makes every tmux call fail, which is the same answer a tmux-less CI box gives.
 import { describe, it, expect, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { run, startWorktree, sweepWorktree } from "../src/commands/job.js";
 import { formatJob, jobPath, worktreePathFor, type JobRecord } from "../src/core/job.js";
-import { runnerAt } from "../src/core/gitwork.js";
+import { runnerAt, type Runner } from "../src/core/gitwork.js";
 
 const TOPIC = "demo";
 
@@ -63,6 +63,22 @@ async function capture(fn: () => Promise<number> | number): Promise<{ rc: number
   process.stderr.write = ((s: string | Uint8Array) => { err.push(String(s)); return true; }) as typeof process.stderr.write;
   try { const rc = await fn(); return { rc, out: out.join(""), err: err.join("") }; }
   finally { process.stdout.write = so; process.stderr.write = se; }
+}
+
+/** The REAL git runner with only `cp` scripted: attempt N takes exit code `codes[N]` (0 past the
+ *  end) and its argv is recorded. Everything else — every git call startWorktree makes — is the
+ *  genuine article, so the fallback chain is exercised without needing a BSD cp to test against. */
+function cpScripted(root: string, codes: number[]): { r: Runner; calls: string[][] } {
+  const real = runnerAt(root);
+  const calls: string[][] = [];
+  const r: Runner = {
+    run(cmd, args) {
+      if (cmd !== "cp") return real.run(cmd, args);
+      calls.push(args);
+      return { code: codes[calls.length - 1] ?? 0, stdout: "" };
+    },
+  };
+  return { r, calls };
 }
 
 function record(root: string, over: Partial<JobRecord> = {}): JobRecord {
@@ -125,14 +141,60 @@ describe("startWorktree — the run gets its own checkout, the operator keeps th
     expect(git(root, "symbolic-ref", "--short", "HEAD")).toBe("operator-side-quest");
   });
 
-  it("hardlink-clones node_modules when there is one (same inode, no copy)", async () => {
+  it("clones node_modules when there is one (a shared inode where cp -al lands)", async () => {
     const root = repo();
     mkdirSync(join(root, "node_modules", "pkg"), { recursive: true });
-    writeFileSync(join(root, "node_modules", "pkg", "index.js"), "module.exports = 1;\n");
-    await capture(() => (startWorktree(root, TOPIC, runnerAt(root)) ? 0 : 1));
+    const src = join(root, "node_modules", "pkg", "index.js");
+    writeFileSync(src, "module.exports = 1;\n");
+    const { err } = await capture(() => (startWorktree(root, TOPIC, runnerAt(root)) ? 0 : 1));
     const cloned = join(worktreePathFor(root, TOPIC), "node_modules", "pkg", "index.js");
     expect(existsSync(cloned)).toBe(true);
-    expect(statSync(cloned).ino).toBe(statSync(join(root, "node_modules", "pkg", "index.js")).ino);
+    // The hardlink mode is GNU cp's, and where it lands the inode is literally shared — no bytes
+    // copied. A box whose cp has no -l (BSD/macOS) falls through to a copy and still gets the tree.
+    if (err.includes("hardlink-cloned")) expect(statSync(cloned).ino).toBe(statSync(src).ino);
+    else expect(readFileSync(cloned, "utf8")).toBe(readFileSync(src, "utf8"));
+  });
+
+  // A2: BSD cp has no -l at all, so a single `cp -al` meant every detached run on a mac lost its
+  // dependency tree. The chain must fall back — and must NOT cost Linux its one-call happy path.
+  it("Linux happy path: `cp -al` succeeds and is the ONLY cp call, argv verbatim", async () => {
+    const root = repo();
+    mkdirSync(join(root, "node_modules"), { recursive: true });
+    const { r, calls } = cpScripted(root, [0]);
+    const { err } = await capture(() => (startWorktree(root, TOPIC, r) ? 0 : 1));
+    expect(calls).toEqual([["-al", join(root, "node_modules"), join(worktreePathFor(root, TOPIC), "node_modules")]]);
+    expect(err).toContain("job start: hardlink-cloned node_modules into the worktree");
+  });
+
+  it("falls -al -> -cR -> -R on a cp without -l, and names the mode that landed", async () => {
+    const root = repo();
+    mkdirSync(join(root, "node_modules"), { recursive: true });
+    const { r, calls } = cpScripted(root, [64, 1, 0]);
+    const { err } = await capture(() => (startWorktree(root, TOPIC, r) ? 0 : 1));
+    expect(calls.map((a) => a[0])).toEqual(["-al", "-cR", "-R"]);
+    expect(err).toContain("job start: copied node_modules into the worktree");
+    expect(err).not.toContain("could not clone node_modules");
+  });
+
+  it("APFS clonefile: -al fails, -cR lands, and -R is never reached", async () => {
+    const root = repo();
+    mkdirSync(join(root, "node_modules"), { recursive: true });
+    const { r, calls } = cpScripted(root, [64, 0]);
+    const { err } = await capture(() => (startWorktree(root, TOPIC, r) ? 0 : 1));
+    expect(calls.map((a) => a[0])).toEqual(["-al", "-cR"]);
+    expect(err).toContain("job start: clone-copied node_modules into the worktree");
+  });
+
+  it("all three modes fail: warns, and the run still starts (the worker can install)", async () => {
+    const root = repo();
+    mkdirSync(join(root, "node_modules"), { recursive: true });
+    const { r, calls } = cpScripted(root, [1, 1, 1]);
+    const { rc, err } = await capture(() => (startWorktree(root, TOPIC, r) ? 0 : 1));
+    expect(calls.length).toBe(3);
+    expect(rc).toBe(0);
+    expect(err).toContain("could not clone node_modules");
+    expect(err).toContain("the worker will have to install dependencies itself");
+    expect(existsSync(worktreePathFor(root, TOPIC))).toBe(true);
   });
 
   // D2: the operator's uncommitted WIP stays out, and is neither stashed nor committed. Warning

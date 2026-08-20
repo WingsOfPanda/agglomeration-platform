@@ -18329,6 +18329,12 @@ function healthCheck() {
     log.warn("tmux session: not set \u2014 `tmux new -s ap` before spawning");
     warn = 1;
   }
+  if (haveCmd("timeout")) log.ok("timeout: GNU timeout");
+  else if (haveCmd("gtimeout")) log.ok("timeout: gtimeout (Homebrew coreutils)");
+  else {
+    log.warn("timeout: no timeout binary on PATH \u2014 hub test re-runs fall back to Node's built-in bound, which kills only the direct child (stray test grandchildren may linger on timeout). Install GNU coreutils (macOS: brew install coreutils) for a process-group kill.");
+    warn = 1;
+  }
   if ((0, import_node_fs23.existsSync)(root)) log.ok(`state dir: ${root} (writable)`);
   else {
     log.error(`state dir: ${root} cannot be created or is not writable`);
@@ -21748,6 +21754,7 @@ function classifyTestRun(testCmd, code) {
   if (testCmd === "") return "none";
   if (code === 0) return "pass";
   if (code === 124 || code === 137) return "unverifiable";
+  if (code === null) return "unverifiable";
   return "fail";
 }
 function parseWorkerDuration(body) {
@@ -21757,26 +21764,46 @@ function parseWorkerDuration(body) {
 function shouldSkipVerify(workerDurationS, maxS) {
   return workerDurationS !== null && workerDurationS > maxS;
 }
+function resolveTimeoutBin(have) {
+  if (have("timeout")) return "timeout";
+  if (have("gtimeout")) return "gtimeout";
+  return null;
+}
+function runBounded(bin, cwd, testCmd, timeoutS) {
+  const script = `${testCmd} 2>&1`;
+  try {
+    const output = bin !== null ? (0, import_node_child_process10.execFileSync)(bin, ["--kill-after=5", String(timeoutS), "bash", "-c", "--", script], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 64 * 1024 * 1024
+    }) : (0, import_node_child_process10.execFileSync)("bash", ["-c", "--", script], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 64 * 1024 * 1024,
+      timeout: timeoutS * 1e3,
+      killSignal: "SIGKILL"
+    });
+    return { code: 0, output };
+  } catch (e) {
+    const err = e;
+    const output = (err.stdout != null ? String(err.stdout) : "") + (err.stderr != null ? String(err.stderr) : "");
+    if (err.signal) return { code: 124, output };
+    if (typeof err.status === "number") return { code: err.status, output };
+    return { code: null, output: output || `${err.message ?? "the hub could not run the test command"} (${err.code ?? "spawn failed"})
+` };
+  }
+}
 var import_node_child_process10, liveTestRunner;
 var init_implementVerifyTests = __esm({
   "src/core/implementVerifyTests.ts"() {
     "use strict";
     import_node_child_process10 = require("node:child_process");
+    init_deps();
     liveTestRunner = {
       run(cwd, testCmd, timeoutS) {
-        try {
-          const output = (0, import_node_child_process10.execFileSync)("timeout", ["--kill-after=5", String(timeoutS), "bash", "-c", "--", `${testCmd} 2>&1`], {
-            cwd,
-            encoding: "utf8",
-            stdio: ["ignore", "pipe", "pipe"],
-            maxBuffer: 64 * 1024 * 1024
-          });
-          return { code: 0, output };
-        } catch (e) {
-          const err = e;
-          const output = (err.stdout != null ? String(err.stdout) : "") + (err.stderr != null ? String(err.stderr) : "");
-          return { code: typeof err.status === "number" ? err.status : 1, output };
-        }
+        return runBounded(resolveTimeoutBin(haveCmd), cwd, testCmd, timeoutS);
       }
     };
   }
@@ -29621,9 +29648,18 @@ function startWorktree(root, topic, r) {
   }
   const deps = (0, import_node_path55.join)(root, "node_modules");
   if ((0, import_node_fs50.existsSync)(deps)) {
-    const cp = r.run("cp", ["-al", deps, (0, import_node_path55.join)(worktree, "node_modules")]);
-    if (cp.code !== 0) log.warn(`job start: could not hardlink-clone node_modules into ${worktree} (rc ${cp.code}) \u2014 the worker will have to install dependencies itself`);
-    else log.ok(`job start: hardlink-cloned node_modules into the worktree`);
+    const dest = (0, import_node_path55.join)(worktree, "node_modules");
+    const modes = [["-al", "hardlink-cloned"], ["-cR", "clone-copied"], ["-R", "copied"]];
+    let mode = "";
+    for (const [flag, label] of modes) {
+      if (r.run("cp", [flag, deps, dest]).code === 0) {
+        mode = label;
+        break;
+      }
+      (0, import_node_fs50.rmSync)(dest, { recursive: true, force: true });
+    }
+    if (mode) log.ok(`job start: ${mode} node_modules into the worktree`);
+    else log.warn(`job start: could not clone node_modules into ${worktree} (cp -al, -cR and -R all failed) \u2014 the worker will have to install dependencies itself`);
   }
   if (classifyDirty(r.run("git", ["status", "--porcelain"]).stdout)) {
     log.warn(`job start: ${root} has UNCOMMITTED changes and they are NOT in the worktree \u2014 it forks committed HEAD (${baseSha.slice(0, 8)}). Nothing of yours was touched or stashed; the run simply will not see that work.`);

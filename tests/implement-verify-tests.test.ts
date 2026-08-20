@@ -1,12 +1,13 @@
 // tests/implement-verify-tests.test.ts — hub-side independent test re-run (v1, in-place).
 import { describe, it, expect } from "vitest";
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { implementArtDir } from "../src/core/implement.js";
-import { classifyTestRun, parseWorkerDuration, shouldSkipVerify, liveTestRunner, TEST_VERDICTS, type TestRunner } from "../src/core/implementVerifyTests.js";
+import { classifyTestRun, parseWorkerDuration, shouldSkipVerify, liveTestRunner, resolveTimeoutBin, runBounded, TEST_VERDICTS, type TestRunner } from "../src/core/implementVerifyTests.js";
 import { verifyTestsWith, type VerifyTestsDeps } from "../src/commands/implement.js";
+import { haveCmd } from "../src/core/deps.js";
 
 async function capture(fn: () => Promise<number>): Promise<{ rc: number; out: string; err: string }> {
   const out: string[] = []; const err: string[] = [];
@@ -36,11 +37,30 @@ describe("classifyTestRun (pure)", () => {
   it("exit 137 (timeout --kill-after SIGKILL) -> unverifiable (a kill-on-timeout is a timeout)", () => {
     expect(classifyTestRun("npm test", 137)).toBe("unverifiable");
   });
-  it("any other non-zero (incl. null) -> fail", () => {
+  it("any other non-zero -> fail", () => {
     expect(classifyTestRun("npm test", 1)).toBe("fail");
     expect(classifyTestRun("npm test", 127)).toBe("fail");
     expect(classifyTestRun("npm test", 143)).toBe("fail");   // external SIGTERM (not a timeout signal)
-    expect(classifyTestRun("npm test", null)).toBe("fail");
+  });
+  // A run that never happened is not evidence. Classifying a spawn failure (no timeout binary on
+  // PATH — every stock mac) as "fail" made the hub report its own non-execution as an authoritative
+  // test failure, every round, on an EMPTY hub log.
+  it("null (the runner could not run at all) -> unverifiable, never fail", () => {
+    expect(classifyTestRun("npm test", null)).toBe("unverifiable");
+  });
+});
+
+describe("resolveTimeoutBin (pure, injected PATH probe)", () => {
+  const have = (...present: string[]) => (cmd: string) => present.includes(cmd);
+  it("prefers GNU timeout when it is there", () => {
+    expect(resolveTimeoutBin(have("timeout", "gtimeout"))).toBe("timeout");
+    expect(resolveTimeoutBin(have("timeout"))).toBe("timeout");
+  });
+  it("falls back to gtimeout (Homebrew coreutils on macOS)", () => {
+    expect(resolveTimeoutBin(have("gtimeout"))).toBe("gtimeout");
+  });
+  it("neither -> null (stock macOS): the caller uses Node's own bound", () => {
+    expect(resolveTimeoutBin(have())).toBeNull();
   });
 });
 
@@ -86,6 +106,24 @@ describe("implement verify-tests (in-place hub re-run)", () => {
     h.cleanup();
   });
 
+  // The #143 shape: on a box with no timeout binary the hub's runner never executed, and the verb
+  // used to publish that as an authoritative FAIL on an EMPTY log. It is now an empty HUB_RC= and
+  // unverifiable, with the spawn error in the log where the operator will see it.
+  it("runner could not run at all (code null) -> VERDICT=unverifiable, empty HUB_RC, log has the error", async () => {
+    const h = freshHome();
+    const art = implementArtDir("vt-spawnfail");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "target_cwd.txt"), "/repo/main\n");
+    const runner: TestRunner = { run: () => ({ code: null, output: "spawnSync timeout ENOENT (ENOENT)\n" }) };
+    const { rc, out } = await capture(() => verifyTestsWith("vt-spawnfail", 3, deps(runner, "npm test")));
+    expect(rc).toBe(0);
+    expect(out).toContain("HUB_RC=\n");
+    expect(out).toContain("VERDICT=unverifiable\n");
+    expect(readFileSync(join(art, "hub-test-output-3.log"), "utf8")).toContain("ENOENT");
+    expect(readFileSync(join(art, "hub-verify-3.tsv"), "utf8")).toContain("hub_rc=\n");
+    h.cleanup();
+  });
+
   it("no test command -> VERDICT=none, no hub-test-output, runner NOT called", async () => {
     const h = freshHome();
     const art = implementArtDir("vt-none");
@@ -120,8 +158,9 @@ describe("implement verify-tests (in-place hub re-run)", () => {
 
 // The LIVE runner (real `timeout bash -c` exec) is what actually gates every implement verdict; the
 // verb tests above all inject a fake, so these exercise the exit-code capture, timeout (124) contract,
-// missing-command degradation, and stdout+stderr concatenation for real. Requires GNU `timeout` on
-// PATH (present on Linux + the CI runner).
+// missing-command degradation, and stdout+stderr concatenation for real. These pass with OR without
+// a timeout binary on PATH: without one the runner falls back to Node's own bound, which reports a
+// kill as the same 124.
 describe("liveTestRunner (real exec)", () => {
   const cwd = () => mkdtempSync(join(tmpdir(), "ltr-"));
 
@@ -157,6 +196,64 @@ describe("liveTestRunner (real exec)", () => {
     const d = cwd();
     writeFileSync(join(d, "marker.txt"), "");
     expect(liveTestRunner.run(d, "test -f marker.txt && echo FOUND", 10).output).toContain("FOUND");
+  });
+});
+
+// Every branch of the bound, by execution. The catch discipline below is written against error
+// shapes READ OFF REAL THROWS, not remembered: ENOENT -> {status: null, signal: null, code:
+// "ENOENT", stdout: null}; Node's own bound firing -> {status: null, signal: "SIGKILL", code:
+// "ETIMEDOUT"} with the partial stdout attached; an ordinary non-zero exit -> {status: <n>}.
+describe("runBounded (real exec, every branch)", () => {
+  const cwd = () => mkdtempSync(join(tmpdir(), "rb-"));
+  const realBin = resolveTimeoutBin(haveCmd);
+
+  // Linux is the primary platform and its happy path must not move: with a bounding binary, the
+  // argv is exactly what shipped before. Asserted through a RECORDING SHIM so the assertion is the
+  // argv itself and holds on a box with no GNU timeout at all.
+  it("with a bin: the argv is byte-identical to the pre-change GNU timeout command line", () => {
+    const d = cwd();
+    const record = join(d, "argv.txt");
+    const shim = join(d, "timeout-shim");
+    writeFileSync(shim, `#!/bin/sh\nprintf '%s\\n' "$@" > ${record}\necho SHIMMED\n`);
+    chmodSync(shim, 0o755);
+    const r = runBounded(shim, d, "npm test", 30);
+    expect(r.code).toBe(0);
+    expect(r.output).toContain("SHIMMED");
+    expect(readFileSync(record, "utf8").split("\n").slice(0, -1))
+      .toEqual(["--kill-after=5", "30", "bash", "-c", "--", "npm test 2>&1"]);
+  });
+
+  it.skipIf(realBin === null)("with this machine's real timeout binary: exit 7 -> code 7", () => {
+    expect(runBounded(realBin, cwd(), "exit 7", 30).code).toBe(7);
+  });
+
+  it.skipIf(realBin === null)("with this machine's real timeout binary: over the bound -> 124", () => {
+    expect(runBounded(realBin, cwd(), "sleep 60", 1).code).toBe(124);
+  });
+
+  it("no bin (stock macOS): the suite still RUNS under Node's bound", () => {
+    const r = runBounded(null, cwd(), "echo hi; exit 0", 30);
+    expect(r.code).toBe(0);
+    expect(r.output).toContain("hi");
+  });
+
+  it("no bin: the command's own exit code is still carried faithfully", () => {
+    expect(runBounded(null, cwd(), "exit 7", 30).code).toBe(7);
+  });
+
+  // Node kills with a SIGNAL and no status; mapping that onto 124 is what lets classifyTestRun stay
+  // a single timeout case across both bounds.
+  it("no bin: a run over the bound is killed and reported as 124, exactly like GNU timeout", () => {
+    const r = runBounded(null, cwd(), "sleep 60", 1);
+    expect(r.code).toBe(124);
+    expect(classifyTestRun("npm test", r.code)).toBe("unverifiable");
+  });
+
+  it("a bin that does not exist -> code null and a NON-EMPTY log, never a fail verdict", () => {
+    const r = runBounded("ap-no-such-bin-xyz", cwd(), "npm test", 30);
+    expect(r.code).toBeNull();
+    expect(r.output).toContain("ENOENT");
+    expect(classifyTestRun("npm test", r.code)).toBe("unverifiable");
   });
 });
 

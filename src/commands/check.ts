@@ -141,6 +141,16 @@ function healthCheck(): number {
     else { for (const l of diag.lines) log.warn(l); warn = 1; }
   } else { log.warn("tmux session: not set — `tmux new -s ap` before spawning"); warn = 1; }
 
+  // The hub bounds its own independent test re-run (`implement verify-tests`) with a timeout binary.
+  // Stock macOS ships none, and the run then falls back to Node's bound — worth naming here, because
+  // a check that only probes tmux reported OK on the box where every hub test re-run degraded.
+  if (haveCmd("timeout")) log.ok("timeout: GNU timeout");
+  else if (haveCmd("gtimeout")) log.ok("timeout: gtimeout (Homebrew coreutils)");
+  else {
+    log.warn("timeout: no timeout binary on PATH — hub test re-runs fall back to Node's built-in bound, which kills only the direct child (stray test grandchildren may linger on timeout). Install GNU coreutils (macOS: brew install coreutils) for a process-group kill.");
+    warn = 1;
+  }
+
   if (existsSync(root)) log.ok(`state dir: ${root} (writable)`);
   else { log.error(`state dir: ${root} cannot be created or is not writable`); fail = 1; }
 
