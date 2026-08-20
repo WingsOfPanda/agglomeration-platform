@@ -56,6 +56,39 @@ describe("job-hub identity template", () => {
     expect(hub).toContain("END_OF_INSTRUCTION");
   });
 
+  // The delta the origin's watcher backstop rests on: a second, in-process signal path, so a broken
+  // poll loop is no longer the only way a finished run can be noticed.
+  describe("the completion hint to the origin session", () => {
+    it("orders the outbox FIRST and the hint after — the record is never the thing that races", () => {
+      expect(hub).toContain("outbox FIRST, always");
+      expect(hub).toContain("append the outbox event first");
+    });
+
+    it("carries the fixed message template, verbatim, with both fill-ins named", () => {
+      expect(hub).toContain("[ap job <TOPIC>] JS=<event> — hint only; verify mechanically: ap job status <TOPIC> / job wait. The outbox is the record.");
+      expect(hub).toContain("with `<TOPIC>` replaced by `{{topic}}`");
+      expect(hub).toContain("That fixed template is the WHOLE message.");
+    });
+
+    // The push is the one channel the hub opens to a session that is not its own, so what may
+    // travel on it is closed by construction: nothing the run produced or read.
+    it("forbids carrying anything the run authored or read", () => {
+      expect(hub).toContain("Never add your summary, a worker's words, a file's");
+    });
+
+    it("is best-effort in every failure direction, and blocks nothing", () => {
+      expect(hub).toContain("only if `ORIGIN_SESSION` is non-empty");
+      expect(hub).toContain("skip it silently");
+      expect(hub).toContain("never retried");
+      expect(hub).toContain("never worth delaying, blocking, or failing the run over");
+    });
+
+    it("exists ONLY here — an ordinary worker is never told to message another session", () => {
+      expect(worker).not.toContain("ORIGIN_SESSION");
+      expect(worker).not.toContain("[ap job");
+    });
+  });
+
   it("carries no emoji (shipped output stays grep-able)", () => {
     expect(/\p{Extended_Pictographic}/u.test(hub)).toBe(false);
   });

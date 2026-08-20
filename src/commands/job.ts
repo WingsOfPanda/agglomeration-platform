@@ -18,7 +18,7 @@ import { validateSlug } from "../core/slug.js";
 import { envNum } from "../core/env.js";
 import { pickRandomAgent } from "../core/agents.js";
 import { deriveSlug } from "../core/quick.js";
-import { livePaneNonces, ownsPane, sessionExists, sessionPaneIds, killSession, validSessionName } from "../core/tmux.js";
+import { livePaneNonces, ownsPane, sessionExists, sessionPaneIds, killSession, validSessionName, currentSessionName } from "../core/tmux.js";
 import { paneMetaRead, paneMetaReadForDir, outboxPath, statusPath } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
 import { percentEncode } from "../core/questionCodec.js";
@@ -351,6 +351,10 @@ async function startRun(rest: string[], origCwd: string): Promise<number> {
   const root = repoRoot();
   const r = runnerAt(root);
   const startBranch = currentBranch(r);
+  // The return address for the hub's completion hint, captured here because this is the only moment
+  // the ORIGIN's own session is observable: the hub runs in a detached session of ap's making and
+  // could never name the one it was launched from. "" outside tmux, and "" is a legal record.
+  const originSession = await currentSessionName();
   const wt = useWorktree ? startWorktree(root, topic, r) : null;
   if (useWorktree && !wt) return 1;
 
@@ -363,6 +367,7 @@ async function startRun(rest: string[], origCwd: string): Promise<number> {
     provider, finish: "keep", budget_hours: budgetHours, max_rounds: maxRounds,
     args_file: argsFile, started: isoUtc(),
     worktree: wt?.worktree ?? "", base_sha: wt?.baseSha ?? "", start_branch: startBranch,
+    origin_session: originSession,
   };
   mkdirSync(jobDir(topic), { recursive: true });
   // The record is written BEFORE the spawn on purpose: a spawn that dies half-way leaves evidence
@@ -414,9 +419,35 @@ async function statusRun(rest: string[]): Promise<number> {
 
 // ---------- wait / relay / attach ----------
 
+/** The ONE verb a watcher loop reads mechanically, so it answers with exactly one `JS=` line on
+ *  every path it reaches — including the paths where there is no job to wait on. A watcher that
+ *  cannot execute at all prints nothing, and the canonical loop turns that silence into
+ *  `JS=unreachable`; anything ap itself decides must therefore SAY so, or "the run finished" and
+ *  "I could not run" stay indistinguishable (the xjp stuck-wait: 22 minutes of a dead poll loop
+ *  past the hub's `done`). `requireJob` is deliberately not used: its refusal is stderr-only. */
 async function waitRun(rest: string[]): Promise<number> {
-  const rec = requireJob(rest[0], "wait");
-  if (!rec) return 1;
+  const topic = rest[0];
+  // A mistyped topic reads as TORN, never as standdown: rc 1 and a loud line, because the one thing
+  // a typo must not do is look like a finished run and retire the watch.
+  if (!topic || !validateSlug(topic)) {
+    log.error(`job wait: topic must match [a-z0-9-]+ and be <= 32 chars; got: '${topic}'`);
+    process.stdout.write("JS=torn\n");
+    return 1;
+  }
+  // Absent record = the run is over from a watcher's point of view (`job stop` clears it), which is
+  // the stand-down the old loop inferred from a second `job mode` call and exited silently on.
+  if (!existsSync(J.jobPath(topic))) {
+    process.stdout.write("JS=standdown\n");
+    return 0;
+  }
+  // Present but unreadable is the fail-closed side, same doctrine as the 0.5.31 status gate: a torn
+  // or half-written record is an operator problem, and a quiet exit would bury it.
+  const rec = readJob(topic);
+  if (!rec) {
+    log.error(`job wait: the record at ${J.jobPath(topic)} exists but cannot be parsed — inspect it, or clear it with 'ap job stop ${topic}'`);
+    process.stdout.write("JS=torn\n");
+    return 1;
+  }
   const budget = envNum("AP_JOB_WAIT_TIMEOUT_S", 3600);
   const ev = await liveOutboxWait(rec.hub.agent, rec.hub.model, rec.topic, readCursor(rec.topic), ["done", "error", "question"], budget);
   if (!ev) { process.stdout.write("JS=timeout\n"); return 1; }

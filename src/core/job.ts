@@ -42,6 +42,11 @@ export interface JobRecord {
   base_sha?: string;
   /** The origin checkout's branch when the run forked; "" for detached or unreadable HEAD. */
   start_branch?: string;
+  /** The tmux session the operator launched from — the return address for the job hub's completion
+   *  hint. "" when the launch was not inside tmux (and absent in records written before 0.5.43),
+   *  which the hub reads as "no hint to send". A HINT only: the outbox stays the record, and the
+   *  origin verifies every push mechanically. */
+  origin_session?: string;
 }
 
 export function jobPath(topic: string): string { return join(jobDir(topic), "job.json"); }
@@ -94,10 +99,12 @@ export function parseJob(text: string): JobRecord | null {
     started: str(o.started),
     // Soft in BOTH directions: older records lack these keys and must stay readable across an
     // upgrade. `--no-worktree` records the first two empty; detached/unreadable HEAD records the
-    // start branch empty. Every consumer tests truthiness, so absent and "" behave alike.
+    // start branch empty; a launch outside tmux records no origin session. Every consumer tests
+    // truthiness, so absent and "" behave alike.
     worktree: str(o.worktree),
     base_sha: str(o.base_sha),
     start_branch: str(o.start_branch),
+    origin_session: str(o.origin_session),
   };
 }
 
@@ -279,6 +286,11 @@ export function jobBrief(j: JobRecord): string {
     `    budget      ${j.budget_hours}h — check at EVERY round boundary with:`,
     `                    ap job budget-check ${j.topic}`,
     `                exit 1 means exhausted: write RESUME.md, park a question, stop.`,
+    ``,
+    `Origin session — the operator's own tmux session, and the return address for the completion hint`,
+    `your identity file describes. Empty means there is none: send no hint, and change nothing else.`,
+    ``,
+    `    ORIGIN_SESSION=${j.origin_session ?? ""}`,
     ``,
     `No operator is watching this run. Never call AskUserQuestion. Wherever the directive says to ask`,
     `the user, PARK instead — append a question event to your outbox, set your status to idle, and`,

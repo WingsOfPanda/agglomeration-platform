@@ -9,6 +9,7 @@ const REC: J.JobRecord = {
   provider: "codex", finish: "keep", budget_hours: 6, max_rounds: 5,
   args_file: "/tmp/args", started: "2026-08-18T00:00:00Z",
   worktree: "/repo/.ap/worktrees/demo", base_sha: "f00dcafe", start_branch: "main",
+  origin_session: "ap-origin",
 };
 const owner = (paneId: string, nonce: string): PaneOwner => ({ paneId, nonce });
 
@@ -49,14 +50,16 @@ describe("job record codec", () => {
     expect(r.worktree).toBe("");
     expect(r.base_sha).toBe("");
     expect(r.start_branch).toBe("");
+    expect(r.origin_session).toBe("");   // pre-0.5.43: no return address, and the hub skips its hint
     expect(r.topic).toBe("demo");     // and everything else is unchanged
     expect(r.finish).toBe("keep");
   });
   it("non-string worktree fields are read as absent rather than carried through", () => {
-    const r = J.parseJob(JSON.stringify({ ...REC, worktree: 42, base_sha: null, start_branch: false }))!;
+    const r = J.parseJob(JSON.stringify({ ...REC, worktree: 42, base_sha: null, start_branch: false, origin_session: 7 }))!;
     expect(r.worktree).toBe("");
     expect(r.base_sha).toBe("");
     expect(r.start_branch).toBe("");
+    expect(r.origin_session).toBe("");
   });
 });
 
@@ -271,6 +274,17 @@ describe("jobBrief", () => {
     expect(none).not.toContain("WORKTREE");
     expect(none).not.toContain("--target");
   });
+  // The return address for the hub's completion hint. A run launched outside tmux has none, and the
+  // line is still rendered empty — the hub reads the empty value as "send no hint", which is a
+  // different instruction from a missing line it would have to interpret.
+  it("names the origin session, and renders the line empty rather than dropping it", () => {
+    expect(b).toContain("ORIGIN_SESSION=ap-origin");
+    const none = J.jobBrief({ ...REC, origin_session: "" });
+    expect(none).toContain("ORIGIN_SESSION=");
+    expect(none).not.toContain("ORIGIN_SESSION=ap-origin");
+    expect(J.jobBrief({ ...REC, origin_session: undefined })).toContain("ORIGIN_SESSION=");
+  });
+
   // The finish line is a literal, not a rendering of the record: `--finish` was removed 2026-08-18,
   // so a record carrying any other action (hand-edited, or written by an older ap) still briefs the
   // hub with the one legal ending.

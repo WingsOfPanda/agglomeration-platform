@@ -16660,6 +16660,13 @@ function sessionTarget(session) {
 function validSessionName(s) {
   return SESSION_NAME_RE.test(s);
 }
+function displayMessageArgs(fmt) {
+  return ["display-message", "-p", fmt];
+}
+function parseSessionName(stdout) {
+  const first = (stdout.split("\n")[0] ?? "").trim();
+  return validSessionName(first) ? first : "";
+}
 function newSessionArgs(session, launch, cwd) {
   const a2 = ["new-session", "-P", "-F", "#{pane_id}", "-d", "-s", session];
   if (cwd) a2.push("-c", cwd);
@@ -16761,6 +16768,14 @@ async function killSession(session) {
     return true;
   } catch {
     return false;
+  }
+}
+async function currentSessionName() {
+  if (!process.env.TMUX) return "";
+  try {
+    return parseSessionName(await tmux(displayMessageArgs("#S")));
+  } catch {
+    return "";
   }
 }
 async function sessionExists(session) {
@@ -17727,10 +17742,12 @@ function parseJob(text) {
     started: str2(o2.started),
     // Soft in BOTH directions: older records lack these keys and must stay readable across an
     // upgrade. `--no-worktree` records the first two empty; detached/unreadable HEAD records the
-    // start branch empty. Every consumer tests truthiness, so absent and "" behave alike.
+    // start branch empty; a launch outside tmux records no origin session. Every consumer tests
+    // truthiness, so absent and "" behave alike.
     worktree: str2(o2.worktree),
     base_sha: str2(o2.base_sha),
-    start_branch: str2(o2.start_branch)
+    start_branch: str2(o2.start_branch),
+    origin_session: str2(o2.origin_session)
   };
 }
 function classifyJobLiveness(live, owner) {
@@ -17838,6 +17855,11 @@ function jobBrief(j) {
     `    budget      ${j.budget_hours}h \u2014 check at EVERY round boundary with:`,
     `                    ap job budget-check ${j.topic}`,
     `                exit 1 means exhausted: write RESUME.md, park a question, stop.`,
+    ``,
+    `Origin session \u2014 the operator's own tmux session, and the return address for the completion hint`,
+    `your identity file describes. Empty means there is none: send no hint, and change nothing else.`,
+    ``,
+    `    ORIGIN_SESSION=${j.origin_session ?? ""}`,
     ``,
     `No operator is watching this run. Never call AskUserQuestion. Wherever the directive says to ask`,
     `the user, PARK instead \u2014 append a question event to your outbox, set your status to idle, and`,
@@ -29794,6 +29816,7 @@ async function startRun(rest, origCwd) {
   const root = repoRoot();
   const r = runnerAt(root);
   const startBranch = currentBranch(r);
+  const originSession = await currentSessionName();
   const wt = useWorktree ? startWorktree(root, topic, r) : null;
   if (useWorktree && !wt) return 1;
   const rec = {
@@ -29812,7 +29835,8 @@ async function startRun(rest, origCwd) {
     started: isoUtc(),
     worktree: wt?.worktree ?? "",
     base_sha: wt?.baseSha ?? "",
-    start_branch: startBranch
+    start_branch: startBranch,
+    origin_session: originSession
   };
   (0, import_node_fs50.mkdirSync)(jobDir(topic), { recursive: true });
   atomicWrite(jobPath(topic), formatJob(rec));
@@ -29873,8 +29897,22 @@ PARKED=${stillParked ? "yes" : "no"}
   return 0;
 }
 async function waitRun(rest) {
-  const rec = requireJob(rest[0], "wait");
-  if (!rec) return 1;
+  const topic = rest[0];
+  if (!topic || !validateSlug(topic)) {
+    log.error(`job wait: topic must match [a-z0-9-]+ and be <= 32 chars; got: '${topic}'`);
+    process.stdout.write("JS=torn\n");
+    return 1;
+  }
+  if (!(0, import_node_fs50.existsSync)(jobPath(topic))) {
+    process.stdout.write("JS=standdown\n");
+    return 0;
+  }
+  const rec = readJob(topic);
+  if (!rec) {
+    log.error(`job wait: the record at ${jobPath(topic)} exists but cannot be parsed \u2014 inspect it, or clear it with 'ap job stop ${topic}'`);
+    process.stdout.write("JS=torn\n");
+    return 1;
+  }
   const budget = envNum("AP_JOB_WAIT_TIMEOUT_S", 3600);
   const ev = await liveOutboxWait(rec.hub.agent, rec.hub.model, rec.topic, readCursor(rec.topic), ["done", "error", "question"], budget);
   if (!ev) {
