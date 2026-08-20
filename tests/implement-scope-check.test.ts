@@ -73,6 +73,26 @@ describe("implement scope-check (single-repo path locked)", () => {
     h.cleanup();
   });
 
+  it("Testing-only scope suppresses the zero-path warning and keeps the diff in scope", async () => {
+    const h = freshHome();
+    const art = implementArtDir("scope-testing-only");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "target_cwd.txt"), "/repo/main\n");
+    writeFileSync(join(art, "branch-base.sha"), "BASE\n");
+    writeFileSync(join(art, "design.md"),
+      "# d\n\n## Components\n\n## Testing\n\n- `tests/a.test.ts` — add\n");
+    const deps = { runnerFor: (_cwd: string): Runner => ({ run: (): RunResult => ({ code: 0, stdout: "tests/a.test.ts\n" }) }) };
+    const { rc, out, err } = await capture(() => scopeCheckWith("scope-testing-only", deps));
+    expect(rc).toBe(0);
+    expect(out).toContain("SCOPE_DECLARED=1\nTESTING_DECLARED=1\nOOS_COUNT=0\n");
+    expect(readFileSync(join(art, "diff-paths.txt"), "utf8")).toBe("tests/a.test.ts\n");
+    expect(readFileSync(join(art, "components-paths.txt"), "utf8")).toBe("");
+    expect(readFileSync(join(art, "testing-paths.txt"), "utf8")).toBe("tests/a.test.ts\n");
+    expect(readFileSync(join(art, "scope-out-of-scope.txt"), "utf8")).toBe("");
+    expect(err).toBe("");
+    h.cleanup();
+  });
+
   it("empty-scope: SCOPE_DECLARED=0 on stdout + a WARN, OOS still computed", async () => {
     const h = freshHome();
     const art = implementArtDir("scope-empty");
