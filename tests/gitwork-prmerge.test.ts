@@ -99,7 +99,7 @@ describe("finishBranchPrMerge", () => {
 
   it("a post-checkout hook failing after the switch still merges the PR (rc is not the switch)", () => {
     const log: string[] = [];
-    const r = fakeRunner({ ...BRANCH_EXISTS, "git remote": { stdout: "origin\n" }, "git remote get-url origin": { stdout: "u\n" }, "git checkout -q main": { code: 1 }, "git symbolic-ref --short HEAD": { stdout: "main\n" } }, log);
+    const r = fakeRunner({ ...BRANCH_EXISTS, "git remote": { stdout: "origin\n" }, "git remote get-url origin": { stdout: "u\n" }, "git checkout -q main": { code: 1 }, "git symbolic-ref HEAD": { stdout: "refs/heads/main\n" } }, log);
     expect(finishBranchPrMerge(r, opts)).toEqual({ action: "pr-merge", outcome: "pr-merged-pulled" });
     expect(log.join(" | ")).toMatch(/gh pr merge feat\/bridge-x --merge --delete-branch/);
   });

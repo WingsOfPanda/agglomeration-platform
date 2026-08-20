@@ -106,7 +106,7 @@ describe("quick branch (branchWith core)", () => {
       calls.push([cmd, ...args]);
       const k = [cmd, ...args].join(" ");
       if (k === "git rev-parse --git-dir") return { code: 0, stdout: ".git" };
-      if (k === "git symbolic-ref --short HEAD") return { code: 0, stdout: "main" };
+      if (k === "git symbolic-ref HEAD") return { code: 0, stdout: "refs/heads/main" };
       if (k === "git rev-parse HEAD") return { code: 0, stdout: "base000" };
       if (k === "git status --porcelain") return { code: 0, stdout: "" };
       if (k === "git show-ref --verify --quiet refs/heads/feat/quick-auth") return { code: 1, stdout: "" };
@@ -162,7 +162,7 @@ describe("quick branch --stash-wip", () => {
       calls.push([cmd, ...args]);
       const k = [cmd, ...args].join(" ");
       if (k === "git rev-parse --git-dir") return { code: 0, stdout: ".git" };
-      if (k === "git symbolic-ref --short HEAD") return { code: 0, stdout: "main" };
+      if (k === "git symbolic-ref HEAD") return { code: 0, stdout: "refs/heads/main" };
       if (k === "git rev-parse HEAD") return { code: 0, stdout: head };
       if (k.startsWith("git status --porcelain")) return { code: 0, stdout: dirty ? " M src/a.ts\n?? junk.txt\n" : "" };
       if (args[0] === "stash" && args[1] === "push") {
@@ -187,7 +187,7 @@ describe("quick branch --stash-wip", () => {
     expect(await branchWith("auth", "/proj", r)).toBe(0);
     expect(calls).toEqual([
       ["git", "rev-parse", "--git-dir"],
-      ["git", "symbolic-ref", "--short", "HEAD"],
+      ["git", "symbolic-ref", "HEAD"],
       ["git", "rev-parse", "HEAD"],
       ["git", "status", "--porcelain"],
       ["git", "add", "-A"],
@@ -211,7 +211,7 @@ describe("quick branch --stash-wip", () => {
       ["git", "rev-parse", "stash@{0}"],                                    // its sha = the park's identity, and it must have CHANGED
       ["git", "status", "--porcelain", "--untracked-files=all"],            // tree really empty?
       ["git", "rev-parse", "--git-dir"],                                    // preSnapshot from here on
-      ["git", "symbolic-ref", "--short", "HEAD"],
+      ["git", "symbolic-ref", "HEAD"],
       ["git", "rev-parse", "HEAD"],
       ["git", "status", "--porcelain"],
       ["git", "show-ref", "--verify", "--quiet", "refs/heads/feat/quick-auth"],
@@ -560,7 +560,7 @@ describe("quick finish: no-branch guard", () => {
       calls.push([cmd, ...args]);
       const k = [cmd, ...args].join(" ");
       if (k === "git show-ref --verify --quiet refs/heads/feat/quick-auth") return { code: refRc, stdout: "" };
-      if (k === "git symbolic-ref --short HEAD") return head ? { code: 0, stdout: head + "\n" } : { code: 128, stdout: "" };
+      if (k === "git symbolic-ref HEAD") return head ? { code: 0, stdout: `refs/heads/${head}\n` } : { code: 128, stdout: "" };
       if (k === "git remote") return { code: 0, stdout: "origin\n" };
       return { code: 0, stdout: "" };
     } };
@@ -666,7 +666,7 @@ describe("quick branch: branch.txt records the branch the run ACTUALLY ended on"
       calls.push([cmd, ...args]);
       const k = [cmd, ...args].join(" ");
       if (k === "git rev-parse --git-dir") return { code: 0, stdout: ".git" };
-      if (k === "git symbolic-ref --short HEAD") return head ? { code: 0, stdout: head } : { code: 128, stdout: "" };
+      if (k === "git symbolic-ref HEAD") return head ? { code: 0, stdout: `refs/heads/${head}` } : { code: 128, stdout: "" };
       if (k === "git rev-parse HEAD") return { code: 0, stdout: "base000" };
       if (k === "git status --porcelain") return { code: 0, stdout: "" };
       if (k === "git show-ref --verify --quiet refs/heads/feat/quick-auth") return { code: o.refExists ? 0 : 1, stdout: "" };
@@ -751,7 +751,7 @@ describe("quick finish: --stash-wip restore", () => {
     const r: Runner = { run(cmd, args) {
       calls.push([cmd, ...args]);
       const k = [cmd, ...args].join(" ");
-      if (k === "git symbolic-ref --short HEAD") return { code: o.headRc ?? 0, stdout: o.headRc ? "" : (o.head ?? "main") + "\n" };
+      if (k === "git symbolic-ref HEAD") return { code: o.headRc ?? 0, stdout: o.headRc ? "" : `refs/heads/${o.head ?? "main"}\n` };
       if (k === STASH_LIST) return { code: o.listRc ?? 0, stdout: o.entries ?? "stash@{0}\tOn main: ap-quick-auth-wip\n" };
       if (k === "git rev-parse stash@{0}") return { code: 0, stdout: (o.sha ?? "stash999") + "\n" };
       if (args[0] === "stash" && args[1] === "pop") return { code: o.popOk === false ? 1 : 0, stdout: "" };

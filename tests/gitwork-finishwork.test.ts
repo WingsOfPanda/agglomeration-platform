@@ -97,7 +97,7 @@ describe("finishWork: a refused base checkout fails closed", () => {
   // binary, husky) fails AFTER git has switched. Position is read back, so a healthy finish that
   // merely tripped a hook still merges.
   it("a post-checkout hook failing after the switch is NOT a refusal — the merge still happens", () => {
-    const { r, calls } = fakeRunner({ ...BLOCKED, "git symbolic-ref --short HEAD": { code: 0, stdout: "main\n" } });
+    const { r, calls } = fakeRunner({ ...BLOCKED, "git symbolic-ref HEAD": { code: 0, stdout: "refs/heads/main\n" } });
     expect(finishWork(r, opts({ action: "merge" }))).toEqual({ action: "merge", outcome: "merged" });
     expect(calls).toContainEqual(["git", "merge", "--no-edit", "-q", "feat/x"]);
   });

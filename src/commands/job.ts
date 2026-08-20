@@ -272,7 +272,7 @@ export function sweepWorktree(rec: J.JobRecord, root: string, r: Runner): boolea
  *  the further that branch has moved, the less that verification says about a merge today. A PR
  *  re-tests against the updated starting branch; a local merge does not, which is why only the PR
  *  commands are offered. */
-function finishHint(rec: J.JobRecord, r: Runner): void {
+export function finishHint(rec: J.JobRecord, r: Runner): void {
   if (!rec.base_sha) return;
   const branch = branchNameFor(rec.command, rec.topic);
   if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]).code !== 0) return;
@@ -282,11 +282,16 @@ function finishHint(rec: J.JobRecord, r: Runner): void {
   const drift = rec.start_branch
     ? r.run("git", ["rev-list", "--count", `${rec.base_sha}..refs/heads/${rec.start_branch}`])
     : null;
-  const driftCount = drift?.stdout.trim() ?? "";
-  const driftKnown = drift?.code === 0 && !!driftCount;
+  // The two degrade independently, as `commands/job.md` documents them: the recorded name is known
+  // from the record alone, so a count that fails (branch deleted, unreadable ref, git noise on
+  // stdout) must not also erase the name the operator needs to read the hint. The count is parsed
+  // rather than echoed — the same discipline COMMITS gets above — so `DRIFT=` is a number or `?`.
+  const driftText = drift?.stdout.trim() ?? "";
+  const driftCount = driftText === "" ? NaN : Number(driftText);
+  const driftKnown = drift?.code === 0 && Number.isFinite(driftCount);
   process.stdout.write(
     `FINISH=pending\nBRANCH=${branch}\nCOMMITS=${commits}\n` +
-    `START_BRANCH=${driftKnown ? rec.start_branch : "?"}\n` +
+    `START_BRANCH=${rec.start_branch || "?"}\n` +
     `DRIFT=${driftKnown ? driftCount : "?"}\n` +
     `git push -u origin ${branch}\n` +
     `gh pr create --head ${branch}\n`);
