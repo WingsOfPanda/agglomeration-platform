@@ -17,6 +17,10 @@
 // So does pathsInvisibleInTarget (2026-08-23-worktree-truth-telling-design.md): the declared paths
 // that exist in the MAIN checkout and are missing in a worktree run's target. Also warn-only, and
 // also never part of the scope verdict.
+// And so does testingBulletsWithoutPaths (2026-08-23-brief-path-correctness-design.md): how many
+// `## Testing` bullets name no path at all, measured at `implement audit` so incomplete authoring is
+// visible BEFORE a worker runs rather than as an OOS surprise at Stage 4. That same doc adds the
+// decoration strip inside pathTokensFrom (paired emphasis + markdown links), which is widening-only.
 // deploy_extract_components_paths -> extractComponentsPaths,
 // deploy_match_diff_against_components -> matchDiffAgainstComponents. The Bash helpers read files via
 // awk; the TS ports take the already-read strings (file IO is the caller's concern). Table-row
@@ -48,17 +52,64 @@ function parentOf(p: string): string { const i = p.lastIndexOf("/"); return i < 
 /** The final path segment (everything after the last "/"), the whole string when there is no "/". */
 function baseOf(p: string): string { const i = p.lastIndexOf("/"); return i < 0 ? p : p.slice(i + 1); }
 
-/** Extract every path-like token from a free-form bullet line: strip backticks, split on
- *  whitespace, trim surrounding punctuation (leading ([{"' ; trailing )]}"',.;:!? — a trailing
- *  "/" is deliberately KEPT so a directory component retains its dir-prefix match semantics), and
- *  keep tokens that look like a path (contain "/" OR end with ".ext"). Unlike the table branch
- *  (first cell only), bullets are unstructured prose, so all tokens are scanned. */
-function pathTokensFrom(text: string): string[] {
+/** Markdown inline link, collapsed to its TARGET before the split: the target is where a path lives
+ *  in `[label](src/a.ts)`, and a label with spaces would otherwise be torn into separate tokens by
+ *  the whitespace split, leaving the unmatchable tail `label](src/a.ts`. Applied to the whole line
+ *  (not per token) for exactly that reason. */
+const MD_LINK = /\[[^\]\n]*\]\(([^)\s]*)\)/g;
+/** Single-character emphasis markers, peeled one PAIRED layer at a time (so `**x**` takes two
+ *  passes, `_x_` one). `__` needs no entry of its own for the same reason. */
+const EMPHASIS = ["*", "_"];
+
+/** Strip PAIRED markdown emphasis wrappers from one token. STRICTLY paired at both ends and never
+ *  one-sided: `_quick/topic-text.txt` opens with `_` and does not close with one, so it survives
+ *  intact — that exact string is the state-relative citation `quick branch`'s brief lint exists to
+ *  catch, and a one-sided strip would eat the evidence. A bare `snake_case_name.py` is untouched for
+ *  the same reason (no leading marker at all). */
+function stripEmphasis(tok: string): string {
+  let s = tok;
+  for (;;) {
+    let next = s;
+    for (const m of EMPHASIS) {
+      if (s.length > 2 && s.startsWith(m) && s.endsWith(m)) { next = s.slice(1, -1); break; }
+    }
+    if (next === s) return s;
+    s = next;
+  }
+}
+
+/** Extract every path-like token from a free-form bullet line: strip backticks, collapse markdown
+ *  links to their target, split on whitespace, trim surrounding punctuation (leading ([{"' ;
+ *  trailing )]}"',.;:!? — a trailing "/" is deliberately KEPT so a directory component retains its
+ *  dir-prefix match semantics), peel paired emphasis wrappers, and keep tokens that look like a path
+ *  (contain "/" OR end with ".ext"). Unlike the table branch (first cell only), bullets are
+ *  unstructured prose, so all tokens are scanned.
+ *
+ *  The decoration strip (2026-08-23-brief-path-correctness-design.md, C4) is WIDENING-ONLY: the
+ *  tokens it changes — `**tests/a.test.ts**`, `label](tests/a.test.ts` — are strings no diff path can
+ *  ever equal, so no scope-check that passes today can start failing. Exported because `quick
+ *  branch`'s brief lint scans a free-form brief that has no `## Components`/`## Testing` section to
+ *  walk; it needs the token heuristic, not the section walk. */
+export function pathTokensFrom(text: string): string[] {
   const out: string[] = [];
-  for (const raw of text.replace(/`/g, "").split(/\s+/)) {
-    const tok = raw.replace(/^[(\[{"']+/, "").replace(/[)\]}"',.;:!?]+$/, "");
+  for (const raw of text.replace(/`/g, "").replace(MD_LINK, "$1").split(/\s+/)) {
+    const trimmed = raw.replace(/^[(\[{"']+/, "").replace(/[)\]}"',.;:!?]+$/, "");
+    const tok = stripEmphasis(trimmed);
     if (tok === "") continue;
     if (HAS_SLASH.test(tok) || ENDS_WITH_EXT.test(tok)) out.push(tok);
+  }
+  return out;
+}
+
+/** Walk one H2 section: its source lines, in document order, heading excluded. Shared by the path
+ *  walk below and the Testing-bullet count, so the section bounds have one implementation. */
+function sectionLines(docText: string, header: RegExp, prefix: RegExp): string[] {
+  const out: string[] = [];
+  let inSection = false;
+  for (const record of docText.split("\n")) {
+    if (header.test(record)) { inSection = true; continue; }
+    if (OTHER_H2.test(record) && !prefix.test(record)) { inSection = false; continue; }
+    if (inSection) out.push(record);
   }
   return out;
 }
@@ -67,11 +118,7 @@ function pathTokensFrom(text: string): string[] {
  *  yielded, in document order. */
 function sectionPathsByLine(docText: string, header: RegExp, prefix: RegExp): { line: string; paths: string[] }[] {
   const out: { line: string; paths: string[] }[] = [];
-  let inSection = false;
-  for (const record of docText.split("\n")) {
-    if (header.test(record)) { inSection = true; continue; }
-    if (OTHER_H2.test(record) && !prefix.test(record)) { inSection = false; continue; }
-    if (!inSection) continue;
+  for (const record of sectionLines(docText, header, prefix)) {
     if (TABLE_ROW.test(record)) {
       if (SEPARATOR_ROW.test(record)) continue;
       let line = record;
@@ -118,6 +165,46 @@ export function extractTestingPaths(docText: string): string[] {
   return out;
 }
 
+/** A declared token that names a FILE (carries an extension) or an explicit directory (trailing
+ *  `/`) — as opposed to a slash-bearing prose fragment like `Spec/metrics` or `D15/D16/D17`. */
+function fileShaped(tok: string): boolean {
+  return ENDS_WITH_EXT.test(tok) || tok.endsWith("/");
+}
+
+/** Split the `## Testing` section's BULLETS by whether the bullet names a TEST FILE
+ *  (2026-08-23-brief-path-correctness-design.md, C3). The first 0.5.44 field run reported
+ *  `OOS_COUNT=2` against `TESTING_DECLARED=10` because two bullets were pure behavior prose
+ *  ("loss-contract gate enrollment") naming no file, while the ten that parsed spelled the path out.
+ *  The parser was right and the authoring was incomplete, so the measurement is PER BULLET: a
+ *  section-level "parsed zero paths" check would not have fired on that doc at all.
+ *
+ *  FILE-SHAPED, not merely path-shaped, and that distinction is the whole signal. Measured against
+ *  the verbatim field section, `pathTokensFrom` alone scores the very bullet that omitted
+ *  `tests/spec/test_tasks.py` as having a path, because `Spec/metrics`, `value_range/aux_shape` and
+ *  `elif/raise` are slash-bearing PROSE. A counter that cannot see the case it was built for is
+ *  decoration, so a bullet counts as declaring only when some token carries a file extension or is
+ *  an explicit trailing-`/` directory. On that same section the count goes 6/1 -> 3/4, which is the
+ *  honest reading: four of seven bullets name no test file.
+ *
+ *  Note this is the COUNTER's rule only. `extractTestingPaths` (the scope verdict's input) still
+ *  admits those prose fragments as declared paths — harmless in itself, since a fragment matches no
+ *  diff path and every Testing rule STRICTLY WIDENS in-scope, but it does inflate
+ *  `TESTING_DECLARED=`. Narrowing the verdict's own heuristic would turn passing scope-checks into
+ *  failing ones, so it needs its own spec and dogfood; it is deliberately not done here.
+ *
+ *  Non-bullet prose and blank lines are not counted — the authoring rule is about bullets. Counts
+ *  only; the caller warns and nothing here feeds a verdict or an rc. */
+export function testingBulletsWithoutPaths(docText: string): { withPath: number; withoutPath: number } {
+  let withPath = 0;
+  let withoutPath = 0;
+  for (const record of sectionLines(docText, TESTING_HEADER, ANY_TESTING_PREFIX)) {
+    if (!BULLET_MARKER.test(record)) continue;
+    if (pathTokensFrom(record.replace(BULLET_MARKER, "")).some(fileShaped)) withPath++;
+    else withoutPath++;
+  }
+  return { withPath, withoutPath };
+}
+
 /** Warn-only Components path lint (2026-08-14-components-path-lint-design.md). Returns the declared
  *  Components paths that do NOT exist under `root` — absolute paths as-is, relative ones joined to
  *  `root`, trailing-`/` dirs checked as directories. A source line carrying the literal `[on-box]`
@@ -146,16 +233,29 @@ export function lintComponentsPaths(docText: string, root: string): string[] {
  *  the conjunction then reads `exists(p) && !exists(p)` and can never fire, which is right — an
  *  absolute path is the same file from either checkout. Warn-only; nothing here fails a run. */
 export function pathsInvisibleInTarget(docText: string, mainRoot: string, targetCwd: string): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
+  const candidates: string[] = [];
   const lines = [...componentsPathsByLine(docText), ...sectionPathsByLine(docText, TESTING_HEADER, ANY_TESTING_PREFIX)];
   for (const rec of lines) {
     if (rec.line.includes(ON_BOX_TAG)) continue;
-    for (const p of rec.paths) {
-      if (seen.has(p)) continue;
-      seen.add(p);
-      if (existsSync(resolve(mainRoot, p)) && !existsSync(resolve(targetCwd, p))) out.push(p);
-    }
+    candidates.push(...rec.paths);
+  }
+  return invisibleInTarget(candidates, mainRoot, targetCwd);
+}
+
+/** The exists-in-origin AND missing-in-target differential itself, over an already-collected path
+ *  list, de-duplicated in first-seen order. Extracted so `quick branch`'s brief lint reuses this
+ *  predicate instead of growing a second variant of it: a brief is free prose with no
+ *  `## Components`/`## Testing` section, so it supplies its own candidates (via `pathTokensFrom`)
+ *  and the conjunction — the part that must not drift — stays in one place. See
+ *  `pathsInvisibleInTarget` above for why the conjunction, and not a plain missing-path check, is
+ *  the whole point. */
+export function invisibleInTarget(paths: string[], mainRoot: string, targetCwd: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of paths) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    if (existsSync(resolve(mainRoot, p)) && !existsSync(resolve(targetCwd, p))) out.push(p);
   }
   return out;
 }

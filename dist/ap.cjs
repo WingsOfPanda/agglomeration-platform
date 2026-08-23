@@ -19383,6 +19383,191 @@ var init_branchRecord = __esm({
   }
 });
 
+// src/core/implementScope.ts
+function parentOf(p) {
+  const i2 = p.lastIndexOf("/");
+  return i2 < 0 ? "" : p.slice(0, i2);
+}
+function baseOf(p) {
+  const i2 = p.lastIndexOf("/");
+  return i2 < 0 ? p : p.slice(i2 + 1);
+}
+function stripEmphasis(tok) {
+  let s = tok;
+  for (; ; ) {
+    let next = s;
+    for (const m of EMPHASIS) {
+      if (s.length > 2 && s.startsWith(m) && s.endsWith(m)) {
+        next = s.slice(1, -1);
+        break;
+      }
+    }
+    if (next === s) return s;
+    s = next;
+  }
+}
+function pathTokensFrom(text) {
+  const out = [];
+  for (const raw of text.replace(/`/g, "").replace(MD_LINK, "$1").split(/\s+/)) {
+    const trimmed = raw.replace(/^[(\[{"']+/, "").replace(/[)\]}"',.;:!?]+$/, "");
+    const tok = stripEmphasis(trimmed);
+    if (tok === "") continue;
+    if (HAS_SLASH.test(tok) || ENDS_WITH_EXT.test(tok)) out.push(tok);
+  }
+  return out;
+}
+function sectionLines(docText, header, prefix) {
+  const out = [];
+  let inSection = false;
+  for (const record of docText.split("\n")) {
+    if (header.test(record)) {
+      inSection = true;
+      continue;
+    }
+    if (OTHER_H2.test(record) && !prefix.test(record)) {
+      inSection = false;
+      continue;
+    }
+    if (inSection) out.push(record);
+  }
+  return out;
+}
+function sectionPathsByLine(docText, header, prefix) {
+  const out = [];
+  for (const record of sectionLines(docText, header, prefix)) {
+    if (TABLE_ROW.test(record)) {
+      if (SEPARATOR_ROW.test(record)) continue;
+      let line = record;
+      line = line.replace(/^[ \t]*\|[ \t]*/, "");
+      line = line.replace(/[ \t]*\|.*$/, "");
+      line = line.replace(/`/g, "");
+      line = line.replace(/^[ \t]+/, "");
+      line = line.replace(/[ \t]+$/, "");
+      if (HEADER_CELL.test(line)) continue;
+      if (HAS_SLASH.test(line) || ENDS_WITH_EXT.test(line)) out.push({ line: record, paths: [line] });
+    } else {
+      const paths = pathTokensFrom(record.replace(BULLET_MARKER, ""));
+      if (paths.length > 0) out.push({ line: record, paths });
+    }
+  }
+  return out;
+}
+function componentsPathsByLine(docText) {
+  return sectionPathsByLine(docText, COMPONENTS_HEADER, ANY_COMPONENTS_PREFIX);
+}
+function extractComponentsPaths(docText) {
+  const out = [];
+  for (const rec of componentsPathsByLine(docText)) out.push(...rec.paths);
+  return out;
+}
+function extractTestingPaths(docText) {
+  const out = [];
+  for (const rec of sectionPathsByLine(docText, TESTING_HEADER, ANY_TESTING_PREFIX)) out.push(...rec.paths);
+  return out;
+}
+function fileShaped(tok) {
+  return ENDS_WITH_EXT.test(tok) || tok.endsWith("/");
+}
+function testingBulletsWithoutPaths(docText) {
+  let withPath = 0;
+  let withoutPath = 0;
+  for (const record of sectionLines(docText, TESTING_HEADER, ANY_TESTING_PREFIX)) {
+    if (!BULLET_MARKER.test(record)) continue;
+    if (pathTokensFrom(record.replace(BULLET_MARKER, "")).some(fileShaped)) withPath++;
+    else withoutPath++;
+  }
+  return { withPath, withoutPath };
+}
+function lintComponentsPaths(docText, root) {
+  const out = [];
+  for (const rec of componentsPathsByLine(docText)) {
+    if (rec.line.includes(ON_BOX_TAG)) continue;
+    for (const p of rec.paths) if (!(0, import_node_fs31.existsSync)((0, import_node_path26.isAbsolute)(p) ? p : (0, import_node_path26.join)(root, p))) out.push(p);
+  }
+  return out;
+}
+function pathsInvisibleInTarget(docText, mainRoot, targetCwd) {
+  const candidates = [];
+  const lines = [...componentsPathsByLine(docText), ...sectionPathsByLine(docText, TESTING_HEADER, ANY_TESTING_PREFIX)];
+  for (const rec of lines) {
+    if (rec.line.includes(ON_BOX_TAG)) continue;
+    candidates.push(...rec.paths);
+  }
+  return invisibleInTarget(candidates, mainRoot, targetCwd);
+}
+function invisibleInTarget(paths, mainRoot, targetCwd) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const p of paths) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    if ((0, import_node_fs31.existsSync)((0, import_node_path26.resolve)(mainRoot, p)) && !(0, import_node_fs31.existsSync)((0, import_node_path26.resolve)(targetCwd, p))) out.push(p);
+  }
+  return out;
+}
+function matchDiffAgainstComponents(diffPaths, compPaths) {
+  const comp = [];
+  for (const raw of compPaths) {
+    const line = raw.replace(/^[ \t]+/, "").replace(/[ \t]+$/, "");
+    if (line === "") continue;
+    comp.push(line);
+  }
+  const out = [];
+  for (const raw of diffPaths) {
+    const path6 = raw.replace(/^[ \t]+/, "").replace(/[ \t]+$/, "");
+    if (path6 === "") continue;
+    let inScope = false;
+    for (const c3 of comp) {
+      if (path6 === c3) {
+        inScope = true;
+        break;
+      }
+      if (c3.charAt(c3.length - 1) === "/" && path6.indexOf(c3) === 0) {
+        inScope = true;
+        break;
+      }
+      if (c3.charAt(c3.length - 1) !== "/" && path6.indexOf(c3 + "/") === 0) {
+        inScope = true;
+        break;
+      }
+      if (ENDS_WITH_EXT.test(c3)) {
+        if (c3.indexOf("/") < 0 && baseOf(path6) === c3) {
+          inScope = true;
+          break;
+        }
+        if (c3.indexOf("/") >= 0 && parentOf(path6) === parentOf(c3)) {
+          inScope = true;
+          break;
+        }
+      }
+    }
+    if (!inScope) out.push(path6);
+  }
+  return out;
+}
+var import_node_fs31, import_node_path26, COMPONENTS_HEADER, TESTING_HEADER, OTHER_H2, ANY_COMPONENTS_PREFIX, ANY_TESTING_PREFIX, TABLE_ROW, SEPARATOR_ROW, BULLET_MARKER, HEADER_CELL, HAS_SLASH, ENDS_WITH_EXT, ON_BOX_TAG, MD_LINK, EMPHASIS;
+var init_implementScope = __esm({
+  "src/core/implementScope.ts"() {
+    "use strict";
+    import_node_fs31 = require("node:fs");
+    import_node_path26 = require("node:path");
+    COMPONENTS_HEADER = /^## Components[ \t]*$/;
+    TESTING_HEADER = /^## Testing[ \t]*$/;
+    OTHER_H2 = /^## [^ ]/;
+    ANY_COMPONENTS_PREFIX = /^## Components/;
+    ANY_TESTING_PREFIX = /^## Testing/;
+    TABLE_ROW = /^[ \t]*\|/;
+    SEPARATOR_ROW = /^[ \t]*\|([ \t]*[:-]+[ \t]*\|)+[ \t]*$/;
+    BULLET_MARKER = /^[ \t]*[-*+][ \t]+/;
+    HEADER_CELL = /^(File|Path|Name|Files?[ \t]+(edited|moved|touched))$/;
+    HAS_SLASH = /\//;
+    ENDS_WITH_EXT = /\.[a-zA-Z]+$/;
+    ON_BOX_TAG = "[on-box]";
+    MD_LINK = /\[[^\]\n]*\]\(([^)\s]*)\)/g;
+    EMPHASIS = ["*", "_"];
+  }
+});
+
 // src/commands/quick.ts
 var quick_exports = {};
 __export(quick_exports, {
@@ -19459,7 +19644,7 @@ async function initWith(tokens, d) {
     return 3;
   }
   const art = quickArtDir(slug);
-  if ((0, import_node_fs31.existsSync)(art)) {
+  if ((0, import_node_fs32.existsSync)(art)) {
     log.error(`quick init: topic already in flight: ${art}`);
     log.error("  run /ap:stop or pick a different topic");
     return 2;
@@ -19470,16 +19655,16 @@ async function initWith(tokens, d) {
     return 1;
   }
   const exec = quickExecDir(slug);
-  (0, import_node_fs31.mkdirSync)(exec, { recursive: true });
-  atomicWrite((0, import_node_path26.join)(art, "topic.txt"), slug + "\n");
-  atomicWrite((0, import_node_path26.join)(art, "topic-text.txt"), topicText);
-  atomicWrite((0, import_node_path26.join)(art, "selected-provider.txt"), provider + "\n");
-  atomicWrite((0, import_node_path26.join)(art, "agent.txt"), agent + "\n");
-  atomicWrite((0, import_node_path26.join)(art, "timing.txt"), `started=${isoUtc()}
+  (0, import_node_fs32.mkdirSync)(exec, { recursive: true });
+  atomicWrite((0, import_node_path27.join)(art, "topic.txt"), slug + "\n");
+  atomicWrite((0, import_node_path27.join)(art, "topic-text.txt"), topicText);
+  atomicWrite((0, import_node_path27.join)(art, "selected-provider.txt"), provider + "\n");
+  atomicWrite((0, import_node_path27.join)(art, "agent.txt"), agent + "\n");
+  atomicWrite((0, import_node_path27.join)(art, "timing.txt"), `started=${isoUtc()}
 `);
-  atomicWrite((0, import_node_path26.join)(exec, "provider.txt"), provider + "\n");
-  atomicWrite((0, import_node_path26.join)(exec, "finish.txt"), (finish ? "yes" : "no") + "\n");
-  atomicWrite((0, import_node_path26.join)(exec, "stash-wip-requested.txt"), (stashWip ? "yes" : "no") + "\n");
+  atomicWrite((0, import_node_path27.join)(exec, "provider.txt"), provider + "\n");
+  atomicWrite((0, import_node_path27.join)(exec, "finish.txt"), (finish ? "yes" : "no") + "\n");
+  atomicWrite((0, import_node_path27.join)(exec, "stash-wip-requested.txt"), (stashWip ? "yes" : "no") + "\n");
   const target = targetArg || repoRoot();
   log.ok(`quick init: topic=${slug} agent=${agent} provider=${provider} finish=${finish ? "yes" : "no"} stash-wip=${stashWip ? "yes" : "no"}`);
   process.stdout.write(`SLUG=${slug}
@@ -19511,14 +19696,46 @@ function stashWipMessage(topic) {
   return `ap-quick-${topic}-wip`;
 }
 function readStashMarker(exec, topic) {
-  const raw = readIfExistsOrNull((0, import_node_path26.join)(exec, "stash-wip.txt"));
+  const raw = readIfExistsOrNull((0, import_node_path27.join)(exec, "stash-wip.txt"));
   if (raw === null) return null;
   const [sha, name] = raw.split("\n")[0].trim().split("	");
   return { sha: sha ?? "", message: name || stashWipMessage(topic) };
 }
+function lintBrief(topic, target, exec) {
+  const brief = readIfExistsOrNull((0, import_node_path27.join)(quickArtDir(topic), "task-brief.md"));
+  if (brief === null) return;
+  const cited = [];
+  for (const line of brief.split("\n")) cited.push(...pathTokensFrom(line));
+  const root = repoRoot();
+  const invisible = invisibleInTarget(cited, root, target);
+  const stateRelative = [];
+  for (const p of cited) {
+    if ((0, import_node_path27.isAbsolute)(p) || stateRelative.includes(p)) continue;
+    if (STATE_RELATIVE_PREFIXES.some((pre) => p.startsWith(pre))) stateRelative.push(p);
+  }
+  for (const p of invisible) {
+    log.warn(`quick branch: brief cites ${p}, which exists in ${root} but NOT in the target ${target} \u2014 the worker cannot read it; cite it absolute or commit it first`);
+  }
+  for (const p of stateRelative) {
+    log.warn(`quick branch: brief cites the state path ${p} RELATIVE \u2014 the state dir is keyed to the repo root and never travels with --target; cite it absolute`);
+  }
+  atomicWrite(
+    (0, import_node_path27.join)(exec, "brief-lint.txt"),
+    `MAIN_ROOT=${root}
+TARGET_CWD=${target}
+INVISIBLE_IN_TARGET=${invisible.length}
+` + invisible.map((p) => `INVISIBLE_PATH=${p}
+`).join("") + `STATE_RELATIVE=${stateRelative.length}
+` + stateRelative.map((p) => `STATE_RELATIVE_PATH=${p}
+`).join("")
+  );
+  if (stateRelative.length > 0) {
+    runFlag("quick", topic, `brief-state-relative: the brief cites ${stateRelative.length} state path(s) RELATIVE (${stateRelative.join(", ")}) \u2014 unresolvable from the worker's cwd; state paths must be cited absolute`);
+  }
+}
 async function branchWith(topic, target, r, stashWip = false) {
   const exec = quickExecDir(topic);
-  (0, import_node_fs31.mkdirSync)(exec, { recursive: true });
+  (0, import_node_fs32.mkdirSync)(exec, { recursive: true });
   if (stashWip && classifyDirty(r.run("git", ["status", "--porcelain", "--untracked-files=all"]).stdout)) {
     const message = stashWipMessage(topic);
     const st = stashPush(r, message);
@@ -19542,7 +19759,7 @@ async function branchWith(topic, target, r, stashWip = false) {
         break;
     }
     if (st.entryExists) {
-      atomicWrite((0, import_node_path26.join)(exec, "stash-wip.txt"), `${st.sha}	${message}
+      atomicWrite((0, import_node_path27.join)(exec, "stash-wip.txt"), `${st.sha}	${message}
 `);
     }
   }
@@ -19553,10 +19770,11 @@ async function branchWith(topic, target, r, stashWip = false) {
   }
   const branch = branchNameFor("quick", topic);
   const onBranch = createOrResumeBranch(r, branch);
-  atomicWrite((0, import_node_path26.join)(exec, "target_cwd.txt"), target + "\n");
-  atomicWrite((0, import_node_path26.join)(exec, "start-branch.txt"), snap.branch + "\n");
-  atomicWrite((0, import_node_path26.join)(exec, "branch-base.sha"), snap.baseSha + "\n");
-  atomicWrite((0, import_node_path26.join)(exec, "branch.txt"), (onBranch ? branch : snap.branch) + "\n");
+  atomicWrite((0, import_node_path27.join)(exec, "target_cwd.txt"), target + "\n");
+  lintBrief(topic, target, exec);
+  atomicWrite((0, import_node_path27.join)(exec, "start-branch.txt"), snap.branch + "\n");
+  atomicWrite((0, import_node_path27.join)(exec, "branch-base.sha"), snap.baseSha + "\n");
+  atomicWrite((0, import_node_path27.join)(exec, "branch.txt"), (onBranch ? branch : snap.branch) + "\n");
   if (!onBranch) {
     log.warn(`quick branch: checkout ${branch} failed; staying on ${snap.branch}`);
   }
@@ -19601,16 +19819,16 @@ async function finishRun(rest) {
     log.error("usage: quick finish <topic>");
     return 2;
   }
-  const target = readField((0, import_node_path26.join)(quickExecDir(topic), "target_cwd.txt")) || repoRoot();
+  const target = readField((0, import_node_path27.join)(quickExecDir(topic), "target_cwd.txt")) || repoRoot();
   return finishWith(topic, runnerAt(target), haveCmd("gh"));
 }
 function restoreStashWip(topic, exec, r, startBranch) {
   const parked = readStashMarker(exec, topic);
   if (!parked) return "";
   const { sha, message } = parked;
-  const marker = (0, import_node_path26.join)(exec, "stash-wip.txt");
+  const marker = (0, import_node_path27.join)(exec, "stash-wip.txt");
   const kept = () => {
-    const target = readField((0, import_node_path26.join)(exec, "target_cwd.txt")) || "<target>";
+    const target = readField((0, import_node_path27.join)(exec, "target_cwd.txt")) || "<target>";
     runFlag("quick", topic, `stash-wip-kept: WIP still stashed as '${message}' in ${target}; restore: git checkout ${startBranch} then git stash pop`);
     return "stash-wip-kept\n";
   };
@@ -19622,11 +19840,11 @@ function restoreStashWip(topic, exec, r, startBranch) {
   }
   switch (outcome) {
     case "popped":
-      (0, import_node_fs31.rmSync)(marker, { force: true });
+      (0, import_node_fs32.rmSync)(marker, { force: true });
       log.ok(`quick finish: restored stashed WIP '${message}'`);
       return "";
     case "not-found":
-      (0, import_node_fs31.rmSync)(marker, { force: true });
+      (0, import_node_fs32.rmSync)(marker, { force: true });
       log.warn(`quick finish: no stash entry named '${message}' (popped already?); nothing to restore`);
       return "";
     case "list-failed":
@@ -19648,13 +19866,13 @@ async function finishWith(topic, r, hasGh) {
   const rec = readBranchRecord("quick", { dir: exec });
   const branch = rec.branch;
   const startBranch = rec.startBranch || "main";
-  const detachedJob = (0, import_node_fs31.existsSync)(jobPath(topic));
+  const detachedJob = (0, import_node_fs32.existsSync)(jobPath(topic));
   if (detachedJob) log.warn(`quick finish: a detached job record is present (${jobPath(topic)}) \u2014 publication is disabled; the run ends on its branch and the operator finishes it`);
-  const doFinish = readField((0, import_node_path26.join)(exec, "finish.txt")) === "yes" && !detachedJob;
+  const doFinish = readField((0, import_node_path27.join)(exec, "finish.txt")) === "yes" && !detachedJob;
   if (!doFinish) {
     r.run("git", ["checkout", "-q", startBranch]);
     const kept2 = restoreStashWip(topic, exec, r, startBranch);
-    atomicWrite((0, import_node_path26.join)(exec, "finish-result.txt"), `none	branch-only (kept ${branch})
+    atomicWrite((0, import_node_path27.join)(exec, "finish-result.txt"), `none	branch-only (kept ${branch})
 ` + kept2);
     log.ok(`quick finish: branch-only \u2014 kept ${branch}, restored ${startBranch}`);
     return 0;
@@ -19665,14 +19883,14 @@ async function finishWith(topic, r, hasGh) {
     log.warn(`  recover: re-run the branch step in the target repo (git checkout -b ${branchNameFor("quick", topic)}), commit the work, then finish again`);
     r.run("git", ["checkout", "-q", startBranch]);
     const head = currentBranch(r) || "(detached)";
-    atomicWrite((0, import_node_path26.join)(exec, "finish-head.txt"), head + "\n");
+    atomicWrite((0, import_node_path27.join)(exec, "finish-head.txt"), head + "\n");
     const keptNoBranch = restoreStashWip(topic, exec, r, startBranch);
-    atomicWrite((0, import_node_path26.join)(exec, "finish-result.txt"), "none	no-branch\n" + keptNoBranch);
+    atomicWrite((0, import_node_path27.join)(exec, "finish-result.txt"), "none	no-branch\n" + keptNoBranch);
     runFlag("quick", topic, `finish-no-branch: the recorded branch '${named}' is missing or is the start branch '${startBranch}' \u2014 nothing was pushed, no PR opened; the work (if any) is on '${head}'`);
     return 0;
   }
-  const brief = readIfExists((0, import_node_path26.join)(quickArtDir(topic), "task-brief.md"));
-  const verify = readField((0, import_node_path26.join)(exec, "verify-result.txt"));
+  const brief = readIfExists((0, import_node_path27.join)(quickArtDir(topic), "task-brief.md"));
+  const verify = readField((0, import_node_path27.join)(exec, "verify-result.txt"));
   const res = finishBranch(r, {
     branch,
     startBranch,
@@ -19685,7 +19903,7 @@ Verify: ${verify}
 (Automated quick branch \u2014 review and merge into ${startBranch}.)`
   });
   const kept = restoreStashWip(topic, exec, r, startBranch);
-  atomicWrite((0, import_node_path26.join)(exec, "finish-result.txt"), `${res.action}	${res.outcome}
+  atomicWrite((0, import_node_path27.join)(exec, "finish-result.txt"), `${res.action}	${res.outcome}
 ` + kept);
   log.ok(`quick finish: ${res.action} \u2192 ${res.outcome}`);
   return 0;
@@ -19699,7 +19917,7 @@ async function summaryRun(rest) {
   const art = quickArtDir(topic);
   const exec = quickExecDir(topic);
   const rec = readBranchRecord("quick", { dir: exec });
-  const started = kvField((0, import_node_path26.join)(art, "timing.txt"), "started") || "unknown";
+  const started = kvField((0, import_node_path27.join)(art, "timing.txt"), "started") || "unknown";
   let ended;
   let duration;
   const i2 = rest.indexOf("--aborted");
@@ -19708,7 +19926,7 @@ async function summaryRun(rest) {
     ended = isoUtc();
     const s = Date.parse(started), e = Date.parse(ended);
     duration = Number.isFinite(s) && Number.isFinite(e) ? Math.round((e - s) / 1e3) : 0;
-    atomicWrite((0, import_node_path26.join)(art, "timing.txt"), `started=${started}
+    atomicWrite((0, import_node_path27.join)(art, "timing.txt"), `started=${started}
 ended=${ended}
 duration=${duration}
 `);
@@ -19719,25 +19937,25 @@ duration=${duration}
     started,
     ended,
     duration,
-    provider: readField((0, import_node_path26.join)(art, "selected-provider.txt")) || "unknown",
-    agent: readField((0, import_node_path26.join)(art, "agent.txt")) || "unknown",
+    provider: readField((0, import_node_path27.join)(art, "selected-provider.txt")) || "unknown",
+    agent: readField((0, import_node_path27.join)(art, "agent.txt")) || "unknown",
     branch: rec.branch || "unknown",
-    verify: readField((0, import_node_path26.join)(exec, "verify-result.txt")) || "unknown",
-    diffStats: readField((0, import_node_path26.join)(exec, "diff-stats.txt")) || "unknown",
-    archived: readField((0, import_node_path26.join)(art, "archived-path.txt")) || "(not archived)",
-    targetCwd: readField((0, import_node_path26.join)(exec, "target_cwd.txt")) || "<target>",
+    verify: readField((0, import_node_path27.join)(exec, "verify-result.txt")) || "unknown",
+    diffStats: readField((0, import_node_path27.join)(exec, "diff-stats.txt")) || "unknown",
+    archived: readField((0, import_node_path27.join)(art, "archived-path.txt")) || "(not archived)",
+    targetCwd: readField((0, import_node_path27.join)(exec, "target_cwd.txt")) || "<target>",
     branchBase: rec.baseSha || "<base>",
-    finishResult: readField((0, import_node_path26.join)(exec, "finish-result.txt")),
-    finishHead: readField((0, import_node_path26.join)(exec, "finish-head.txt")) || "unknown",
+    finishResult: readField((0, import_node_path27.join)(exec, "finish-result.txt")),
+    finishHead: readField((0, import_node_path27.join)(exec, "finish-head.txt")) || "unknown",
     abortedPhase: aborted2 ? rest[i2 + 1] : void 0,
     abortedGate: aborted2 ? rest[i2 + 2] : void 0,
     abortedReason: aborted2 ? rest.slice(i2 + 3).join(" ") || "unknown" : void 0
   };
-  atomicWrite((0, import_node_path26.join)(art, "SUMMARY.md"), renderSummary(facts));
+  atomicWrite((0, import_node_path27.join)(art, "SUMMARY.md"), renderSummary(facts));
   if (aborted2) {
     const stashName = readStashMarker(exec, topic)?.message ?? "";
     const startBranch = rec.startBranch || "<start-branch>";
-    atomicWrite((0, import_node_path26.join)(art, "RESUME.md"), renderResume({
+    atomicWrite((0, import_node_path27.join)(art, "RESUME.md"), renderResume({
       topic,
       branch: facts.branch,
       artDir: art,
@@ -19746,15 +19964,15 @@ duration=${duration}
       stashNote: stashName ? `Pre-existing WIP is parked in stash '${stashName}' \u2014 restore with: git -C ${facts.targetCwd} checkout ${startBranch}  then  git stash pop <ref>` : void 0
     }));
   }
-  log.ok(`quick summary: wrote ${(0, import_node_path26.join)(art, "SUMMARY.md")}`);
+  log.ok(`quick summary: wrote ${(0, import_node_path27.join)(art, "SUMMARY.md")}`);
   return 0;
 }
-var import_node_fs31, import_node_path26, liveInitDeps, QUICK_TURN_TIMEOUT, QUICK_ROUND;
+var import_node_fs32, import_node_path27, liveInitDeps, STATE_RELATIVE_PREFIXES, QUICK_TURN_TIMEOUT, QUICK_ROUND;
 var init_quick2 = __esm({
   "src/commands/quick.ts"() {
     "use strict";
-    import_node_fs31 = require("node:fs");
-    import_node_path26 = require("node:path");
+    import_node_fs32 = require("node:fs");
+    import_node_path27 = require("node:path");
     init_log();
     init_args();
     init_atomic();
@@ -19774,7 +19992,9 @@ var init_quick2 = __esm({
     init_send2();
     init_fsread();
     init_branchRecord();
+    init_implementScope();
     liveInitDeps = { haveCmd, agentBinary, pickRandomAgent };
+    STATE_RELATIVE_PREFIXES = ["_quick/", "_implement/", ".ap/"];
     QUICK_TURN_TIMEOUT = envNum("AP_QUICK_TURN_TIMEOUT", DEFAULT_TURN_BUDGET_S);
     QUICK_ROUND = {
       command: "quick",
@@ -19783,16 +20003,16 @@ var init_quick2 = __esm({
       gateNoun: "turn",
       artDir: quickArtDir,
       execDir: quickExecDir,
-      stateFile: (exec, round) => (0, import_node_path26.join)(exec, `turn-${round}.txt`),
-      promptFile: (exec, round) => (0, import_node_path26.join)(exec, `turn-prompt-${round}.md`),
-      bundle: (exec, round) => ({ path: (0, import_node_path26.join)(exec, `fix-prompt-${round}.md`), missingWording: "fix bundle missing" }),
+      stateFile: (exec, round) => (0, import_node_path27.join)(exec, `turn-${round}.txt`),
+      promptFile: (exec, round) => (0, import_node_path27.join)(exec, `turn-prompt-${round}.md`),
+      bundle: (exec, round) => ({ path: (0, import_node_path27.join)(exec, `fix-prompt-${round}.md`), missingWording: "fix bundle missing" }),
       composeFirst: ({ art, exec, topic }) => composeRound1Prompt(
-        readIfExists((0, import_node_path26.join)(art, "task-brief.md")),
-        readField((0, import_node_path26.join)(exec, "branch.txt")) || branchNameFor("quick", topic)
+        readIfExists((0, import_node_path27.join)(art, "task-brief.md")),
+        readField((0, import_node_path27.join)(exec, "branch.txt")) || branchNameFor("quick", topic)
       ),
       composeFollowup: composeFixPrompt,
       timeoutS: () => QUICK_TURN_TIMEOUT,
-      questionFile: (exec, round) => (0, import_node_path26.join)(exec, `question-${round}.txt`)
+      questionFile: (exec, round) => (0, import_node_path27.join)(exec, `question-${round}.txt`)
     };
   }
 });
@@ -19826,23 +20046,23 @@ function parseWalkVerdict(text) {
 function walkSectionState(dir, opts) {
   let files;
   try {
-    files = (0, import_node_fs32.readdirSync)(dir).filter((f) => f.endsWith(".state"));
+    files = (0, import_node_fs33.readdirSync)(dir).filter((f) => f.endsWith(".state"));
   } catch {
     return [];
   }
   const settled = [];
   for (const f of files.sort()) {
-    const status = parseWalkVerdict((0, import_node_fs32.readFileSync)((0, import_node_path27.join)(dir, f), "utf8"));
+    const status = parseWalkVerdict((0, import_node_fs33.readFileSync)((0, import_node_path28.join)(dir, f), "utf8"));
     if (status) settled.push({ name: f.replace(/\.state$/, ""), status });
   }
   return opts?.withStatus ? settled : settled.map((s) => s.name);
 }
-var import_node_fs32, import_node_path27, WALK_DIRNAME, WALK_VERDICTS;
+var import_node_fs33, import_node_path28, WALK_DIRNAME, WALK_VERDICTS;
 var init_designWalk = __esm({
   "src/core/designWalk.ts"() {
     "use strict";
-    import_node_fs32 = require("node:fs");
-    import_node_path27 = require("node:path");
+    import_node_fs33 = require("node:fs");
+    import_node_path28 = require("node:path");
     WALK_DIRNAME = ".walk";
     WALK_VERDICTS = ["approved", "skipped"];
   }
@@ -19850,13 +20070,13 @@ var init_designWalk = __esm({
 
 // src/core/design.ts
 function designArtDir(topic, opts) {
-  return (0, import_node_path28.join)(topicDir(topic, opts), "_design");
+  return (0, import_node_path29.join)(topicDir(topic, opts), "_design");
 }
 function designDraftDir(topic, opts) {
-  return (0, import_node_path28.join)(designArtDir(topic, opts), "design-doc", ".draft");
+  return (0, import_node_path29.join)(designArtDir(topic, opts), "design-doc", ".draft");
 }
 function designWalkDir(topic, opts) {
-  return (0, import_node_path28.join)(designArtDir(topic, opts), "design-doc", WALK_DIRNAME);
+  return (0, import_node_path29.join)(designArtDir(topic, opts), "design-doc", WALK_DIRNAME);
 }
 function parseDesignArgs(tokens) {
   let ensemble = false;
@@ -19872,7 +20092,7 @@ function parseDesignArgs(tokens) {
   return { topicText: rest.join(" "), ensemble };
 }
 function designDocPath(topic, dateUtc, opts) {
-  return (0, import_node_path28.join)(designArtDir(topic, opts), "design-doc", `${dateUtc}-${topic}-design.md`);
+  return (0, import_node_path29.join)(designArtDir(topic, opts), "design-doc", `${dateUtc}-${topic}-design.md`);
 }
 function cascadeTargets(phase, keepFindings) {
   const workerFile = phase === "research" ? "findings.md" : "verify.md";
@@ -19885,32 +20105,32 @@ function resolveDrilldownPath(scratchDir, section, agent) {
   const base = `drilldown-${slug}-${agent}`;
   let cand = base;
   let n2 = 2;
-  while ((0, import_node_fs33.existsSync)((0, import_node_path28.join)(scratchDir, `${cand}.md`))) {
+  while ((0, import_node_fs34.existsSync)((0, import_node_path29.join)(scratchDir, `${cand}.md`))) {
     cand = `${cand.replace(/-[0-9]+$/, "")}-${n2}`;
     if (++n2 > 100) throw new Error("resolveDrilldownPath: too many same-section drilldown collisions");
   }
-  return (0, import_node_path28.join)(scratchDir, `${cand}.md`);
+  return (0, import_node_path29.join)(scratchDir, `${cand}.md`);
 }
 function designExportDocPath(repoRoot2, basename5) {
-  return (0, import_node_path28.join)(repoRoot2, "docs", "ap", "specs", basename5);
+  return (0, import_node_path29.join)(repoRoot2, "docs", "ap", "specs", basename5);
 }
 function exportDocTo(topic, destRoot, opts) {
-  const ddir = (0, import_node_path28.join)(designArtDir(topic, opts), "design-doc");
-  if (!(0, import_node_fs33.existsSync)(ddir)) return null;
-  const hits = (0, import_node_fs33.readdirSync)(ddir).filter((f) => f.endsWith(`-${topic}-design.md`)).sort();
+  const ddir = (0, import_node_path29.join)(designArtDir(topic, opts), "design-doc");
+  if (!(0, import_node_fs34.existsSync)(ddir)) return null;
+  const hits = (0, import_node_fs34.readdirSync)(ddir).filter((f) => f.endsWith(`-${topic}-design.md`)).sort();
   if (hits.length === 0) return null;
   const basename5 = hits[hits.length - 1];
   const dest = designExportDocPath(destRoot, basename5);
-  (0, import_node_fs33.mkdirSync)((0, import_node_path28.join)(destRoot, "docs", "ap", "specs"), { recursive: true });
-  atomicWrite(dest, (0, import_node_fs33.readFileSync)((0, import_node_path28.join)(ddir, basename5), "utf8"));
+  (0, import_node_fs34.mkdirSync)((0, import_node_path29.join)(destRoot, "docs", "ap", "specs"), { recursive: true });
+  atomicWrite(dest, (0, import_node_fs34.readFileSync)((0, import_node_path29.join)(ddir, basename5), "utf8"));
   return dest;
 }
-var import_node_path28, import_node_fs33;
+var import_node_path29, import_node_fs34;
 var init_design = __esm({
   "src/core/design.ts"() {
     "use strict";
-    import_node_path28 = require("node:path");
-    import_node_fs33 = require("node:fs");
+    import_node_path29 = require("node:path");
+    import_node_fs34 = require("node:fs");
     init_atomic();
     init_paths();
     init_designWalk();
@@ -20026,150 +20246,6 @@ function auditDoc(docText) {
 var init_audit = __esm({
   "src/core/audit.ts"() {
     "use strict";
-  }
-});
-
-// src/core/implementScope.ts
-function parentOf(p) {
-  const i2 = p.lastIndexOf("/");
-  return i2 < 0 ? "" : p.slice(0, i2);
-}
-function baseOf(p) {
-  const i2 = p.lastIndexOf("/");
-  return i2 < 0 ? p : p.slice(i2 + 1);
-}
-function pathTokensFrom(text) {
-  const out = [];
-  for (const raw of text.replace(/`/g, "").split(/\s+/)) {
-    const tok = raw.replace(/^[(\[{"']+/, "").replace(/[)\]}"',.;:!?]+$/, "");
-    if (tok === "") continue;
-    if (HAS_SLASH.test(tok) || ENDS_WITH_EXT.test(tok)) out.push(tok);
-  }
-  return out;
-}
-function sectionPathsByLine(docText, header, prefix) {
-  const out = [];
-  let inSection = false;
-  for (const record of docText.split("\n")) {
-    if (header.test(record)) {
-      inSection = true;
-      continue;
-    }
-    if (OTHER_H2.test(record) && !prefix.test(record)) {
-      inSection = false;
-      continue;
-    }
-    if (!inSection) continue;
-    if (TABLE_ROW.test(record)) {
-      if (SEPARATOR_ROW.test(record)) continue;
-      let line = record;
-      line = line.replace(/^[ \t]*\|[ \t]*/, "");
-      line = line.replace(/[ \t]*\|.*$/, "");
-      line = line.replace(/`/g, "");
-      line = line.replace(/^[ \t]+/, "");
-      line = line.replace(/[ \t]+$/, "");
-      if (HEADER_CELL.test(line)) continue;
-      if (HAS_SLASH.test(line) || ENDS_WITH_EXT.test(line)) out.push({ line: record, paths: [line] });
-    } else {
-      const paths = pathTokensFrom(record.replace(BULLET_MARKER, ""));
-      if (paths.length > 0) out.push({ line: record, paths });
-    }
-  }
-  return out;
-}
-function componentsPathsByLine(docText) {
-  return sectionPathsByLine(docText, COMPONENTS_HEADER, ANY_COMPONENTS_PREFIX);
-}
-function extractComponentsPaths(docText) {
-  const out = [];
-  for (const rec of componentsPathsByLine(docText)) out.push(...rec.paths);
-  return out;
-}
-function extractTestingPaths(docText) {
-  const out = [];
-  for (const rec of sectionPathsByLine(docText, TESTING_HEADER, ANY_TESTING_PREFIX)) out.push(...rec.paths);
-  return out;
-}
-function lintComponentsPaths(docText, root) {
-  const out = [];
-  for (const rec of componentsPathsByLine(docText)) {
-    if (rec.line.includes(ON_BOX_TAG)) continue;
-    for (const p of rec.paths) if (!(0, import_node_fs34.existsSync)((0, import_node_path29.isAbsolute)(p) ? p : (0, import_node_path29.join)(root, p))) out.push(p);
-  }
-  return out;
-}
-function pathsInvisibleInTarget(docText, mainRoot, targetCwd) {
-  const seen = /* @__PURE__ */ new Set();
-  const out = [];
-  const lines = [...componentsPathsByLine(docText), ...sectionPathsByLine(docText, TESTING_HEADER, ANY_TESTING_PREFIX)];
-  for (const rec of lines) {
-    if (rec.line.includes(ON_BOX_TAG)) continue;
-    for (const p of rec.paths) {
-      if (seen.has(p)) continue;
-      seen.add(p);
-      if ((0, import_node_fs34.existsSync)((0, import_node_path29.resolve)(mainRoot, p)) && !(0, import_node_fs34.existsSync)((0, import_node_path29.resolve)(targetCwd, p))) out.push(p);
-    }
-  }
-  return out;
-}
-function matchDiffAgainstComponents(diffPaths, compPaths) {
-  const comp = [];
-  for (const raw of compPaths) {
-    const line = raw.replace(/^[ \t]+/, "").replace(/[ \t]+$/, "");
-    if (line === "") continue;
-    comp.push(line);
-  }
-  const out = [];
-  for (const raw of diffPaths) {
-    const path6 = raw.replace(/^[ \t]+/, "").replace(/[ \t]+$/, "");
-    if (path6 === "") continue;
-    let inScope = false;
-    for (const c3 of comp) {
-      if (path6 === c3) {
-        inScope = true;
-        break;
-      }
-      if (c3.charAt(c3.length - 1) === "/" && path6.indexOf(c3) === 0) {
-        inScope = true;
-        break;
-      }
-      if (c3.charAt(c3.length - 1) !== "/" && path6.indexOf(c3 + "/") === 0) {
-        inScope = true;
-        break;
-      }
-      if (ENDS_WITH_EXT.test(c3)) {
-        if (c3.indexOf("/") < 0 && baseOf(path6) === c3) {
-          inScope = true;
-          break;
-        }
-        if (c3.indexOf("/") >= 0 && parentOf(path6) === parentOf(c3)) {
-          inScope = true;
-          break;
-        }
-      }
-    }
-    if (!inScope) out.push(path6);
-  }
-  return out;
-}
-var import_node_fs34, import_node_path29, COMPONENTS_HEADER, TESTING_HEADER, OTHER_H2, ANY_COMPONENTS_PREFIX, ANY_TESTING_PREFIX, TABLE_ROW, SEPARATOR_ROW, BULLET_MARKER, HEADER_CELL, HAS_SLASH, ENDS_WITH_EXT, ON_BOX_TAG;
-var init_implementScope = __esm({
-  "src/core/implementScope.ts"() {
-    "use strict";
-    import_node_fs34 = require("node:fs");
-    import_node_path29 = require("node:path");
-    COMPONENTS_HEADER = /^## Components[ \t]*$/;
-    TESTING_HEADER = /^## Testing[ \t]*$/;
-    OTHER_H2 = /^## [^ ]/;
-    ANY_COMPONENTS_PREFIX = /^## Components/;
-    ANY_TESTING_PREFIX = /^## Testing/;
-    TABLE_ROW = /^[ \t]*\|/;
-    SEPARATOR_ROW = /^[ \t]*\|([ \t]*[:-]+[ \t]*\|)+[ \t]*$/;
-    BULLET_MARKER = /^[ \t]*[-*+][ \t]+/;
-    HEADER_CELL = /^(File|Path|Name|Files?[ \t]+(edited|moved|touched))$/;
-    HAS_SLASH = /\//;
-    ENDS_WITH_EXT = /\.[a-zA-Z]+$/;
-    ON_BOX_TAG = "[on-box]";
   }
 });
 
@@ -21954,6 +22030,10 @@ async function auditRun(rest) {
   }
   for (const p of lintComponentsPaths(text, repoRoot())) {
     log.warn(`implement audit: Components path not found in this checkout: ${p} \u2014 mark it [on-box] if it is deliberately box-local, or fix the path`);
+  }
+  const tb = testingBulletsWithoutPaths(text);
+  if (tb.withoutPath > 0) {
+    log.warn(`implement audit: ${tb.withoutPath} of ${tb.withPath + tb.withoutPath} Testing bullets declare no path \u2014 lead each bullet with the file path it covers, or scope-check will read the files they touch as out-of-scope`);
   }
   const ad = auditDoc(text);
   if (ad.verdict === "FAIL") {

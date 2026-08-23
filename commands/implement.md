@@ -393,6 +393,17 @@ preamble, **no** skill mention, **no** `END_OF_INSTRUCTION` (the turn-send verb 
 - [spec-gap] <file:line evidence> — <suggested fix direction>
 ```
 
+**Citation rule — every path, every number.** The `<file:line evidence>` is the whole value of a fix
+bundle, so it must be evidence and not recall:
+- **Stat every path before you cite it, and write it ABSOLUTE.** A Read/Glob/`ls` in *this* session,
+  not "I know that file". State-dir paths especially: the state dir is keyed to the repo **root** and
+  never travels with `--target`, so a relative `_implement/…` resolves against the worker's cwd and is
+  simply not there. A path named at a location that does not exist costs a whole round.
+- **Every number arrives with the command that produced it**, pasted from a run you did, or expressed
+  as a command for the worker to run — never as a prediction. A predicted delta that the run does not
+  reproduce reads to the worker as a regression it must chase.
+- **Anything the fix is meant to CREATE is labelled `(new — does not exist yet)`.**
+
 Then `ROUND=$((ROUND+1))`, `RETRY=0`, and loop back to Stage 1.
 
 ## Stage 4 — scope check + summary + finish + teardown

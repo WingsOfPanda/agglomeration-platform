@@ -128,9 +128,29 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
    ## Acceptance check
    <a specific behavior, or "the repo's tests pass">
 
-   ## Touch-point hints
-   <only if obvious from the topic; otherwise omit this heading>
+   ## Touch-points
+   <only if obvious from the topic; otherwise omit this heading — one entry per line>
+   <abs path> (exists|new)
    ```
+
+   **Citation rule — every path, every number.** A brief written from memory is the single largest
+   source of wasted worker rounds in this pipeline, so:
+   - **Stat every path before you cite it, and write it ABSOLUTE.** Not "I know that file" — a
+     Read/Glob/`ls` in *this* session. State-dir paths especially: the state dir is keyed to the repo
+     **root** and never travels with `--target`, so a relative `_quick/topic-text.txt` resolves
+     against the worker's cwd and is simply not there. `quick branch` warn-lints the brief for both
+     failures (a path visible here and missing in the target; a relative state path) and records the
+     result in `<SLUG state>/_quick/execute/brief-lint.txt`; a relative state path also files a
+     forensics flag. It never rewrites the brief and never changes an rc — fixing it is yours.
+   - **Every number arrives with the command that produced it**, pasted from a run you did (`` 158
+     matches (`rg -c foo src/`) ``), or handed to the worker as a command to run. Never a predicted
+     delta: a brief that says `158->154` when the change actually lands at `159` burns a round on
+     reconciling a number nobody measured.
+   - **Anything the run is meant to CREATE is labelled `(new — does not exist yet)`** so the worker
+     never hunts for a file that was always going to be its own output.
+   - **Acceptance checks must be jointly satisfiable.** Read the pair you just wrote and ask whether
+     one run can pass both ("tests green" + "this file byte-identical" is not satisfiable when the
+     tests regenerate the file).
 
 ## Stage 1 — Build
 
