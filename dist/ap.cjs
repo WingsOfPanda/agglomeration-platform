@@ -9458,12 +9458,12 @@ var require_isexe = __commonJS({
         if (typeof Promise !== "function") {
           throw new TypeError("callback not provided");
         }
-        return new Promise(function(resolve3, reject) {
+        return new Promise(function(resolve4, reject) {
           isexe(path6, options || {}, function(er, is) {
             if (er) {
               reject(er);
             } else {
-              resolve3(is);
+              resolve4(is);
             }
           });
         });
@@ -9529,27 +9529,27 @@ var require_which = __commonJS({
         opt = {};
       const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
       const found = [];
-      const step = (i2) => new Promise((resolve3, reject) => {
+      const step = (i2) => new Promise((resolve4, reject) => {
         if (i2 === pathEnv.length)
-          return opt.all && found.length ? resolve3(found) : reject(getNotFoundError(cmd));
+          return opt.all && found.length ? resolve4(found) : reject(getNotFoundError(cmd));
         const ppRaw = pathEnv[i2];
         const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
         const pCmd = path6.join(pathPart, cmd);
         const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve3(subStep(p, i2, 0));
+        resolve4(subStep(p, i2, 0));
       });
-      const subStep = (p, i2, ii) => new Promise((resolve3, reject) => {
+      const subStep = (p, i2, ii) => new Promise((resolve4, reject) => {
         if (ii === pathExt.length)
-          return resolve3(step(i2 + 1));
+          return resolve4(step(i2 + 1));
         const ext = pathExt[ii];
         isexe(p + ext, { pathExt: pathExtExe }, (er, is) => {
           if (!er && is) {
             if (opt.all)
               found.push(p + ext);
             else
-              return resolve3(p + ext);
+              return resolve4(p + ext);
           }
-          return resolve3(subStep(p, i2, ii + 1));
+          return resolve4(subStep(p, i2, ii + 1));
         });
       });
       return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
@@ -10629,8 +10629,8 @@ var init_deferred = __esm({
   "node_modules/execa/lib/utils/deferred.js"() {
     createDeferred = () => {
       const methods = {};
-      const promise = new Promise((resolve3, reject) => {
-        Object.assign(methods, { resolve: resolve3, reject });
+      const promise = new Promise((resolve4, reject) => {
+        Object.assign(methods, { resolve: resolve4, reject });
       });
       return Object.assign(promise, methods);
     };
@@ -15923,11 +15923,11 @@ var init_concurrent = __esm({
       const promises = weakMap.get(stream);
       const promise = createDeferred();
       promises.push(promise);
-      const resolve3 = promise.resolve.bind(promise);
-      return { resolve: resolve3, promises };
+      const resolve4 = promise.resolve.bind(promise);
+      return { resolve: resolve4, promises };
     };
-    waitForConcurrentStreams = async ({ resolve: resolve3, promises }, subprocess) => {
-      resolve3();
+    waitForConcurrentStreams = async ({ resolve: resolve4, promises }, subprocess) => {
+      resolve4();
       const [isSubprocessExit] = await Promise.race([
         Promise.allSettled([true, subprocess]),
         Promise.all([false, ...promises])
@@ -17710,6 +17710,10 @@ function worktreePathFor(root, topic) {
 function worktreeProvenanced(path6, root) {
   return path6.startsWith((0, import_node_path16.join)(root, ".ap", "worktrees") + import_node_path16.sep) && path6.length > (0, import_node_path16.join)(root, ".ap", "worktrees").length + import_node_path16.sep.length;
 }
+function mainCheckoutRoot(root) {
+  const recovered = (0, import_node_path16.dirname)((0, import_node_path16.dirname)((0, import_node_path16.dirname)(root)));
+  return worktreeProvenanced(root, recovered) ? recovered : root;
+}
 function jobCursorPath(topic) {
   return (0, import_node_path16.join)(jobDir(topic), "cursor.txt");
 }
@@ -17832,7 +17836,12 @@ function worktreeLines(j) {
     ``,
     `The main checkout belongs to the operator for the whole run \u2014 the worker must never check out`,
     `a branch there. Your own state (\`.ap/state/...\`, this record, your inbox/outbox) stays keyed`,
-    `to the repo ROOT and is unaffected; only the worker's target moves.`
+    `to the repo ROOT and is unaffected; only the worker's target moves.`,
+    ``,
+    `That directory is a FRESH checkout of the committed HEAD the run forked from, plus a clone of`,
+    `node_modules. Nothing else came across: no build products, no untracked \`.env\` or local config,`,
+    `and none of the operator's uncommitted work. Anything the run needs that is not committed is`,
+    `simply not there \u2014 treat a file you cannot find as absent, not as a path to guess at.`
   ];
 }
 function jobBrief(j) {
@@ -20089,6 +20098,20 @@ function lintComponentsPaths(docText, root) {
   }
   return out;
 }
+function pathsInvisibleInTarget(docText, mainRoot, targetCwd) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  const lines = [...componentsPathsByLine(docText), ...sectionPathsByLine(docText, TESTING_HEADER, ANY_TESTING_PREFIX)];
+  for (const rec of lines) {
+    if (rec.line.includes(ON_BOX_TAG)) continue;
+    for (const p of rec.paths) {
+      if (seen.has(p)) continue;
+      seen.add(p);
+      if ((0, import_node_fs34.existsSync)((0, import_node_path29.resolve)(mainRoot, p)) && !(0, import_node_fs34.existsSync)((0, import_node_path29.resolve)(targetCwd, p))) out.push(p);
+    }
+  }
+  return out;
+}
 function matchDiffAgainstComponents(diffPaths, compPaths) {
   const comp = [];
   for (const raw of compPaths) {
@@ -22050,6 +22073,21 @@ TOPIC=${topic}
 PROVIDER=${provider}
 TARGET_CWD=${targetCwd}
 `);
+  if (parsed.target && targetCwd !== d.repoRoot()) {
+    const invisible = pathsInvisibleInTarget(text, d.repoRoot(), targetCwd);
+    process.stdout.write(`INVISIBLE_IN_TARGET=${invisible.length}
+`);
+    for (const p of invisible) process.stdout.write(`INVISIBLE_PATH=${p}
+`);
+    atomicWrite(
+      (0, import_node_path35.join)(art, "path-lint.txt"),
+      `MAIN_ROOT=${d.repoRoot()}
+TARGET_CWD=${targetCwd}
+INVISIBLE_IN_TARGET=${invisible.length}
+` + invisible.map((p) => `INVISIBLE_PATH=${p}
+`).join("")
+    );
+  }
   return 0;
 }
 async function setProviderRun(rest) {
@@ -29566,6 +29604,7 @@ var init_bridge2 = __esm({
 // src/commands/job.ts
 var job_exports = {};
 __export(job_exports, {
+  driftFor: () => driftFor,
   finishHint: () => finishHint,
   run: () => run16,
   startWorktree: () => startWorktree,
@@ -29580,7 +29619,7 @@ function usage7() {
 async function run16(args) {
   const [sub, ...rest] = args;
   const origCwd = process.cwd();
-  const root = repoRoot();
+  const root = mainCheckoutRoot(repoRoot());
   if (root !== origCwd) process.chdir(root);
   try {
     return await dispatchSub(sub, rest, origCwd);
@@ -29658,6 +29697,42 @@ function jobProgressNow(rec) {
   const stillParked = parked && !questionConsumed(Buffer.byteLength(outbox, "utf8"), readCursor(rec.topic)) ? parked : null;
   return { events, last, parked: stillParked };
 }
+function unquotePorcelainPath(s) {
+  if (s.length < 2 || !s.startsWith('"') || !s.endsWith('"')) return s;
+  const body = s.slice(1, -1);
+  const simple = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
+  const bytes = [];
+  for (let i2 = 0; i2 < body.length; i2++) {
+    const c3 = body.charAt(i2);
+    if (c3 !== "\\") {
+      for (const b of Buffer.from(c3, "utf8")) bytes.push(b);
+      continue;
+    }
+    const n2 = body.charAt(++i2);
+    if (n2 >= "0" && n2 <= "7") {
+      bytes.push(parseInt(body.slice(i2, i2 + 3), 8) & 255);
+      i2 += 2;
+      continue;
+    }
+    bytes.push(simple[n2] ?? n2.charCodeAt(0));
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+function dirtyPaths(porcelain) {
+  const out = [];
+  for (const line of porcelain.split("\n")) {
+    if (line.length < 4) continue;
+    const xy = line.slice(0, 2);
+    let entry2 = line.slice(3);
+    if (xy.includes("R") || xy.includes("C")) {
+      const arrow = entry2.indexOf(" -> ");
+      if (arrow >= 0) entry2 = entry2.slice(arrow + 4);
+    }
+    const p = unquotePorcelainPath(entry2);
+    if (p) out.push(p);
+  }
+  return out;
+}
 function startWorktree(root, topic, r) {
   const head = r.run("git", ["rev-parse", "HEAD"]);
   const baseSha = head.stdout.trim();
@@ -29703,8 +29778,15 @@ function startWorktree(root, topic, r) {
     if (mode) log.ok(`job start: ${mode} node_modules into the worktree`);
     else log.warn(`job start: could not clone node_modules into ${worktree} (cp -al, -cR and -R all failed) \u2014 the worker will have to install dependencies itself`);
   }
-  if (classifyDirty(r.run("git", ["status", "--porcelain"]).stdout)) {
+  const porcelain = r.run("git", ["status", "--porcelain"]).stdout;
+  if (classifyDirty(porcelain)) {
+    const paths = dirtyPaths(porcelain);
+    const shown = paths.slice(0, 10);
+    const more = paths.length - shown.length;
     log.warn(`job start: ${root} has UNCOMMITTED changes and they are NOT in the worktree \u2014 it forks committed HEAD (${baseSha.slice(0, 8)}). Nothing of yours was touched or stashed; the run simply will not see that work.`);
+    for (const p of shown) log.warn(`  not in the worktree: ${p}`);
+    if (more > 0) log.warn(`  +${more} more`);
+    log.warn(`  If the run must READ any of those \u2014 a design doc especially \u2014 stop now: 'ap job stop ${topic}', commit them, and start again.`);
   }
   log.ok(`job start: worktree ${worktree} on ${baseBranch} at ${baseSha.slice(0, 8)}`);
   return { worktree, baseSha };
@@ -29748,6 +29830,13 @@ function sweepWorktree(rec, root, r) {
   sweepBaseBranch(rec, root, r);
   return true;
 }
+function driftFor(rec, r) {
+  if (!rec.base_sha || !rec.start_branch) return null;
+  const drift = r.run("git", ["rev-list", "--count", `${rec.base_sha}..refs/heads/${rec.start_branch}`]);
+  const text = drift.stdout.trim();
+  const count2 = text === "" ? NaN : Number(text);
+  return drift.code === 0 && Number.isFinite(count2) ? count2 : null;
+}
 function finishHint(rec, r) {
   if (!rec.base_sha) return;
   const branch = branchNameFor(rec.command, rec.topic);
@@ -29755,16 +29844,13 @@ function finishHint(rec, r) {
   const count2 = r.run("git", ["rev-list", "--count", `${rec.base_sha}..${branch}`]);
   const commits = Number(count2.stdout.trim());
   if (count2.code !== 0 || !Number.isFinite(commits) || commits <= 0) return;
-  const drift = rec.start_branch ? r.run("git", ["rev-list", "--count", `${rec.base_sha}..refs/heads/${rec.start_branch}`]) : null;
-  const driftText = drift?.stdout.trim() ?? "";
-  const driftCount = driftText === "" ? NaN : Number(driftText);
-  const driftKnown = drift?.code === 0 && Number.isFinite(driftCount);
+  const drift = driftFor(rec, r);
   process.stdout.write(
     `FINISH=pending
 BRANCH=${branch}
 COMMITS=${commits}
 START_BRANCH=${rec.start_branch || "?"}
-DRIFT=${driftKnown ? driftCount : "?"}
+DRIFT=${drift === null ? "?" : drift}
 git push -u origin ${branch}
 gh pr create --head ${branch}
 `
@@ -29901,6 +29987,15 @@ LAST_EVENT=${last ? last.event : "none"}
 PARKED=${stillParked ? "yes" : "no"}
 `
   );
+  if (rec.worktree) {
+    const drift = driftFor(rec, runnerAt(process.cwd()));
+    process.stdout.write(
+      `WORKTREE=${rec.worktree}
+START_BRANCH=${rec.start_branch || "?"}
+DRIFT=${drift === null ? "?" : drift} (local ref; ap never fetches)
+`
+    );
+  }
   if (stillParked) process.stdout.write(`PARKED_MESSAGE=${enc(stillParked.message ?? stillParked.note ?? "")}
 `);
   if (liveness === "dead") {

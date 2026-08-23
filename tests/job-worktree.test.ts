@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { finishHint, run, startWorktree, sweepWorktree } from "../src/commands/job.js";
-import { formatJob, jobPath, worktreePathFor, type JobRecord } from "../src/core/job.js";
+import { formatJob, jobPath, mainCheckoutRoot, worktreePathFor, type JobRecord } from "../src/core/job.js";
 import { currentBranch, runnerAt, type Runner } from "../src/core/gitwork.js";
 
 const TOPIC = "demo";
@@ -208,6 +208,38 @@ describe("startWorktree — the run gets its own checkout, the operator keeps th
     expect(git(root, "status", "--porcelain")).toContain("README.md");   // untouched, not stashed
   });
 
+  // W1: "the tree is dirty" is not the fact the operator needs — WHICH files is. Twice the invisible
+  // file was the design doc the run was launched to implement.
+  it("NAMES the uncommitted files, truncates past ten, and says what to do about them", async () => {
+    const root = repo();
+    writeFileSync(join(root, "docs-spec.md"), "the design this run will not see\n");
+    const { err } = await capture(() => (startWorktree(root, TOPIC, runnerAt(root)) ? 0 : 1));
+    expect(err).toContain("not in the worktree: docs-spec.md");
+    expect(err).toContain(`'ap job stop ${TOPIC}'`);
+    expect(err).not.toContain("+0 more");
+  });
+
+  it("with 12 dirty entries: ten are named and the rest are counted", async () => {
+    const root = repo();
+    for (let i = 0; i < 12; i++) writeFileSync(join(root, `f${i}.txt`), "wip\n");
+    const { err } = await capture(() => (startWorktree(root, TOPIC, runnerAt(root)) ? 0 : 1));
+    expect((err.match(/not in the worktree: /g) ?? []).length).toBe(10);
+    expect(err).toContain("+2 more");
+  });
+
+  it("a RENAME reports its destination, and a quoted name is printed unescaped", async () => {
+    const root = repo();
+    git(root, "mv", "README.md", "RENAMED.md");
+    writeFileSync(join(root, "désign.md"), "non-ascii\n");
+    // core.quotePath is on by default: git prints "d\303\251sign.md", which matches nothing typeable.
+    expect(git(root, "status", "--porcelain")).toContain("\\303");
+    const { err } = await capture(() => (startWorktree(root, TOPIC, runnerAt(root)) ? 0 : 1));
+    expect(err).toContain("not in the worktree: RENAMED.md");
+    expect(err).not.toContain("README.md -> RENAMED.md");
+    expect(err).toContain("not in the worktree: désign.md");
+    expect(err).not.toContain("\\303");
+  });
+
   it("REFUSES when the path already exists — a kept-dirty leftover is named, with its remedy", async () => {
     const root = repo();
     mkdirSync(worktreePathFor(root, TOPIC), { recursive: true });
@@ -223,6 +255,38 @@ describe("startWorktree — the run gets its own checkout, the operator keeps th
     expect(rc).toBe(1);
     expect(err).toContain("could not read HEAD");
     expect(existsSync(worktreePathFor(root, TOPIC))).toBe(false);
+  });
+});
+
+// F6: `job` verbs are cwd-sensitive — every state path hashes repoRoot(), and from inside the run's
+// worktree that is the WORKTREE's toplevel, not the main checkout. A healthy 0.62h/2h run read
+// `BUDGET=unknown` rc 1 and would have parked as if its budget were exhausted.
+describe("job verbs resolve ONE record from either checkout", () => {
+  it("budget-check from inside the run's worktree reads the record seeded at the ROOT", async () => {
+    const root = repo();
+    await capture(() => (startWorktree(root, TOPIC, runnerAt(root)) ? 0 : 1));
+    seedJob(record(root, { started: new Date().toISOString(), budget_hours: 2 }));
+    expect(existsSync(jobPath(TOPIC))).toBe(true);           // seeded while cwd is the main checkout
+
+    process.chdir(worktreePathFor(root, TOPIC));
+    const { rc, out } = await capture(() => run(["budget-check", TOPIC]));
+    expect(rc).toBe(0);
+    expect(out).toContain("BUDGET=within");
+    expect(out).not.toContain("BUDGET=unknown");
+  });
+
+  // The guard is the whole safety of the string surgery: a user's OWN worktree (the standard
+  // parallel-session discipline) is three segments deep too, and re-homing it into some other repo's
+  // state namespace would be a worse failure than the one this fixes.
+  it("leaves a NON-provenanced worktree path exactly as git reported it", () => {
+    const main = "/repo";
+    expect(mainCheckoutRoot(join(main, ".ap", "worktrees", TOPIC))).toBe(main);
+    // a user's own worktree, three segments deep but not under .ap/worktrees
+    expect(mainCheckoutRoot("/repo/wt/feature/checkout")).toBe("/repo/wt/feature/checkout");
+    expect(mainCheckoutRoot("/repo/a/b/c")).toBe("/repo/a/b/c");
+    // a plain checkout, and the degenerate near-misses
+    expect(mainCheckoutRoot(main)).toBe(main);
+    expect(mainCheckoutRoot(join(main, ".ap", "worktrees"))).toBe(join(main, ".ap", "worktrees"));
   });
 });
 
@@ -296,6 +360,53 @@ describe("sweepWorktree — clean goes, dirty stays, foreign is never touched", 
     rmSync(worktreePathFor(root, TOPIC), { recursive: true, force: true });
     expect((await capture(() => (sweepWorktree(record(root), root, runnerAt(root)) ? 0 : 1))).rc).toBe(0);
     expect(git(root, "worktree", "list")).not.toContain(worktreePathFor(root, TOPIC));
+  });
+});
+
+// W2: DRIFT existed only in the FINISH hint at `job stop` — after the merge decision was already
+// made. One dogfood branch sat through three merges of its starting branch and landed a conflict.
+describe("job status — the worktree facts, DURING the run", () => {
+  /** A seeded worktree run whose starting branch has moved `drift` commits since the fork. */
+  async function startedRun(root: string, drift: number, over: Partial<JobRecord> = {}): Promise<void> {
+    await capture(() => (startWorktree(root, TOPIC, runnerAt(root)) ? 0 : 1));
+    const rec = record(root, over);
+    for (let i = 0; i < drift; i++) {
+      writeFileSync(join(root, `m${i}.txt`), "meanwhile\n");
+      git(root, "add", "-A"); git(root, "commit", "-q", "-m", `main ${i}`);
+    }
+    seedJob(rec);
+  }
+
+  it("prints the worktree, the start branch and the drift — with the local-ref caveat", async () => {
+    const root = repo();
+    await startedRun(root, 2);
+    const { rc, out } = await capture(() => run(["status", TOPIC]));
+    expect(rc).toBe(0);
+    expect(out).toContain(`WORKTREE=${worktreePathFor(root, TOPIC)}`);
+    expect(out).toContain("START_BRANCH=main");
+    // The caveat is load-bearing: ap makes ZERO network git calls, so a bare 0 on a branch whose
+    // merges only exist on the forge would read as "not stale".
+    expect(out).toContain("DRIFT=2 (local ref; ap never fetches)");
+  });
+
+  it("an unresolvable start branch prints ? — never 0, which would read as 'not stale'", async () => {
+    const root = repo();
+    await startedRun(root, 0, { start_branch: "" });
+    const { out } = await capture(() => run(["status", TOPIC]));
+    expect(out).toContain("DRIFT=? (local ref; ap never fetches)");
+    expect(out).not.toContain("DRIFT=0");
+    expect(out).toContain("START_BRANCH=?");
+  });
+
+  // Non-regression: a --no-worktree run has no fork to measure against, and its stdout is unchanged.
+  it("prints none of the three lines for a --no-worktree run", async () => {
+    const root = repo();
+    seedJob(record(root, { worktree: "", base_sha: "", start_branch: "" }));
+    const { rc, out } = await capture(() => run(["status", TOPIC]));
+    expect(rc).toBe(0);
+    expect(out).not.toContain("WORKTREE=");
+    expect(out).not.toContain("START_BRANCH=");
+    expect(out).not.toContain("DRIFT=");
   });
 });
 

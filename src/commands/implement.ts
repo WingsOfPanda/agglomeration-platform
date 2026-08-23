@@ -14,7 +14,7 @@ import {
   implementArtDir, iterTargets, assertImplementTopic, ImplementArgError,
 } from "../core/implement.js";
 import { isoUtc, archiveTopic } from "../core/archive.js";
-import { extractComponentsPaths, extractTestingPaths, lintComponentsPaths, matchDiffAgainstComponents } from "../core/implementScope.js";
+import { extractComponentsPaths, extractTestingPaths, lintComponentsPaths, matchDiffAgainstComponents, pathsInvisibleInTarget } from "../core/implementScope.js";
 import { runnerAt, preSnapshot, createOrResumeBranch, currentBranch, shortstat, finishBranchAction, hasDistinctBranch, targetProblem, type Runner } from "../core/gitwork.js";
 import { runForensics, runFlag, recordHubFlag } from "../core/forensics.js";
 import { haveCmd } from "../core/deps.js";
@@ -173,6 +173,23 @@ export async function initWith(tokens: string[], d: ImplementInitDeps): Promise<
 
   log.ok(`implement init: topic=${topic} provider=${provider}`);
   process.stdout.write(`ART=${art}\nTOPIC=${topic}\nPROVIDER=${provider}\nTARGET_CWD=${targetCwd}\n`);
+  // Which cited paths this run cannot SEE. A detached run's worktree forks committed HEAD, so an
+  // uncommitted file — twice now the design doc itself — exists where the operator is standing and
+  // nowhere the worker can read. Reported only when a `--target` actually moved the run: with no
+  // target the two roots are the same directory and the answer is always empty, so an attached run's
+  // stdout stays byte-identical.
+  //
+  // rc is deliberately UNCHANGED (0): this is a report, not a gate. And it is written to disk as
+  // well as printed, because stdout is gone after the reading hub's turn ends — the layer that knows
+  // records its own verdict where the next layer can still read it.
+  if (parsed.target && targetCwd !== d.repoRoot()) {
+    const invisible = pathsInvisibleInTarget(text, d.repoRoot(), targetCwd);
+    process.stdout.write(`INVISIBLE_IN_TARGET=${invisible.length}\n`);
+    for (const p of invisible) process.stdout.write(`INVISIBLE_PATH=${p}\n`);
+    atomicWrite(join(art, "path-lint.txt"),
+      `MAIN_ROOT=${d.repoRoot()}\nTARGET_CWD=${targetCwd}\nINVISIBLE_IN_TARGET=${invisible.length}\n` +
+      invisible.map((p) => `INVISIBLE_PATH=${p}\n`).join(""));
+  }
   return 0;
 }
 

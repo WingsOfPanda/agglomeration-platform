@@ -1,6 +1,7 @@
 // tests/implement-init.test.ts — B2a: implement init verb (initWith core path).
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { captureStdout } from "./helpers/captureStdout.js";
@@ -170,6 +171,40 @@ describe("implement init", () => {
       "\n## Components\n\n- `src/core/implementScope.ts` — edit\n- `~/.ap/contracts.yaml` [on-box] — read at spawn time\n");
     expect(await implementRun(["audit", p])).toBe(0);
     expect(errSpy.text().match(LINT) ?? []).toHaveLength(0);
+  });
+
+  // ---- INVISIBLE_IN_TARGET (2026-08-23-worktree-truth-telling-design.md) ----
+  // A detached run's worktree forks committed HEAD, so an uncommitted file is visible where the
+  // operator stands and nowhere the worker can read. init reports the differential; the rc is
+  // unchanged, because this is a report and not a gate.
+  const WT_DOC = PASSING_DOC + "\n## Components\n\n- `spec.md` — the design doc itself\n- `new.ts` — the file this design creates\n";
+
+  it("--target: names the main-only path, keeps rc 0, and records the verdict in path-lint.txt", async () => {
+    const target = join(h.home, "wt");
+    mkdirSync(target, { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: target });
+    writeFileSync(join(tmpRepo, "spec.md"), "uncommitted\n");     // in the operator's checkout only
+    const p = docFile("2026-05-30-add-oauth-design.md", WT_DOC);
+
+    const rc = await initWith(["--target", target, p], deps);
+    expect(rc).toBe(0);
+    const out = outSpy.text();
+    expect(out).toContain("INVISIBLE_IN_TARGET=1");
+    expect(out).toContain("INVISIBLE_PATH=spec.md");
+    expect(out).not.toContain("INVISIBLE_PATH=new.ts");            // a file the design CREATES is not invisible
+    const lint = readFileSync(join(implementArtDir("add-oauth"), "path-lint.txt"), "utf8");
+    expect(lint).toContain("INVISIBLE_IN_TARGET=1");
+    expect(lint).toContain("INVISIBLE_PATH=spec.md");
+  });
+
+  it("WITHOUT --target: neither line is printed and no path-lint.txt is written", async () => {
+    writeFileSync(join(tmpRepo, "spec.md"), "uncommitted\n");
+    const p = docFile("2026-05-30-add-oauth-design.md", WT_DOC);
+    const rc = await initWith([p], deps);
+    expect(rc).toBe(0);
+    expect(outSpy.text()).not.toContain("INVISIBLE_IN_TARGET=");
+    expect(outSpy.text()).not.toContain("INVISIBLE_PATH=");
+    expect(existsSync(join(implementArtDir("add-oauth"), "path-lint.txt"))).toBe(false);
   });
 
   // ---- init --force (bypass an audit FAIL — deploy "Proceed anyway") ----
