@@ -107,7 +107,11 @@ function loadArgsFileVerbatim(path6, valueFlags) {
   return body ? [...flags, body] : flags;
 }
 function applyArgsFile(argv, opts) {
-  if (argv[0] !== "--args-file") return [...argv];
+  if (argv[0] !== "--args-file") {
+    if (opts && argv.some((a2) => a2 === "--args-file" || a2.startsWith("--args-file=")))
+      throw new ArgsFileError("--args-file must be the first argument");
+    return [...argv];
+  }
   const path6 = argv[1];
   if (!path6) throw new ArgsFileError("--args-file requires a path");
   const tokens = opts ? loadArgsFileVerbatim(path6, opts.valueFlags) : loadArgsFile(path6);
@@ -30116,7 +30120,7 @@ async function dispatch(fn, args) {
   try {
     return await fn(args);
   } catch (e) {
-    if (e instanceof KvError || e instanceof SlugError) {
+    if (e instanceof KvError || e instanceof SlugError || e instanceof ArgsFileError) {
       process.stderr.write(`${e.message}
 `);
       return e.code;

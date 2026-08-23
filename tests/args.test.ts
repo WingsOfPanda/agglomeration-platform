@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tokenizeArgsLine, applyArgsFile, kvParse, ArgsFileError, KvError } from "../src/args.js";
+import { dispatch } from "../src/core/dispatch.js";
 
 describe("args", () => {
   it("tokenize preserves quoted phrases + literal metachars", () => {
@@ -95,5 +96,45 @@ describe("applyArgsFile verbatim-tail (prose mode)", () => {
   });
   it("a value-flag with no following value pushes only the flag (no empty token)", () => {
     expect(applyArgsFile(["--args-file", af("--targets")], opts(["--targets"]))).toEqual(["--targets"]);
+  });
+});
+
+describe("applyArgsFile position refusal", () => {
+  function af(content: string): string {
+    const f = join(mkdtempSync(join(tmpdir(), "afp-")), "args");
+    writeFileSync(f, content);
+    return f;
+  }
+
+  it("a prose-body verb refuses a non-first --args-file and leaves the file on disk", () => {
+    const f = af("some topic body");
+    expect(() => applyArgsFile(["--provider", "codex", "--args-file", f], { valueFlags: new Set(["--provider"]) }))
+      .toThrow(ArgsFileError);
+    expect(existsSync(f)).toBe(true); // not consumed: a corrected retry can still read it
+  });
+
+  it("the no-opts `job start` passthrough is unaffected", () => {
+    const f = af("some topic body");
+    const argv = ["job", "start", "--args-file", f];
+    expect(applyArgsFile(argv)).toEqual(argv);
+    expect(existsSync(f)).toBe(true);
+  });
+
+  it("argv[0] --args-file still expands, and a body naming --args-file is not re-scanned", () => {
+    const f = af("never pass --args-file late");
+    expect(applyArgsFile(["--args-file", f], { valueFlags: new Set<string>() }))
+      .toEqual(["never pass --args-file late"]);
+    expect(existsSync(f)).toBe(false); // consumed as usual
+  });
+
+  it("dispatch converts an ArgsFileError into rc 2 with the message on stderr", async () => {
+    const errs: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    (process.stderr as any).write = (s: string) => { errs.push(String(s)); return true; };
+    let rc = -1;
+    try { rc = await dispatch(async () => { throw new ArgsFileError("--args-file must be the first argument"); }, []); }
+    finally { (process.stderr as any).write = orig; }
+    expect(rc).toBe(2);
+    expect(errs.join("")).toBe("--args-file must be the first argument\n"); // message, not a stack
   });
 });

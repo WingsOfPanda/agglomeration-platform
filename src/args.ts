@@ -62,7 +62,16 @@ function loadArgsFileVerbatim(path: string, valueFlags: Set<string>): string[] {
 }
 
 export function applyArgsFile(argv: string[], opts?: ArgsFileOpts): string[] {
-  if (argv[0] !== "--args-file") return [...argv];
+  if (argv[0] !== "--args-file") {
+    // `opts` present is not a coincidence: it marks exactly the verbs that take a free-form prose
+    // body and therefore have no unknown-flag branch, so a misplaced `--args-file` is swallowed into
+    // the topic (junk state dir, args file left orphaned) instead of refused. The no-opts call sites
+    // either own an unknown-flag branch or must pass the flag through verbatim
+    // (`ap job start --args-file <p>` parses the path itself), so they are never scanned.
+    if (opts && argv.some((a) => a === "--args-file" || a.startsWith("--args-file=")))
+      throw new ArgsFileError("--args-file must be the first argument");
+    return [...argv];
+  }
   const path = argv[1];
   if (!path) throw new ArgsFileError("--args-file requires a path");
   const tokens = opts ? loadArgsFileVerbatim(path, opts.valueFlags) : loadArgsFile(path);
