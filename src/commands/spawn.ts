@@ -5,6 +5,7 @@ import { kvParse } from "../args.js";
 import { log } from "../core/log.js";
 import { inTmuxSession, tmuxVersionOk, tmuxVersionString, haveCmd } from "../core/deps.js";
 import { topicDir, workerDir, repoRoot } from "../core/paths.js";
+import { mainCheckoutRoot, orphanRefusal, orphanedTopicState, worktreeTopic } from "../core/job.js";
 import { stateInit, stateArchive, isoUtc } from "../core/archive.js";
 import { readIfExists } from "../core/fsread.js";
 import { atomicWrite } from "../core/atomic.js";
@@ -68,6 +69,31 @@ export function prepareWorkerState(agent: string, model: string, topic: string, 
 }
 
 export async function run(args: string[]): Promise<number> {
+  // ONE state tree per run, whatever directory the hub is standing in. Every state path derives from
+  // process.cwd() (paths.ts stateRoot + repoHash), and `--cwd` sets only the PANE's start directory
+  // (`startDir`) -- it never enters the hash -- so the same spawn issued from the repo root and from
+  // inside the run's own worktree wrote identity.md into two different trees, and the worker rightly
+  // refused a later nudge naming an inbox its identity did not name. `mainCheckoutRoot` re-roots
+  // ap-created run worktrees ONLY and leaves every other path (a user's own worktree included)
+  // exactly as git reported it. Outside a git repo repoRoot() falls back to cwd, so this is a no-op.
+  const origCwd = process.cwd();
+  const gitRoot = repoRoot();
+  const root = mainCheckoutRoot(gitRoot);
+  const wtTopic = worktreeTopic(gitRoot);
+  const stranded = orphanedTopicState(wtTopic, gitRoot, root);
+  if (stranded) { for (const l of orphanRefusal(wtTopic, stranded, root).split("\n")) log.error(l); return 2; }
+  if (root !== origCwd) process.chdir(root);
+  try {
+    return await dispatchVerb(args);
+  } finally {
+    // One verb per process on the CLI path (src/ap.ts exits right after), but tests import run() and
+    // share a process, so the cwd is restored rather than left moved. A cwd that has since been
+    // removed must not turn a completed verb into a throw.
+    if (root !== origCwd) { try { process.chdir(origCwd); } catch { /* the caller's cwd is gone */ } }
+  }
+}
+
+async function dispatchVerb(args: string[]): Promise<number> {
   if (args.length < 3) { log.error("usage: spawn <agent|random> <model> <topic> [--mode m] [--cwd abs] [--target-pane id] [--session name] [--role worker|job-hub] [initial-prompt]"); return 2; }
   const parsed = parseSpawnArgs(args);
   let agent = parsed.agent;

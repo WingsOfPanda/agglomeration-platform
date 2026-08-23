@@ -7,8 +7,10 @@
 // record says what was LAUNCHED and nothing else; liveness comes from the pane nonce, progress from
 // the outbox, and the hub's own state from its status.json. Four independent reads, no inference.
 
-import { dirname, join, sep } from "node:path";
-import { jobDir } from "./paths.js";
+import { existsSync } from "node:fs";
+import { basename, dirname, join, sep } from "node:path";
+import { jobDir, topicDir } from "./paths.js";
+import { validateSlug } from "./slug.js";
 import { ownsPane, verifiableNonce } from "./tmux.js";
 import { deriveTopicFromPath } from "./implement.js";
 import { parseEvent } from "./ipc.js";
@@ -80,6 +82,44 @@ export function worktreeProvenanced(path: string, root: string): boolean {
 export function mainCheckoutRoot(root: string): string {
   const recovered = dirname(dirname(dirname(root)));
   return worktreeProvenanced(root, recovered) ? recovered : root;
+}
+/** The topic an ap-created run worktree belongs to, or "" for any path that is not one. A run
+ *  worktree is `<root>/.ap/worktrees/<topic>` BY CONSTRUCTION (`worktreePathFor`), so the last
+ *  segment IS the topic — no arg parsing, and nothing to keep in step with nine different verb
+ *  grammars. Gated on the same provenance check `mainCheckoutRoot` uses, and on the slug rule, so a
+ *  hand-made directory can never hand a `../` segment to `topicDir`. */
+export function worktreeTopic(root: string): string {
+  if (mainCheckoutRoot(root) === root) return "";
+  const topic = basename(root);
+  return validateSlug(topic) ? topic : "";
+}
+/** Orphaned state from a run that STARTED before uniform rooting: its verbs hashed the worktree
+ *  checkout, so its topic dir sits under the worktree tree while the re-rooted verb now reads the
+ *  main one. Returns the worktree-side path when the main tree has no state for the topic and the
+ *  worktree tree does, else null — so the steady state (both present, or only the main one) is a
+ *  no-op and only the genuinely split run is caught.
+ *
+ *  Fail closed rather than migrate: ap does not move a run's state on the user's behalf. Silently
+ *  resolving the main tree would start a SECOND run under the same topic, and reporting "no such
+ *  topic" would hide a run that is alive in the other tree. `recovered === root` (no re-root
+ *  happened) is null by construction — there are not two trees to be split across. */
+export function orphanedTopicState(topic: string, root: string, recovered: string): string | null {
+  if (!topic || recovered === root || !validateSlug(topic)) return null;
+  if (existsSync(topicDir(topic, { cwd: recovered }))) return null;
+  const stranded = topicDir(topic, { cwd: root });
+  return existsSync(stranded) ? stranded : null;
+}
+/** The refusal text for the case above: both paths and the remedy, because the operator has to
+ *  decide which tree the run really lives in — ap cannot. Newline-separated; callers emit it line by
+ *  line through `log.error` (stderr), the way `formatCollisionError` is emitted. */
+export function orphanRefusal(topic: string, stranded: string, recovered: string): string {
+  return [
+    `state for topic '${topic}' lives under this run's worktree, not the main checkout`,
+    `  worktree state: ${stranded}`,
+    `  main state:     ${topicDir(topic, { cwd: recovered })}   (absent)`,
+    `  ap will not move a run's state for you. Finish or tear the run down from its own worktree`,
+    `  with the release it was started on, or move the topic dir to the main path above by hand.`,
+  ].join("\n");
 }
 /** Byte offset into the hub's outbox that the origin hub has already consumed. `job wait` resumes
  *  from it; `job relay` bumps it past the question it just answered, so the next wait does not
