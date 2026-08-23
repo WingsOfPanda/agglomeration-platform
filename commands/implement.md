@@ -450,9 +450,17 @@ Then `ROUND=$((ROUND+1))`, `RETRY=0`, and loop back to Stage 1.
 
 ## Stage 4 — scope check + summary + finish + teardown
 
-1. **Scope conformance.** `$CS implement scope-check <TOPIC>` (writes `scope-out-of-scope.txt`, prints
-   `SCOPE_DECLARED=`/`TESTING_DECLARED=`/`OOS_COUNT=`/`OOS_PATH=`). Paths named in the design's
-   Testing section count as declared scope alongside Components paths. If `SCOPE_DECLARED=0`, the
+1. **Scope conformance.** `$CS implement scope-check <TOPIC>` (writes `scope-out-of-scope.txt` and
+   `scope-unresolved.txt`, prints `SCOPE_DECLARED=`/`TESTING_DECLARED=`/`OOS_COUNT=`/`OOS_PATH=`/
+   `SCOPE_UNRESOLVED=`/`TESTING_UNRESOLVED=`). Paths named in the design's Testing section count as
+   declared scope alongside Components paths. Weigh `OOS_COUNT` against the declared counts NET of
+   the unresolved ones: `SCOPE_UNRESOLVED=`/`TESTING_UNRESOLVED=` count the declared tokens
+   (Components / Testing) that name neither a file nor a trailing-`/` directory — slash-bearing prose
+   like `Spec/metrics`, listed in `scope-unresolved.txt`. A high unresolved share means the declared
+   number is prose, not scope: the design declares less than the count suggests, so prefer *Amend*
+   over *Force-keep*. They are a REPORT — every declared token still counts as scope, so the OOS
+   verdict is unaffected — and a bare `src/core` (a legal implicit-directory declaration) is reported
+   unresolved too. If `SCOPE_DECLARED=0`, the
    design declared no parseable scope paths, so the OOS list is the entire diff — a guard **no-op**,
    not a real finding; prefer *Amend* (add a real Components table) and do NOT *Force-keep* the no-op. Otherwise,
    if `OOS_COUNT > 0`, read the file and **AskUserQuestion** ("Amend the design / Send back to the

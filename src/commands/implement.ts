@@ -14,7 +14,7 @@ import {
   implementArtDir, iterTargets, assertImplementTopic, ImplementArgError,
 } from "../core/implement.js";
 import { isoUtc, archiveTopic } from "../core/archive.js";
-import { extractComponentsPaths, extractTestingPaths, lintComponentsPaths, matchDiffAgainstComponents, pathsInvisibleInTarget, testingBulletsWithoutPaths } from "../core/implementScope.js";
+import { extractComponentsPaths, extractTestingPaths, lintComponentsPaths, matchDiffAgainstComponents, pathsInvisibleInTarget, testingBulletsWithoutPaths, unresolvedDeclaredPaths } from "../core/implementScope.js";
 import { runnerAt, preSnapshot, createOrResumeBranch, currentBranch, shortstat, finishBranchAction, hasDistinctBranch, targetProblem, type Runner } from "../core/gitwork.js";
 import { runForensics, runFlag, recordHubFlag } from "../core/forensics.js";
 import { haveCmd } from "../core/deps.js";
@@ -427,7 +427,17 @@ export async function scopeCheckWith(topic: string, d: ScopeDeps): Promise<numbe
   const oosPath = join(art, "scope-out-of-scope.txt");
   atomicWrite(oosPath, oos.length ? oos.join("\n") + "\n" : "");
   if (oos.length > 0) log.warn(`scope conformance: ${oos.length} out-of-scope path(s) detected`);
-  process.stdout.write(`SCOPE_DECLARED=${declaredPaths.length}\nTESTING_DECLARED=${testingPaths.length}\nOOS_COUNT=${oos.length}\nOOS_PATH=${oosPath}\n`); return 0;
+  // Declared-path precision (2026-08-23-declared-path-precision-design.md): report how much of the
+  // declared count is a slash-bearing PROSE fragment rather than a path the matcher can key on, so
+  // the number a human weighs `OOS_COUNT` against at Stage 4 is honest. Computed ALONGSIDE
+  // `declaredPaths` and deliberately never subtracted from it — `declaredPaths` above is the
+  // matcher's input, byte-identical to what it was before this report existed. The two counts are
+  // per SECTION (Components / Testing), matching how `TESTING_DECLARED` already reports the Testing
+  // section beside the deduped union in `SCOPE_DECLARED`; the artifact holds the deduped union, in
+  // declaration order, because stdout is gone once the hub's turn ends.
+  const unresolved = unresolvedDeclaredPaths(declaredPaths);
+  atomicWrite(join(art, "scope-unresolved.txt"), unresolved.length ? unresolved.join("\n") + "\n" : "");
+  process.stdout.write(`SCOPE_DECLARED=${declaredPaths.length}\nTESTING_DECLARED=${testingPaths.length}\nOOS_COUNT=${oos.length}\nOOS_PATH=${oosPath}\nSCOPE_UNRESOLVED=${unresolvedDeclaredPaths(compPaths).length}\nTESTING_UNRESOLVED=${unresolvedDeclaredPaths(testingPaths).length}\n`); return 0;
 }
 
 // ---- verify-tests (v1 hub-side independent test re-run, IN-PLACE in target_cwd) ----

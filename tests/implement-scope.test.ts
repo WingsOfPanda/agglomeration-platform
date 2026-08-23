@@ -3,7 +3,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { extractComponentsPaths, extractTestingPaths, lintComponentsPaths, matchDiffAgainstComponents, pathsInvisibleInTarget, testingBulletsWithoutPaths } from "../src/core/implementScope.js";
+import { extractComponentsPaths, extractTestingPaths, fileShaped, lintComponentsPaths, matchDiffAgainstComponents, pathsInvisibleInTarget, testingBulletsWithoutPaths, unresolvedDeclaredPaths } from "../src/core/implementScope.js";
 
 function doc(...lines: string[]): string { return lines.join("\n") + "\n"; }
 
@@ -414,5 +414,46 @@ describe("testingBulletsWithoutPaths", () => {
 
   it("an explicit trailing-slash directory counts as declared", () => {
     expect(testingBulletsWithoutPaths(doc("## Testing", "- everything under `tests/data_seam/` is re-run"))).toEqual({ withPath: 1, withoutPath: 0 });
+  });
+});
+
+// ---- Declared-path precision (2026-08-23-declared-path-precision-design.md) ----
+// A bare "/" is dropped at extraction, and the unresolved REPORT names the declared tokens the
+// matcher cannot key on. Neither narrows what reaches matchDiffAgainstComponents.
+describe("bare / is not a declaration", () => {
+  it("a bare `/` token is dropped; a real trailing-slash directory still declares", () => {
+    expect(extractComponentsPaths(doc("## Components", "- everything under / is in play"))).toEqual([]);
+    expect(extractComponentsPaths(doc("## Components", "- `src/` and / together"))).toEqual(["src/"]);
+    expect(extractTestingPaths(doc("## Testing", "- run / then `tests/`"))).toEqual(["tests/"]);
+  });
+
+  // WHY it matters, executed rather than asserted: under match rule 2 a declared "/" prefixes every
+  // absolute path, so an absolute-path diff would land entirely in scope. Repo-relative diffs (what
+  // `git diff --name-only` emits) are unaffected either way — dropping it removes nothing today.
+  it("a declared `/` would have put an absolute diff path in scope", () => {
+    expect(matchDiffAgainstComponents(["/etc/passwd"], ["/"])).toEqual([]);
+    expect(matchDiffAgainstComponents(["/etc/passwd"], extractComponentsPaths(doc("## Components", "- /")))).toEqual(["/etc/passwd"]);
+  });
+});
+
+describe("unresolvedDeclaredPaths", () => {
+  it("keeps the slash-bearing prose fragments and drops file-shaped tokens", () => {
+    expect(unresolvedDeclaredPaths([
+      "tests/model/test_d19_temporal_graph.py", "Spec/metrics", "value_range/aux_shape",
+      "elif/raise", "loss/grad", "D15/D16/D17", "tests/data_seam/",
+    ])).toEqual(["Spec/metrics", "value_range/aux_shape", "elif/raise", "loss/grad", "D15/D16/D17"]);
+  });
+  it("an explicit trailing-slash directory is resolved; a bare implicit one is NOT (known false positive)", () => {
+    expect(unresolvedDeclaredPaths(["src/core/", "src/core"])).toEqual(["src/core"]);
+  });
+  it("shares ONE definition of file-shaped with the C3 bullet counter", () => {
+    expect(fileShaped("src/a.ts")).toBe(true);
+    expect(fileShaped("tests/data_seam/")).toBe(true);
+    expect(fileShaped("Spec/metrics")).toBe(false);
+  });
+  it("reports in declaration order, and reports nothing for a fully file-shaped set", () => {
+    expect(unresolvedDeclaredPaths(["b/x", "src/a.ts", "a/y"])).toEqual(["b/x", "a/y"]);
+    expect(unresolvedDeclaredPaths(["src/a.ts", "tests/", "name.py"])).toEqual([]);
+    expect(unresolvedDeclaredPaths([])).toEqual([]);
   });
 });
