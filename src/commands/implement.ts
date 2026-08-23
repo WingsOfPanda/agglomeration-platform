@@ -14,7 +14,7 @@ import {
   implementArtDir, iterTargets, assertImplementTopic, ImplementArgError,
 } from "../core/implement.js";
 import { isoUtc, archiveTopic } from "../core/archive.js";
-import { extractComponentsPaths, extractTestingPaths, lintComponentsPaths, matchDiffAgainstComponents, pathsInvisibleInTarget } from "../core/implementScope.js";
+import { extractComponentsPaths, extractTestingPaths, lintComponentsPaths, matchDiffAgainstComponents, pathsInvisibleInTarget, testingBulletsWithoutPaths } from "../core/implementScope.js";
 import { runnerAt, preSnapshot, createOrResumeBranch, currentBranch, shortstat, finishBranchAction, hasDistinctBranch, targetProblem, type Runner } from "../core/gitwork.js";
 import { runForensics, runFlag, recordHubFlag } from "../core/forensics.js";
 import { haveCmd } from "../core/deps.js";
@@ -97,6 +97,13 @@ async function auditRun(rest: string[]): Promise<number> {
   // Warn-only path lint (catches docs authored outside /ap:design); the audit below owns the verdict.
   for (const p of lintComponentsPaths(text, repoRoot())) {
     log.warn(`implement audit: Components path not found in this checkout: ${p} — mark it [on-box] if it is deliberately box-local, or fix the path`);
+  }
+  // Warn-only Testing-bullet count (2026-08-23-brief-path-correctness-design.md, C3). A bullet that
+  // names only a behavior contributes nothing to scope, and the cost of that lands at Stage 4 as an
+  // OOS surprise on a file the design meant all along. Measured HERE, before a worker is spawned.
+  const tb = testingBulletsWithoutPaths(text);
+  if (tb.withoutPath > 0) {
+    log.warn(`implement audit: ${tb.withoutPath} of ${tb.withPath + tb.withoutPath} Testing bullets declare no path — lead each bullet with the file path it covers, or scope-check will read the files they touch as out-of-scope`);
   }
   const ad = auditDoc(text);
   if (ad.verdict === "FAIL") { for (const i of ad.issues) process.stderr.write(`ISSUE=${i}\n`); return 1; }

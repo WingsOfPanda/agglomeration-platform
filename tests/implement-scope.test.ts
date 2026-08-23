@@ -1,9 +1,9 @@
 // tests/implement-scope.test.ts
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { extractComponentsPaths, extractTestingPaths, lintComponentsPaths, matchDiffAgainstComponents, pathsInvisibleInTarget } from "../src/core/implementScope.js";
+import { extractComponentsPaths, extractTestingPaths, lintComponentsPaths, matchDiffAgainstComponents, pathsInvisibleInTarget, testingBulletsWithoutPaths } from "../src/core/implementScope.js";
 
 function doc(...lines: string[]): string { return lines.join("\n") + "\n"; }
 
@@ -292,5 +292,127 @@ describe("pathsInvisibleInTarget", () => {
   it("says nothing when the two roots are the same directory", () => {
     const d = doc("## Components", "- `keep.ts`", "- `spec.md`", "## Testing", "- `tests/only-here.test.ts`");
     expect(pathsInvisibleInTarget(d, main, main)).toEqual([]);
+  });
+});
+
+// ---- C4 decoration strip (2026-08-23-brief-path-correctness-design.md) ----
+// pathTokensFrom strips PAIRED markdown emphasis and collapses `[label](target)` links before the
+// path heuristic, so a decorated citation yields the path instead of an unmatchable token. Widening
+// only: the tokens it changes are strings no diff path can ever equal.
+describe("pathTokensFrom decoration strip", () => {
+  it("bold: ** ** wrappers are peeled (two single-marker passes)", () => {
+    expect(extractTestingPaths(doc("## Testing", "- Extend **`tests/a.test.ts`**"))).toEqual(["tests/a.test.ts"]);
+  });
+  it("markdown link: collapsed to its target, spaced label and all", () => {
+    expect(extractTestingPaths(doc("## Testing", "- see [tests/a.test.ts](tests/a.test.ts)"))).toEqual(["tests/a.test.ts"]);
+    expect(extractTestingPaths(doc("## Testing", "- see [the new case](tests/a.test.ts)"))).toEqual(["tests/a.test.ts"]);
+  });
+  it("italic: a paired _ wrapper is peeled", () => {
+    expect(extractTestingPaths(doc("## Testing", "- _tests/a.test.ts_"))).toEqual(["tests/a.test.ts"]);
+  });
+
+  // NON-REGRESSION. The strip is strictly PAIRED at token boundaries. `_quick/topic-text.txt` opens
+  // with `_` and does not close with one; it is the exact citation quick's brief lint exists to
+  // catch, so eating its leading underscore would defeat the feature that motivated this change.
+  it("NON-REGRESSION: a leading-underscore state path survives intact", () => {
+    expect(extractTestingPaths(doc("## Testing", "- the brief cites `_quick/topic-text.txt`"))).toEqual(["_quick/topic-text.txt"]);
+    expect(extractTestingPaths(doc("## Testing", "- `_implement/execute/`"))).toEqual(["_implement/execute/"]);
+  });
+  it("NON-REGRESSION: a bare snake_case filename is unchanged", () => {
+    expect(extractTestingPaths(doc("## Testing", "- run snake_case_name.py"))).toEqual(["snake_case_name.py"]);
+    expect(extractTestingPaths(doc("## Testing", "- tests/model/test_d19_temporal_graph.py"))).toEqual(["tests/model/test_d19_temporal_graph.py"]);
+  });
+  it("NON-REGRESSION: the parenthesized field form still parses, as before", () => {
+    expect(extractTestingPaths(doc("## Testing", "- MAP rules (`tests/model/test_d19_temporal_graph.py`):"))).toEqual(["tests/model/test_d19_temporal_graph.py"]);
+  });
+
+  // Success Criterion 4: no scope-check that passes today changes verdict. Asserted against a
+  // SHIPPED design doc in this repo (not a synthetic string): the values below were captured from
+  // the pre-C4 extractor, so a strip that narrowed anything would move them.
+  it("an existing shipped design doc extracts exactly what it did before C4", () => {
+    const shipped = readFileSync(join(process.cwd(), "docs", "superpowers", "specs", "2026-08-23-worktree-truth-telling-design.md"), "utf8");
+    expect(extractComponentsPaths(shipped)).toEqual([
+      "src/core/job.ts", "src/commands/job.ts", "WORKTREE=/START_BRANCH=/DRIFT=",
+      "src/core/implementScope.ts", "src/commands/implement.ts", "INVISIBLE_IN_TARGET=/INVISIBLE_PATH=",
+      "<art>/path-lint.txt", "commands/implement.md", "commands/job.md", "tests/job-worktree.test.ts",
+      "tests/job.test.ts", "tests/implement-scope.test.ts", "tests/implement-init.test.ts", "dist/ap.cjs",
+    ]);
+    expect(extractTestingPaths(shipped)).toEqual([
+      "tests/job-worktree.test.ts", "process.chdir(<root>/.ap/worktrees/demo", "tests/job-worktree.test.ts",
+      ".ap/worktrees/", "tests/job-worktree.test.ts", "docs/spec.md", "tests/job-worktree.test.ts",
+      "tests/implement-scope.test.ts", "keep.ts", "new.ts", "spec.md", "spec.md", "new.ts",
+      "tests/implement-init.test.ts", "<art>/path-lint.txt", "tests/job.test.ts",
+    ]);
+    // …and the verdict those paths produce is unchanged: one rogue path, out of scope.
+    expect(matchDiffAgainstComponents(
+      ["src/core/job.ts", "tests/job.test.ts", "commands/quick.md", "src/core/nowhere/rogue.ts"],
+      [...extractComponentsPaths(shipped), ...extractTestingPaths(shipped)],
+    )).toEqual(["src/core/nowhere/rogue.ts"]);
+  });
+});
+
+// ---- C3 testingBulletsWithoutPaths (2026-08-23-brief-path-correctness-design.md) ----
+// The 0.5.44 field failure, reconstructed: ten Testing bullets spelled the path out, two were pure
+// behavior prose. The parser was right; the authoring was incomplete. Counted PER BULLET, because a
+// section-level "parsed zero paths" check would not have fired on that doc at all.
+describe("testingBulletsWithoutPaths", () => {
+  const FIELD = doc(
+    "# D19", "## Testing",
+    "- `tests/model/test_d19_temporal_graph.py` — MAP head shapes",
+    "- `tests/model/test_d19_heads.py` — head registry",
+    "- `tests/model/test_d19_encoder.py` — encoder contract",
+    "- `tests/training/test_d19_loop.py` — loop wiring",
+    "- `tests/training/test_d19_sched.py` — scheduler",
+    "- `tests/data/test_d19_windows.py` — window builder",
+    "- `tests/data/test_d19_norm.py` — normalisation",
+    "- `tests/spec/test_d19_registry.py` — registry round-trip",
+    "- `tests/eval/test_d19_metrics.py` — metric parity",
+    "- `tests/eval/test_d19_report.py` — report rendering",
+    "- MAP TaskSpec construction rules (channels>=1; paired rejection tests)",
+    "- loss-contract gate enrollment",
+    "## Success Criteria", "- `tests/out-of-section.py` — not counted",
+  );
+  it("counts the field section as 10 with a path, 2 without", () => {
+    expect(testingBulletsWithoutPaths(FIELD)).toEqual({ withPath: 10, withoutPath: 2 });
+  });
+  it("a fully-pathed section reports zero without", () => {
+    const d = doc("## Testing", "- `tests/a.test.ts` — x", "- `tests/b.test.ts` — y");
+    expect(testingBulletsWithoutPaths(d)).toEqual({ withPath: 2, withoutPath: 0 });
+  });
+  it("non-bullet prose and blank lines are not counted at all", () => {
+    const d = doc("## Testing", "", "Run the suite before and after.", "", "- `tests/a.test.ts` — x", "");
+    expect(testingBulletsWithoutPaths(d)).toEqual({ withPath: 1, withoutPath: 0 });
+  });
+  it("no Testing section → zero of both", () => {
+    expect(testingBulletsWithoutPaths(doc("## Components", "- src/a.ts"))).toEqual({ withPath: 0, withoutPath: 0 });
+  });
+  it("a decorated bullet counts as path-bearing (C4 feeds this count)", () => {
+    expect(testingBulletsWithoutPaths(doc("## Testing", "- **`tests/a.test.ts`** — x"))).toEqual({ withPath: 1, withoutPath: 0 });
+  });
+
+  // The fixture above is a RECONSTRUCTION whose prose bullets happen to carry no slash, so it
+  // passes whether the count requires a file-shaped token or merely a path-shaped one. These are
+  // the VERBATIM bullets from the 0.5.44 field doc, and they are the ones that discriminate: the
+  // bullet that omitted `tests/spec/test_tasks.py` reads "Spec/metrics gates: ..." and is full of
+  // slash-bearing PROSE. Counting any slash-bearing token as a path scores it 6/1 — the counter
+  // blind to the exact case it exists for. Requiring a file extension (or a trailing-/ dir) scores
+  // it 3/4, which is the honest reading.
+  it("VERBATIM field bullets: slash-bearing prose is NOT a declared test file", () => {
+    const VERBATIM = doc(
+      "## Testing",
+      "- All new gates CPU-capable in the default leg except the capacity tool and driver (GPU, explicit).",
+      "- D19 (`tests/model/test_d19_temporal_graph.py`): every positive conjunct ships its executable mutant.",
+      "- Loader gates (`tests/data_seam/test_frames.py`): the measured frame-0 (1,1,1) sentinel case.",
+      "- Spec/metrics gates: MAP TaskSpec construction rules (channels>=1; value_range/aux_shape forbidden — paired rejection tests); measure_task MAP branch + the converted `elif`/raise proven by an unknown-Kind raise test; loss-contract gate enrollment.",
+      "- Capacity record (`tests/model/temporal_capacity.json` + validation): sweep complete.",
+      "- pmg overfit record validation: exact key-set, per-Kind loss/grad scale block present.",
+      "- Existing suites stay green untouched: D15/D16/D17 pins, the trunk digest recomputation.",
+      "## Success Criteria", "- s",
+    );
+    expect(testingBulletsWithoutPaths(VERBATIM)).toEqual({ withPath: 3, withoutPath: 4 });
+  });
+
+  it("an explicit trailing-slash directory counts as declared", () => {
+    expect(testingBulletsWithoutPaths(doc("## Testing", "- everything under `tests/data_seam/` is re-run"))).toEqual({ withPath: 1, withoutPath: 0 });
   });
 });

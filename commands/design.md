@@ -89,7 +89,12 @@ tool** (atomic single-shot writes), one file per section:
   somewhere other than this checkout (a box-local config, a sibling repo) is tagged **`[on-box]`** on
   the same line — `` - `~/.ap/contracts.yaml` [on-box] — read at spawn time `` — which exempts that
   line from the path check; `assemble` warns (never fails) on every unmarked path it cannot find.
-- `.draft/testing.md` → `## Testing` + bullets of test coverage. *(required)*
+- `.draft/testing.md` → `## Testing` + bullets of test coverage. *(required)* **Lead each bullet with
+  the test file path** (`` - `tests/foo.test.ts` — <what it asserts> ``), the same rule
+  `.draft/components.md` carries above: `implement`'s scope-check counts Testing paths as declared
+  scope, so a bullet naming only a behavior ("loss-contract gate enrollment") contributes nothing and
+  the files it covers surface as out-of-scope at Stage 4. `implement audit` warns `<n> of <m> Testing
+  bullets declare no path`, so the gap is visible before a worker is spawned.
 - `.draft/success-criteria.md` → `## Success Criteria` + measurable bullets. *(required)*
 
 Each section body should cite sources inline where applicable (`path/to/file:line`, URLs, runtime

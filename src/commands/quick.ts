@@ -1,6 +1,6 @@
 // src/commands/quick.ts
 import { mkdirSync, existsSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
@@ -21,6 +21,7 @@ import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
 import { run as sendRun } from "./send.js";
 import { readIfExists, readIfExistsOrNull, readField, kvField } from "../core/fsread.js";
 import { branchNameFor, readBranchRecord } from "../core/branchRecord.js";
+import { invisibleInTarget, pathTokensFrom } from "../core/implementScope.js";
 
 function usage(): number {
   log.error("usage: quick <init|branch|turn-send|turn-wait|detect-test|finish|forensics|summary> ...");
@@ -127,6 +128,56 @@ function readStashMarker(exec: string, topic: string): { sha: string; message: s
   return { sha: sha ?? "", message: name || stashWipMessage(topic) };
 }
 
+/** The state namespace, reachable ONLY by an absolute path: the state dir is keyed to the repo ROOT
+ *  (sha256 of its realpath), so a relative `_quick/...` resolves against whatever cwd the worker
+ *  happens to hold — which under `--target` is not the repo the state dir belongs to. */
+const STATE_RELATIVE_PREFIXES = ["_quick/", "_implement/", ".ap/"];
+
+/** Warn-only brief lint (2026-08-23-brief-path-correctness-design.md, C2). Reads the hub's
+ *  `task-brief.md` and reports two classes of path citation that cannot resolve where the worker
+ *  will stand:
+ *
+ *   1. INVISIBLE — cited paths that exist in the origin checkout and are MISSING in the target,
+ *      through the shared `invisibleInTarget` predicate. The differential is what keeps this channel
+ *      worth reading: a plain missing-path check fires on every file the brief intends to CREATE.
+ *   2. STATE_RELATIVE — a RELATIVE path into the state namespace. Unconditional, because it is never
+ *      correct: this is exactly the `_quick/topic-text.txt` citation that cost a field run a whole
+ *      question round. This class alone files ONE forensics flag, so /ap:review can trend it; the
+ *      invisible class warns and records without a flag (a brief may legitimately cite an
+ *      about-to-be-created file that happens to exist here).
+ *
+ *  Both classes land in `<exec>/brief-lint.txt` — the layer that knows records its own verdict,
+ *  because stdout is gone once the reading hub's turn ends. rc is NOT this function's to change (rc
+ *  1 stays reserved for not-a-git-repo) and the brief is never rewritten. Called AFTER the
+ *  `target_cwd.txt` write so a not-git abort records nothing at all. */
+function lintBrief(topic: string, target: string, exec: string): void {
+  const brief = readIfExistsOrNull(join(quickArtDir(topic), "task-brief.md"));
+  if (brief === null) return;
+  const cited: string[] = [];
+  for (const line of brief.split("\n")) cited.push(...pathTokensFrom(line));
+  const root = repoRoot();
+  const invisible = invisibleInTarget(cited, root, target);
+  const stateRelative: string[] = [];
+  for (const p of cited) {
+    if (isAbsolute(p) || stateRelative.includes(p)) continue;
+    if (STATE_RELATIVE_PREFIXES.some((pre) => p.startsWith(pre))) stateRelative.push(p);
+  }
+  for (const p of invisible) {
+    log.warn(`quick branch: brief cites ${p}, which exists in ${root} but NOT in the target ${target} — the worker cannot read it; cite it absolute or commit it first`);
+  }
+  for (const p of stateRelative) {
+    log.warn(`quick branch: brief cites the state path ${p} RELATIVE — the state dir is keyed to the repo root and never travels with --target; cite it absolute`);
+  }
+  atomicWrite(join(exec, "brief-lint.txt"),
+    `MAIN_ROOT=${root}\nTARGET_CWD=${target}\n` +
+    `INVISIBLE_IN_TARGET=${invisible.length}\n` + invisible.map((p) => `INVISIBLE_PATH=${p}\n`).join("") +
+    `STATE_RELATIVE=${stateRelative.length}\n` + stateRelative.map((p) => `STATE_RELATIVE_PATH=${p}\n`).join(""));
+  // ONE flag, for the state-relative class only.
+  if (stateRelative.length > 0) {
+    runFlag("quick", topic, `brief-state-relative: the brief cites ${stateRelative.length} state path(s) RELATIVE (${stateRelative.join(", ")}) — unresolvable from the worker's cwd; state paths must be cited absolute`);
+  }
+}
+
 /** Testable core: snapshot + branch the target repo, recording execute/ facts. */
 export async function branchWith(topic: string, target: string, r: Runner, stashWip = false): Promise<number> {
   const exec = quickExecDir(topic);
@@ -171,6 +222,7 @@ export async function branchWith(topic: string, target: string, r: Runner, stash
   const branch = branchNameFor("quick", topic);
   const onBranch = createOrResumeBranch(r, branch);
   atomicWrite(join(exec, "target_cwd.txt"), target + "\n");
+  lintBrief(topic, target, exec);
   atomicWrite(join(exec, "start-branch.txt"), snap.branch + "\n");
   atomicWrite(join(exec, "branch-base.sha"), snap.baseSha + "\n");
   // The branch the run is ACTUALLY on, the way implement records its `recorded`: a failed checkout

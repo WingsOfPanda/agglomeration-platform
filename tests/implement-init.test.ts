@@ -173,6 +173,38 @@ describe("implement init", () => {
     expect(errSpy.text().match(LINT) ?? []).toHaveLength(0);
   });
 
+  // ---- Testing-bullet count (2026-08-23-brief-path-correctness-design.md, C3) ----
+  // The 0.5.44 field failure surfaced as OOS_COUNT=2 at Stage 4 on a doc whose two prose-only Testing
+  // bullets named no file at all. The count is per BULLET and it is reported HERE, before a worker is
+  // spawned. Warn-only: the rc stays the audit's alone.
+  const TB = /implement audit: (\d+) of (\d+) Testing bullets declare no path/;
+  const withTesting = (bullets: string) =>
+    "# T\n\n## Goal\ng\n\n## Architecture\na\n\n## Testing\n" + bullets + "\n## Success Criteria\ns\n";
+
+  it("audit verb: 2 path-bearing + 1 prose-only Testing bullet warns `1 of 3`, rc 0", async () => {
+    const p = docFile("testing-prose-design.md", withTesting(
+      "- `tests/a.test.ts` — asserts the guard\n- `tests/b.test.ts` — asserts the lint\n- loss-contract gate enrollment\n"));
+    expect(await implementRun(["audit", p])).toBe(0);
+    expect(errSpy.text()).toMatch(TB);
+    expect(errSpy.text().match(TB)!.slice(1, 3)).toEqual(["1", "3"]);
+    expect(errSpy.text()).toContain("lead each bullet with the file path it covers");
+  });
+
+  it("audit verb: every Testing bullet carries a path → no such warn, rc 0", async () => {
+    const p = docFile("testing-pathed-design.md", withTesting(
+      "- `tests/a.test.ts` — asserts the guard\n- `tests/b.test.ts` — asserts the lint\n"));
+    expect(await implementRun(["audit", p])).toBe(0);
+    expect(errSpy.text()).not.toMatch(TB);
+  });
+
+  it("audit verb: an audit-FAIL doc still returns rc 1, and the Testing warn is emitted alongside", async () => {
+    const p = docFile("testing-prose-bad-design.md",
+      "# T\n\n## Architecture\na\n\n## Testing\n- prose only\n\n## Success Criteria\ns\n");
+    expect(await implementRun(["audit", p])).toBe(1);
+    expect(errSpy.text()).toContain("ISSUE=no_goal_section");
+    expect(errSpy.text().match(TB)!.slice(1, 3)).toEqual(["1", "1"]);
+  });
+
   // ---- INVISIBLE_IN_TARGET (2026-08-23-worktree-truth-telling-design.md) ----
   // A detached run's worktree forks committed HEAD, so an uncommitted file is visible where the
   // operator stands and nowhere the worker can read. init reports the differential; the rc is

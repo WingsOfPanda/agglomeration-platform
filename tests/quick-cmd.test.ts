@@ -961,3 +961,106 @@ describe("quick summary", () => {
     expect(md).toContain("git -C /proj checkout main  then  git stash pop <ref>");
   });
 });
+
+// ---- brief lint (2026-08-23-brief-path-correctness-design.md, C2) ----
+// `quick branch` warn-lints the hub's task-brief for two classes of path citation that cannot
+// resolve where the WORKER will stand, records its own verdict in execute/brief-lint.txt, and files
+// exactly ONE forensics flag — for the state-relative class only. rc is untouched throughout.
+describe("quick branch: brief lint", () => {
+  let h: { home: string; cleanup: () => void };
+  let target: string;
+  beforeEach(() => {
+    h = freshHome();
+    mkdirSync(quickArtDir("auth"), { recursive: true });
+    mkdirSync(quickExecDir("auth"), { recursive: true });
+    // A target checkout that is NOT this repo: every repo-relative path is missing there.
+    target = mkdtempSync(join(tmpdir(), "ap-brief-tgt-"));
+  });
+  afterEach(() => { rmSync(target, { recursive: true, force: true }); h.cleanup(); });
+
+  function okRepo(): Runner {
+    return { run(cmd, args) {
+      const k = [cmd, ...args].join(" ");
+      if (k === "git rev-parse --git-dir") return { code: 0, stdout: ".git" };
+      if (k === "git symbolic-ref HEAD") return { code: 0, stdout: "refs/heads/main" };
+      if (k === "git rev-parse HEAD") return { code: 0, stdout: "base000" };
+      return { code: 0, stdout: "" };
+    } };
+  }
+  function brief(body: string) { writeFileSync(join(quickArtDir("auth"), "task-brief.md"), body); }
+  const lintFile = () => join(quickExecDir("auth"), "brief-lint.txt");
+  /** Every forensics feed this run wrote, under the fresh AP_HOME. */
+  function flags(): string[] {
+    const root = join(h.home, "forensics");
+    if (!existsSync(root)) return [];
+    const out: string[] = [];
+    for (const d of readdirSync(root)) for (const f of readdirSync(join(root, d))) out.push(f);
+    return out;
+  }
+
+  it("both classes: rc 0, both warns on stderr, both in brief-lint.txt, EXACTLY ONE flag", async () => {
+    brief([
+      "## Goal", "Rename the guard.", "",
+      "## Acceptance check", "the repo's tests pass", "",
+      "## Touch-points",
+      "`src/core/implementScope.ts` (exists)",
+      "read the cleaned topic from `_quick/topic-text.txt`",
+    ].join("\n"));
+    const { rc, err } = await capture(() => branchWith("auth", target, okRepo()));
+    expect(rc).toBe(0);
+
+    // 1. invisible: present in this checkout, absent in the target.
+    expect(err).toContain("brief cites src/core/implementScope.ts, which exists in");
+    expect(err).toContain(`NOT in the target ${target}`);
+    // 2. state-relative: never correct, regardless of what exists anywhere.
+    expect(err).toContain("brief cites the state path _quick/topic-text.txt RELATIVE");
+
+    const rec = readFileSync(lintFile(), "utf8");
+    expect(rec).toContain("INVISIBLE_IN_TARGET=1\nINVISIBLE_PATH=src/core/implementScope.ts\n");
+    expect(rec).toContain("STATE_RELATIVE=1\nSTATE_RELATIVE_PATH=_quick/topic-text.txt\n");
+    expect(rec).toContain(`TARGET_CWD=${target}\n`);
+
+    // EXACTLY ONE flag, and it is the state-relative one. The invisible class warns and records
+    // without a flag: a brief may legitimately cite a file that exists here and is about to be made
+    // there, so flagging it would train /ap:review to ignore the channel.
+    const f = flags();
+    expect(f).toHaveLength(1);
+    expect(f[0]).toMatch(/-quick-flag-auth\.md$/);
+    expect(readFileSync(join(h.home, "forensics", readdirSync(join(h.home, "forensics"))[0], f[0]), "utf8"))
+      .toContain("brief-state-relative");
+  });
+
+  it("a clean brief: no warns, no flag, but the verdict is still recorded", async () => {
+    brief(["## Goal", "Rename the guard.", "", "## Touch-points", `${join(target, "new.ts")} (new)`].join("\n"));
+    const { rc, err } = await capture(() => branchWith("auth", target, okRepo()));
+    expect(rc).toBe(0);
+    expect(err).not.toContain("brief cites");
+    expect(readFileSync(lintFile(), "utf8")).toContain("INVISIBLE_IN_TARGET=0\nSTATE_RELATIVE=0\n");
+    expect(flags()).toHaveLength(0);
+  });
+
+  it("an ABSOLUTE state path is not the state-relative class — that is the fix being asked for", async () => {
+    brief(["## Goal", "g", "", "## Touch-points", `${join(h.home, "state", "abc", "auth", "_quick", "topic-text.txt")} (exists)`].join("\n"));
+    const { rc, err } = await capture(() => branchWith("auth", target, okRepo()));
+    expect(rc).toBe(0);
+    expect(err).not.toContain("RELATIVE");
+    expect(readFileSync(lintFile(), "utf8")).toContain("STATE_RELATIVE=0\n");
+    expect(flags()).toHaveLength(0);
+  });
+
+  // The lint runs AFTER the target_cwd.txt write, so the not-a-git-repo abort (rc 1) records NOTHING
+  // — no brief-lint.txt for a run that never started.
+  it("not-git abort: rc 1 and no brief-lint.txt at all", async () => {
+    brief(["## Touch-points", "`_quick/topic-text.txt`"].join("\n"));
+    const dead: Runner = { run: () => ({ code: 128, stdout: "" }) };
+    expect(await branchWith("auth", target, dead)).toBe(1);
+    expect(existsSync(lintFile())).toBe(false);
+    expect(flags()).toHaveLength(0);
+  });
+
+  it("no brief on disk: nothing is linted and nothing is recorded", async () => {
+    expect(await branchWith("auth", target, okRepo())).toBe(0);
+    expect(existsSync(lintFile())).toBe(false);
+    expect(flags()).toHaveLength(0);
+  });
+});
