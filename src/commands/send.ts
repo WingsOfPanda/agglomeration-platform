@@ -1,9 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { log } from "../core/log.js";
-import { repoRoot } from "../core/paths.js";
+import { repoRoot, workerDir, sameStateDir } from "../core/paths.js";
 import { mainCheckoutRoot, orphanRefusal, orphanedTopicState, worktreeTopic } from "../core/job.js";
 import { resolveModel, paneMetaRead, inboxWrite, inboxPath } from "../core/ipc.js";
-import { paneOwned, paneSend } from "../core/tmux.js";
+import { paneOwned, paneSend, paneStateRead } from "../core/tmux.js";
 import { validateSlug } from "../core/slug.js";
 
 /** The typed pane prompt that points a worker at its inbox. A claude worker's line carries the
@@ -15,14 +15,19 @@ export function taskNudge(inbox: string, model: string, env: NodeJS.ProcessEnv =
   return `Read ${inbox} and execute the task${ultra ? " with ultracode" : ""}. Reply when done.`;
 }
 
-/** The two tmux touches this verb makes: the ownership probe that decides whether the pane may be
- *  typed into, and the typing itself. Injected only by tests — nothing may reach a real pane in a
- *  unit test, least of all the verb whose bug was typing into a stranger's shell. */
+/** The three tmux touches this verb makes: the ownership probe that decides whether the pane may be
+ *  typed into, the @ap_state read that decides whether the tree it is about to write is the tree the
+ *  worker reads, and the typing itself. Injected only by tests — nothing may reach a real pane in a
+ *  unit test, least of all the verb whose bug was typing into a stranger's shell. `paneState` is
+ *  optional so a test that is not about the state guard needs no shim and reaches no tmux: an
+ *  un-injected reader answers "" (unverified), the same proceed-anyway value an unstamped pane
+ *  gives. The shipped path always injects the live reader. */
 export interface SendCmdDeps {
   paneOwned(pane: string, nonce: string): Promise<boolean>;
   paneSend(pane: string, line: string): Promise<void>;
+  paneState?(pane: string): Promise<string>;
 }
-const liveSendCmdDeps: SendCmdDeps = { paneOwned, paneSend };
+const liveSendCmdDeps: SendCmdDeps = { paneOwned, paneSend, paneState: paneStateRead };
 
 export async function run(args: string[], deps: SendCmdDeps = liveSendCmdDeps): Promise<number> {
   // ONE state tree per run, whatever directory the hub is standing in. Every state path derives from
@@ -68,6 +73,24 @@ async function dispatchVerb(args: string[], deps: SendCmdDeps): Promise<number> 
   // Ownership, not liveness: a recorded id that outlived its pane can name a stranger's pane after a
   // tmux restart, and this verb TYPES INTO the pane it accepts (the nudge is executed there).
   if (!(await deps.paneOwned(pane, owner.nonce))) { log.error(`${agent}'s pane ${pane} is gone or is no longer ours (orphan); run ap stop ${agent} ${topic}`); return 1; }
+
+  // The hub's own proof that it resolved the tree this worker was actually given. inboxWrite and the
+  // nudge derive from the SAME cwd, so they stay consistent with each other while both miss the
+  // worker; the pane is the one reference the two sides share that does not derive from the hub's
+  // cwd. Three-valued, and the third value carries the weight: an unstamped pane (a worker spawned
+  // by a pre-@ap_state release) is UNVERIFIED, never mismatched — refusing on absence would strand
+  // every in-flight worker across the upgrade, the same discipline `job wait` and classifyTestRun
+  // apply to a check that could not run. This MUST precede inboxWrite: a guard that refuses after
+  // writing has already put the task in the tree it was guarding against.
+  const resolvedDir = workerDir(agent, model, topic);
+  const stamped = deps.paneState ? await deps.paneState(pane) : "";
+  if (stamped && !sameStateDir(stamped, resolvedDir)) {
+    log.error(`state-tree disagreement: ${agent}'s pane ${pane} was given a different state tree than this hub resolved; nothing was written`);
+    log.error(`  worker's tree (pane @ap_state): ${stamped}`);
+    log.error(`  tree resolved here:             ${resolvedDir}`);
+    log.error(`  run ap from the repo root that owns this run, or finish/tear down the run that owns the other tree (ap list; ap stop ${agent} ${topic})`);
+    return 2;
+  }
 
   if (msg.startsWith("@")) {
     const f = msg.slice(1);

@@ -70,6 +70,20 @@ export function jobDir(topic: string, opts?: { home?: string; cwd?: string }): s
   return join(topicDir(topic, opts), "_job");
 }
 
+/** Resolve a state-dir path for COMPARISON: realpath when it exists, otherwise the path itself with
+ *  any trailing slashes dropped. A tree that is symlinked (the workaround a field run reached for)
+ *  must compare EQUAL to its target, and a path that no longer resolves must still compare, not
+ *  throw. Mirrors repoHash's realpath-or-self discipline. */
+function realOrSelf(p: string): string {
+  try { return realpathSync(p); } catch { return p.replace(/(.)\/+$/, "$1"); }
+}
+/** Do two paths name the same state directory? The one comparison behind the hub-side state-tree
+ *  agreement guard (send) -- symlink-tolerant by construction, so the guard fires on a genuinely
+ *  different tree and never on the same tree reached by another name. */
+export function sameStateDir(a: string, b: string): boolean {
+  return realOrSelf(a) === realOrSelf(b);
+}
+
 export function repoRoot(cwd: string = process.cwd()): string {
   try {
     return execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8" }).trim();

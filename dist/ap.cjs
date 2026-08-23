@@ -237,6 +237,16 @@ function workerDir(agent, model, topic, opts) {
 function jobDir(topic, opts) {
   return (0, import_node_path.join)(topicDir(topic, opts), "_job");
 }
+function realOrSelf(p) {
+  try {
+    return (0, import_node_fs3.realpathSync)(p);
+  } catch {
+    return p.replace(/(.)\/+$/, "$1");
+  }
+}
+function sameStateDir(a2, b) {
+  return realOrSelf(a2) === realOrSelf(b);
+}
 function repoRoot(cwd = process.cwd()) {
   try {
     return (0, import_node_child_process.execFileSync)("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8" }).trim();
@@ -8730,6 +8740,9 @@ function setOptionArgs(pane, opt, val) {
 function paneNonceSetArgs(pane, nonce) {
   return setOptionArgs(pane, "@ap_nonce", nonce);
 }
+function paneStateSetArgs(pane, dir) {
+  return setOptionArgs(pane, "@ap_state", dir);
+}
 function parsePaneNonces(stdout, realIds) {
   const m = /* @__PURE__ */ new Map();
   const dup = /* @__PURE__ */ new Set();
@@ -8842,15 +8855,24 @@ async function ensureWindowBorderStatus(target) {
   }
 }
 async function livePaneNonces() {
+  return livePaneOption("@ap_nonce");
+}
+async function livePaneOption(opt) {
   try {
     const [ids, pairs] = await Promise.all([
       execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}"]),
-      execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}	#{@ap_nonce}"])
+      execa("tmux", ["list-panes", "-a", "-F", `#{pane_id}	#{${opt}}`])
     ]);
     return parsePaneNonces(pairs.stdout, new Set(ids.stdout.split("\n").filter(Boolean)));
   } catch {
     return /* @__PURE__ */ new Map();
   }
+}
+async function livePaneStates() {
+  return livePaneOption("@ap_state");
+}
+async function paneStateRead(pane) {
+  return (await livePaneStates()).get(pane) ?? "";
 }
 async function paneOwned(pane, nonce) {
   if (!NONCE_RE.test(nonce)) return false;
@@ -8859,6 +8881,14 @@ async function paneOwned(pane, nonce) {
 async function paneNonceSet(pane, nonce) {
   try {
     await execa("tmux", paneNonceSetArgs(pane, nonce));
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function paneStateSet(pane, dir) {
+  try {
+    await execa("tmux", paneStateSetArgs(pane, dir));
     return true;
   } catch {
     return false;
@@ -17322,6 +17352,15 @@ async function dispatchVerb(args, deps) {
     log.error(`${agent}'s pane ${pane} is gone or is no longer ours (orphan); run ap stop ${agent} ${topic}`);
     return 1;
   }
+  const resolvedDir = workerDir(agent, model, topic);
+  const stamped = deps.paneState ? await deps.paneState(pane) : "";
+  if (stamped && !sameStateDir(stamped, resolvedDir)) {
+    log.error(`state-tree disagreement: ${agent}'s pane ${pane} was given a different state tree than this hub resolved; nothing was written`);
+    log.error(`  worker's tree (pane @ap_state): ${stamped}`);
+    log.error(`  tree resolved here:             ${resolvedDir}`);
+    log.error(`  run ap from the repo root that owns this run, or finish/tear down the run that owns the other tree (ap list; ap stop ${agent} ${topic})`);
+    return 2;
+  }
   if (msg.startsWith("@")) {
     const f = msg.slice(1);
     if (!(0, import_node_fs18.existsSync)(f)) {
@@ -17353,7 +17392,7 @@ var init_send2 = __esm({
     init_ipc2();
     init_tmux();
     init_slug();
-    liveSendCmdDeps = { paneOwned, paneSend };
+    liveSendCmdDeps = { paneOwned, paneSend, paneState: paneStateRead };
   }
 });
 
@@ -17619,6 +17658,7 @@ var init_forensics = __esm({
 // src/commands/spawn.ts
 var spawn_exports = {};
 __export(spawn_exports, {
+  paneStateStamp: () => paneStateStamp,
   parseSpawnArgs: () => parseSpawnArgs,
   prepareWorkerState: () => prepareWorkerState,
   resolveMode: () => resolveMode,
@@ -17665,11 +17705,15 @@ function parseSpawnArgs(args) {
   return { agent, model, topic, mode, cwd, targetPane, preflightArtDir, session, role, initial };
 }
 async function stampOrFail(pane, nonce, agent, model, topic) {
-  if (await paneNonceSet(pane, nonce)) return true;
-  captureSpawnFailure({ agent, model, topic, reason: "pane_failed", detail: `could not stamp @ap_nonce on ${pane}` });
+  const missing = !await paneNonceSet(pane, nonce) ? "@ap_nonce" : !await paneStateSet(pane, paneStateStamp(agent, model, topic)) ? "@ap_state" : "";
+  if (!missing) return true;
+  captureSpawnFailure({ agent, model, topic, reason: "pane_failed", detail: `could not stamp ${missing} on ${pane}` });
   await killNow(pane);
-  log.error(`could not stamp the ownership nonce on ${pane} (tmux unreachable?); the pane was torn down rather than left unownable \u2014 check for a stray pane with: tmux list-panes -a`);
+  log.error(`could not stamp the ownership nonce on ${pane} (tmux unreachable?): ${missing} was refused; the pane was torn down rather than left unownable \u2014 check for a stray pane with: tmux list-panes -a`);
   return false;
+}
+function paneStateStamp(agent, model, topic) {
+  return workerDir(agent, model, topic);
 }
 function prepareWorkerState(agent, model, topic, role) {
   stateInit(agent, model, topic);

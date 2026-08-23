@@ -14,7 +14,7 @@ import { identityWrite, identityPath, seedWorkerStatus, writeWorkerStatus, inbox
 import { paneNonceFor } from "../core/roster.js";
 import { pickRandomAgent, agentInUse, formatCollisionError } from "../core/agents.js";
 import { agentBinary, agentDefaultMode, agentModeArgs, agentReadyTimeout, agentBootstrapSleep } from "../core/contracts.js";
-import { wrapLaunch, splitRight, splitDown, respawn, paneOwned, paneNonceSet, paneLabelSet, paneSend, killNow, capturePane, ensurePaneBorders, ensureWindowBorderStatus, sessionExists, newSession, newWindow, validSessionName } from "../core/tmux.js";
+import { wrapLaunch, splitRight, splitDown, respawn, paneOwned, paneNonceSet, paneStateSet, paneLabelSet, paneSend, killNow, capturePane, ensurePaneBorders, ensureWindowBorderStatus, sessionExists, newSession, newWindow, validSessionName } from "../core/tmux.js";
 import { labelFor } from "../core/colors.js";
 import { taskNudge } from "./send.js";
 import { captureFailure, captureSpawnFailure, bootstrapFailureArgs } from "../core/forensics.js";
@@ -53,11 +53,25 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  *  ever kill, so the pane goes now (best-effort — the same tmux failure may well defeat the kill,
  *  and the message says so). Returns false when the caller must abort the spawn. */
 async function stampOrFail(pane: string, nonce: string, agent: string, model: string, topic: string): Promise<boolean> {
-  if (await paneNonceSet(pane, nonce)) return true;
-  captureSpawnFailure({ agent, model, topic, reason: "pane_failed", detail: `could not stamp @ap_nonce on ${pane}` });
+  // Both stamps or neither: @ap_state is the hub's proof that the tree it resolves is the tree this
+  // worker was given, and a pane carrying one stamp without the other is a pane whose answers cannot
+  // be trusted either way.
+  const missing = !(await paneNonceSet(pane, nonce)) ? "@ap_nonce"
+    : !(await paneStateSet(pane, paneStateStamp(agent, model, topic))) ? "@ap_state"
+    : "";
+  if (!missing) return true;
+  captureSpawnFailure({ agent, model, topic, reason: "pane_failed", detail: `could not stamp ${missing} on ${pane}` });
   await killNow(pane);
-  log.error(`could not stamp the ownership nonce on ${pane} (tmux unreachable?); the pane was torn down rather than left unownable — check for a stray pane with: tmux list-panes -a`);
+  log.error(`could not stamp the ownership nonce on ${pane} (tmux unreachable?): ${missing} was refused; the pane was torn down rather than left unownable — check for a stray pane with: tmux list-panes -a`);
   return false;
+}
+
+/** The value stamped onto the worker's pane as @ap_state. It is exactly the `workerDir` that
+ *  identityWrite embeds in the worker's identity.md, so pane and identity name ONE tree by
+ *  construction -- if this ever returns something else, the hub-side guard in `send` starts refusing
+ *  healthy runs, which is why it is a named seam and not an inline expression. */
+export function paneStateStamp(agent: string, model: string, topic: string): string {
+  return workerDir(agent, model, topic);
 }
 
 /** The three pre-tmux state writes every spawn path crosses: a fresh state dir, the identity file,
