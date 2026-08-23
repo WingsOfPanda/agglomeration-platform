@@ -54,8 +54,14 @@ export async function run(args: string[]): Promise<number> {
   // the directive's "ordinary attached run" branch and finishes by pushing and opening a PR — the
   // exact thing detachment refuses — and identity/status/inbox split along with it. Outside a git
   // repo repoRoot() falls back to cwd, so this is a no-op there.
+  // And ONE namespace across the two CHECKOUTS a worktree run has. `repoRoot()` from inside
+  // `.ap/worktrees/<topic>` reports the WORKTREE's toplevel, so a verb invoked there hashed a
+  // different repo path, found no record, and answered from an empty namespace: `budget-check`
+  // printed `BUDGET=unknown` rc 1 — indistinguishable from "budget exhausted" — on a healthy
+  // 0.62h/2h run. `mainCheckoutRoot` re-roots ap-created run worktrees only, and leaves every other
+  // path (a user's own worktree included) exactly as git reported it.
   const origCwd = process.cwd();
-  const root = repoRoot();
+  const root = J.mainCheckoutRoot(repoRoot());
   if (root !== origCwd) process.chdir(root);
   try {
     return await dispatchSub(sub, rest, origCwd);
@@ -136,6 +142,47 @@ function jobProgressNow(rec: J.JobRecord) {
 
 // ---------- the isolated worktree a detached run works in ----------
 
+/** Undo `core.quotePath` (on by default): git wraps a path holding non-ASCII, a quote, a backslash
+ *  or a control character in double quotes and C-escapes its BYTES. Printed raw, an operator with a
+ *  `desig\303\251n.md` in their tree is shown a name that matches nothing they can type. Octal
+ *  escapes are decoded as bytes and only then read back as UTF-8, because one character is several
+ *  escapes. A string that is not quoted is returned untouched. */
+function unquotePorcelainPath(s: string): string {
+  if (s.length < 2 || !s.startsWith('"') || !s.endsWith('"')) return s;
+  const body = s.slice(1, -1);
+  const simple: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
+  const bytes: number[] = [];
+  for (let i = 0; i < body.length; i++) {
+    const c = body.charAt(i);
+    if (c !== "\\") { for (const b of Buffer.from(c, "utf8")) bytes.push(b); continue; }
+    const n = body.charAt(++i);
+    if (n >= "0" && n <= "7") { bytes.push(parseInt(body.slice(i, i + 3), 8) & 0xff); i += 2; continue; }
+    bytes.push(simple[n] ?? n.charCodeAt(0));
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
+/** The paths in a `git status --porcelain` (v1) listing. Each entry is `XY <path>`, and a rename or
+ *  copy is `XY <from> -> <to>` — the DESTINATION is the name that matters, since that is what the
+ *  operator now has on disk. Parsed rather than echoed for the same reason `COMMITS` is: an echoed
+ *  listing shows ` M docs/spec.md` and `"d\303\251sign.md"` at somebody who has to act on it. */
+function dirtyPaths(porcelain: string): string[] {
+  const out: string[] = [];
+  for (const line of porcelain.split("\n")) {
+    if (line.length < 4) continue;
+    const xy = line.slice(0, 2);
+    let entry = line.slice(3);
+    if (xy.includes("R") || xy.includes("C")) {
+      const arrow = entry.indexOf(" -> ");
+      if (arrow >= 0) entry = entry.slice(arrow + 4);
+    }
+    const p = unquotePorcelainPath(entry);
+    if (p) out.push(p);
+  }
+  return out;
+}
+
+
 /** Create the worktree the WORKER will run in, and return what the record must carry.
  *
  *  Detached runs used to check `feat/<cmd>-<topic>` out in the MAIN checkout, which froze the origin
@@ -205,8 +252,18 @@ export function startWorktree(root: string, topic: string, r: Runner): { worktre
     if (mode) log.ok(`job start: ${mode} node_modules into the worktree`);
     else log.warn(`job start: could not clone node_modules into ${worktree} (cp -al, -cR and -R all failed) — the worker will have to install dependencies itself`);
   }
-  if (classifyDirty(r.run("git", ["status", "--porcelain"]).stdout)) {
+  const porcelain = r.run("git", ["status", "--porcelain"]).stdout;
+  if (classifyDirty(porcelain)) {
+    // WHICH files, not just "the tree is dirty". Twice now the invisible file was the design doc the
+    // run was launched to implement, and a warning that does not name it is a warning the operator
+    // reads as routine WIP noise.
+    const paths = dirtyPaths(porcelain);
+    const shown = paths.slice(0, 10);
+    const more = paths.length - shown.length;
     log.warn(`job start: ${root} has UNCOMMITTED changes and they are NOT in the worktree — it forks committed HEAD (${baseSha.slice(0, 8)}). Nothing of yours was touched or stashed; the run simply will not see that work.`);
+    for (const p of shown) log.warn(`  not in the worktree: ${p}`);
+    if (more > 0) log.warn(`  +${more} more`);
+    log.warn(`  If the run must READ any of those — a design doc especially — stop now: 'ap job stop ${topic}', commit them, and start again.`);
   }
   log.ok(`job start: worktree ${worktree} on ${baseBranch} at ${baseSha.slice(0, 8)}`);
   return { worktree, baseSha };
@@ -266,6 +323,25 @@ export function sweepWorktree(rec: J.JobRecord, root: string, r: Runner): boolea
   return true;
 }
 
+/** How far the run's STARTING branch has moved past the fork base — `null` when that cannot be
+ *  answered, which `job stop` and `job status` both render as `?`.
+ *
+ *  It degrades independently of the branch NAME, as `commands/job.md` documents: the name is known
+ *  from the record alone, so a count that fails (branch deleted, unreadable ref, git noise on
+ *  stdout) must not also erase the name the operator needs. The count is parsed rather than echoed —
+ *  the same discipline `COMMITS` gets — so callers print a number or `?`, never git's words.
+ *
+ *  The ref read is LOCAL (`refs/heads/<start_branch>`): ap makes no network git calls anywhere, so
+ *  this counts what this checkout has fetched, not what the remote holds. Every caller must SAY so;
+ *  an unlabelled `0` on a branch whose merges only exist on the forge reads as "not stale". */
+export function driftFor(rec: J.JobRecord, r: Runner): number | null {
+  if (!rec.base_sha || !rec.start_branch) return null;
+  const drift = r.run("git", ["rev-list", "--count", `${rec.base_sha}..refs/heads/${rec.start_branch}`]);
+  const text = drift.stdout.trim();
+  const count = text === "" ? NaN : Number(text);
+  return drift.code === 0 && Number.isFinite(count) ? count : null;
+}
+
 /** The push+PR commands for a run that produced commits, plus how far its start branch moved since
  *  the fork. Printed rather than executed: every detached run ends `keep`, so the operator decides,
  *  and drift is the number that decides FOR them — the hub cross-verified against the fork base, so
@@ -279,20 +355,11 @@ export function finishHint(rec: J.JobRecord, r: Runner): void {
   const count = r.run("git", ["rev-list", "--count", `${rec.base_sha}..${branch}`]);
   const commits = Number(count.stdout.trim());
   if (count.code !== 0 || !Number.isFinite(commits) || commits <= 0) return;
-  const drift = rec.start_branch
-    ? r.run("git", ["rev-list", "--count", `${rec.base_sha}..refs/heads/${rec.start_branch}`])
-    : null;
-  // The two degrade independently, as `commands/job.md` documents them: the recorded name is known
-  // from the record alone, so a count that fails (branch deleted, unreadable ref, git noise on
-  // stdout) must not also erase the name the operator needs to read the hint. The count is parsed
-  // rather than echoed — the same discipline COMMITS gets above — so `DRIFT=` is a number or `?`.
-  const driftText = drift?.stdout.trim() ?? "";
-  const driftCount = driftText === "" ? NaN : Number(driftText);
-  const driftKnown = drift?.code === 0 && Number.isFinite(driftCount);
+  const drift = driftFor(rec, r);
   process.stdout.write(
     `FINISH=pending\nBRANCH=${branch}\nCOMMITS=${commits}\n` +
     `START_BRANCH=${rec.start_branch || "?"}\n` +
-    `DRIFT=${driftKnown ? driftCount : "?"}\n` +
+    `DRIFT=${drift === null ? "?" : drift}\n` +
     `git push -u origin ${branch}\n` +
     `gh pr create --head ${branch}\n`);
 }
@@ -405,6 +472,23 @@ async function statusRun(rest: string[]): Promise<number> {
     `BUDGET=${J.budgetExceeded(rec.started, rec.budget_hours, now) ? "exceeded" : "within"}\n` +
     `FINISH=${rec.finish}\nEVENTS=${events.length}\nLAST_EVENT=${last ? last.event : "none"}\n` +
     `PARKED=${stillParked ? "yes" : "no"}\n`);
+  // The worktree facts, DURING the run rather than at teardown. `finishHint` has carried DRIFT since
+  // 0.5.38, but only from `job stop` — after the operator's merge decision was already made. One
+  // dogfood branch sat through three merges of its starting branch and landed a conflict nobody
+  // could have seen coming from anything ap printed. Emitted only for a worktree run: a
+  // `--no-worktree` record has no fork base to measure against, and its stdout stays byte-identical.
+  //
+  // The caveat is not decoration. ap issues ZERO network git calls, so this counts commits on the
+  // LOCAL `refs/heads/<start_branch>`. In the exact scenario that motivated the field — PRs
+  // squash-merged on the forge, local `main` never pulled — a bare `DRIFT=0` would read as "not
+  // stale" and be worse than printing nothing.
+  if (rec.worktree) {
+    const drift = driftFor(rec, runnerAt(process.cwd()));
+    process.stdout.write(
+      `WORKTREE=${rec.worktree}\n` +
+      `START_BRANCH=${rec.start_branch || "?"}\n` +
+      `DRIFT=${drift === null ? "?" : drift} (local ref; ap never fetches)\n`);
+  }
   if (stillParked) process.stdout.write(`PARKED_MESSAGE=${enc(stillParked.message ?? stillParked.note ?? "")}\n`);
   if (liveness === "dead") {
     process.stdout.write(`NOTE=${enc(`the job hub's pane is gone. Its workers, if any, are now unsupervised: 'ap list ${rec.topic}' shows them, 'ap job stop ${rec.topic}' tears the whole job down. Nothing is auto-respawned — a second hub waking onto a live worker corrupts the run.`)}\n`);

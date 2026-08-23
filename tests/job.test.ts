@@ -269,10 +269,21 @@ describe("jobBrief", () => {
     expect(q).toContain("ap quick init --target /repo/.ap/worktrees/demo");
     expect(q).toContain("ap quick branch --target /repo/.ap/worktrees/demo");
   });
+  // W1: what the worktree does NOT contain is a fact only this layer knows. A fork of committed HEAD
+  // carries no build products, no untracked config and none of the operator's WIP, and a hub that
+  // does not know that reads a missing file as a path to guess at.
+  it("states that the worktree is a FRESH checkout of committed HEAD, and what did not come across", () => {
+    expect(b).toContain("FRESH checkout of the committed HEAD");
+    expect(b).toContain("no build products");
+    expect(b).toContain("untracked `.env`");
+    expect(b).toContain("node_modules");
+    expect(b).toContain("treat a file you cannot find as absent");
+  });
   it("says nothing about a worktree for a --no-worktree run (or a pre-0.5.36 record)", () => {
     const none = J.jobBrief({ ...REC, worktree: "", base_sha: "" });
     expect(none).not.toContain("WORKTREE");
     expect(none).not.toContain("--target");
+    expect(none).not.toContain("FRESH checkout of the committed HEAD");
   });
   // The return address for the hub's completion hint. A run launched outside tmux has none, and the
   // line is still rendered empty — the hub reads the empty value as "send no hint", which is a

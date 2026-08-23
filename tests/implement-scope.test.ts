@@ -3,7 +3,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { extractComponentsPaths, extractTestingPaths, lintComponentsPaths, matchDiffAgainstComponents } from "../src/core/implementScope.js";
+import { extractComponentsPaths, extractTestingPaths, lintComponentsPaths, matchDiffAgainstComponents, pathsInvisibleInTarget } from "../src/core/implementScope.js";
 
 function doc(...lines: string[]): string { return lines.join("\n") + "\n"; }
 
@@ -255,5 +255,42 @@ describe("lintComponentsPaths", () => {
   it("does not disturb extraction: the same doc extracts every path, [on-box] included", () => {
     const d = doc("## Components", "- `src/core/real.ts` — edit", "- `etc/box.conf` [on-box] — box config");
     expect(extractComponentsPaths(d)).toEqual(["src/core/real.ts", "etc/box.conf"]);
+  });
+});
+
+// ---- pathsInvisibleInTarget (2026-08-23-worktree-truth-telling-design.md) ----
+// The differential a worktree run needs: which cited paths exist where the OPERATOR stands and not
+// where the WORKER will stand. The exists-in-main conjunct is the whole point — without it the
+// report fires on every file a design intends to CREATE, which is most of them.
+describe("pathsInvisibleInTarget", () => {
+  let main: string;
+  let target: string;
+  beforeAll(() => {
+    main = mkdtempSync(join(tmpdir(), "ap-inv-main-"));
+    target = mkdtempSync(join(tmpdir(), "ap-inv-tgt-"));
+    for (const r of [main, target]) writeFileSync(join(r, "keep.ts"), "");
+    writeFileSync(join(main, "spec.md"), "");              // uncommitted: in the checkout, not the fork
+    mkdirSync(join(main, "etc"), { recursive: true });
+    writeFileSync(join(main, "etc", "box.conf"), "");
+    mkdirSync(join(main, "tests"), { recursive: true });
+    writeFileSync(join(main, "tests", "only-here.test.ts"), "");
+  });
+  afterAll(() => { for (const r of [main, target]) rmSync(r, { recursive: true, force: true }); });
+
+  it("returns ONLY the path present in main and missing in the target", () => {
+    const d = doc("## Components", "- `keep.ts` — edit", "- `new.ts` — the file this design creates", "- `spec.md` — the design itself");
+    expect(pathsInvisibleInTarget(d, main, target)).toEqual(["spec.md"]);
+  });
+  it("an [on-box] line is exempt, however invisible its paths are", () => {
+    const d = doc("## Components", "- `etc/box.conf` [on-box] — read at spawn time");
+    expect(pathsInvisibleInTarget(d, main, target)).toEqual([]);
+  });
+  it("a ## Testing path present only in main is reported too", () => {
+    const d = doc("## Components", "- `keep.ts` — edit", "## Testing", "- `tests/only-here.test.ts` — the new case");
+    expect(pathsInvisibleInTarget(d, main, target)).toEqual(["tests/only-here.test.ts"]);
+  });
+  it("says nothing when the two roots are the same directory", () => {
+    const d = doc("## Components", "- `keep.ts`", "- `spec.md`", "## Testing", "- `tests/only-here.test.ts`");
+    expect(pathsInvisibleInTarget(d, main, main)).toEqual([]);
   });
 });

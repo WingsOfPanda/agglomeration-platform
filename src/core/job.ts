@@ -7,7 +7,7 @@
 // record says what was LAUNCHED and nothing else; liveness comes from the pane nonce, progress from
 // the outbox, and the hub's own state from its status.json. Four independent reads, no inference.
 
-import { join, sep } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { jobDir } from "./paths.js";
 import { ownsPane, verifiableNonce } from "./tmux.js";
 import { deriveTopicFromPath } from "./implement.js";
@@ -62,6 +62,24 @@ export function worktreePathFor(root: string, topic: string): string {
  *  record naming some other checkout is never a path `job stop` will delete. */
 export function worktreeProvenanced(path: string, root: string): boolean {
   return path.startsWith(join(root, ".ap", "worktrees") + sep) && path.length > join(root, ".ap", "worktrees").length + sep.length;
+}
+/** The MAIN checkout a `job` verb must resolve its state against, given the root git reported for
+ *  wherever it was invoked. A run worktree is `<root>/.ap/worktrees/<topic>` BY CONSTRUCTION
+ *  (`worktreePathFor`), so recovering the main root is the inverse string surgery — three path
+ *  segments off, no `git rev-parse` subprocess and no extra git call per invocation.
+ *
+ *  The recovered root is returned ONLY when `worktreeProvenanced` agrees that `root` really is a
+ *  path ap could have created under it; anything else (a user's own worktree, a plain subdirectory,
+ *  a repo three levels down) is left exactly as given. Stripping segments unconditionally would
+ *  re-home an unrelated checkout into some other repo's state namespace, which is a worse failure
+ *  than the one this fixes.
+ *
+ *  Why only the `job` verbs, and not `repoRoot()` itself: broadening `repoRoot` would silently
+ *  re-home a user's OWN worktree — the standard parallel-session discipline — into the main repo's
+ *  state, and make `implement init` default its target to a checkout the user deliberately left. */
+export function mainCheckoutRoot(root: string): string {
+  const recovered = dirname(dirname(dirname(root)));
+  return worktreeProvenanced(root, recovered) ? recovered : root;
 }
 /** Byte offset into the hub's outbox that the origin hub has already consumed. `job wait` resumes
  *  from it; `job relay` bumps it past the question it just answered, so the next wait does not
@@ -257,6 +275,11 @@ function worktreeLines(j: JobRecord): string[] {
     `The main checkout belongs to the operator for the whole run — the worker must never check out`,
     `a branch there. Your own state (\`.ap/state/...\`, this record, your inbox/outbox) stays keyed`,
     `to the repo ROOT and is unaffected; only the worker's target moves.`,
+    ``,
+    `That directory is a FRESH checkout of the committed HEAD the run forked from, plus a clone of`,
+    `node_modules. Nothing else came across: no build products, no untracked \`.env\` or local config,`,
+    `and none of the operator's uncommitted work. Anything the run needs that is not committed is`,
+    `simply not there — treat a file you cannot find as absent, not as a path to guess at.`,
   ];
 }
 

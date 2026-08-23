@@ -14,6 +14,9 @@
 // A separate addition (2026-08-14-components-path-lint-design.md) sits beside the guard rather than in
 // it: lintComponentsPaths, the warn-only authoring-time check that every declared path exists in the
 // checkout unless its line is tagged [on-box]. It never feeds the scope verdict.
+// So does pathsInvisibleInTarget (2026-08-23-worktree-truth-telling-design.md): the declared paths
+// that exist in the MAIN checkout and are missing in a worktree run's target. Also warn-only, and
+// also never part of the scope verdict.
 // deploy_extract_components_paths -> extractComponentsPaths,
 // deploy_match_diff_against_components -> matchDiffAgainstComponents. The Bash helpers read files via
 // awk; the TS ports take the already-read strings (file IO is the caller's concern). Table-row
@@ -24,7 +27,7 @@
 // scope-check into a failing one.
 
 import { existsSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 const COMPONENTS_HEADER = /^## Components[ \t]*$/;
 const TESTING_HEADER = /^## Testing[ \t]*$/;
@@ -124,6 +127,35 @@ export function lintComponentsPaths(docText: string, root: string): string[] {
   for (const rec of componentsPathsByLine(docText)) {
     if (rec.line.includes(ON_BOX_TAG)) continue;
     for (const p of rec.paths) if (!existsSync(isAbsolute(p) ? p : join(root, p))) out.push(p);
+  }
+  return out;
+}
+
+/** The declared paths that EXIST in the main checkout but are MISSING in the run's target — the
+ *  files a worktree run cannot see. Walks the Components section AND `## Testing` (the same two
+ *  sections the scope guard already treats as declared scope), skipping `[on-box]` lines exactly as
+ *  the lint does.
+ *
+ *  The exists-in-main AND missing-in-target conjunction is the whole point, not an optimisation. A
+ *  plain missing-in-target check fires on every file the design intends to CREATE, which in this
+ *  repo's docs is most of them, and a warning that fires every run is a warning nobody reads. Only
+ *  the differential isolates "this path exists where you are standing and not where the run will
+ *  stand" — which is exactly and only the uncommitted-file failure a worktree fork produces.
+ *
+ *  `resolve` rather than `join` so an ABSOLUTE declared path resolves to itself under both roots:
+ *  the conjunction then reads `exists(p) && !exists(p)` and can never fire, which is right — an
+ *  absolute path is the same file from either checkout. Warn-only; nothing here fails a run. */
+export function pathsInvisibleInTarget(docText: string, mainRoot: string, targetCwd: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const lines = [...componentsPathsByLine(docText), ...sectionPathsByLine(docText, TESTING_HEADER, ANY_TESTING_PREFIX)];
+  for (const rec of lines) {
+    if (rec.line.includes(ON_BOX_TAG)) continue;
+    for (const p of rec.paths) {
+      if (seen.has(p)) continue;
+      seen.add(p);
+      if (existsSync(resolve(mainRoot, p)) && !existsSync(resolve(targetCwd, p))) out.push(p);
+    }
   }
   return out;
 }
