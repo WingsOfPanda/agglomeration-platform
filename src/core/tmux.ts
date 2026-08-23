@@ -94,6 +94,15 @@ export function setOptionArgs(pane: string, opt: string, val: string): string[] 
 export function paneNonceSetArgs(pane: string, nonce: string): string[] {
   return setOptionArgs(pane, "@ap_nonce", nonce);
 }
+/** Stamp a pane with the state dir its worker was actually given (`workerDir`, the same absolute
+ *  path identityWrite embedded in the worker's identity.md). The pane is the ONLY reference hub and
+ *  worker share that does not itself derive from the hub's cwd, so this is what lets a hub prove --
+ *  before it types a nudge -- that the tree it resolved is the tree the worker reads. Written by the
+ *  same mechanism and in the same fail-closed place as @ap_nonce, so neither stamp exists without
+ *  the other. */
+export function paneStateSetArgs(pane: string, dir: string): string[] {
+  return setOptionArgs(pane, "@ap_state", dir);
+}
 const PANE_ID_RE = /^%\d+$/;
 /** The shape `randomUUID()` produces, and the ONLY shape an ownership check honours. The generator
  *  (spawn / preflightLayout) and this pattern change together. */
@@ -101,6 +110,8 @@ const NONCE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
 
 /** Parse `list-panes -a -F '#{pane_id}\t#{@ap_nonce}'` output into id -> nonce. A pane with no
  *  @ap_nonce (never ours, or pre-nonce) yields an empty field, i.e. "". Blank lines are skipped.
+ *  Shared with the @ap_state snapshot (livePaneStates): the format and every hardening rule below
+ *  are identical, only the option name in the -F string differs.
  *
  *  Hardened against a forged option value: tmux allows a NEWLINE inside a pane option, so a pane
  *  whose @ap_nonce contains one injects extra "rows" into this snapshot — the single oracle every
@@ -254,13 +265,33 @@ export async function livePaneNonces(): Promise<Map<string, string>> {
   // the same thing — ap cannot prove it owns anything. The empty map answers every ownership
   // question with "not ours", so nothing is killed, nudged, or called alive. Callers reach this from
   // paths that must survive a tmux-less machine (a headless box, a container, CI).
+  return livePaneOption("@ap_nonce");
+}
+
+/** The snapshot both pane options are read through. Kept as ONE body so @ap_state inherits every
+ *  hardening @ap_nonce has (the unforgeable id list, the phantom/duplicate rules) rather than
+ *  growing a second, weaker copy. */
+async function livePaneOption(opt: string): Promise<Map<string, string>> {
   try {
     const [ids, pairs] = await Promise.all([
       execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}"]),
-      execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}\t#{@ap_nonce}"]),
+      execa("tmux", ["list-panes", "-a", "-F", `#{pane_id}\t#{${opt}}`]),
     ]);
     return parsePaneNonces(pairs.stdout, new Set(ids.stdout.split("\n").filter(Boolean)));
   } catch { return new Map(); }
+}
+
+/** Every live pane's @ap_state stamp (the state dir its worker was given). */
+export async function livePaneStates(): Promise<Map<string, string>> {
+  return livePaneOption("@ap_state");
+}
+
+/** The state dir stamped on `pane`, or "" when there is none to compare: an unstamped pane (a worker
+ *  spawned by a pre-@ap_state release), a pane that is gone, or no tmux at all. "" is UNVERIFIED,
+ *  never "mismatched" -- the caller must proceed on it, exactly as classifyTestRun refuses to read a
+ *  check that could not run as a failure. Never throws. */
+export async function paneStateRead(pane: string): Promise<string> {
+  return (await livePaneStates()).get(pane) ?? "";
 }
 
 /** Is `pane` live and ours (its live @ap_nonce is the one we recorded)? The single-pane form of
@@ -277,6 +308,13 @@ export async function paneOwned(pane: string, nonce: string): Promise<boolean> {
  *  does not carry. */
 export async function paneNonceSet(pane: string, nonce: string): Promise<boolean> {
   try { await execa("tmux", paneNonceSetArgs(pane, nonce)); return true; } catch { return false; }
+}
+
+/** Stamp the pane's state dir; false on any tmux error (never throws). Load-bearing exactly as
+ *  paneNonceSet is: a pane that did not take this stamp can never prove which tree its worker reads,
+ *  so the CALLER must fail closed rather than leave the pane half-stamped. */
+export async function paneStateSet(pane: string, dir: string): Promise<boolean> {
+  try { await execa("tmux", paneStateSetArgs(pane, dir)); return true; } catch { return false; }
 }
 
 export async function paneSend(pane: string, line: string): Promise<void> {
