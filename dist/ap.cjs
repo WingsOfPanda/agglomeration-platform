@@ -18795,9 +18795,10 @@ function stashPopOnBranch(r, message, expectSha, requiredBranch) {
 }
 function createOrResumeBranch(r, name) {
   if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${name}`]).code === 0) {
-    return r.run("git", ["checkout", "-q", name]).code === 0;
+    if (r.run("git", ["merge-base", "--is-ancestor", "HEAD", `refs/heads/${name}`]).code !== 0) return "stale";
+    return r.run("git", ["checkout", "-q", name]).code === 0 ? "resumed" : "failed";
   }
-  return r.run("git", ["checkout", "-q", "-b", name]).code === 0;
+  return r.run("git", ["checkout", "-q", "-b", name]).code === 0 ? "created" : "failed";
 }
 function shortstat(r, base) {
   return r.run("git", ["diff", "--shortstat", `${base}..HEAD`]).stdout.trim();
@@ -19769,7 +19770,13 @@ async function branchWith(topic, target, r, stashWip = false) {
     return 1;
   }
   const branch = branchNameFor("quick", topic);
-  const onBranch = createOrResumeBranch(r, branch);
+  const outcome = createOrResumeBranch(r, branch);
+  if (outcome === "stale") {
+    log.error(`quick branch: ${branch} already exists in ${target} and has diverged from the current HEAD (its commits are likely already merged, e.g. by a squash merge) \u2014 refusing to resume it`);
+    log.error(`  delete it (git -C ${target} branch -D ${branch}), rename it (git -C ${target} branch -m ${branch} <new-name>), or check it out by hand and re-run`);
+    return 1;
+  }
+  const onBranch = outcome !== "failed";
   atomicWrite((0, import_node_path27.join)(exec, "target_cwd.txt"), target + "\n");
   lintBrief(topic, target, exec);
   atomicWrite((0, import_node_path27.join)(exec, "start-branch.txt"), snap.branch + "\n");
@@ -22411,6 +22418,10 @@ async function branchRun2(rest) {
   }
   return branchWith2({ topic: pos[0], noBranch, branchName }, {}, runnerAt);
 }
+function staleBranchRefusal(branch, cwd) {
+  log.error(`implement branch: ${branch} already exists in ${cwd} and has diverged from the current HEAD (its commits are likely already merged, e.g. by a squash merge) \u2014 refusing to resume it`);
+  log.error(`  delete it (git -C ${cwd} branch -D ${branch}), rename it (git -C ${cwd} branch -m ${branch} <new-name>), or check it out by hand and re-run`);
+}
 async function branchWith2(a2, opts, runnerFor) {
   const art = implementArtDir(a2.topic, opts);
   if (!(0, import_node_fs39.existsSync)(art)) {
@@ -22439,15 +22450,25 @@ async function branchWith2(a2, opts, runnerFor) {
       recorded = currentBranch(r) || "(detached)";
       log.info(`branch: (--no-branch) staying on ${recorded} in ${cwd}`);
     } else if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${defaultBranch}`]).code === 0) {
-      createOrResumeBranch(r, defaultBranch);
+      if (createOrResumeBranch(r, defaultBranch) === "stale") {
+        staleBranchRefusal(defaultBranch, cwd);
+        return 1;
+      }
       log.info(`branch: resumed ${defaultBranch} in ${cwd}`);
       recorded = defaultBranch;
-    } else if (createOrResumeBranch(r, defaultBranch)) {
-      log.info(`branch: created ${defaultBranch} in ${cwd}`);
-      recorded = defaultBranch;
     } else {
-      recorded = currentBranch(r) || "(detached)";
-      log.warn(`branch: checkout -b failed in ${cwd}; staying on current branch`);
+      const outcome = createOrResumeBranch(r, defaultBranch);
+      if (outcome === "stale") {
+        staleBranchRefusal(defaultBranch, cwd);
+        return 1;
+      }
+      if (outcome === "created") {
+        log.info(`branch: created ${defaultBranch} in ${cwd}`);
+        recorded = defaultBranch;
+      } else {
+        recorded = currentBranch(r) || "(detached)";
+        log.warn(`branch: checkout -b failed in ${cwd}; staying on current branch`);
+      }
     }
     rows.push(`${slug}	${recorded}`);
     const baseline = (0, import_node_path35.join)(art, "baselines", `${slug}.tsv`);
@@ -29463,7 +29484,13 @@ async function branchWith3(topic, target, r) {
     log.error(`bridge branch: ${target} is already on ${snap.branch} (another bridge session?) \u2014 refusing`);
     return 1;
   }
-  const onBranch = createOrResumeBranch(r, branch);
+  const outcome = createOrResumeBranch(r, branch);
+  if (outcome === "stale") {
+    log.error(`bridge branch: ${branch} already exists in ${target} and has diverged from the current HEAD (its commits are likely already merged, e.g. by a squash merge) \u2014 refusing to resume it`);
+    log.error(`  delete it (git -C ${target} branch -D ${branch}), rename it (git -C ${target} branch -m ${branch} <new-name>), or check it out by hand and re-run`);
+    return 1;
+  }
+  const onBranch = outcome !== "failed";
   const exec = bridgeExecDir(topic);
   atomicWrite((0, import_node_path54.join)(exec, "start-branch.txt"), snap.branch + "\n");
   atomicWrite((0, import_node_path54.join)(exec, "branch-base.sha"), snap.baseSha + "\n");

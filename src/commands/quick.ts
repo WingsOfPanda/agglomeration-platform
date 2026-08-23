@@ -220,7 +220,16 @@ export async function branchWith(topic: string, target: string, r: Runner, stash
   const snap = preSnapshot(r, "quick", topic);
   if (snap.state === "not-git") { log.error(`quick branch: ${target} is not a git repository`); return 1; }
   const branch = branchNameFor("quick", topic);
-  const onBranch = createOrResumeBranch(r, branch);
+  const outcome = createOrResumeBranch(r, branch);
+  // Refuse BEFORE anything is written: a leftover branch from a SQUASH-merged run of this same topic
+  // is not a continuation of this checkout, and resuming it opens a PR re-proposing merged work.
+  // ap touches nobody's branch — the operator picks the remedy.
+  if (outcome === "stale") {
+    log.error(`quick branch: ${branch} already exists in ${target} and has diverged from the current HEAD (its commits are likely already merged, e.g. by a squash merge) — refusing to resume it`);
+    log.error(`  delete it (git -C ${target} branch -D ${branch}), rename it (git -C ${target} branch -m ${branch} <new-name>), or check it out by hand and re-run`);
+    return 1;
+  }
+  const onBranch = outcome !== "failed";
   atomicWrite(join(exec, "target_cwd.txt"), target + "\n");
   lintBrief(topic, target, exec);
   atomicWrite(join(exec, "start-branch.txt"), snap.branch + "\n");

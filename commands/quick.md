@@ -168,6 +168,13 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
    On **rc 1** (target is not a git repo) → abort:
    `$CS quick summary <SLUG> --aborted build not-a-git-repo "target is not a git repository"`,
    print the SUMMARY, and stop. No worker was spawned, so do **not** run `stop`.
+   Also **rc 1** when `feat/quick-<SLUG>` already exists and has **diverged from the current HEAD** —
+   typically the leftover of an earlier run of this same topic whose PR was **squash-merged**, whose
+   commits are therefore already in the base by content. Resuming it would open a PR re-proposing
+   merged work, so nothing is checked out and nothing is written. ap never deletes, renames, or
+   force-updates the branch: surface the message and let the operator pick the remedy it names —
+   delete it (`git -C <TARGET> branch -D feat/quick-<SLUG>`), rename it, or check it out by hand and
+   re-run. If `--stash-wip` parked a stash first, say so and point at the recovery below.
 2. Spawn the worker: `$CS spawn <AGENT> <PROVIDER> <SLUG> --cwd <TARGET>`. On **rc 1**
    (bootstrap failed) → abort: `$CS quick summary <SLUG> --aborted build spawn-failed "worker failed
    bootstrap"`, print the SUMMARY, and stop. Do **not** run `stop` — `spawn` already

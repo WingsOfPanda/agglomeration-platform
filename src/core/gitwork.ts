@@ -181,13 +181,30 @@ export function stashPopOnBranch(r: Runner, message: string, expectSha: string, 
   return { outcome: stashPopByMessage(r, message, expectSha), head };
 }
 
+/** What `createOrResumeBranch` did. `stale` is the only one where NO checkout was attempted. */
+export type BranchOutcome = "created" | "resumed" | "stale" | "failed";
+
 /** Check out `name` — created from current HEAD, or resumed if the ref already exists. All three
- *  callers (quick, implement, bridge) pass their own `branchNameFor` name. */
-export function createOrResumeBranch(r: Runner, name: string): boolean {
+ *  callers (quick, implement, bridge) pass their own `branchNameFor` name, which is derived from the
+ *  topic, so a second run on the same topic asks for the same branch.
+ *
+ *  An existing ref is resumed only when it is a genuine continuation of where the checkout stands
+ *  now: `git merge-base --is-ancestor HEAD refs/heads/<name>` (rc 0 = the branch tip is HEAD or a
+ *  descendant of it). When HEAD is NOT an ancestor of the branch the checkout has moved on past the
+ *  branch's fork point — exactly what a SQUASH merge of that branch leaves behind, since the squash
+ *  commit carries the content but not the commits. Resuming there silently inherits already-merged
+ *  work and re-proposes it as a PR, so it is `stale` and nothing is checked out. The branch is the
+ *  operator's: ap never deletes, renames, or force-updates it — callers report and refuse.
+ *
+ *  A false positive is accepted: a genuine WIP branch whose start branch has since moved also reads
+ *  `stale`. Resuming that is already the wrong default (it forks from an old point) and the callers'
+ *  message names the ways forward. The false NEGATIVE — inheriting merged work — cannot happen. */
+export function createOrResumeBranch(r: Runner, name: string): BranchOutcome {
   if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${name}`]).code === 0) {
-    return r.run("git", ["checkout", "-q", name]).code === 0;
+    if (r.run("git", ["merge-base", "--is-ancestor", "HEAD", `refs/heads/${name}`]).code !== 0) return "stale";
+    return r.run("git", ["checkout", "-q", name]).code === 0 ? "resumed" : "failed";
   }
-  return r.run("git", ["checkout", "-q", "-b", name]).code === 0;
+  return r.run("git", ["checkout", "-q", "-b", name]).code === 0 ? "created" : "failed";
 }
 
 export function shortstat(r: Runner, base: string): string {

@@ -41,9 +41,13 @@ straight to the review feed (survives teardown and aborts) and costs nothing. Re
 
 ## Stage 1 — Branch + spawn + open
 
-1. If `MODE=branch`: `$CS bridge branch <SLUG>`. On **rc 1** (not a git repo, or repo B already on another
-   `feat/bridge-*` branch) → abort: `$CS bridge summary <SLUG> --aborted setup branch "<reason>"`, print the
-   SUMMARY, stop. (No worker spawned, so no `stop`.) If `MODE=in-place`: skip branch entirely.
+1. If `MODE=branch`: `$CS bridge branch <SLUG>`. On **rc 1** (not a git repo; repo B already on another
+   `feat/bridge-*` branch; or `feat/bridge-<SLUG>` already exists and has **diverged from the current
+   HEAD** — the leftover of an earlier squash-merged run of this topic, which bridge's merging finish
+   would push back into repo B) → abort: `$CS bridge summary <SLUG> --aborted setup branch "<reason>"`,
+   print the SUMMARY, stop. (No worker spawned, so no `stop`.) Nothing was checked out or written, and
+   ap never deletes, renames, or force-updates repo B's branch — relay the remedy the message names.
+   If `MODE=in-place`: skip branch entirely.
    `branch.txt` records the branch the run is **actually** on, so a checkout that failed ends in finish's
    `no-branch` refusal (flagged for `/ap:review`) rather than a merged PR containing none of the run's work.
 2. Spawn the worker **in repo B** (NO initial prompt — the brief is round 1):

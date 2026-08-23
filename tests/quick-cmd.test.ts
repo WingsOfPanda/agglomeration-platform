@@ -140,6 +140,37 @@ describe("quick branch (branchWith core)", () => {
     mkdirSync(quickExecDir("nope"), { recursive: true });
     expect(await branchWith("nope", "/proj", r)).toBe(1);
   });
+
+  it("squash-merged leftover branch → rc 1, no checkout, and NOTHING written (the run never started)", async () => {
+    const { mkdirSync, existsSync } = await import("node:fs");
+    const { quickExecDir } = await import("../src/core/quick.js");
+    mkdirSync(quickExecDir("auth"), { recursive: true });
+    const calls: string[][] = [];
+    const r: Runner = { run(cmd, args) {
+      calls.push([cmd, ...args]);
+      const k = [cmd, ...args].join(" ");
+      if (k === "git rev-parse --git-dir") return { code: 0, stdout: ".git" };
+      if (k === "git symbolic-ref HEAD") return { code: 0, stdout: "refs/heads/main" };
+      if (k === "git rev-parse HEAD") return { code: 0, stdout: "base000" };
+      if (k === "git status --porcelain") return { code: 0, stdout: "" };
+      // The ref is there, but HEAD is not an ancestor of it — the squash-merge leftover.
+      if (k === "git show-ref --verify --quiet refs/heads/feat/quick-auth") return { code: 0, stdout: "" };
+      if (k === "git merge-base --is-ancestor HEAD refs/heads/feat/quick-auth") return { code: 1, stdout: "" };
+      return { code: 0, stdout: "" };
+    } };
+    const { rc, err } = await capture(() => branchWith("auth", "/proj", r));
+    expect(rc).toBe(1);
+    expect(err).toContain("feat/quick-auth");
+    expect(err).toContain("diverged from the current HEAD");
+    expect(err).toContain("git -C /proj branch -D feat/quick-auth");
+    expect(calls.some((c) => c[1] === "checkout")).toBe(false);
+    // ap touches nobody's branch.
+    expect(calls.some((c) => c[1] === "branch" || c[1] === "update-ref")).toBe(false);
+    // A run that refused must leave no record a later verb could read as a started run.
+    for (const f of ["branch.txt", "target_cwd.txt", "start-branch.txt", "branch-base.sha"]) {
+      expect(existsSync(join(quickExecDir("auth"), f))).toBe(false);
+    }
+  });
 });
 
 describe("quick branch --stash-wip", () => {
