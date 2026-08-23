@@ -256,12 +256,12 @@ describe("stashPush / findStashRef / stashPopByMessage", () => {
 describe("createOrResumeBranch", () => {
   it("creates with checkout -b when the ref is absent", () => {
     const { r, calls } = fakeRunner({ "git show-ref --verify --quiet refs/heads/feat/quick-auth": { code: 1, stdout: "" } });
-    expect(createOrResumeBranch(r, "feat/quick-auth")).toBe(true);
+    expect(createOrResumeBranch(r, "feat/quick-auth")).toBe("created");
     expect(calls).toContainEqual(["git", "checkout", "-q", "-b", "feat/quick-auth"]);
   });
   it("resumes with checkout when the ref exists", () => {
     const { r, calls } = fakeRunner({ "git show-ref --verify --quiet refs/heads/feat/quick-auth": { code: 0, stdout: "" } });
-    expect(createOrResumeBranch(r, "feat/quick-auth")).toBe(true);
+    expect(createOrResumeBranch(r, "feat/quick-auth")).toBe("resumed");
     expect(calls).toContainEqual(["git", "checkout", "-q", "feat/quick-auth"]);
   });
 });

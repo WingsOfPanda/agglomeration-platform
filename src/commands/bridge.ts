@@ -118,7 +118,16 @@ export async function branchWith(topic: string, target: string, r: Runner): Prom
     log.error(`bridge branch: ${target} is already on ${snap.branch} (another bridge session?) — refusing`);
     return 1;
   }
-  const onBranch = createOrResumeBranch(r, branch);
+  const outcome = createOrResumeBranch(r, branch);
+  // Refuse BEFORE anything is written, joining the rc-1 aborts above: bridge's finish MERGES, so
+  // resuming a leftover from a SQUASH-merged run of this topic would merge already-merged work back.
+  // The hub turns this rc into `bridge summary --aborted setup branch` (commands/bridge.md).
+  if (outcome === "stale") {
+    log.error(`bridge branch: ${branch} already exists in ${target} and has diverged from the current HEAD (its commits are likely already merged, e.g. by a squash merge) — refusing to resume it`);
+    log.error(`  delete it (git -C ${target} branch -D ${branch}), rename it (git -C ${target} branch -m ${branch} <new-name>), or check it out by hand and re-run`);
+    return 1;
+  }
+  const onBranch = outcome !== "failed";
   const exec = bridgeExecDir(topic);
   atomicWrite(join(exec, "start-branch.txt"), snap.branch + "\n");
   atomicWrite(join(exec, "branch-base.sha"), snap.baseSha + "\n");

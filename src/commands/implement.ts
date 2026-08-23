@@ -340,6 +340,13 @@ async function branchRun(rest: string[]): Promise<number> {
   if (pos.length !== 1) { log.error("usage: implement branch [--no-branch] [--branch <name>] <topic>"); return 2; }
   return branchWith({ topic: pos[0], noBranch, branchName }, {}, runnerAt);
 }
+/** The stale-branch refusal, shared by branchWith's resume and create arms. ap deletes, renames and
+ *  force-updates nothing — the branch is the operator's work, so this only reports and names the
+ *  three ways forward. */
+function staleBranchRefusal(branch: string, cwd: string): void {
+  log.error(`implement branch: ${branch} already exists in ${cwd} and has diverged from the current HEAD (its commits are likely already merged, e.g. by a squash merge) — refusing to resume it`);
+  log.error(`  delete it (git -C ${cwd} branch -D ${branch}), rename it (git -C ${cwd} branch -m ${branch} <new-name>), or check it out by hand and re-run`);
+}
 export async function branchWith(a: { topic: string; noBranch: boolean; branchName?: string }, opts: { home?: string; cwd?: string }, runnerFor: (cwd: string) => Runner): Promise<number> {
   const art = implementArtDir(a.topic, opts);
   if (!existsSync(art)) { log.error(`implement branch: art-dir missing: ${art} (run implement init first)`); return 1; }
@@ -365,9 +372,21 @@ export async function branchWith(a: { topic: string; noBranch: boolean; branchNa
     if (!slug || !cwd) continue;
     const r = runnerFor(cwd); let recorded: string;
     if (a.noBranch) { recorded = currentBranch(r) || "(detached)"; log.info(`branch: (--no-branch) staying on ${recorded} in ${cwd}`); }
-    else if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${defaultBranch}`]).code === 0) { createOrResumeBranch(r, defaultBranch); log.info(`branch: resumed ${defaultBranch} in ${cwd}`); recorded = defaultBranch; }
-    else if (createOrResumeBranch(r, defaultBranch)) { log.info(`branch: created ${defaultBranch} in ${cwd}`); recorded = defaultBranch; }
-    else { recorded = currentBranch(r) || "(detached)"; log.warn(`branch: checkout -b failed in ${cwd}; staying on current branch`); }
+    else if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${defaultBranch}`]).code === 0) {
+      // Resume arm. A leftover branch from a SQUASH-merged run of this same topic is not a
+      // continuation of this checkout; resuming it would re-propose merged work. Refuse before the
+      // records below are written, the way the two baseline refusals above do. ap touches no branch.
+      if (createOrResumeBranch(r, defaultBranch) === "stale") { staleBranchRefusal(defaultBranch, cwd); return 1; }
+      log.info(`branch: resumed ${defaultBranch} in ${cwd}`); recorded = defaultBranch;
+    }
+    else {
+      // Create arm: the ref was absent a line ago, so `stale` is unreachable here — but it is
+      // spelled out rather than folded into a truthiness test, so it can never read as success.
+      const outcome = createOrResumeBranch(r, defaultBranch);
+      if (outcome === "stale") { staleBranchRefusal(defaultBranch, cwd); return 1; }
+      if (outcome === "created") { log.info(`branch: created ${defaultBranch} in ${cwd}`); recorded = defaultBranch; }
+      else { recorded = currentBranch(r) || "(detached)"; log.warn(`branch: checkout -b failed in ${cwd}; staying on current branch`); }
+    }
     rows.push(`${slug}\t${recorded}`);
     const baseline = join(art, "baselines", `${slug}.tsv`);
     if (existsSync(baseline)) { const m = readFileSync(baseline, "utf8").match(/^baseline_sha=(.*)$/m); if (m) atomicWrite(join(art, "branch-base.sha"), m[1] + "\n"); }

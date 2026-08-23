@@ -203,13 +203,19 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
    the user passed `--no-branch`, `$CS implement branch <TOPIC>` (creates/resumes `feat/implement-<TOPIC>`
    from the clean HEAD and records `branch-base.sha` plus the branch mode). With `--no-branch`, run
    `$CS implement branch --no-branch <TOPIC>` (stays on the current branch).
-   `branch` exits **rc 1** on two refusals (read the message — a missing art-dir is rc 1 too):
+   `branch` exits **rc 1** on three refusals (read the message — a missing art-dir is rc 1 too):
    - **"HEAD was already `feat/implement-<TOPIC>` at pre-snapshot"** — the baseline IS the feat
      branch, so the work branch and the base are one ref and finish would have nothing to merge or
      push.
    - **"pre-snapshot recorded a detached HEAD"** — there is no start branch to restore or merge into.
+   - **"`feat/implement-<TOPIC>` ... has diverged from the current HEAD"** — a leftover branch from an
+     earlier run of this same topic, typically one whose PR was **squash-merged** (its commits are in
+     the base by content, not by ancestry). Resuming it would re-propose merged work, so nothing was
+     checked out. ap never deletes, renames, or force-updates it; the remedy is the operator's —
+     delete it (`git -C "$TARGET_CWD" branch -D feat/implement-<TOPIC>`), rename it, or check it out
+     by hand and re-run.
 
-   Nothing was written in either case. **AskUserQuestion** how to proceed — offer the base branches
+   Nothing was written in any case. **AskUserQuestion** how to proceed — offer the base branches
    the repo actually has (`git -C "$TARGET_CWD" branch --format='%(refname:short)'`) as "checkout
    `<base>` and re-snapshot", plus "implement on the current branch (`--no-branch`)" for the first
    refusal only. Then either `git -C "$TARGET_CWD" checkout <base>` + re-run `pre-snapshot` +

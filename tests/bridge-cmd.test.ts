@@ -134,6 +134,30 @@ describe("bridge branch", () => {
     const r = fakeRunner({ "git rev-parse --git-dir": { code: 1 } });
     expect(await branchWith("t", "/abs/repoB", r)).toBe(1);
   });
+
+  it("squash-merged leftover branch → rc 1 (the hub's `summary --aborted setup branch` path), no checkout, nothing written", async () => {
+    seedInit("t", "/abs/repoB");
+    const calls: string[][] = [];
+    const inner = fakeRunner({
+      "git rev-parse --git-dir": { code: 0 },
+      "git symbolic-ref HEAD": { stdout: "refs/heads/main\n" },
+      "git rev-parse HEAD": { stdout: "deadbeef\n" },
+      "git status --porcelain": { stdout: "" },
+      "git show-ref": { code: 0 },                                                   // the ref is there
+      "git merge-base --is-ancestor HEAD refs/heads/feat/bridge-t": { code: 1 },      // but HEAD is not its ancestor
+    });
+    const r: Runner = { run: (cmd, args) => { calls.push([cmd, ...args]); return inner.run(cmd, args); } };
+    const { rc, err } = await capture(() => branchWith("t", "/abs/repoB", r));
+    expect(rc).toBe(1);
+    expect(err).toContain("feat/bridge-t");
+    expect(err).toContain("diverged from the current HEAD");
+    expect(err).toContain("git -C /abs/repoB branch -D feat/bridge-t");
+    expect(calls.some((c) => c[1] === "checkout")).toBe(false);
+    expect(calls.some((c) => c[1] === "branch" || c[1] === "update-ref")).toBe(false);
+    for (const f of ["branch.txt", "start-branch.txt", "branch-base.sha"]) {
+      expect(existsSync(join(bridgeExecDir("t"), f))).toBe(false);
+    }
+  });
 });
 
 import { roundSendWith, roundWaitWith } from "../src/commands/bridge.js";

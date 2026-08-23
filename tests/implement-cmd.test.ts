@@ -169,6 +169,29 @@ describe("implement branch", () => {
     expect(readFileSync(join(art, "branch-mode.txt"), "utf8")).toBe("no-branch\n");
   });
 
+  it("squash-merged leftover branch → rc 1 from the RESUME arm, no checkout, nothing written", async () => {
+    const art = seedArt();
+    seedTargetCwd(art, "/repo/main");
+    mkdirSync(join(art, "baselines"), { recursive: true });
+    writeFileSync(join(art, "baselines", "main.tsv"), "slug=main\nbranch=main\nbaseline_sha=ABC\n");
+    const calls: string[][] = [];
+    const r: Runner = { run(cmd, args) {
+      calls.push([cmd, ...args]);
+      const key = [cmd, ...args].join(" ");
+      // The ref exists (so the resume arm is taken) but HEAD is not an ancestor of it.
+      if (key === "git merge-base --is-ancestor HEAD refs/heads/feat/implement-add-oauth") return { code: 1, stdout: "" };
+      return { code: 0, stdout: "" };
+    } };
+    const { rc, err } = await capture(() => branchWith({ topic: TOPIC, noBranch: false }, {}, () => r));
+    expect(rc).toBe(1);
+    expect(err).toContain("feat/implement-add-oauth");
+    expect(err).toContain("diverged from the current HEAD");
+    expect(err).toContain("git -C /repo/main branch -D feat/implement-add-oauth");
+    expect(calls.some((c) => c[1] === "checkout")).toBe(false);
+    expect(calls.some((c) => c[1] === "branch" || c[1] === "update-ref")).toBe(false);
+    for (const f of ["implement-branches.tsv", "branch-mode.txt", "branch-base.sha"]) expect(existsSync(join(art, f))).toBe(false);
+  });
+
   it("--branch=custom (ref absent) → records custom", async () => {
     const art = seedArt();
     seedTargetCwd(art, "/repo/main");
