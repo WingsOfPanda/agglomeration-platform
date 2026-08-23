@@ -21728,6 +21728,8 @@ function composeRound1Prompt2(args) {
     "  line, followed by per-requirement evidence (file:line citations) and a",
     "  short summary.",
     "",
+    ...REPORT_CONTRACT,
+    "",
     "  Also record how long the test suite itself took, in whole wall-clock",
     "  seconds, and write it as `TEST_DURATION_S=<seconds>` (one line) to:",
     `    ${durationLog}`,
@@ -21766,6 +21768,9 @@ function composeFixPrompt2(round, bundleText, verifyPath, testCmd) {
     "  stop and reassess the hypothesis.",
     "- For each issue tagged [spec-gap]: re-plan the gap against the design and",
     "  update the implementation plan before editing.",
+    "- Never hand-edit a committed evidence/measurement record to satisfy an",
+    "  issue; re-run its producer and commit the regenerated record, or halt",
+    "  with a question event.",
     "- After EACH fix commit: dispatch a code-review subagent scoped to the fix",
     "  commit's SHA. Ask it to compare the change with the issue, design, and",
     "  tests and look for regressions. Address Critical and Important findings",
@@ -21782,6 +21787,8 @@ function composeFixPrompt2(round, bundleText, verifyPath, testCmd) {
     "  Write the verify report to:",
     `    ${verifyPath}`,
     "  The report MUST start with `VERDICT: PASS|PARTIAL|FAIL`.",
+    ...REPORT_CONTRACT,
+    "",
     "  Also record the suite's wall-clock seconds as `TEST_DURATION_S=<seconds>`",
     `  (one line) to: ${durationLog}`,
     "",
@@ -21789,11 +21796,23 @@ function composeFixPrompt2(round, bundleText, verifyPath, testCmd) {
     blockers(testCmd)
   ].join("\n");
 }
-var import_node_path34, BRANCH_DISCIPLINE2;
+var import_node_path34, REPORT_CONTRACT, BRANCH_DISCIPLINE2;
 var init_implementTurn = __esm({
   "src/core/implementTurn.ts"() {
     "use strict";
     import_node_path34 = require("node:path");
+    REPORT_CONTRACT = [
+      "  Line 2 of the report MUST be:",
+      "    ENV: shell=<as observed>; suite=<cmd>; legs=<ran ... / skipped ... + why>; build=<generated or native artifacts present, or rebuilt by you>",
+      "  If ANY leg was skipped for an environment reason, the verdict is PARTIAL",
+      "  \u2014 a green default leg is not PASS.",
+      "",
+      "  For every test or gate you ADD, write:",
+      "    MUTATION: <file:line> <the change you made to break it> -> <observed failure>",
+      "  A gate you never watched fail is not evidence. A gate must assert a",
+      "  SPEC-derived expectation \u2014 a literal, or an independently recomputed",
+      "  value \u2014 never the implementation's own output read back at itself."
+    ];
     BRANCH_DISCIPLINE2 = `BRANCH DISCIPLINE (hard rule):
 - You are operating on the conductor's current branch in the target
   repository. Do NOT run 'git checkout', 'git switch',

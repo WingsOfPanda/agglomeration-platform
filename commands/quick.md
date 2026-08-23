@@ -219,10 +219,16 @@ HEAD is probably still on `feat/quick-<SLUG>`, not the start branch. Give the br
 2. If `TEST_CMD` is non-empty, run it once in `<TARGET>` via Bash, tee to
    `<SLUG state>/_quick/execute/verify-1.log`; set `VERIFY` to `PASS (<cmd>)` or `FAIL (<cmd>)`.
    If empty, `VERIFY="skipped (no test command detected)"`.
+   If the suite ran green but any leg of it did NOT run for an environment reason (a missing tool, an
+   unset env var, absent build products), that is not a PASS: set
+   `VERIFY="PARTIAL (<cmd>) — legs skipped: <names>"`.
 3. If `VERIFY` starts with `FAIL`: read the tail of `verify-1.log`, **Write**
    `execute/fix-prompt-2.md` (concrete failures + fix direction), then `$CS quick turn-send <SLUG> 2`,
    background `$CS quick turn-wait <SLUG> 2`; on completion re-run `TEST_CMD` into `verify-2.log`
    and set `VERIFY` to the second result. **One fix round only** — proceed regardless.
+   In that fix prompt, a bullet about a generated evidence or measurement record names its **producer
+   command** and says *regenerate*: never "edit"/"update" the record itself, and never "do NOT
+   re-run" it.
 4. Record results (run in `<TARGET>`):
    ```bash
    git -C <TARGET> diff --shortstat "$(cat <SLUG state>/_quick/execute/branch-base.sha)"..HEAD \

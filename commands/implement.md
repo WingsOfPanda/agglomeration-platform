@@ -373,6 +373,31 @@ observed this round, never the worker's say-so. Read (capped):
 - up to 3 spot-checks: Read the highest-stakes diff hunk per critical requirement (paths from
   `git diff` are relative to `TARGET_CWD`; prefix them).
 
+**Worker `VERDICT: PARTIAL` — never promote it silently.** The worker's report opens with
+`VERDICT: PASS|PARTIAL|FAIL` and carries an `ENV:` line as line 2. A `VERDICT: PARTIAL` means the
+worker ran only part of the suite; it is NOT a not-FAIL you may consume as PASS:
+- Copy the worker's `ENV:` line and the name of every skipped leg **verbatim** into
+  `$ART/cross-verify-<ROUND>.md`.
+- You may write `VERDICT: PASS` only by running those legs YOURSELF in `TARGET_CWD` and recording in
+  the cross-verify doc that YOU ran them (the command you ran + its rc). Otherwise take the operator
+  gate — **AskUserQuestion** ("Run the skipped legs myself / Accept PARTIAL as-is / Send back to the
+  worker") when attached, **PARK** when detached (per the Run-path table) — carrying the `ENV:` line
+  and the skipped-leg names verbatim in the question.
+- The environment asymmetry that produces skipped legs is the reverse of the obvious guess, so weigh
+  it before calling a worker/hub difference a worker error: the worker's pane is
+  `bash -ic 'exec <binary>'` (`src/core/tmux.ts`, `wrapLaunch`), so `~/.bashrc` **is** sourced and
+  only `~/.profile` is not, while the hub's own re-run is `bash -c`
+  (`src/core/implementVerifyTests.ts`, `runBounded`) and sources **nothing** — a var exported at login
+  or set non-exported in `.bashrc` is present for the worker and absent for you. On top of that a
+  fresh `.ap/worktrees/<topic>` carries no build products at all.
+
+**New-gate cross-check (part of the spot-checks above).** For each new test/gate hunk in the diff,
+look for a matching `MUTATION: <file:line> <break> -> <observed failure>` line in
+`$ART/verify-report-<ROUND>.md`. A gate the worker never watched fail is not evidence: write it up as
+a `[bug]` ("gate added without mutation evidence") instead of counting it. Record the tally in
+`$ART/cross-verify-<ROUND>.md` as one line — `NEW_GATES=<n> MUTATION_LINES=<n>` — so `/ap:review` can
+trend the ratio across runs instead of re-reading reports.
+
 Write the verdict to `$ART/cross-verify-<ROUND>.md`: top line `VERDICT: PASS` or `VERDICT: FAIL`. On
 FAIL, list issues under `## Issues`, each tagged `[bug]` / `[regression]` / `[spec-gap]` with a
 `(file:line)` reference and a one-line fix direction.
@@ -403,6 +428,17 @@ bundle, so it must be evidence and not recall:
   as a command for the worker to run — never as a prediction. A predicted delta that the run does not
   reproduce reads to the worker as a regression it must chase.
 - **Anything the fix is meant to CREATE is labelled `(new — does not exist yet)`.**
+
+**Generated records — regenerate, never edit.** A bullet about a generated evidence or measurement
+record (a benchmark table, a coverage number, a captured log, a golden file) names its **producer
+command** and says *regenerate*:
+- Never tell the worker to "edit", "update", or "adjust" the record itself, and never write "do NOT
+  re-run" — the same rule already stated for `$ART/provider.txt` above, applied to every record a run
+  generates.
+- If re-running genuinely must be skipped, say so in the bullet **and** downgrade the round's claim.
+  A bullet may never authorize a touch of the record to make it agree.
+- A byte-identical / unchanged-record guard may only cite evidence that existed before
+  `$(cat "$ART/branch-base.sha")`. A record this round generated cannot be its own baseline.
 
 Then `ROUND=$((ROUND+1))`, `RETRY=0`, and loop back to Stage 1.
 

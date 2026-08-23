@@ -18,6 +18,30 @@ export function implementState(ev: OutboxEvent | null, verifyText: string | null
   return "failed";
 }
 
+/** The verdicts a WORKER may open its verify report with (distinct from `TEST_VERDICTS`, which is the
+ *  HUB's own re-run classification). Exported so the directive-contract test can assert that
+ *  `commands/implement.md` carries a Stage 2 branch for each one. The composers below deliberately do
+ *  NOT build their verdict line from this const: a mirrored gate moves with its implementation, so
+ *  deleting a verdict here would mutate prompt and assertion together and stay green. Keep the
+ *  composers' `VERDICT: PASS|PARTIAL|FAIL` a LITERAL. */
+export const WORKER_VERDICTS = ["PASS", "PARTIAL", "FAIL"] as const;
+
+/** Report contract shared by both turn composers: the ENV line, the skipped-leg => PARTIAL rule, and
+ *  the MUTATION: requirement for gates the round adds. The verdict LINE is not here on purpose (see
+ *  WORKER_VERDICTS) — each composer spells it out literally. */
+const REPORT_CONTRACT = [
+  "  Line 2 of the report MUST be:",
+  "    ENV: shell=<as observed>; suite=<cmd>; legs=<ran ... / skipped ... + why>; build=<generated or native artifacts present, or rebuilt by you>",
+  "  If ANY leg was skipped for an environment reason, the verdict is PARTIAL",
+  "  — a green default leg is not PASS.",
+  "",
+  "  For every test or gate you ADD, write:",
+  "    MUTATION: <file:line> <the change you made to break it> -> <observed failure>",
+  "  A gate you never watched fail is not evidence. A gate must assert a",
+  "  SPEC-derived expectation — a literal, or an independently recomputed",
+  "  value — never the implementation's own output read back at itself.",
+];
+
 const BRANCH_DISCIPLINE =
   "BRANCH DISCIPLINE (hard rule):\n" +
   "- You are operating on the conductor's current branch in the target\n" +
@@ -106,6 +130,8 @@ export function composeRound1Prompt(args: { designPath: string; planPath: string
     "  line, followed by per-requirement evidence (file:line citations) and a",
     "  short summary.",
     "",
+    ...REPORT_CONTRACT,
+    "",
     "  Also record how long the test suite itself took, in whole wall-clock",
     "  seconds, and write it as `TEST_DURATION_S=<seconds>` (one line) to:",
     `    ${durationLog}`,
@@ -147,6 +173,9 @@ export function composeFixPrompt(round: number, bundleText: string, verifyPath: 
     "  stop and reassess the hypothesis.",
     "- For each issue tagged [spec-gap]: re-plan the gap against the design and",
     "  update the implementation plan before editing.",
+    "- Never hand-edit a committed evidence/measurement record to satisfy an",
+    "  issue; re-run its producer and commit the regenerated record, or halt",
+    "  with a question event.",
     "- After EACH fix commit: dispatch a code-review subagent scoped to the fix",
     "  commit's SHA. Ask it to compare the change with the issue, design, and",
     "  tests and look for regressions. Address Critical and Important findings",
@@ -163,6 +192,8 @@ export function composeFixPrompt(round: number, bundleText: string, verifyPath: 
     "  Write the verify report to:",
     `    ${verifyPath}`,
     "  The report MUST start with `VERDICT: PASS|PARTIAL|FAIL`.",
+    ...REPORT_CONTRACT,
+    "",
     "  Also record the suite's wall-clock seconds as `TEST_DURATION_S=<seconds>`",
     `  (one line) to: ${durationLog}`,
     "",
