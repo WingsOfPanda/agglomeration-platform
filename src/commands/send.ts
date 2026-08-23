@@ -1,5 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { log } from "../core/log.js";
+import { repoRoot } from "../core/paths.js";
+import { mainCheckoutRoot, orphanRefusal, orphanedTopicState, worktreeTopic } from "../core/job.js";
 import { resolveModel, paneMetaRead, inboxWrite, inboxPath } from "../core/ipc.js";
 import { paneOwned, paneSend } from "../core/tmux.js";
 import { validateSlug } from "../core/slug.js";
@@ -23,6 +25,33 @@ export interface SendCmdDeps {
 const liveSendCmdDeps: SendCmdDeps = { paneOwned, paneSend };
 
 export async function run(args: string[], deps: SendCmdDeps = liveSendCmdDeps): Promise<number> {
+  // ONE state tree per run, whatever directory the hub is standing in. Every state path derives from
+  // process.cwd() (paths.ts stateRoot + repoHash), so this verb's inboxWrite and its nudge -- which
+  // are consistent with EACH OTHER by construction, both deriving from the same cwd -- could be
+  // consistently wrong relative to the worker: from inside the run's own worktree the task was
+  // written into a second tree, the pane was nudged with that tree's path, and the worker (rightly)
+  // refused an inbox its identity.md did not name and idled. The split is here, not in the nudge.
+  // `mainCheckoutRoot` re-roots ap-created run worktrees ONLY and leaves every other path (a user's
+  // own worktree included) exactly as git reported it; outside a git repo repoRoot() falls back to
+  // cwd, so this is a no-op there.
+  const origCwd = process.cwd();
+  const gitRoot = repoRoot();
+  const root = mainCheckoutRoot(gitRoot);
+  const wtTopic = worktreeTopic(gitRoot);
+  const stranded = orphanedTopicState(wtTopic, gitRoot, root);
+  if (stranded) { for (const l of orphanRefusal(wtTopic, stranded, root).split("\n")) log.error(l); return 2; }
+  if (root !== origCwd) process.chdir(root);
+  try {
+    return await dispatchVerb(args, deps);
+  } finally {
+    // One verb per process on the CLI path (src/ap.ts exits right after), but tests import run() and
+    // share a process, so the cwd is restored rather than left moved. A cwd that has since been
+    // removed must not turn a completed verb into a throw.
+    if (root !== origCwd) { try { process.chdir(origCwd); } catch { /* the caller's cwd is gone */ } }
+  }
+}
+
+async function dispatchVerb(args: string[], deps: SendCmdDeps): Promise<number> {
   let from: string | undefined;
   let a = [...args];
   if (a[0] === "--from") { if (!a[1]) { log.error("--from requires a sender name"); return 2; } from = a[1]; a = a.slice(2); }
