@@ -128,6 +128,56 @@ describe("implement scope-check (single-repo path locked)", () => {
     h.cleanup();
   });
 
+  // ---- Declared-path precision (2026-08-23-declared-path-precision-design.md) ----
+  // The report is computed ALONGSIDE the declared set, never subtracted from it. The fixture
+  // declares a BARE `src/core` on purpose: it is a legal implicit-directory declaration (match rule
+  // 3) and is shape-identical to the prose fragment `Spec/metrics`, so it is the standing guard
+  // against a future contributor "fixing" the count by filtering the matcher's input — do that and
+  // `src/core/x.ts` goes out of scope and OOS_COUNT flips 0 -> 1.
+  it("unresolved counts report the prose fragments without moving the verdict", async () => {
+    const h = freshHome();
+    const art = implementArtDir("scope-unresolved");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "target_cwd.txt"), "/repo/main\n");
+    writeFileSync(join(art, "branch-base.sha"), "BASE\n");
+    writeFileSync(join(art, "design.md"),
+      "# d\n\n## Components\n\n- `src/core` — the guard module\n\n## Testing\n\n"
+      + "- `tests/model/test_d19_temporal_graph.py` — MAP head shapes\n"
+      + "- Spec/metrics gates: MAP TaskSpec construction rules; the converted elif/raise proven by a raise test.\n");
+    const deps = { runnerFor: (_cwd: string): Runner => ({ run: (): RunResult => ({ code: 0, stdout: "src/core/x.ts\ntests/model/test_d19_temporal_graph.py\n" }) }) };
+    const { rc, out } = await capture(() => scopeCheckWith("scope-unresolved", deps));
+    expect(rc).toBe(0);
+    // (a) the verdict is untouched: both diff paths are in scope, `src/core/x.ts` via the implicit
+    // directory rule that a filtered matcher input would destroy.
+    expect(out).toContain("OOS_COUNT=0\n");
+    expect(readFileSync(join(art, "scope-out-of-scope.txt"), "utf8")).toBe("");
+    // (b) the declared counts are exactly what they were before the report existed.
+    expect(out).toContain("SCOPE_DECLARED=4\nTESTING_DECLARED=3\n");
+    // (c) the report itself: 2 of the 3 Testing tokens and 1 of the 1 Components token are prose.
+    expect(out).toContain("SCOPE_UNRESOLVED=1\nTESTING_UNRESOLVED=2\n");
+    // (d) the artifact records the layer's own verdict — the deduped union in declaration order,
+    // INCLUDING the known false positive `src/core`. A report that quietly disagreed with the
+    // matcher would be worse than one that over-reports.
+    expect(readFileSync(join(art, "scope-unresolved.txt"), "utf8")).toBe("src/core\nSpec/metrics\nelif/raise\n");
+    h.cleanup();
+  });
+
+  it("a fully file-shaped design reports zero unresolved and an empty artifact", async () => {
+    const h = freshHome();
+    const art = implementArtDir("scope-unresolved-none");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "target_cwd.txt"), "/repo/main\n");
+    writeFileSync(join(art, "branch-base.sha"), "BASE\n");
+    writeFileSync(join(art, "design.md"),
+      "# d\n\n## Components\n\n- `src/a.ts` — edit\n\n## Testing\n\n- `tests/a.test.ts` — add\n");
+    const deps = { runnerFor: (_cwd: string): Runner => ({ run: (): RunResult => ({ code: 0, stdout: "src/a.ts\n" }) }) };
+    const { rc, out } = await capture(() => scopeCheckWith("scope-unresolved-none", deps));
+    expect(rc).toBe(0);
+    expect(out).toContain("SCOPE_UNRESOLVED=0\nTESTING_UNRESOLVED=0\n");
+    expect(readFileSync(join(art, "scope-unresolved.txt"), "utf8")).toBe("");
+    h.cleanup();
+  });
+
   it("same-dir siblings of an exact-file Components entry are in scope (OOS_COUNT=0)", async () => {
     const h = freshHome();
     const art = implementArtDir("scope-sibling");

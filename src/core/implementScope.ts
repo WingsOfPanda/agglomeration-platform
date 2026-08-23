@@ -21,6 +21,11 @@
 // `## Testing` bullets name no path at all, measured at `implement audit` so incomplete authoring is
 // visible BEFORE a worker runs rather than as an OOS surprise at Stage 4. That same doc adds the
 // decoration strip inside pathTokensFrom (paired emphasis + markdown links), which is widening-only.
+// And so does unresolvedDeclaredPaths (2026-08-23-declared-path-precision-design.md): which declared
+// tokens name neither a file nor an explicit directory. REPORT ONLY — it is computed ALONGSIDE the
+// declared set that reaches matchDiffAgainstComponents and is never subtracted from it, because
+// removing a declaration can only move a diff path from in-scope to OUT-of-scope (a passing check
+// turned failing). That same doc drops a bare `/` token at extraction.
 // deploy_extract_components_paths -> extractComponentsPaths,
 // deploy_match_diff_against_components -> matchDiffAgainstComponents. The Bash helpers read files via
 // awk; the TS ports take the already-read strings (file IO is the caller's concern). Table-row
@@ -96,6 +101,13 @@ export function pathTokensFrom(text: string): string[] {
     const trimmed = raw.replace(/^[(\[{"']+/, "").replace(/[)\]}"',.;:!?]+$/, "");
     const tok = stripEmphasis(trimmed);
     if (tok === "") continue;
+    // A bare "/" is never a meaningful declaration, and under the explicit-directory match rule it
+    // would put EVERY absolute diff path in scope — a scope gate that silently opens. Inert today
+    // only because `git diff --name-only` emits repo-relative paths (62 such tokens sit in this
+    // repo's own specs, declaring nothing), so dropping it removes zero in-scope paths; dropping a
+    // declaration is also the safe direction, since it can only ADD out-of-scope paths, never hide
+    // one (2026-08-23-declared-path-precision-design.md).
+    if (tok === "/") continue;
     if (HAS_SLASH.test(tok) || ENDS_WITH_EXT.test(tok)) out.push(tok);
   }
   return out;
@@ -167,7 +179,7 @@ export function extractTestingPaths(docText: string): string[] {
 
 /** A declared token that names a FILE (carries an extension) or an explicit directory (trailing
  *  `/`) — as opposed to a slash-bearing prose fragment like `Spec/metrics` or `D15/D16/D17`. */
-function fileShaped(tok: string): boolean {
+export function fileShaped(tok: string): boolean {
   return ENDS_WITH_EXT.test(tok) || tok.endsWith("/");
 }
 
@@ -203,6 +215,29 @@ export function testingBulletsWithoutPaths(docText: string): { withPath: number;
     else withoutPath++;
   }
   return { withPath, withoutPath };
+}
+
+/** The declared tokens that resolve to NOTHING the matcher can key on: neither a file (a `.ext`) nor
+ *  an explicit directory (a trailing `/`). Reuses `fileShaped`, so the C3 bullet counter and this
+ *  report share ONE definition of "names a file". Order and duplicates are the caller's — the tokens
+ *  come back in declaration order, filtered only.
+ *
+ *  REPORT, NEVER FILTER (2026-08-23-declared-path-precision-design.md). The tempting use of this
+ *  function — narrowing the set handed to matchDiffAgainstComponents — is the one that must never
+ *  happen: the matcher is a pure elementwise existential OR, so dropping a declaration can only move
+ *  a diff path from in-scope to OUT-of-scope, i.e. turn a passing scope-check into a failing one (a
+ *  200,000-trial fuzz: removal increased OOS 12,439 times and decreased it 0 times). The fragments
+ *  it names are inert as declarations anyway — across all 206 tracked `.md` files, 0 of the dir-form
+ *  tokens equal or dir-prefix any tracked file — so narrowing would buy nothing and risk that.
+ *
+ *  It reports a KNOWN false positive and that is deliberate: a bare `src/core` is a LEGAL implicit-
+ *  directory declaration under match rule 3 and is shape-identical to the prose fragment
+ *  `Spec/metrics`, so it is listed as unresolved. An existence check would "fix" that at the cost of
+ *  making the verdict irreproducible from design.md + the diff alone; a report that quietly
+ *  disagrees with the matcher is worse than one that over-reports. Warn/report only: nothing here
+ *  feeds a verdict or an rc. */
+export function unresolvedDeclaredPaths(declared: string[]): string[] {
+  return declared.filter((tok) => !fileShaped(tok));
 }
 
 /** Warn-only Components path lint (2026-08-14-components-path-lint-design.md). Returns the declared

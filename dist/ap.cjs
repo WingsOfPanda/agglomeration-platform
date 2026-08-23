@@ -19413,6 +19413,7 @@ function pathTokensFrom(text) {
     const trimmed = raw.replace(/^[(\[{"']+/, "").replace(/[)\]}"',.;:!?]+$/, "");
     const tok = stripEmphasis(trimmed);
     if (tok === "") continue;
+    if (tok === "/") continue;
     if (HAS_SLASH.test(tok) || ENDS_WITH_EXT.test(tok)) out.push(tok);
   }
   return out;
@@ -19478,6 +19479,9 @@ function testingBulletsWithoutPaths(docText) {
     else withoutPath++;
   }
   return { withPath, withoutPath };
+}
+function unresolvedDeclaredPaths(declared) {
+  return declared.filter((tok) => !fileShaped(tok));
 }
 function lintComponentsPaths(docText, root) {
   const out = [];
@@ -22517,10 +22521,14 @@ async function scopeCheckWith(topic, d) {
   const oosPath = (0, import_node_path35.join)(art, "scope-out-of-scope.txt");
   atomicWrite(oosPath, oos.length ? oos.join("\n") + "\n" : "");
   if (oos.length > 0) log.warn(`scope conformance: ${oos.length} out-of-scope path(s) detected`);
+  const unresolved = unresolvedDeclaredPaths(declaredPaths);
+  atomicWrite((0, import_node_path35.join)(art, "scope-unresolved.txt"), unresolved.length ? unresolved.join("\n") + "\n" : "");
   process.stdout.write(`SCOPE_DECLARED=${declaredPaths.length}
 TESTING_DECLARED=${testingPaths.length}
 OOS_COUNT=${oos.length}
 OOS_PATH=${oosPath}
+SCOPE_UNRESOLVED=${unresolvedDeclaredPaths(compPaths).length}
+TESTING_UNRESOLVED=${unresolvedDeclaredPaths(testingPaths).length}
 `);
   return 0;
 }
