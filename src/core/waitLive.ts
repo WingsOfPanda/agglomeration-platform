@@ -15,8 +15,12 @@ import { envNum } from "./env.js";
  *  AP_WAIT_EXTEND_MULT x the budget — a live worker outrunning its budget is mid-turn, not dead.
  *  Knob semantics: default 3; set 1 to DISABLE (envNum's `|| def` means 0/unset also fall back
  *  to 3, so 1 is the only off-switch); clamped to <=10 so a typo cannot yield a multi-day wait. */
+/** `onPoll` (last, optional) is forwarded straight into the wait's existing per-`everyS` poll — the
+ *  seam `job wait` uses to run its worker classifier at the pane probe's cadence. Omitted by every
+ *  other caller, and omitted it changes nothing: the wait is the wait it always was. */
 export function liveOutboxWait(
   i: string, m: string, t: string, offset: number, events: string[], timeoutSec: number, clock?: Clock,
+  onPoll?: () => Promise<OutboxEvent | null>,
 ): Promise<OutboxEvent | null> {
   // The probe is ownership-checked, not id-only: a pane id recorded before a tmux server restart
   // can name a stranger's pane, and reading that as "the worker is alive" would extend the wait
@@ -29,5 +33,6 @@ export function liveOutboxWait(
     paneAlive: (p) => paneOwned(p, owner?.nonce ?? ""),
     paneId: owner?.nonce ? owner.paneId : null,
     extendMult: envNum("AP_WAIT_EXTEND_MULT", 3),
+    onPoll,
   }, clock);
 }

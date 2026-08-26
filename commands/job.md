@@ -60,9 +60,18 @@ When `PARKED=yes`, decode `PARKED_MESSAGE=` and put it to the user with **AskUse
 their answer with `$CS job relay <TOPIC> "<answer>"` (or `@<file>` for a long one), then re-arm the
 watch — as a persistent **Monitor**, never a plain background shell (the launch path's DETACHED
 MODE section in `/ap:implement` carries the canonical loop: `job wait` in a `while` loop, emit +
-exit on `JS=done|error|question`, absorb timeouts silently, stand down when `job mode` says the
-record is gone). A Monitor can be parked before a session restart and re-armed after it via a
-monitor-handoff workflow; a background shell just dies.
+exit on `JS=done|error|question|worker-dead`, absorb timeouts silently, stand down when `job mode`
+says the record is gone). A Monitor can be parked before a session restart and re-armed after it via
+a monitor-handoff workflow; a background shell just dies.
+
+`JS=worker-dead` is terminal for that loop the way a question is not: the job hub is ALIVE but its
+worker is gone, and `WORKER=` and `VERDICT=` on the same line name which and how — `bootstrap-dead`
+for a worker that never bootstrapped (a spawn killed before its own deadline), `pane-dead` for a
+pane that vanished mid-run. The run cannot progress and nothing will change that, so **do not
+re-arm**: run `$CS job stop <TOPIC>` to tear the job down (the killed spawn already killed its own
+pane; `stop` clears the rest), then relaunch the same brief as a NEW job — or attach to the session
+first if you want to see what the pane showed. Never respawn a worker into a running job: a second
+worker under one hub corrupts the run.
 
 Relay bumps the job's cursor past the question, so the next `wait` will not re-report it — and
 `status` stops reporting an answered question as `PARKED=yes`, so seeing it again means a genuinely

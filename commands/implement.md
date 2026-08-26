@@ -53,6 +53,7 @@ This command has two entry paths. Which one you are on is decided **once**, befo
        OUT=$($CS job wait <TOPIC> 2>/dev/null)
        case "$OUT" in
          *"JS=done"*|*"JS=error"*|*"JS=question"*) printf "%s\n" "$OUT"; exit 0;;
+         *"JS=worker-dead"*) printf "%s\n" "$OUT"; exit 0;;
          *"JS=standdown"*) printf "JS=standdown\n"; exit 0;;
          *"JS=timeout"*) ;;
          *) printf "JS=unreachable\n%s\n" "$OUT"; exit 1;;
@@ -78,6 +79,13 @@ This command has two entry paths. Which one you are on is decided **once**, befo
      **AskUserQuestion**, deliver the answer with `$CS job relay <TOPIC> "<answer>"`, then re-arm
      the same Monitor (the relay bumped the cursor, so it will not re-report the answered
      question).
+   - `JS=worker-dead` — the job hub is ALIVE but its worker is gone (the line carries `WORKER=` and
+     `VERDICT=`: `bootstrap-dead` means the worker never bootstrapped — a spawn killed before its
+     own deadline — and `pane-dead` means its pane vanished mid-run). The run cannot progress and
+     nothing will change that. **Do not re-arm.** Run `$CS job stop <TOPIC>` to tear the job down
+     (the killed spawn already killed its own pane; `stop` clears the rest), then relaunch the same
+     brief as a NEW job — or attach to `<SESSION>` first if you want to see what the pane showed.
+     Never respawn a worker into a running job: a second worker under one hub corrupts the run.
    - `JS=standdown` — there is no record left: the job was torn down (by you, or by the operator).
      Nothing to watch and nothing to report from it; do not re-arm.
    - `JS=unreachable` — the WATCH infrastructure failed, which says nothing about the run: ap

@@ -41,6 +41,7 @@ Two entry paths, decided once before Stage 0 — the same shape `/ap:implement` 
        OUT=$($CS job wait <TOPIC> 2>/dev/null)
        case "$OUT" in
          *"JS=done"*|*"JS=error"*|*"JS=question"*) printf "%s\n" "$OUT"; exit 0;;
+         *"JS=worker-dead"*) printf "%s\n" "$OUT"; exit 0;;
          *"JS=standdown"*) printf "JS=standdown\n"; exit 0;;
          *"JS=timeout"*) ;;
          *) printf "JS=unreachable\n%s\n" "$OUT"; exit 1;;
@@ -50,7 +51,12 @@ Two entry paths, decided once before Stage 0 — the same shape `/ap:implement` 
   Every ending is loud: `JS=timeout` just re-arms, `JS=standdown` means the record is gone — retire
   the watch, do not re-arm — and `JS=unreachable` means the WATCH infrastructure failed and says
   nothing about the run: check the environment, read `$CS job status <SLUG>` yourself, re-arm once
-  it answers, and never tear anything down on watcher evidence alone. Then tell the user
+  it answers, and never tear anything down on watcher evidence alone. `JS=worker-dead` means the job
+  hub is ALIVE but its worker is gone (`WORKER=` and `VERDICT=` name which and how —
+  `bootstrap-dead` for a worker that never bootstrapped, `pane-dead` for a pane that vanished
+  mid-run): the run cannot progress, so **do not re-arm** — `$CS job stop <SLUG>` tears it down (a
+  killed spawn already killed its own pane), then relaunch the same brief as a new job, or attach
+  first to investigate. Never respawn a worker into a running job. Then tell the user
   `tmux attach -t <SESSION>`, `/ap:job status <SLUG>`, and that the run works in the printed
   `WORKTREE=` so **this checkout stays theirs** for the duration, then stop. Handle `JS=done`,
   `JS=error` and `JS=question` exactly as `/ap:implement`'s launch path does, including decoding

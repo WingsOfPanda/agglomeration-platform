@@ -258,6 +258,14 @@ export interface WaitLivenessOpts {
   paneId: string | null;   // the worker's pane id (pane.json); null (absent) disables the check
   everyS?: number;         // liveness poll cadence in seconds (default 15)
   extendMult?: number;     // budget extension cap while the pane stays alive (default 1 = off; liveOutboxWait wires 3)
+  /** An extra check the wait runs at the SAME cadence as the pane probe, whose event (when it
+   *  returns one) ends the wait immediately. The one hook a long wait needs to notice something
+   *  that is not in the outbox it is watching and is not its own pane: `job wait` blocks on the HUB
+   *  outbox for up to 3h, and a WORKER dying under it is invisible to both. Injected rather than
+   *  hard-wired for the reason `paneAlive` is — ipc.ts stays free of tmux — and OPTIONAL so every
+   *  other caller's wait is byte-for-byte the wait it was before. Never runs a second timer and
+   *  never races the poll: it rides the loop that already exists. */
+  onPoll?: () => Promise<OutboxEvent | null>;
 }
 
 export async function outboxWaitSince(i: string, m: string, t: string, offset: number, events: string[], timeoutSec: number, live?: WaitLivenessOpts, clock: Clock = realClock): Promise<OutboxEvent | null> {
@@ -274,11 +282,21 @@ export async function outboxWaitSince(i: string, m: string, t: string, offset: n
   for (let n = 0; n < capSec; n++) {
     const hit = lastMatch(readFrom(path, offset), events);
     if (hit) return hit;   // a terminal event in the outbox always wins over a liveness check
-    if (live && live.paneId && n > 0 && n % everyS === 0) {
-      let alive = true;
-      try { alive = await live.paneAlive(live.paneId); } catch { alive = false; } // tmux server gone -> dead
-      if (alive) deadPolls = 0;
-      else if (++deadPolls >= 2) return { event: "error", note: PANE_DIED_NOTE, ts: isoUtc() };
+    if (live && n > 0 && n % everyS === 0) {
+      if (live.paneId) {
+        let alive = true;
+        try { alive = await live.paneAlive(live.paneId); } catch { alive = false; } // tmux server gone -> dead
+        if (alive) deadPolls = 0;
+        else if (++deadPolls >= 2) return { event: "error", note: PANE_DIED_NOTE, ts: isoUtc() };
+      }
+      // AFTER the pane check, so a dead pane on the outbox being waited on always wins: that is the
+      // subject of the wait, and an extra probe must not speak over it. Runs even with paneId null
+      // (an unverifiable pane.json disables the probe but says nothing about anything else).
+      if (live.onPoll) {
+        let extra: OutboxEvent | null = null;
+        try { extra = await live.onPoll(); } catch { extra = null; } // a probe that throws is not evidence
+        if (extra) return extra;
+      }
     }
     if (n === timeoutSec && capSec > timeoutSec) {
       log.warn(`outbox-wait: ${i} budget ${timeoutSec}s elapsed, pane not confirmed dead — extending up to ${extendMult}x`);

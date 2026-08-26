@@ -4,7 +4,8 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
-import { run } from "../src/commands/job.js";
+import { virtualClock } from "./helpers/clock.js";
+import { run, waitRun } from "../src/commands/job.js";
 import { formatJob, jobPath, type JobRecord } from "../src/core/job.js";
 import { outboxPath } from "../src/core/ipc.js";
 
@@ -129,6 +130,18 @@ describe("job wait always speaks — exactly one JS= line per invocation", () =>
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, lines.map((o) => JSON.stringify(o)).join("\n") + "\n");
   }
+  /** A worker dir under the job's topic, exactly as spawn leaves one that never reported: the
+   *  platform-written status seed, an empty outbox, and a pane record. */
+  function seedWorker(name: string, spawnedAt: string): void {
+    const dir = join(dirname(dirname(jobPath(REC.topic))), name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "pane.json"), JSON.stringify({
+      pane_id: "%89", pane_nonce: "ace6b021-d592-48aa-8a59-ba5860417a78",
+      agent: name.replace(/-[^-]*$/, ""), model: name.replace(/^.*-/, ""), spawned_at: spawnedAt,
+    }) + "\n");
+    writeFileSync(join(dir, "status.json"), JSON.stringify({ state: "idle", updated: spawnedAt, last_event: "spawn" }) + "\n");
+    writeFileSync(join(dir, "outbox.jsonl"), "");
+  }
   const JS = (out: string): string[] => out.split("\n").filter((l) => l.startsWith("JS="));
 
   it("no record: JS=standdown and rc 0 — from a watcher's seat the run is over", async () => {
@@ -182,6 +195,21 @@ describe("job wait always speaks — exactly one JS= line per invocation", () =>
     expect(q.out).toContain("QUESTION=merge or keep?%0Asay which");
   });
 
+  // L2b's producer half. The hub is fine — it has no pane record at all here, so the wait's own
+  // pane probe is disabled — and the WORKER is the thing that died. One line, carrying its identity
+  // and verdict, because a second line would give the loop a second JS=-shaped token to branch on.
+  it("a worker found dead mid-wait: exactly one JS=worker-dead line, rc 0", async () => {
+    home();
+    seedJob();
+    seedWorker("bravo-codex", "2026-08-25T15:03:33Z");
+    const v = virtualClock(Date.parse("2026-08-25T15:10:00Z"));
+    const { rc, out } = await capture(() => waitRun(["demo"], {
+      snapshot: async () => new Map(), now: () => v.clock.now(), clock: v.clock,
+    }));
+    expect(rc).toBe(0);
+    expect(JS(out)).toEqual(["JS=worker-dead WORKER=bravo-codex VERDICT=bootstrap-dead"]);
+  });
+
   it("nothing to report before the budget expires: JS=timeout, rc 1", async () => {
     home();
     seedJob();
@@ -204,12 +232,18 @@ describe("job wait tokens <-> the directives' canonical loop", () => {
   const md = (p: string) => readFileSync(join(process.cwd(), "commands", p), "utf8");
   const implement = md("implement.md");
   const quick = md("quick.md");
+  // The origin-side observer directive. It carries no copy of the loop — it points at the launch
+  // path for that — but it DOES enumerate the tokens the loop exits on, so a token added to the
+  // verb and to the two loops while this list stays behind sends an origin hub to the one directive
+  // that never heard of it.
+  const job = md("job.md");
   const LOOP = `   \`\`\`
    Monitor(persistent: true, description: 'detached job <TOPIC>', command: '
      while :; do
        OUT=$($CS job wait <TOPIC> 2>/dev/null)
        case "$OUT" in
          *"JS=done"*|*"JS=error"*|*"JS=question"*) printf "%s\\n" "$OUT"; exit 0;;
+         *"JS=worker-dead"*) printf "%s\\n" "$OUT"; exit 0;;
          *"JS=standdown"*) printf "JS=standdown\\n"; exit 0;;
          *"JS=timeout"*) ;;
          *) printf "JS=unreachable\\n%s\\n" "$OUT"; exit 1;;
@@ -234,8 +268,26 @@ describe("job wait tokens <-> the directives' canonical loop", () => {
     }
   });
 
+  // `JS=worker-dead` is terminal for the loop and must have its OWN arm: it would otherwise fall
+  // into the catch-all, which prepends `JS=unreachable` and hands the reader TWO JS= lines — one of
+  // them a lie about the watch infrastructure.
+  it("worker-dead has its own arm, ahead of the catch-all, in both directives", () => {
+    const arm = `*"JS=worker-dead"*) printf "%s\\n" "$OUT"; exit 0;;`;
+    for (const [name, text] of [["implement.md", implement], ["quick.md", quick]] as const) {
+      expect(text, `${name} has no JS=worker-dead arm`).toContain(arm);
+      expect(text.indexOf(arm), `${name} puts the worker-dead arm after the catch-all`)
+        .toBeLessThan(text.indexOf(`*) printf "JS=unreachable\\n%s\\n" "$OUT"; exit 1;;`));
+    }
+  });
+
+  it("commands/job.md enumerates the same terminal tokens, worker-dead included", () => {
+    expect(job, "job.md's JS= enumeration drifted from the verb").toContain("JS=done|error|question|worker-dead");
+    expect(job, "job.md names worker-dead without saying what to do about it").toContain("do not\nre-arm");
+    expect(job, "job.md must send the reader to job stop, not to a respawn").toContain("$CS job stop <TOPIC>");
+  });
+
   it("every JS= token the verb can print is a documented branch in both directives", () => {
-    for (const tok of ["JS=done", "JS=error", "JS=question", "JS=timeout", "JS=standdown", "JS=torn", "JS=unreachable"]) {
+    for (const tok of ["JS=done", "JS=error", "JS=question", "JS=timeout", "JS=standdown", "JS=torn", "JS=unreachable", "JS=worker-dead"]) {
       // `JS=torn` reaches a reader only through the loop's catch-all, so it is the ONE token the
       // prose need not name; the others are branches an origin hub has to know by name.
       if (tok === "JS=torn") continue;

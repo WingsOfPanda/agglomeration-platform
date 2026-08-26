@@ -19,8 +19,9 @@ import { envNum } from "../core/env.js";
 import { pickRandomAgent } from "../core/agents.js";
 import { deriveSlug } from "../core/quick.js";
 import { livePaneNonces, ownsPane, sessionExists, sessionPaneIds, killSession, validSessionName, currentSessionName } from "../core/tmux.js";
-import { paneMetaRead, paneMetaReadForDir, outboxPath, statusPath } from "../core/ipc.js";
+import { paneMetaRead, paneMetaReadForDir, outboxPath, statusPath, type Clock, type OutboxEvent } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
+import { scanTopicWorkers } from "../core/workerLiveness.js";
 import { percentEncode } from "../core/questionCodec.js";
 import { runnerAt, classifyDirty, currentBranch, type Runner } from "../core/gitwork.js";
 import { branchNameFor } from "../core/branchRecord.js";
@@ -454,6 +455,27 @@ async function startRun(rest: string[], origCwd: string): Promise<number> {
   return 0;
 }
 
+// ---------- worker liveness ----------
+
+/** Every worker under the job's topic, classified against one pane snapshot — the hub excluded by
+ *  name, because its own liveness is already reported as `LIVENESS=` by `classifyJobLiveness` and
+ *  two layers describing the same pane in two vocabularies is how they start disagreeing. Persists,
+ *  because both callers here are the run's own scheduled rescans. */
+function workerRows(rec: J.JobRecord, snapshot: Map<string, string>, now: number) {
+  return scanTopicWorkers(rec.topic, snapshot, now, { exclude: `${rec.hub.agent}-${rec.hub.model}`, persist: true });
+}
+
+/** The probe `job wait` hands to the wait's per-poll hook. `job wait` blocks on the HUB's outbox for
+ *  up to an hour at a time; a worker that dies under it writes nothing there and its pane is not the
+ *  one the wait probes, so without this the death is invisible until the whole budget expires. The
+ *  returned event is IN-PROCESS ONLY — it is never appended to any outbox. */
+function workerDeathProbe(rec: J.JobRecord, deps: WaitDeps): () => Promise<OutboxEvent | null> {
+  return async () => {
+    const dead = workerRows(rec, await deps.snapshot(), deps.now()).find((w) => w.dead);
+    return dead ? { event: J.WORKER_DEAD_EVENT, worker: dead.worker, verdict: dead.verdict, ts: isoUtc() } : null;
+  };
+}
+
 // ---------- status ----------
 
 async function statusRun(rest: string[]): Promise<number> {
@@ -493,6 +515,11 @@ async function statusRun(rest: string[]): Promise<number> {
   if (liveness === "dead") {
     process.stdout.write(`NOTE=${enc(`the job hub's pane is gone. Its workers, if any, are now unsupervised: 'ap list ${rec.topic}' shows them, 'ap job stop ${rec.topic}' tears the whole job down. Nothing is auto-respawned — a second hub waking onto a live worker corrupts the run.`)}\n`);
   }
+  // The hub being `alive` and `working` was never the whole answer: issue #157's run read
+  // LIVENESS=alive HUB_STATE=working for ten hours with a worker that had never bootstrapped. One
+  // line per worker dir, from the records the platform already holds — and the same scan advances
+  // the miss counter `job wait`'s mid-wait poll reads, so a status run is a rescan, not a peek.
+  for (const w of workerRows(rec, live, now)) process.stdout.write(`WORKER=${w.worker} ${w.verdict}\n`);
   const tail = events.slice(-10);
   if (tail.length) {
     process.stdout.write("--- recent events ---\n");
@@ -508,8 +535,16 @@ async function statusRun(rest: string[]): Promise<number> {
  *  cannot execute at all prints nothing, and the canonical loop turns that silence into
  *  `JS=unreachable`; anything ap itself decides must therefore SAY so, or "the run finished" and
  *  "I could not run" stay indistinguishable (the xjp stuck-wait: 22 minutes of a dead poll loop
- *  past the hub's `done`). `requireJob` is deliberately not used: its refusal is stderr-only. */
-async function waitRun(rest: string[]): Promise<number> {
+ *  past the hub's `done`). `requireJob` is deliberately not used: its refusal is stderr-only.
+ *
+ *  `deps` is injected for one reason: the mid-wait worker rescan is a fake-clock behavior (a worker
+ *  alive at call time and gone 45s later), and there is no way to script a tmux snapshot and a
+ *  clock through the CLI. The default binds the real pane snapshot and the real clock, so `run()`
+ *  is unchanged. */
+export interface WaitDeps { snapshot: () => Promise<Map<string, string>>; now: () => number; clock?: Clock }
+const realWaitDeps = (): WaitDeps => ({ snapshot: livePaneNonces, now: Date.now });
+
+export async function waitRun(rest: string[], deps: WaitDeps = realWaitDeps()): Promise<number> {
   const topic = rest[0];
   // A mistyped topic reads as TORN, never as standdown: rc 1 and a loud line, because the one thing
   // a typo must not do is look like a finished run and retire the watch.
@@ -533,8 +568,20 @@ async function waitRun(rest: string[]): Promise<number> {
     return 1;
   }
   const budget = envNum("AP_JOB_WAIT_TIMEOUT_S", 3600);
-  const ev = await liveOutboxWait(rec.hub.agent, rec.hub.model, rec.topic, readCursor(rec.topic), ["done", "error", "question"], budget);
+  // The worker rescan runs INSIDE the wait, at the pane probe's own cadence — not once before it.
+  // A check before the wait would have been true of #157's very first poll and useless for the
+  // next ten hours; the detection bound has to be the cadence, never the 3600s budget.
+  const ev = await liveOutboxWait(
+    rec.hub.agent, rec.hub.model, rec.topic, readCursor(rec.topic), ["done", "error", "question"], budget,
+    deps.clock, workerDeathProbe(rec, deps),
+  );
   if (!ev) { process.stdout.write("JS=timeout\n"); return 1; }
+  // Still exactly ONE JS= line: the worker's identity and verdict ride the same line, because a
+  // second line would be a second `JS=`-shaped token for the loop to mis-branch on.
+  if (ev.event === J.WORKER_DEAD_EVENT) {
+    process.stdout.write(`JS=worker-dead WORKER=${String(ev.worker ?? "?")} VERDICT=${String(ev.verdict ?? "?")}\n`);
+    return 0;
+  }
   process.stdout.write(`JS=${ev.event}\n`);
   if (ev.event === "question") process.stdout.write(`QUESTION=${enc(ev.message ?? "")}\n`);
   return 0;
