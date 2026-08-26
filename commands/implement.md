@@ -247,6 +247,13 @@ set `PROVIDER=codex` for this spawn. Then spawn one worker in the resolved targe
 $CS spawn lead "$PROVIDER" "$TOPIC" --cwd "$(cat "$ART/target_cwd.txt")"
 ```
 
+The Bash call MUST carry `timeout: 300000`: bootstrap costs `bootstrap_sleep_s +
+ready_timeout_s` (up to 170s), so the tool's 120s default SIGTERMs the spawn before its own
+deadline can fire. Never append `; echo "rc=$?"` to that call — it masks the rc this step
+branches on. Never wait on the worker with an unbounded `until ... sleep` loop; the bounded
+wait verbs are the only waits. A spawn killed anyway exits **143** — treat it exactly as rc 1
+(it has already FAILED-archived the worker).
+
 On spawn failure (non-zero): `$CS implement archive <TOPIC>` and stop (nothing to tear down — the worker
 never came up).
 

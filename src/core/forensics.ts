@@ -7,7 +7,12 @@ import { isoUtc } from "./archive.js";
 import { log } from "./log.js";
 import { parseEvent } from "./ipc.js";
 
-export type FailureReason = "timeout" | "error_event";
+/** Why a spawn never reached `ready`. `timeout`/`error_event` are the two the ready-wait itself
+ *  can reach; `killed` is the spawn PROCESS being SIGTERMed mid-wait (the caller's own deadline
+ *  firing first), and `pane_dead` is the worker's pane dying during bootstrap, caught by the
+ *  wait's liveness probe instead of at the full deadline. */
+export type FailureReason = "timeout" | "error_event" | "killed" | "pane_dead";
+const FAILURE_REASONS: ReadonlySet<string> = new Set<FailureReason>(["timeout", "error_event", "killed", "pane_dead"]);
 export const SCROLLBACK_LINES = 50;
 export const NO_EVENT_SENTINEL = "no error event before timeout";
 export const FAILURE_FILENAME = "failure-reason.txt";
@@ -38,7 +43,11 @@ export function renderFailureReport(f: {
     `pane_id:       ${f.paneId}\n` +
     `fail_reason:   ${f.reason}\n` +
     `ready_timeout: ${f.readyTimeout}\n`;
-  const evt = f.reason === "error_event" && f.eventLine ? f.eventLine : NO_EVENT_SENTINEL;
+  // An eventLine is supplied only when an event actually arrived (the ready-wait passes it for
+  // `error_event` and for the synthetic `pane_dead` error, and never for `timeout`/`killed`), so
+  // keying off its presence rather than off one reason name is behavior-identical for the two
+  // original reasons and lets `pane_dead` carry its event instead of the no-event sentinel.
+  const evt = f.eventLine ? f.eventLine : NO_EVENT_SENTINEL;
   return `# Spawn bootstrap failure\n${meta}\n` +
     `## Pane scrollback (last 50 lines, captured BEFORE pane kill)\n${f.scrollback}\n\n` +
     `## Event context\n${evt}\n`;
@@ -46,7 +55,7 @@ export function renderFailureReport(f: {
 
 export async function captureFailure(input: CaptureFailureInput, deps: ForensicsDeps): Promise<CaptureFailureResult> {
   if (!input.agent || !input.model || !input.topic) return { ok: false, code: 1 };
-  if (input.reason !== "timeout" && input.reason !== "error_event") return { ok: false, code: 2 };
+  if (!FAILURE_REASONS.has(input.reason)) return { ok: false, code: 2 };
   const dir = deps.workerDir(input.agent, input.model, input.topic);
   if (!deps.isWritableDir(dir)) return { ok: false, code: 1 };
   const scrollback = await deps.capturePane(input.paneId, SCROLLBACK_LINES).catch(() => "");

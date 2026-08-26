@@ -9388,7 +9388,7 @@ async function outboxWaitSince(i2, m, t, offset, events, timeoutSec, live, clock
         alive = false;
       }
       if (alive) deadPolls = 0;
-      else if (++deadPolls >= 2) return { event: "error", note: "pane-died", ts: isoUtc() };
+      else if (++deadPolls >= 2) return { event: "error", note: PANE_DIED_NOTE, ts: isoUtc() };
     }
     if (n2 === timeoutSec && capSec > timeoutSec) {
       log.warn(`outbox-wait: ${i2} budget ${timeoutSec}s elapsed, pane not confirmed dead \u2014 extending up to ${extendMult}x`);
@@ -9440,7 +9440,7 @@ function resolveModel(agent, topic) {
   const model = d.name.slice(agent.length + 1);
   return readPaneJson(workerDir(agent, model, topic))?.model ?? model;
 }
-var import_node_fs13, import_node_path10, TERMINAL_WORKER_STATES, STATUS_UNREADABLE, SENDER_RE, TERMINAL_EVENTS, realClock;
+var import_node_fs13, import_node_path10, TERMINAL_WORKER_STATES, STATUS_UNREADABLE, SENDER_RE, TERMINAL_EVENTS, realClock, PANE_DIED_NOTE;
 var init_ipc2 = __esm({
   "src/core/ipc.ts"() {
     "use strict";
@@ -9461,6 +9461,7 @@ var init_ipc2 = __esm({
         setTimeout(r, ms);
       })
     };
+    PANE_DIED_NOTE = "pane-died";
   }
 });
 
@@ -17406,7 +17407,7 @@ pane_id:       ${f.paneId}
 fail_reason:   ${f.reason}
 ready_timeout: ${f.readyTimeout}
 `;
-  const evt = f.reason === "error_event" && f.eventLine ? f.eventLine : NO_EVENT_SENTINEL;
+  const evt = f.eventLine ? f.eventLine : NO_EVENT_SENTINEL;
   return `# Spawn bootstrap failure
 ${meta}
 ## Pane scrollback (last 50 lines, captured BEFORE pane kill)
@@ -17418,7 +17419,7 @@ ${evt}
 }
 async function captureFailure(input, deps) {
   if (!input.agent || !input.model || !input.topic) return { ok: false, code: 1 };
-  if (input.reason !== "timeout" && input.reason !== "error_event") return { ok: false, code: 2 };
+  if (!FAILURE_REASONS.has(input.reason)) return { ok: false, code: 2 };
   const dir = deps.workerDir(input.agent, input.model, input.topic);
   if (!deps.isWritableDir(dir)) return { ok: false, code: 1 };
   const scrollback = await deps.capturePane(input.paneId, SCROLLBACK_LINES).catch(() => "");
@@ -17637,7 +17638,7 @@ function runFlag(command, topic, note) {
   } else log.info(`${command} flag: nothing recorded`);
   return 0;
 }
-var import_node_fs19, import_node_path15, SCROLLBACK_LINES, NO_EVENT_SENTINEL, FAILURE_FILENAME;
+var import_node_fs19, import_node_path15, FAILURE_REASONS, SCROLLBACK_LINES, NO_EVENT_SENTINEL, FAILURE_FILENAME;
 var init_forensics = __esm({
   "src/core/forensics.ts"() {
     "use strict";
@@ -17649,6 +17650,7 @@ var init_forensics = __esm({
     init_archive();
     init_log();
     init_ipc2();
+    FAILURE_REASONS = /* @__PURE__ */ new Set(["timeout", "error_event", "killed", "pane_dead"]);
     SCROLLBACK_LINES = 50;
     NO_EVENT_SENTINEL = "no error event before timeout";
     FAILURE_FILENAME = "failure-reason.txt";
@@ -17658,12 +17660,19 @@ var init_forensics = __esm({
 // src/commands/spawn.ts
 var spawn_exports = {};
 __export(spawn_exports, {
+  READY_EVENTS: () => READY_EVENTS,
+  SPAWN_KILLED_EXIT: () => SPAWN_KILLED_EXIT,
+  bootstrapFailureReason: () => bootstrapFailureReason,
   paneStateStamp: () => paneStateStamp,
   parseSpawnArgs: () => parseSpawnArgs,
   prepareWorkerState: () => prepareWorkerState,
+  readyWait: () => readyWait,
+  realSpawnKilledDeps: () => realSpawnKilledDeps,
   resolveMode: () => resolveMode,
   run: () => run2,
-  validateSlug: () => validateSlug
+  spawnKilled: () => spawnKilled,
+  validateSlug: () => validateSlug,
+  withSigtermGuard: () => withSigtermGuard
 });
 function resolveMode(explicit, dflt) {
   return explicit || dflt || "full";
@@ -17719,6 +17728,68 @@ function prepareWorkerState(agent, model, topic, role) {
   stateInit(agent, model, topic);
   identityWrite(agent, model, topic, { role });
   seedWorkerStatus(agent, model, topic);
+}
+function readyWait(ctx, deps) {
+  return deps.wait(ctx.agent, ctx.model, ctx.topic, 0, READY_EVENTS, ctx.readyTimeout, {
+    paneAlive: (p) => deps.paneAlive(p, ctx.nonce),
+    paneId: ctx.pane
+  }, deps.clock);
+}
+function bootstrapFailureReason(ev) {
+  if (!ev) return "timeout";
+  return ev.note === PANE_DIED_NOTE ? "pane_dead" : "error_event";
+}
+function realSpawnKilledDeps() {
+  return { writeWorkerStatus, killNow, capturePane, captureFailure, captureSpawnFailure, stateArchive, exit: (c3) => process.exit(c3) };
+}
+async function spawnKilled(ctx, deps) {
+  const { agent, model, topic, pane } = ctx;
+  const step = async (fn) => {
+    try {
+      await fn();
+    } catch {
+    }
+  };
+  try {
+    await step(() => {
+      deps.writeWorkerStatus(agent, model, topic, "error", "spawn-killed");
+    });
+    await step(() => deps.killNow(pane));
+    await step(async () => {
+      const fr = await deps.captureFailure(
+        { agent, model, topic, paneId: pane, reason: "killed", readyTimeout: ctx.readyTimeout },
+        { workerDir, capturePane: (p, n2) => deps.capturePane(p, n2), atomicWriteSync: (d, c3) => (0, import_node_fs20.writeFileSync)(d, c3), isWritableDir: (d) => (0, import_node_fs20.existsSync)(d), now: () => isoUtc() }
+      );
+      deps.captureSpawnFailure({
+        agent,
+        model,
+        topic,
+        reason: "killed",
+        detail: `spawn was killed (SIGTERM) while waiting for {ready,error} (timeout ${ctx.readyTimeout}s)`,
+        failureReportPath: fr.ok ? fr.path : void 0
+      });
+    });
+    await step(() => {
+      const arch = deps.stateArchive(agent, model, topic, "FAILED");
+      log.error(`${agent} spawn was killed (SIGTERM) during bootstrap; state archived to: ${arch}`);
+    });
+  } finally {
+    deps.exit(SPAWN_KILLED_EXIT);
+  }
+}
+async function withSigtermGuard(onTerm, body) {
+  let fired = false;
+  const handler = () => {
+    if (fired) return;
+    fired = true;
+    void onTerm();
+  };
+  process.on("SIGTERM", handler);
+  try {
+    return await body();
+  } finally {
+    process.off("SIGTERM", handler);
+  }
 }
 async function run2(args) {
   const origCwd = process.cwd();
@@ -17877,9 +17948,12 @@ async function dispatchVerb2(args) {
     log.info(`asking ${agent} to read identity`);
     await paneSend(pane, `Read ${identityPath(agent, model, topic)} and follow its instructions exactly.`);
     log.info(`waiting for {ready,error} in outbox (timeout ${readyTimeout}s)`);
-    const ev = await outboxWait(agent, model, topic, ["ready", "error"], readyTimeout);
+    const ev = await withSigtermGuard(
+      () => spawnKilled({ agent, model, topic, pane, readyTimeout }, realSpawnKilledDeps()),
+      () => readyWait({ agent, model, topic, pane, nonce, readyTimeout }, { wait: outboxWaitSince, paneAlive: paneOwned })
+    );
     if (!ev || ev.event === "error") {
-      const reason = ev ? "error_event" : "timeout";
+      const reason = bootstrapFailureReason(ev);
       const tail = await capturePane(pane, 25);
       process.stderr.write(tail + "\n");
       if (!ev) {
@@ -17892,7 +17966,7 @@ ${ob}
         { agent, model, topic, paneId: pane, reason, eventLine: ev ? JSON.stringify(ev) : void 0, readyTimeout },
         { workerDir, capturePane: (p, n2) => capturePane(p, n2), atomicWriteSync: (d, c3) => (0, import_node_fs20.writeFileSync)(d, c3), isWritableDir: (d) => (0, import_node_fs20.existsSync)(d), now: () => isoUtc() }
       );
-      captureSpawnFailure({ agent, model, topic, ...bootstrapFailureArgs(ev ?? null, fr.ok ? fr.path : void 0) });
+      captureSpawnFailure({ agent, model, topic, ...bootstrapFailureArgs(ev ?? null, fr.ok ? fr.path : void 0), reason });
       await killNow(pane);
       writeWorkerStatus(agent, model, topic, "error", "bootstrap-failed");
       const arch = stateArchive(agent, model, topic, "FAILED");
@@ -17920,7 +17994,7 @@ ${sessionLine}  state:   ${workerDir(agent, model, topic)}
     throw e;
   }
 }
-var import_node_fs20, import_node_crypto4, import_node_path16, sleep;
+var import_node_fs20, import_node_crypto4, import_node_path16, sleep, READY_EVENTS, SPAWN_KILLED_EXIT;
 var init_spawn = __esm({
   "src/commands/spawn.ts"() {
     "use strict";
@@ -17945,6 +18019,8 @@ var init_spawn = __esm({
     init_send2();
     init_forensics();
     sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    READY_EVENTS = ["ready", "error"];
+    SPAWN_KILLED_EXIT = 143;
   }
 });
 

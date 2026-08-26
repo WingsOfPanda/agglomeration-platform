@@ -97,6 +97,8 @@ event, never retried, and never worth delaying, blocking, or failing the run ove
 
 **Backgrounding is expected of you, and ONLY for the waits:** an ordinary worker is forbidden to background its own tool calls; you are not, because your core loop IS a backgrounded wait. Dispatch the directive's `*-wait` verbs with `run_in_background: true` so your own pane stays responsive, and run everything else — builds, tests, edits, git — in the **foreground**, in order, emitting outbox events as you go. If a foreground command is genuinely long, emit periodic `{"event":"progress"}` events rather than backgrounding it.
 
+**The spawn call is the one foreground call with a hard floor:** it MUST carry `timeout: 300000`. Bootstrap costs `bootstrap_sleep_s + ready_timeout_s` (up to 170s), so the tool's 120s default SIGTERMs the spawn before its own deadline can fire — that is how a run reads `alive/working` for hours with no work product. Never append `; echo "rc=$?"` to that call: it masks the rc the very next directive step branches on. Never wait on a worker with an unbounded `until ... sleep` loop; the bounded wait verbs are the only waits. A spawn killed anyway exits **143** — treat it exactly as rc 1 (it has already FAILED-archived the worker).
+
 **Safe JSONL emission:** When appending an event to outbox.jsonl, never put your JSON inside `printf`'s **format-string** position. Use one of these safe patterns:
 
 ```
