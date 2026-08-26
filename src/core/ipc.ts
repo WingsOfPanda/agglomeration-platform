@@ -248,6 +248,11 @@ export const realClock: Clock = {
  *  stays testable and ipc.ts stays free of the tmux/execa dependency — which is also why the
  *  OWNERSHIP check lives in the binder (waitLive.ts closes the worker's recorded nonce into this
  *  probe) and not here: a reused pane id must not read as "the worker is alive". */
+/** The `note` on the synthetic `error` the wait returns when the pane is confirmed dead. Named so a
+ *  caller can tell this event — which the WORKER never wrote — apart from a real error event it
+ *  reported, without matching a literal in two places. */
+export const PANE_DIED_NOTE = "pane-died";
+
 export interface WaitLivenessOpts {
   paneAlive: (pane: string) => Promise<boolean>;
   paneId: string | null;   // the worker's pane id (pane.json); null (absent) disables the check
@@ -273,7 +278,7 @@ export async function outboxWaitSince(i: string, m: string, t: string, offset: n
       let alive = true;
       try { alive = await live.paneAlive(live.paneId); } catch { alive = false; } // tmux server gone -> dead
       if (alive) deadPolls = 0;
-      else if (++deadPolls >= 2) return { event: "error", note: "pane-died", ts: isoUtc() };
+      else if (++deadPolls >= 2) return { event: "error", note: PANE_DIED_NOTE, ts: isoUtc() };
     }
     if (n === timeoutSec && capSec > timeoutSec) {
       log.warn(`outbox-wait: ${i} budget ${timeoutSec}s elapsed, pane not confirmed dead — extending up to ${extendMult}x`);

@@ -175,8 +175,14 @@ feed (survives teardown and aborts) and costs nothing, so prefer over-recording.
    force-updates the branch: surface the message and let the operator pick the remedy it names —
    delete it (`git -C <TARGET> branch -D feat/quick-<SLUG>`), rename it, or check it out by hand and
    re-run. If `--stash-wip` parked a stash first, say so and point at the recovery below.
-2. Spawn the worker: `$CS spawn <AGENT> <PROVIDER> <SLUG> --cwd <TARGET>`. On **rc 1**
-   (bootstrap failed) → abort: `$CS quick summary <SLUG> --aborted build spawn-failed "worker failed
+2. Spawn the worker: `$CS spawn <AGENT> <PROVIDER> <SLUG> --cwd <TARGET>`.
+   The Bash call MUST carry `timeout: 300000`: bootstrap costs `bootstrap_sleep_s +
+   ready_timeout_s` (up to 170s), so the tool's 120s default SIGTERMs the spawn before its own
+   deadline can fire. Never append `; echo "rc=$?"` to that call — it masks the rc this step
+   branches on. Never wait on the worker with an unbounded `until ... sleep` loop; the bounded
+   wait verbs are the only waits. A spawn killed anyway exits **143** — treat it exactly as rc 1
+   (it has already FAILED-archived the worker).
+   On **rc 1** (bootstrap failed) → abort: `$CS quick summary <SLUG> --aborted build spawn-failed "worker failed
    bootstrap"`, print the SUMMARY, and stop. Do **not** run `stop` — `spawn` already
    FAILED-archived the worker.
 3. Dispatch round 1: `$CS quick turn-send <SLUG> 1`.

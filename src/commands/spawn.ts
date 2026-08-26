@@ -10,14 +10,14 @@ import { stateInit, stateArchive, isoUtc } from "../core/archive.js";
 import { readIfExists } from "../core/fsread.js";
 import { atomicWrite } from "../core/atomic.js";
 import { validateSlug } from "../core/slug.js";
-import { identityWrite, identityPath, seedWorkerStatus, writeWorkerStatus, inboxWrite, inboxPath, paneMetaWrite, outboxWait, outboxDump, parseLastPane, formatLastPane, type WorkerRole } from "../core/ipc.js";
+import { identityWrite, identityPath, seedWorkerStatus, writeWorkerStatus, inboxWrite, inboxPath, paneMetaWrite, outboxWaitSince, outboxDump, parseLastPane, formatLastPane, PANE_DIED_NOTE, type WorkerRole, type OutboxEvent, type Clock } from "../core/ipc.js";
 import { paneNonceFor } from "../core/roster.js";
 import { pickRandomAgent, agentInUse, formatCollisionError } from "../core/agents.js";
 import { agentBinary, agentDefaultMode, agentModeArgs, agentReadyTimeout, agentBootstrapSleep } from "../core/contracts.js";
 import { wrapLaunch, splitRight, splitDown, respawn, paneOwned, paneNonceSet, paneStateSet, paneLabelSet, paneSend, killNow, capturePane, ensurePaneBorders, ensureWindowBorderStatus, sessionExists, newSession, newWindow, validSessionName } from "../core/tmux.js";
 import { labelFor } from "../core/colors.js";
 import { taskNudge } from "./send.js";
-import { captureFailure, captureSpawnFailure, bootstrapFailureArgs } from "../core/forensics.js";
+import { captureFailure, captureSpawnFailure, bootstrapFailureArgs, type FailureReason } from "../core/forensics.js";
 
 export { validateSlug };
 export function resolveMode(explicit: string | undefined, dflt: string | undefined): string { return explicit || dflt || "full"; }
@@ -80,6 +80,119 @@ export function prepareWorkerState(agent: string, model: string, topic: string, 
   stateInit(agent, model, topic);
   identityWrite(agent, model, topic, { role });
   seedWorkerStatus(agent, model, topic);
+}
+
+/** The events the bootstrap ready-wait listens for. Frozen names, one definition: the live call and
+ *  the tests that drive the real wait engine must not be able to drift apart. */
+export const READY_EVENTS: string[] = ["ready", "error"];
+
+/** The exit code spawn re-raises when it is SIGTERMed: 128 + SIGTERM(15), i.e. exactly the code the
+ *  caller would have seen had no handler been installed. */
+export const SPAWN_KILLED_EXIT = 143;
+
+export interface ReadyWaitDeps {
+  wait: typeof outboxWaitSince;
+  paneAlive: (pane: string, nonce: string) => Promise<boolean>;
+  clock?: Clock;
+}
+
+/** The bootstrap ready-wait, with the wait's pane-liveness escape hatch wired to the pane THIS call
+ *  just created. Without it, a pane that dies at t=10s still burned the whole ready_timeout_s before
+ *  anyone noticed. Deliberately NO `extendMult` (default 1 = off): the turn waits extend for a live
+ *  worker that is merely slow, but a bootstrap deadline a silent pane can stretch is not a deadline.
+ *  The probe is ownership-checked (nonce, not id alone) for the reason waitLive.ts carries: a pane id
+ *  can name a stranger's pane after a tmux restart. */
+export function readyWait(
+  ctx: { agent: string; model: string; topic: string; pane: string; nonce: string; readyTimeout: number },
+  deps: ReadyWaitDeps,
+): Promise<OutboxEvent | null> {
+  return deps.wait(ctx.agent, ctx.model, ctx.topic, 0, READY_EVENTS, ctx.readyTimeout, {
+    paneAlive: (p) => deps.paneAlive(p, ctx.nonce),
+    paneId: ctx.pane,
+  }, deps.clock);
+}
+
+/** Why the ready-wait ended without a `ready`: no event at all is the deadline; the wait's synthetic
+ *  pane-death error is a dead pane (the worker never wrote it); anything else is the worker's own
+ *  `error` event. Pure, so the three-way split is testable without a wait. */
+export function bootstrapFailureReason(ev: OutboxEvent | null): FailureReason {
+  if (!ev) return "timeout";
+  return ev.note === PANE_DIED_NOTE ? "pane_dead" : "error_event";
+}
+
+/** Injected so the killed-spawn ORDER is unit-testable without a pane, a real signal, or a real exit. */
+export interface SpawnKilledDeps {
+  writeWorkerStatus: typeof writeWorkerStatus;
+  killNow: typeof killNow;
+  capturePane: typeof capturePane;
+  captureFailure: typeof captureFailure;
+  captureSpawnFailure: typeof captureSpawnFailure;
+  stateArchive: typeof stateArchive;
+  exit: (code: number) => void;
+}
+
+export function realSpawnKilledDeps(): SpawnKilledDeps {
+  return { writeWorkerStatus, killNow, capturePane, captureFailure, captureSpawnFailure, stateArchive, exit: (c) => process.exit(c) };
+}
+
+/** The bootstrap-failure sequence for a spawn whose OWN PROCESS is killed mid-ready-wait — the
+ *  caller's deadline firing before ours (every Bash-tool default does: 120s < bootstrap_sleep_s +
+ *  ready_timeout_s on every provider). Without it the killed spawn left `status.json` frozen at the
+ *  seed, no forensics, no archive, and the caller free to read "spawned" as "running" for hours.
+ *
+ *  Ordered cheapest-and-most-valuable first, because the harness may escalate to SIGKILL after a
+ *  grace we cannot measure:
+ *    (a) ONE atomic status rename — alone it moves the worker off the `last_event: spawn` seed, so
+ *        every reader sees a terminal `error` even if nothing below completes;
+ *    (b) kill the pane — BEFORE the archive and never after: stateArchive moves pane.json out of the
+ *        topic and every teardown discovers ownership from active topic dirs, so an archived live
+ *        pane is unreachable by `stop`/`job stop`/`list`. The id was created by THIS call, so it
+ *        cannot be stale (the same justification the timeout path carries);
+ *    (c) forensics — the scrollback is captured from an already-killed pane and is usually empty;
+ *        that is the accepted price of (b) ordering ahead of it;
+ *    (d) archive, then re-raise the signal's own exit code.
+ *  Each step is individually guarded: a step that throws must not cost the ones after it. */
+export async function spawnKilled(
+  ctx: { agent: string; model: string; topic: string; pane: string; readyTimeout: number },
+  deps: SpawnKilledDeps,
+): Promise<void> {
+  const { agent, model, topic, pane } = ctx;
+  const step = async (fn: () => void | Promise<void>): Promise<void> => {
+    try { await fn(); } catch { /* the steps after this one are worth more than this one's error */ }
+  };
+  try {
+    await step(() => { deps.writeWorkerStatus(agent, model, topic, "error", "spawn-killed"); });
+    await step(() => deps.killNow(pane));
+    await step(async () => {
+      const fr = await deps.captureFailure(
+        { agent, model, topic, paneId: pane, reason: "killed", readyTimeout: ctx.readyTimeout },
+        { workerDir, capturePane: (p, n) => deps.capturePane(p, n), atomicWriteSync: (d, c) => writeFileSync(d, c), isWritableDir: (d) => existsSync(d), now: () => isoUtc() },
+      );
+      deps.captureSpawnFailure({
+        agent, model, topic, reason: "killed",
+        detail: `spawn was killed (SIGTERM) while waiting for {ready,error} (timeout ${ctx.readyTimeout}s)`,
+        failureReportPath: fr.ok ? fr.path : undefined,
+      });
+    });
+    await step(() => {
+      const arch = deps.stateArchive(agent, model, topic, "FAILED");
+      log.error(`${agent} spawn was killed (SIGTERM) during bootstrap; state archived to: ${arch}`);
+    });
+  } finally {
+    deps.exit(SPAWN_KILLED_EXIT);
+  }
+}
+
+/** Run `body` with a SIGTERM handler installed for exactly its duration, and removed after: a
+ *  handler left installed would swallow the default terminate for every later phase of the spawn.
+ *  Node suppresses the default SIGTERM action while any listener exists, so `onTerm` MUST end the
+ *  process itself (spawnKilled does, in a finally). Fires at most once — a second signal must not
+ *  restart a sequence that is already archiving. */
+export async function withSigtermGuard<T>(onTerm: () => void | Promise<void>, body: () => Promise<T>): Promise<T> {
+  let fired = false;
+  const handler = (): void => { if (fired) return; fired = true; void onTerm(); };
+  process.on("SIGTERM", handler);
+  try { return await body(); } finally { process.off("SIGTERM", handler); }
 }
 
 export async function run(args: string[]): Promise<number> {
@@ -228,9 +341,15 @@ async function dispatchVerb(args: string[]): Promise<number> {
     await paneSend(pane, `Read ${identityPath(agent, model, topic)} and follow its instructions exactly.`);
 
     log.info(`waiting for {ready,error} in outbox (timeout ${readyTimeout}s)`);
-    const ev = await outboxWait(agent, model, topic, ["ready", "error"], readyTimeout);
+    // Two ways this wait can end early, both of which used to end it in silence: the pane dying
+    // during bootstrap (the liveness probe below), and THIS PROCESS being killed by a caller whose
+    // deadline is shorter than ours (the SIGTERM guard, which fails the worker closed and re-raises).
+    const ev = await withSigtermGuard(
+      () => spawnKilled({ agent, model, topic, pane, readyTimeout }, realSpawnKilledDeps()),
+      () => readyWait({ agent, model, topic, pane, nonce, readyTimeout }, { wait: outboxWaitSince, paneAlive: paneOwned }),
+    );
     if (!ev || ev.event === "error") {
-      const reason = ev ? "error_event" : "timeout";
+      const reason = bootstrapFailureReason(ev);
       const tail = await capturePane(pane, 25);
       process.stderr.write(tail + "\n");
       if (!ev) {
@@ -238,10 +357,12 @@ async function dispatchVerb(args: string[]): Promise<number> {
         if (ob) process.stderr.write(`outbox:\n${ob}\n`);
       }
       const fr = await captureFailure(
-        { agent, model, topic, paneId: pane, reason: reason as "timeout" | "error_event", eventLine: ev ? JSON.stringify(ev) : undefined, readyTimeout },
+        { agent, model, topic, paneId: pane, reason, eventLine: ev ? JSON.stringify(ev) : undefined, readyTimeout },
         { workerDir, capturePane: (p, n) => capturePane(p, n), atomicWriteSync: (d, c) => writeFileSync(d, c), isWritableDir: (d) => existsSync(d), now: () => isoUtc() },
       );
-      captureSpawnFailure({ agent, model, topic, ...bootstrapFailureArgs(ev ?? null, fr.ok ? fr.path : undefined) });
+      // reason last: bootstrapFailureArgs only knows event-vs-no-event, and a synthetic pane-death
+      // error is neither the worker's own error nor a timeout.
+      captureSpawnFailure({ agent, model, topic, ...bootstrapFailureArgs(ev ?? null, fr.ok ? fr.path : undefined), reason });
       await killNow(pane);   // no ownership re-check: this id was created by THIS call, it cannot be stale
       // stamp the truth over the seed: a FAILED archive must not claim a dispatchable state for a worker that never reported (`error` is terminal, so no gate changes)
       writeWorkerStatus(agent, model, topic, "error", "bootstrap-failed");
