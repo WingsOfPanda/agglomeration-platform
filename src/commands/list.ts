@@ -5,6 +5,7 @@ import { parseJob, jobPath, classifyJobLiveness } from "../core/job.js";
 import { readIfExists } from "../core/fsread.js";
 import { paneMetaReadForDir, outboxPath, parseEvent, type PaneMeta } from "../core/ipc.js";
 import { livePaneNonces, ownsPane } from "../core/tmux.js";
+import { scanTopicWorkers } from "../core/workerLiveness.js";
 
 export function deriveState(lastEvent: string | undefined): string {
   switch (lastEvent) {
@@ -47,14 +48,19 @@ export async function run(args: string[]): Promise<number> {
   const repo = repoStateDir();
   if (!existsSync(repo)) { process.stdout.write(`no workers deployed (state dir absent: ${repo})\n`); return 0; }
   const W = (s: string, n: number) => s.padEnd(n);
-  process.stdout.write(`${W("PART", 32)} ${W("MODEL", 8)} ${W("TOPIC", 12)} ${W("PANE", 9)} STATE\n`);
-  process.stdout.write(`${"-".repeat(32)} ${"-".repeat(8)} ${"-".repeat(12)} ${"-".repeat(9)} -----\n`);
+  process.stdout.write(`${W("PART", 32)} ${W("MODEL", 8)} ${W("TOPIC", 12)} ${W("PANE", 9)} ${W("STATE", 12)} LIVENESS\n`);
+  process.stdout.write(`${"-".repeat(32)} ${"-".repeat(8)} ${"-".repeat(12)} ${"-".repeat(9)} ${"-".repeat(12)} --------\n`);
   const threshold = staleThresholdS();
   const live = await livePaneNonces(); // one server-wide pane snapshot, not one scan per worker
+  const now = Date.now();
   for (const t of readdirSync(repo, { withFileTypes: true })) {
     if (!t.isDirectory()) continue;
     if (filter && t.name !== filter) continue;
     const td = join(repo, t.name);
+    // Read-only: `ap list` reports the classifier's verdict but never ADVANCES the miss counter.
+    // An operator running it in a `watch` loop must not be able to drive a worker to `pane-dead`
+    // faster than the run's own scheduled rescans do.
+    const liveness = new Map(scanTopicWorkers(t.name, live, now).map((w) => [w.worker, w.verdict]));
     for (const p of readdirSync(td, { withFileTypes: true })) {
       if (!p.isDirectory() || isArtifactDir(p.name)) continue;
       const dir = join(td, p.name);
@@ -62,7 +68,7 @@ export async function run(args: string[]): Promise<number> {
       const pane = meta.paneId || "?";
       const ob = outboxPath(meta.agent, meta.model, t.name);
       const state = rowState(live, meta, ob, threshold);
-      process.stdout.write(`${W(meta.agent, 32)} ${W(meta.model, 8)} ${W(t.name, 12)} ${W(pane, 9)} ${state}\n`);
+      process.stdout.write(`${W(meta.agent, 32)} ${W(meta.model, 8)} ${W(t.name, 12)} ${W(pane, 9)} ${W(state, 12)} ${liveness.get(p.name) ?? "unknown"}\n`);
     }
   }
   writeJobsSection(repo, live, filter, W);

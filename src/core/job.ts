@@ -12,6 +12,7 @@ import { basename, dirname, join, sep } from "node:path";
 import { jobDir, topicDir } from "./paths.js";
 import { validateSlug } from "./slug.js";
 import { ownsPane, verifiableNonce } from "./tmux.js";
+import { agentBootstrapSleep, agentReadyTimeout } from "./contracts.js";
 import { deriveTopicFromPath } from "./implement.js";
 import { parseEvent } from "./ipc.js";
 import type { OutboxEvent, PaneOwner } from "./ipc.js";
@@ -180,6 +181,137 @@ export function classifyJobLiveness(live: Map<string, string>, owner: PaneOwner 
   if (ownsPane(live, owner.paneId, owner.nonce)) return "alive";
   return verifiableNonce(owner.nonce) ? "dead" : "unknown";
 }
+
+// ---------- worker liveness ----------
+//
+// The hub's own liveness (above) was never the whole answer: a job hub can sit `alive` and
+// `working` for ten hours while the worker it is waiting on never bootstrapped at all (issue #157).
+// These are the records that settle that question — pane.json, status.json, the outbox — plus one
+// counter this layer records for itself.
+
+/** The synthetic event `job wait` returns when a WORKER (never the hub) is found dead mid-wait.
+ *  IN-PROCESS ONLY: no worker ever writes it, and it is NEVER appended to any outbox — exactly the
+ *  discipline `PANE_DIED_NOTE` follows for the hub's own dead pane. The frozen event names are what
+ *  a worker WRITES; this is what a verb DECIDES, and the two namespaces must not be confused. */
+export const WORKER_DEAD_EVENT = "worker-dead";
+
+/** Consecutive scans a worker's pane must be missing before the miss becomes a death verdict.
+ *  `livePaneNonces()` returns an EMPTY map on any tmux error (no server, no tmux, a hiccup), which
+ *  is fail-closed for ownership — nothing is killed or nudged — but would be fail-OPEN for
+ *  termination: one blip would end a healthy multi-hour run. So a miss only counts, and only three
+ *  in a row decide. Any hit resets. */
+export const WORKER_MISS_LIMIT = 3;
+
+/** Grace added to a provider's own bootstrap deadline before an unreported worker is called dead. */
+const BOOTSTRAP_GRACE_S = 60;
+
+/** The deadline `spawn` itself would have applied to this worker's bootstrap, plus a grace. Read
+ *  per-model from contracts.yaml rather than fixed, so there is ONE definition of "too long to
+ *  still be starting" and it moves when a provider's timeout does. */
+export function bootstrapDeadlineS(model: string): number {
+  return agentBootstrapSleep(model) + agentReadyTimeout(model) + BOOTSTRAP_GRACE_S;
+}
+
+/** The status states that mean this worker's life is OVER, so liveness has nothing left to decide.
+ *
+ *  Deliberately NOT `TERMINAL_WORKER_STATES` (ipc.ts), and this is the whole bug: that set is the
+ *  send-side "not busy" gate and it contains `idle` and `ready`. The field case's status.json was
+ *  `{"state":"idle","last_event":"spawn"}` — the platform-written SEED of a worker that never
+ *  bootstrapped. Reading `idle` as terminal here would classify the dead worker as `terminal` and
+ *  hide exactly the failure this layer exists to catch. `idle` means "not mid-turn"; it says
+ *  nothing about whether the worker is alive. */
+const LIVENESS_OVER_STATES = new Set(["done", "complete", "error"]);
+
+/** The pane record a worker-liveness verdict is computed from: what `pane.json` recorded, plus the
+ *  model (which picks the bootstrap deadline). `spawnedAt` is "" for a record that predates it — an
+ *  unexpirable seed, never an expired one. */
+export interface WorkerRec { agent: string; model: string; paneId: string; nonce: string; spawnedAt: string; }
+
+/** `status.json` as far as liveness cares; null for an absent, empty, or unreadable file. */
+export interface WorkerStatusRec { state: string; lastEvent: string; }
+
+export type WorkerLivenessKind = "terminal" | "bootstrap-dead" | "alive" | "unknown" | "pane-missing" | "pane-dead";
+
+/** `verdict` is the printed token (`pane-missing` carries its own `(n/3)`); `dead` is the ONE flag
+ *  a caller may act on — true only for the two terminal verdicts, never for `terminal` itself,
+ *  which is a run that already ended properly. `misses` is the counter to persist after this scan. */
+export interface WorkerLiveness { kind: WorkerLivenessKind; verdict: string; dead: boolean; misses: number; }
+
+/** ONE ordered, exhaustive classifier, evaluated top-down, first match wins:
+ *
+ *  1. status state is done/complete/error         -> `terminal`      (already over, not a death)
+ *  2. seed status + empty outbox + past deadline  -> `bootstrap-dead`   TERMINAL
+ *  3. pane present carrying the recorded nonce    -> `alive`         (resets the miss counter)
+ *  4. nonce not verifiable                        -> `unknown`
+ *  5. pane absent/foreign, misses < 3             -> `pane-missing (n/3)`
+ *  6. pane absent/foreign, misses >= 3            -> `pane-dead`        TERMINAL
+ *
+ *  Rule 2 precedes rule 3 ON PURPOSE. An expired seed with a LIVE pane is the killed-parent case:
+ *  the spawn process was SIGTERMed before it could stamp the failure, so the pane is still sitting
+ *  there running a model TUI that was never handed a task. It is dead by contract regardless of
+ *  what the pane shows, and ordering the pane check first would report it `alive` forever — which
+ *  is precisely the ten-hour silence this layer was written for.
+ *
+ *  Pure: every input is a value, including `now` and the snapshot. */
+export function classifyWorkerLiveness(
+  rec: WorkerRec,
+  status: WorkerStatusRec | null,
+  outboxLen: number,
+  snapshot: Map<string, string>,
+  misses: number,
+  now: number,
+): WorkerLiveness {
+  if (status && LIVENESS_OVER_STATES.has(status.state.trim().toLowerCase())) {
+    return { kind: "terminal", verdict: "terminal", dead: false, misses };
+  }
+  if (status && status.lastEvent === "spawn" && outboxLen === 0 && seedExpired(rec, now)) {
+    return { kind: "bootstrap-dead", verdict: "bootstrap-dead", dead: true, misses };
+  }
+  if (ownsPane(snapshot, rec.paneId, rec.nonce)) {
+    return { kind: "alive", verdict: "alive", dead: false, misses: 0 };
+  }
+  if (!rec.paneId || !verifiableNonce(rec.nonce)) {
+    return { kind: "unknown", verdict: "unknown", dead: false, misses };
+  }
+  const n = misses + 1;
+  return n >= WORKER_MISS_LIMIT
+    ? { kind: "pane-dead", verdict: "pane-dead", dead: true, misses: n }
+    : { kind: "pane-missing", verdict: `pane-missing (${n}/${WORKER_MISS_LIMIT})`, dead: false, misses: n };
+}
+
+/** Has this worker's platform-written seed outlived the deadline spawn would have enforced? An
+ *  unparseable or absent `spawned_at` answers NO: a record whose age cannot be measured must never
+ *  be declared dead by a clock. */
+function seedExpired(rec: WorkerRec, now: number): boolean {
+  const t = Date.parse(rec.spawnedAt);
+  if (!Number.isFinite(t)) return false;
+  return now - t > bootstrapDeadlineS(rec.model) * 1000;
+}
+
+/** Where this layer records its OWN verdict's raw material: `<agent>-<model>` -> consecutive misses
+ *  and the last time the pane was seen. Under `_job/` beside the record it belongs to, atomically
+ *  written. A layer records its own state and never infers another's. */
+export function workerLivenessPath(topic: string): string { return join(jobDir(topic), "worker-liveness.json"); }
+
+export interface WorkerMiss { misses: number; last_seen: string; }
+
+/** Parse the counter file. Every unusable shape reads as "no counts" — a torn or hand-edited file
+ *  must restart the count at zero (three fresh misses are still needed), never fabricate one. */
+export function parseWorkerMisses(text: string): Record<string, WorkerMiss> {
+  let o: unknown;
+  try { o = JSON.parse(text); } catch { return {}; }
+  if (!o || typeof o !== "object" || Array.isArray(o)) return {};
+  const out: Record<string, WorkerMiss> = {};
+  for (const [k, v] of Object.entries(o as Record<string, unknown>)) {
+    const row = v as { misses?: unknown; last_seen?: unknown } | null;
+    if (!row || typeof row !== "object") continue;
+    const n = typeof row.misses === "number" && Number.isFinite(row.misses) && row.misses >= 0 ? Math.floor(row.misses) : 0;
+    out[k] = { misses: n, last_seen: typeof row.last_seen === "string" ? row.last_seen : "" };
+  }
+  return out;
+}
+
+export function formatWorkerMisses(m: Record<string, WorkerMiss>): string { return JSON.stringify(m) + "\n"; }
 
 // ---------- budget ----------
 
