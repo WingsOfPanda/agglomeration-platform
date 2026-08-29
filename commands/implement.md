@@ -277,10 +277,24 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
      then re-run `$CS implement turn-send <TOPIC> <ROUND>`.
    - *Abort* — `$CS stop <TOPIC>` then `$CS implement archive <TOPIC>`; stop.
    (The single-repo worker is the `lead` agent.) Any other non-zero rc → surface and stop.
-2. Wait in the background so your pane stays interactive:
+2. Wait under a persistent **Monitor**, never a plain background shell, so your pane stays
+   interactive. The Monitor runs the SAME bounded `turn-wait` verb and then derives the round's
+   outcome from the file that verb wrote, so every ending is LOUD. Why not a background `Bash`: it
+   dies with this session, it has no park/re-arm story, and — seen in the field on ap 0.5.54, twice
+   in one 11h run — it can be killed from outside while the worker is perfectly healthy. A killed
+   wait that says nothing is indistinguishable from a dead worker, which is exactly the confusion
+   the `TS=` read-back below removes. There is no `grep` in it: the watch must not depend on one
+   more binary than it has to. Substitute `$CS`, the absolute `$ART`, the topic and the round before
+   arming — the Monitor's shell has none of your variables.
    ```
-   Bash(command='$CS implement turn-wait "$TOPIC" "$ROUND"', run_in_background: true,
-        description="hub await lead round=$ROUND")
+   Monitor(persistent: true, description: "implement turn <ROUND> <TOPIC>", command: '
+     $CS implement turn-wait "$TOPIC" "$ROUND" >/dev/null 2>&1
+     F="$ART/turn-lead-<ROUND>.txt"; TS=
+     if [ -f "$F" ]; then while IFS= read -r L; do case "$L" in TS=*) TS=${L#TS=};; esac; done < "$F"; fi
+     case "$TS" in
+       ok|failed|timeout|question) printf "TS=%s\n" "$TS"; exit 0;;
+       *) printf "TS=unreachable\n"; exit 1;;
+     esac')
    ```
    The default turn budget is 4 hours (`AP_IMPLEMENT_TURN_TIMEOUT_S=14400`); override the env var
    for unusually large or small tasks. Since 0.5.5 the budget is liveness-extended: while the
@@ -307,6 +321,14 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
        do NOT tear down; stop.
      - *Abort* — `$CS stop <TOPIC>` then `$CS implement archive <TOPIC>`; stop.
      - *Try-again* — `RETRY=0`; loop back to step 1.
+   - **`TS=unreachable` — or the Monitor task dying/killed with no output:**
+     a wait that dies without a `TS=` line is a WATCHER failure, not a worker outcome. Never take
+     the `TS=failed`/`TS=timeout` branch on it, and never spend the retry or tear down on it: two
+     killed watchers would otherwise end a healthy run. Verify the worker mechanically first — read
+     `<state>/lead-<PROVIDER>/status.json` and run `$CS list <TOPIC>`, whose `LIVENESS` column
+     carries the 0.5.54 worker-liveness verdict (the same one `job wait` reports as `WORKER=`). A
+     live/working lead means re-arm the same Monitor on the same round and keep waiting; only a
+     terminal or dead verdict takes the matching TS branch.
    - **`TS=question`** → the worker halted with a question. Read the payload file
      `$ART/question-lead-<ROUND>.txt` (KV: `TEXT=` percent-encoded, `CLAIM_KIND=`, `CLAIM_VALUE=`,
      `ROUTE=verify|escalate|objection`). Decode `TEXT` with the same scheme `design` uses
@@ -342,9 +364,10 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
          - *Override* — write a reply (`From: hub`, then "Proceeding as planned: <your reason>.
            Resume implementation.") and deliver it the same way.
          - *Abort* — `$CS stop <TOPIC>` then `$CS implement archive <TOPIC>`; stop.
-     - **Re-arm** the wait on the **same** round: re-run the background `turn-wait <TOPIC> <ROUND>`
-       (the prior question-wait appended a fresh `OFFSET=`, so it resumes past the question). The next
-       event you see should be the worker's `ack`, then its next terminal event.
+     - **Re-arm** the wait on the **same** round: re-arm the step-2 **Monitor** unchanged
+       (`turn-wait <TOPIC> <ROUND>`; the prior question-wait appended a fresh `OFFSET=`, so it
+       resumes past the question). The next event you see should be the worker's `ack`, then its
+       next terminal event.
 
 ## Stage 2 — cross-verify (Hub)
 
