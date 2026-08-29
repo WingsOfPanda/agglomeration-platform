@@ -7,7 +7,7 @@ import { log } from "../core/log.js";
 import { applyArgsFile, kvParse } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
 import { repoRoot, repoStateDir } from "../core/paths.js";
-import { jobPath, keepOnBranch, mainCheckoutRoot, orphanRefusal, orphanedTopicState, worktreeTopic } from "../core/job.js";
+import { jobPath, keepOnBranch, withMainCheckout } from "../core/job.js";
 import { auditDoc } from "../core/audit.js";
 import {
   parseImplementArgs, deriveTopicFromPath, detectProvider,
@@ -112,27 +112,8 @@ async function auditRun(rest: string[]): Promise<number> {
 }
 
 export async function run(args: string[]): Promise<number> {
-  // ONE state tree per run, whatever directory the hub is standing in. Every state path derives from
-  // process.cwd() (paths.ts stateRoot + repoHash), so a verb invoked from inside the run's own
-  // worktree -- `<root>/.ap/worktrees/<topic>` -- hashed the WORKTREE and split the run across two
-  // trees: half its state written where the other half could not see it. `mainCheckoutRoot` re-roots
-  // ap-created run worktrees ONLY and leaves every other path (a user's own worktree included)
-  // exactly as git reported it. Outside a git repo repoRoot() falls back to cwd, so this is a no-op.
-  const origCwd = process.cwd();
-  const gitRoot = repoRoot();
-  const root = mainCheckoutRoot(gitRoot);
-  const wtTopic = worktreeTopic(gitRoot);
-  const stranded = orphanedTopicState(wtTopic, gitRoot, root);
-  if (stranded) { for (const l of orphanRefusal(wtTopic, stranded, root).split("\n")) log.error(l); return 2; }
-  if (root !== origCwd) process.chdir(root);
-  try {
-    return await dispatchVerb(args);
-  } finally {
-    // One verb per process on the CLI path (src/ap.ts exits right after), but tests import run() and
-    // share a process, so the cwd is restored rather than left moved. A cwd that has since been
-    // removed must not turn a completed verb into a throw.
-    if (root !== origCwd) { try { process.chdir(origCwd); } catch { /* the caller's cwd is gone */ } }
-  }
+  // ONE state tree per run, whatever directory the hub is standing in -- see `withMainCheckout`.
+  return withMainCheckout(() => dispatchVerb(args));
 }
 
 async function dispatchVerb(args: string[]): Promise<number> {
