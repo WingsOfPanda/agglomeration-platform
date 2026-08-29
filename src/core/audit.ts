@@ -1,8 +1,5 @@
 // src/core/audit.ts
 
-/** Behavioral source: SLUG_REGEX_BASE (lib/state.sh:10). */
-export const SLUG_REGEX = /^[A-Za-z0-9._-]+$/;
-
 export interface AuditResult { verdict: "PASS" | "FAIL"; issues: string[]; }
 
 /** Port of deploy_audit_doc (lib/deploy.sh:68-122) — a pure read-only markdown linter. Issue ORDER mirrors the Bash. */

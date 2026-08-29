@@ -1,4 +1,4 @@
-import { writeFileSync, renameSync, appendFileSync, rmSync } from "node:fs";
+import { writeFileSync, renameSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 
 export function atomicWrite(dest: string, content: string | Buffer): void {
@@ -11,8 +11,4 @@ export function atomicWrite(dest: string, content: string | Buffer): void {
     try { rmSync(tmp, { force: true }); } catch { /* ignore */ }
     throw e;
   }
-}
-
-export function appendJsonl(path: string, obj: unknown): void {
-  appendFileSync(path, JSON.stringify(obj) + "\n");
 }

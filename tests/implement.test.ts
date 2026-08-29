@@ -1,30 +1,20 @@
 // tests/implement.test.ts
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  implementArtDir, implementTopicDir, deriveTopicFromPath, parseImplementArgs, ImplementArgError,
-  detectProvider, iterTargets, assertImplementTopic,
+  implementArtDir, deriveTopicFromPath, parseImplementArgs, ImplementArgError,
+  detectProvider, targetCwd, assertImplementTopic,
 } from "../src/core/implement.js";
 import { topicDir } from "../src/core/paths.js";
 
 function freshHome(): string { return mkdtempSync(join(tmpdir(), "perf-home-")); }
 
-afterEach(() => { delete process.env.AP_IMPLEMENT_ART_DIR_OVERRIDE; });
-
-describe("implementArtDir / implementTopicDir", () => {
+describe("implementArtDir", () => {
   it("art dir is <topicDir>/_implement", () => {
     const home = freshHome();
     expect(implementArtDir("foo", { home })).toBe(join(topicDir("foo", { home }), "_implement"));
-  });
-  it("topic dir mirrors paths.topicDir", () => {
-    const home = freshHome();
-    expect(implementTopicDir("foo", { home })).toBe(topicDir("foo", { home }));
-  });
-  it("AP_IMPLEMENT_ART_DIR_OVERRIDE short-circuits", () => {
-    process.env.AP_IMPLEMENT_ART_DIR_OVERRIDE = "/tmp/override-art";
-    expect(implementArtDir("foo", { home: freshHome() })).toBe("/tmp/override-art");
   });
 });
 
@@ -79,14 +69,14 @@ describe("detectProvider", () => {
   });
 });
 
-describe("iterTargets", () => {
-  it("single-repo synthesizes one 'main' row from target_cwd.txt", () => {
+describe("targetCwd", () => {
+  it("reads target_cwd.txt, trailing newline stripped", () => {
     const home = freshHome();
     const art = implementArtDir("topic", { home }); mkdirSync(art, { recursive: true });
     writeFileSync(join(art, "target_cwd.txt"), "/repo/root\n");
-    expect(iterTargets("topic", { home })).toEqual([{ slug: "main", cwd: "/repo/root" }]);
+    expect(targetCwd("topic", { home })).toBe("/repo/root");
   });
-  it("neither file -> []", () => { expect(iterTargets("topic", { home: freshHome() })).toEqual([]); });
+  it("no file -> \"\"", () => { expect(targetCwd("topic", { home: freshHome() })).toBe(""); });
 });
 
 describe("assertImplementTopic", () => {

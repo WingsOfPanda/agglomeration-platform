@@ -62,14 +62,6 @@ interactive flow — autonomous mode only adds branches gated on it.
   WITHOUT an AskUserQuestion: proceed if **≥ 2** workers are ready (dropping the failed lanes), else fail
   closed (teardown + archive + exit). See the autonomous branch on the Phase 3 degraded-spawn step.
 
-**Available cores at the integration frontier (NOT yet auto-invoked — the Hub applies them by judgment;
-none fire automatically at finalize/dispatch):**
-- **Marginal-gain stop** — an adaptive "diminishing-returns" budget stop is available as a core but is not
-  wired into the Step 4 decision policy; the frozen completion-check policy (floor/target/K/plateau) is
-  what actually fires.
-- **Reliability-winner selection** — a top-k / reliability-weighted winner pick is available as a core but
-  is not auto-applied at finalize; the winner is the scoreboard's rank-1 leader as documented in Phase 5.
-
 ## Flagging suspicions
 
 At any point in the run, if something looks weird, surprising, or suspicious — even a likely false
@@ -278,7 +270,7 @@ Initialize `RAN_SCORE=0`, `LAST_AGENT=`, `LAST_EXP=`. Route each queued notifica
 - **`question`** → surface the worker's question to the user in chat; set that worker's `phase=blocked`. Do
   **NOT** auto-dispatch it — wait for user direction.
   - **Autonomous mode (`$ART/autonomous.txt` present):** do **NOT** set `phase=blocked` (no user is
-    watching). Apply the `decideQuestion` answer-or-fail-closed policy instead: if the question is grounded
+    watching). Apply the answer-or-fail-closed policy instead: if the question is grounded
     by the locked run context (a multiple-choice pick, or a closed factual question the
     objective/metric/budget already answers), **answer the worker from context** —
     `$CS send --from hub <agent> <TOPIC> "<answer>"`, then set `phase=working` and continue. If the

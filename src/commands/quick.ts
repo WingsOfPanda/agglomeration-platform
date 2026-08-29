@@ -6,7 +6,7 @@ import { applyArgsFile } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
 import { isoUtc } from "../core/archive.js";
 import { repoRoot } from "../core/paths.js";
-import { jobPath, keepOnBranch, mainCheckoutRoot, orphanRefusal, orphanedTopicState, worktreeTopic } from "../core/job.js";
+import { jobPath, keepOnBranch, withMainCheckout } from "../core/job.js";
 import { quickArtDir, quickExecDir, deriveSlug, parseQuickArgs, parseBranchArgs, detectTestCommand, renderSummary, renderResume, type SummaryFacts } from "../core/quick.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { agentBinary } from "../core/contracts.js";
@@ -46,21 +46,7 @@ export async function run(args: string[]): Promise<number> {
   // `mainCheckoutRoot` re-roots ap-created run worktrees ONLY and leaves every other path (a user's
   // own worktree included) exactly as git reported it. Outside a git repo repoRoot() falls back to
   // cwd, so this is a no-op there.
-  const origCwd = process.cwd();
-  const gitRoot = repoRoot();
-  const root = mainCheckoutRoot(gitRoot);
-  const wtTopic = worktreeTopic(gitRoot);
-  const stranded = orphanedTopicState(wtTopic, gitRoot, root);
-  if (stranded) { for (const l of orphanRefusal(wtTopic, stranded, root).split("\n")) log.error(l); return 2; }
-  if (root !== origCwd) process.chdir(root);
-  try {
-    return await dispatchVerb(args);
-  } finally {
-    // One verb per process on the CLI path (src/ap.ts exits right after), but tests import run() and
-    // share a process, so the cwd is restored rather than left moved. A cwd that has since been
-    // removed must not turn a completed verb into a throw.
-    if (root !== origCwd) { try { process.chdir(origCwd); } catch { /* the caller's cwd is gone */ } }
-  }
+  return withMainCheckout(() => dispatchVerb(args));
 }
 
 async function dispatchVerb(args: string[]): Promise<number> {
@@ -271,8 +257,6 @@ export async function branchWith(topic: string, target: string, r: Runner, stash
   log.ok(`quick branch: ${branch} (snapshot=${snap.state}, base=${snap.baseSha.slice(0, 8)})`);
   return 0;
 }
-export type TurnSendDeps = RoundSendDeps;
-export type TurnWaitDeps = RoundWaitDeps;
 
 const QUICK_TURN_TIMEOUT = envNum("AP_QUICK_TURN_TIMEOUT", DEFAULT_TURN_BUDGET_S);
 
@@ -306,7 +290,7 @@ async function turnSendRun(rest: string[]): Promise<number> {
   });
 }
 
-export async function turnSendWith(topic: string, round: number, d: TurnSendDeps): Promise<number> {
+export async function turnSendWith(topic: string, round: number, d: RoundSendDeps): Promise<number> {
   return sendRound(QUICK_ROUND, topic, round, d);
 }
 
@@ -317,7 +301,7 @@ async function turnWaitRun(rest: string[]): Promise<number> {
   return turnWaitWith(topic, round, {});
 }
 
-export async function turnWaitWith(topic: string, round: number, d: TurnWaitDeps): Promise<number> {
+export async function turnWaitWith(topic: string, round: number, d: RoundWaitDeps): Promise<number> {
   return waitRound(QUICK_ROUND, topic, round, d);
 }
 async function detectTestRun(rest: string[]): Promise<number> {

@@ -19,7 +19,6 @@ const okDeps = (over: Partial<AutoresearchInitDeps> = {}): AutoresearchInitDeps 
   haveCmd: () => true,
   agentBinary: (n) => (n === "codex" ? "codex" : undefined),
   now: () => "2026-05-30T00:00:00Z",
-  probeHardware: () => {},
   configRoot: () => process.cwd(),
   ...over,
 });

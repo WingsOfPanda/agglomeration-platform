@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { createHash } from "node:crypto";
-import { realpathSync, existsSync, readFileSync, writeFileSync, mkdtempSync, mkdirSync, utimesSync } from "node:fs";
+import { realpathSync, readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
@@ -34,31 +34,14 @@ describe("paths", () => {
     expect(P.isArtifactDir("/a/b/_consult")).toBe(true);
     expect(P.isArtifactDir("/a/b/bravo-codex")).toBe(false);
   });
-  it("runDir: unique, .gitignore, .last, sweep", () => {
+  it("runArgsFile: unique empty file under _args, state root gitignored", () => {
     const h = home();
-    const a = P.runDir("design");
-    const b = P.runDir("design");
+    const a = P.runArgsFile("design");
+    const b = P.runArgsFile("design");
     expect(a).not.toBe(b);
-    expect(readFileSync(join(h, "_run", ".gitignore"), "utf8")).toBe("*\n");
-    expect(P.runDirLast()).toBe(b); // no trailing newline
-    // stale sweep
-    const stale = join(h, "_run", "design.STALE");
-    mkdirSync(stale);
-    const old = (Date.now() - 100000_000) / 1000;
-    utimesSync(stale, old, old);
-    P.runDir("design");
-    expect(existsSync(stale)).toBe(false);
-  });
-  it("runArgsFile records path with no newline", () => {
-    home();
-    const f = P.runArgsFile("design");
-    expect(f).toContain("/_args/");
-    const recorded = readFileSync(join(P.runDirLast(), "args-path.txt"), "utf8");
-    expect(recorded).toBe(f); // exact, no newline
-  });
-  it("runDirLast throws when absent", () => {
-    home();
-    expect(() => P.runDirLast()).toThrow();
+    expect(a).toContain("/_args/");
+    expect(readFileSync(a, "utf8")).toBe("");
+    expect(readFileSync(join(h, ".gitignore"), "utf8")).toBe("*\n");
   });
   it("activeProvidersPath: prefers active when present, else available", () => {
     const h = home();

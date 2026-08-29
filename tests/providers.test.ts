@@ -2,25 +2,18 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseProviderList, readProviderList, planList, formatActiveFile, formatProviderFile } from "../src/core/providers.js";
-
-describe("parseProviderList", () => {
-  it("keeps providers, skips blank + # lines, trims whitespace", () => {
-    expect(parseProviderList("# header\n\ncodex\n  claude  \n#trailing\n")).toEqual(["codex", "claude"]);
-  });
-  it("empty input → []", () => {
-    expect(parseProviderList("")).toEqual([]);
-  });
-});
+import { readProviderList, planList, formatActiveFile, formatProviderFile } from "../src/core/providers.js";
 
 describe("readProviderList", () => {
   it("missing file → []", () => {
     expect(readProviderList("/no/such/providers.txt")).toEqual([]);
   });
-  it("reads + parses an on-disk file", () => {
+  it("reads an on-disk file: keeps providers, skips blank + # lines, trims whitespace", () => {
     const f = join(mkdtempSync(join(tmpdir(), "pl-")), "providers.txt");
-    writeFileSync(f, "# generated …\ncodex\nclaude\n");
+    writeFileSync(f, "# header\n\ncodex\n  claude  \n#trailing\n");
     expect(readProviderList(f)).toEqual(["codex", "claude"]);
+    writeFileSync(f, "");
+    expect(readProviderList(f)).toEqual([]);
   });
 });
 

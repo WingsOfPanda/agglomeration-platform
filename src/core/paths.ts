@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
-import { realpathSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync, rmSync, mkdtempSync } from "node:fs";
+import { realpathSync, mkdirSync, writeFileSync, existsSync, mkdtempSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, basename, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
-import { atomicWrite } from "./atomic.js";
 import { assertSlug } from "./slug.js";
 
 export function globalRoot(home?: string): string {
@@ -96,38 +95,12 @@ export function isArtifactDir(p: string): boolean {
   return basename(p.replace(/\/+$/, "")).startsWith("_");
 }
 
-export function runDir(command: string, opts?: { sweepSecs?: number }): string {
-  if (!command) throw new Error("runDir: missing <command> arg");
-  const root = stateEnsure();
-  const runRoot = join(root, "_run");
-  mkdirSync(runRoot, { recursive: true });
-  ensureGitignore(runRoot);
-  const sweepMs = (opts?.sweepSecs ?? 86400) * 1000;
-  for (const name of readdirSync(runRoot)) {
-    const child = join(runRoot, name);
-    try {
-      const st = statSync(child);
-      if (st.isDirectory() && Date.now() - st.mtimeMs > sweepMs) rmSync(child, { recursive: true, force: true });
-    } catch { /* ignore */ }
-  }
-  const dir = mkdtempSync(join(runRoot, `${command}.`));
-  atomicWrite(join(runRoot, ".last"), dir); // no trailing newline; atomic so a torn write can't strand runDirLast
-  return dir;
-}
-
-export function runDirLast(): string {
-  const last = join(stateRoot(), "_run", ".last");
-  if (!existsSync(last)) throw new Error("runDirLast: .last missing — call runDir first");
-  return readFileSync(last, "utf8");
-}
-
 export function runArgsFile(command: string, prefix?: string): string {
-  const dir = runDir(command);
+  stateEnsure();
   const argsDir = join(stateRoot(), "_args");
   mkdirSync(argsDir, { recursive: true });
   const f = mkdtempSync(join(argsDir, `${prefix ?? command}.`)) + "/args";
   writeFileSync(f, ""); // placeholder file at a unique path
-  atomicWrite(join(dir, "args-path.txt"), f); // no trailing newline; atomic so the pointer never tears
   return f;
 }
 

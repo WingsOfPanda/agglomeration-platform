@@ -11,11 +11,11 @@ import { extractHandoffData } from "../core/exploreHandoff.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { killNow, livePaneNonces, ownsPane } from "../core/tmux.js";
 import {
-  type ListRow, formatListFile, parseListFile, parsePanesFile, spawnAllBatch, lastTag, verifyScopeFiles,
+  type ListRow, type SpawnAllBatchDeps, formatListFile, parseListFile, parsePanesFile, spawnAllBatch, lastTag, verifyScopeFiles,
 } from "../core/roster.js";
 import { readProviderList } from "../core/providers.js";
 import { activeProvidersPath, repoRoot } from "../core/paths.js";
-import { mainCheckoutRoot, orphanRefusal, orphanedTopicState, worktreeTopic } from "../core/job.js";
+import { withMainCheckout } from "../core/job.js";
 import { pickAgents } from "../core/agents.js";
 import { agentConsultValidated } from "../core/contracts.js";
 import { classifyTopic } from "../core/exploreLit.js";
@@ -24,7 +24,7 @@ import { buildAnnotations, soloTokensFromAnnotations } from "../core/exploreAnno
 import { composeVerifyPrompt } from "../core/designTurn.js";
 import {
   PHASES, phaseSend, phaseWait, phaseStems, rowFor, waitGateVerb, surveyPhaseArtifact, triad,
-  liveSendDeps, liveWaitDeps, type SendDeps, type WaitDeps,
+  liveSendDeps, liveWaitDeps, type SendDeps, type WaitDeps, type PhaseRow,
 } from "../core/phaseTable.js";
 import { composeExploreResearchPrompt, composeAdversaryPrompt, composeGapPrompt, composeSignoffPrompt, litGuidance, ADVERSARY_LENSES, researchLens } from "../core/exploreTurn.js";
 import { run as spawnRun } from "./spawn.js";
@@ -44,27 +44,8 @@ function usage(): number {
 }
 
 export async function run(args: string[]): Promise<number> {
-  // ONE state tree per run, whatever directory the hub is standing in. Every state path derives from
-  // process.cwd() (paths.ts stateRoot + repoHash), so a verb invoked from inside the run's own
-  // worktree -- `<root>/.ap/worktrees/<topic>` -- hashed the WORKTREE and split the run across two
-  // trees: half its state written where the other half could not see it. `mainCheckoutRoot` re-roots
-  // ap-created run worktrees ONLY and leaves every other path (a user's own worktree included)
-  // exactly as git reported it. Outside a git repo repoRoot() falls back to cwd, so this is a no-op.
-  const origCwd = process.cwd();
-  const gitRoot = repoRoot();
-  const root = mainCheckoutRoot(gitRoot);
-  const wtTopic = worktreeTopic(gitRoot);
-  const stranded = orphanedTopicState(wtTopic, gitRoot, root);
-  if (stranded) { for (const l of orphanRefusal(wtTopic, stranded, root).split("\n")) log.error(l); return 2; }
-  if (root !== origCwd) process.chdir(root);
-  try {
-    return await dispatchVerb(args);
-  } finally {
-    // One verb per process on the CLI path (src/ap.ts exits right after), but tests import run() and
-    // share a process, so the cwd is restored rather than left moved. A cwd that has since been
-    // removed must not turn a completed verb into a throw.
-    if (root !== origCwd) { try { process.chdir(origCwd); } catch { /* the caller's cwd is gone */ } }
-  }
+  // ONE state tree per run, whatever directory the hub is standing in -- see `withMainCheckout`.
+  return withMainCheckout(() => dispatchVerb(args));
 }
 
 async function dispatchVerb(args: string[]): Promise<number> {
@@ -166,11 +147,7 @@ export async function classifyRun(rest: string[]): Promise<number> {
 }
 
 // ---- spawn-all ----
-export interface ExploreSpawnAllDeps {
-  preflight(args: string[]): Promise<number>;
-  spawn(args: string[]): Promise<number>;
-  repoRoot(): string;
-}
+export type ExploreSpawnAllDeps = SpawnAllBatchDeps;
 const liveExploreSpawnAllDeps: ExploreSpawnAllDeps = { preflight: preflightRun, spawn: spawnRun, repoRoot };
 
 async function spawnAllRun(rest: string[]): Promise<number> {
@@ -419,6 +396,23 @@ export async function contributionRun(rest: string[]): Promise<number> {
   return 0;
 }
 
+/** The missing-artifact sweep the three roster validators share: `missingListArtifacts`' own
+ *  predicate first, then the sentinel backstop over the files that ARE present — a worker whose
+ *  artifact the wait never accepted joins the missing list. Null = one is still being written, and
+ *  the caller refuses (rc 1) so the hub can re-run the wait. The whole roster is surveyed either
+ *  way: the strikes the shipped code recorded stay recorded. */
+function surveyMissing(row: PhaseRow, rows: ListRow[], art: string, topic: string, label: string, prefix: string): string[] | null {
+  const missing = missingListArtifacts(art, rows, prefix);
+  let stillWriting = false;
+  for (const r of rows) {
+    if (missing.includes(`${prefix}-${r.agent}.md`)) continue;
+    const { verdict } = surveyPhaseArtifact(row, r, { topic, label, emptyIsComplete: false });
+    if (verdict === "still-writing") stillWriting = true;
+    else if (verdict === "drop") missing.push(`${prefix}-${r.agent}.md`);
+  }
+  return stillWriting ? null : missing;
+}
+
 // ---- survivors (Phase 4a N-1 continuation: drop findings-less rows, preserve the roster) ----
 export async function survivorsRun(rest: string[]): Promise<number> {
   const topic = rest[0];
@@ -430,21 +424,12 @@ export async function survivorsRun(rest: string[]): Promise<number> {
   if (rows.length === 0) { log.error(`explore survivors: list.txt missing or empty at ${art}`); return 1; }
 
   // Survivor predicate IS missingListArtifacts' readIf().trim() — reused, never re-implemented (a
-  // whitespace-only findings file must not survive here only to block synth-preliminary anyway).
-  const missing = new Set(missingListArtifacts(art, rows, "findings"));
-  // Sentinel backstop over the findings that ARE present: a file still being written cannot enter
-  // the survivor set (refuse, the hub runs research-wait), and one the wait held open until grace
-  // expired is dropped as empty through the machinery below.
-  let stillWriting = false;
-  for (const r of rows) {
-    if (missing.has(`findings-${r.agent}.md`)) continue;
-    const { verdict } = surveyPhaseArtifact(RESEARCH, r, {
-      topic, label: "explore survivors", emptyIsComplete: false,
-    });
-    if (verdict === "still-writing") stillWriting = true;
-    else if (verdict === "drop") missing.add(`findings-${r.agent}.md`);
-  }
-  if (stillWriting) return 1;
+  // whitespace-only findings file must not survive here only to block synth-preliminary anyway),
+  // plus the sentinel backstop: a file still being written cannot enter the survivor set (refuse,
+  // the hub runs research-wait), and one the wait held open until grace expired is dropped as empty.
+  const found = surveyMissing(RESEARCH, rows, art, topic, "explore survivors", "findings");
+  if (!found) return 1;
+  const missing = new Set(found);
   const survivors = rows.filter((r) => !missing.has(`findings-${r.agent}.md`));
   const dropped = rows.filter((r) => missing.has(`findings-${r.agent}.md`));
 
@@ -477,19 +462,10 @@ export async function synthPreliminaryRun(rest: string[]): Promise<number> {
     if (!readIf(join(art, f)).trim()) { log.error(`explore synth-preliminary: missing or empty: ${join(art, f)}`); return 1; }
   }
   const rows = parseListFile(readIf(join(art, "list.txt")));
-  const missing = missingListArtifacts(art, rows, "findings");
   // Sentinel backstop, same rule as survivors: still-writing refuses (rc 1, retry after the wait),
   // a worker whose artifact the wait never accepted joins the missing list (survivors drops it).
-  let stillWriting = false;
-  for (const r of rows) {
-    if (missing.includes(`findings-${r.agent}.md`)) continue;
-    const { verdict } = surveyPhaseArtifact(RESEARCH, r, {
-      topic, label: "explore synth-preliminary", emptyIsComplete: false,
-    });
-    if (verdict === "still-writing") stillWriting = true;
-    else if (verdict === "drop") missing.push(`findings-${r.agent}.md`);
-  }
-  if (stillWriting) return 1;
+  const missing = surveyMissing(RESEARCH, rows, art, topic, "explore synth-preliminary", "findings");
+  if (!missing) return 1;
   if (missing.length) {
     log.error("explore synth-preliminary: blocked — missing or empty findings:");
     for (const m of missing) log.error(`  - ${join(art, m)}`);
@@ -624,19 +600,10 @@ export async function synthFinalRun(rest: string[]): Promise<number> {
   if (!skipped) {
     const rows = parseListFile(readIf(join(art, "list.txt")));
     const active = rows.filter((r) => lastTag(readIf(join(art, `adversary-${r.agent}.txt`)), "AS") !== "skipped");
-    const missing = missingListArtifacts(art, active, "adversary");
     // Sentinel backstop, synth-preliminary's shape, over the critiques the final doc quotes: a
     // still-writing critique refuses (rc 1), one the wait never accepted joins the missing list.
-    let stillWriting = false;
-    for (const r of active) {
-      if (missing.includes(`adversary-${r.agent}.md`)) continue;
-      const { verdict } = surveyPhaseArtifact(ADVERSARY, r, {
-        topic, label: "explore synth-final", emptyIsComplete: false,
-      });
-      if (verdict === "still-writing") stillWriting = true;
-      else if (verdict === "drop") missing.push(`adversary-${r.agent}.md`);
-    }
-    if (stillWriting) return 1;
+    const missing = surveyMissing(ADVERSARY, active, art, topic, "explore synth-final", "adversary");
+    if (!missing) return 1;
     if (missing.length) {
       log.error("explore synth-final: blocked — adversary ran but critiques missing:");
       for (const m of missing) log.error(`  - ${join(art, m)}`);

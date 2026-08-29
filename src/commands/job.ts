@@ -144,42 +144,21 @@ function jobProgressNow(rec: J.JobRecord) {
 
 // ---------- the isolated worktree a detached run works in ----------
 
-/** Undo `core.quotePath` (on by default): git wraps a path holding non-ASCII, a quote, a backslash
- *  or a control character in double quotes and C-escapes its BYTES. Printed raw, an operator with a
- *  `desig\303\251n.md` in their tree is shown a name that matches nothing they can type. Octal
- *  escapes are decoded as bytes and only then read back as UTF-8, because one character is several
- *  escapes. A string that is not quoted is returned untouched. */
-function unquotePorcelainPath(s: string): string {
-  if (s.length < 2 || !s.startsWith('"') || !s.endsWith('"')) return s;
-  const body = s.slice(1, -1);
-  const simple: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
-  const bytes: number[] = [];
-  for (let i = 0; i < body.length; i++) {
-    const c = body.charAt(i);
-    if (c !== "\\") { for (const b of Buffer.from(c, "utf8")) bytes.push(b); continue; }
-    const n = body.charAt(++i);
-    if (n >= "0" && n <= "7") { bytes.push(parseInt(body.slice(i, i + 3), 8) & 0xff); i += 2; continue; }
-    bytes.push(simple[n] ?? n.charCodeAt(0));
-  }
-  return Buffer.from(bytes).toString("utf8");
-}
-
-/** The paths in a `git status --porcelain` (v1) listing. Each entry is `XY <path>`, and a rename or
- *  copy is `XY <from> -> <to>` — the DESTINATION is the name that matters, since that is what the
- *  operator now has on disk. Parsed rather than echoed for the same reason `COMMITS` is: an echoed
- *  listing shows ` M docs/spec.md` and `"d\303\251sign.md"` at somebody who has to act on it. */
+/** The paths in a `git status --porcelain -z` (v1) listing — BOTH callers must pass `-z`.
+ *  Fields are NUL-terminated `XY <path>` and are never quoted, which is the point of
+ *  `-z`: without it `core.quotePath` (on by default) shows an operator with a `désign.md` in their
+ *  tree the C-escaped `"d\303\251sign.md"`, a name that matches nothing they can type. A rename or
+ *  copy is two fields, DESTINATION first then source — the destination is the name that matters,
+ *  since that is what the operator now has on disk, so the source field is consumed and dropped. */
 function dirtyPaths(porcelain: string): string[] {
+  const fields = porcelain.split("\0");
   const out: string[] = [];
-  for (const line of porcelain.split("\n")) {
-    if (line.length < 4) continue;
-    const xy = line.slice(0, 2);
-    let entry = line.slice(3);
-    if (xy.includes("R") || xy.includes("C")) {
-      const arrow = entry.indexOf(" -> ");
-      if (arrow >= 0) entry = entry.slice(arrow + 4);
-    }
-    const p = unquotePorcelainPath(entry);
-    if (p) out.push(p);
+  for (let i = 0; i < fields.length; i++) {
+    const f = fields[i];
+    if (f.length < 4) continue;
+    const xy = f.slice(0, 2);
+    if (xy.includes("R") || xy.includes("C")) i++;   // consume the source field of a rename/copy
+    out.push(f.slice(3));
   }
   return out;
 }
@@ -254,7 +233,7 @@ export function startWorktree(root: string, topic: string, r: Runner): { worktre
     if (mode) log.ok(`job start: ${mode} node_modules into the worktree`);
     else log.warn(`job start: could not clone node_modules into ${worktree} (cp -al, -cR and -R all failed) — the worker will have to install dependencies itself`);
   }
-  const porcelain = r.run("git", ["status", "--porcelain"]).stdout;
+  const porcelain = r.run("git", ["status", "--porcelain", "-z"]).stdout;
   if (classifyDirty(porcelain)) {
     // WHICH files, not just "the tree is dirty". Twice now the invisible file was the design doc the
     // run was launched to implement, and a warning that does not name it is a warning the operator
@@ -397,7 +376,7 @@ function refuseInvisibleDoc(argsText: string, root: string, origCwd: string, r: 
   // prefix it is. `-uall` would expand it instead, at the cost of walking every untracked tree in
   // the repo on every launch.
   const covers = (p: string): boolean => p === rel || (p.endsWith("/") && rel.startsWith(p));
-  if (!dirtyPaths(r.run("git", ["status", "--porcelain"]).stdout).some(covers)) return 0;
+  if (!dirtyPaths(r.run("git", ["status", "--porcelain", "-z"]).stdout).some(covers)) return 0;
   log.error(`job start: the design doc ${rel} exists only as uncommitted work in ${root} — the run's worktree forks committed HEAD and cannot see it. Commit it and start again, or pass --allow-invisible-doc to launch anyway.`);
   return 2;
 }

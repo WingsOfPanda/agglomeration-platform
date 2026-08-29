@@ -2,21 +2,20 @@
 // the hub uses to turn a worker's `question` outbox event into a question-<worker>-<round>.txt KV
 // payload and read it back. Byte-faithful port of the prior bash plugin's deploy-questions lib
 // (payload extractor) + the worker-question line validator, rebranded for ap. Pure: no filesystem,
-// no subprocess. The claim VERIFIER that consumes these payloads lives in implementQuestions.ts and
-// is parked (see that file's header).
+// no subprocess. The hub verifies the routed claim itself per commands/implement.md (the parked
+// claim-verify module was deleted in the 0.5.59 purge; see git history for implementQuestions.ts).
 import type { OutboxEvent } from "./ipc.js";
 
 /** Percent-decode the 6 escapes (TEXT field). %0A->nl, %09->tab, %22->", %5C->\, %2C->comma,
  *  %25->%. Order matters: %25 is decoded LAST so nested encodings like %2522 round-trip. */
 export function percentDecode(s: string): string {
-  let out = s;
-  out = out.split("%0A").join("\n");
-  out = out.split("%09").join("\t");
-  out = out.split("%22").join('"');
-  out = out.split("%5C").join("\\");
-  out = out.split("%2C").join(",");
-  out = out.split("%25").join("%"); // literal-percent escape — must be LAST
-  return out;
+  return s
+    .replaceAll("%0A", "\n")
+    .replaceAll("%09", "\t")
+    .replaceAll("%22", '"')
+    .replaceAll("%5C", "\\")
+    .replaceAll("%2C", ",")
+    .replaceAll("%25", "%"); // literal-percent escape — must be LAST
 }
 
 /** Exact inverse of percentDecode — encode the same 6 escapes so a message round-trips through the
@@ -24,14 +23,13 @@ export function percentDecode(s: string): string {
  *  `%25` and a message that itself contains `%2C`/`%0A` survives instead of being decoded on the way
  *  out. Without this, a message like `5%2C000` would decode to `5,000`. */
 export function percentEncode(s: string): string {
-  let out = s;
-  out = out.split("%").join("%25"); // literal-percent escape — must be FIRST
-  out = out.split("\n").join("%0A");
-  out = out.split("\t").join("%09");
-  out = out.split('"').join("%22");
-  out = out.split("\\").join("%5C");
-  out = out.split(",").join("%2C");
-  return out;
+  return s
+    .replaceAll("%", "%25") // literal-percent escape — must be FIRST
+    .replaceAll("\n", "%0A")
+    .replaceAll("\t", "%09")
+    .replaceAll('"', "%22")
+    .replaceAll("\\", "%5C")
+    .replaceAll(",", "%2C");
 }
 
 export type ClaimKind = "path" | "git" | "env" | "cmd" | "test" | "";

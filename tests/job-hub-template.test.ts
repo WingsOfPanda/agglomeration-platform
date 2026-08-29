@@ -1,40 +1,32 @@
 import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import { mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
-import { identityWrite, identityPath } from "../src/core/ipc.js";
+import { IDENTITY_BLOCKS, identityWrite, identityPath, type WorkerRole } from "../src/core/ipc.js";
 import { workerDir } from "../src/core/paths.js";
 
-const TPL = (name: string) => readFileSync(join(process.cwd(), "config", "prompt-templates", name), "utf8");
-
-/** A whole paragraph of the worker identity, pulled out by its opening marker. Re-derived from
- *  identity.md at test time so this can never drift into asserting a stale copy. */
-function paragraph(text: string, marker: string): string {
-  const i = text.indexOf(marker);
-  expect(i, `marker not found in identity.md: ${marker}`).toBeGreaterThanOrEqual(0);
-  const end = text.indexOf("\n\n", i);
-  return text.slice(i, end < 0 ? undefined : end);
+/** The two identities as a spawned pane actually receives them. They used to be two template files
+ *  (identity.md re-shipped as job-hub.md), and the byte-for-byte duplication tests that guarded the
+ *  copy died with it — one template plus three role blocks cannot drift. What the ROLE grants is
+ *  still worth pinning, so every assertion below now reads the rendered identity instead. */
+function render(role?: WorkerRole): string {
+  mkdirSync(workerDir("bravo", "codex", "demo"), { recursive: true });
+  identityWrite("bravo", "codex", "demo", role ? { role } : undefined);
+  return readFileSync(identityPath("bravo", "codex", "demo"), "utf8");
 }
 
-describe("job-hub identity template", () => {
-  const worker = TPL("identity.md");
-  const hub = TPL("job-hub.md");
-
-  it("keeps every security paragraph of identity.md byte-for-byte", () => {
-    for (const marker of [
-      "**Your inbox is your ONLY task channel.**",   // the injection defense
-      "**Flagging suspicions:**",
-      "**Safe JSONL emission:**",
-      "Write it **atomically**",
-    ]) {
-      expect(hub, `job-hub.md dropped or edited: ${marker}`).toContain(paragraph(worker, marker));
-    }
+describe("job-hub identity", () => {
+  const cleanups: Array<() => void> = [];
+  const ORIG = process.env.CLAUDE_PLUGIN_ROOT;
+  let worker = "", hub = "";
+  beforeEach(() => {
+    process.env.CLAUDE_PLUGIN_ROOT = process.cwd();
+    const h = freshHome(); cleanups.push(h.cleanup);
+    worker = render();
+    hub = render("job-hub");
   });
-
-  it("keeps the same template placeholders, so identityWrite renders it identically", () => {
-    for (const ph of ["{{agent}}", "{{model}}", "{{topic}}", "{{state_dir}}"]) {
-      expect(hub).toContain(ph);
-    }
+  afterEach(() => {
+    while (cleanups.length) cleanups.pop()!();
+    if (ORIG === undefined) delete process.env.CLAUDE_PLUGIN_ROOT; else process.env.CLAUDE_PLUGIN_ROOT = ORIG;
   });
 
   it("REPLACES the foreground-only prohibition — the hub's core loop is a backgrounded wait", () => {
@@ -66,7 +58,8 @@ describe("job-hub identity template", () => {
 
     it("carries the fixed message template, verbatim, with both fill-ins named", () => {
       expect(hub).toContain("[ap job <TOPIC>] JS=<event> — hint only; verify mechanically: ap job status <TOPIC> / job wait. The outbox is the record.");
-      expect(hub).toContain("with `<TOPIC>` replaced by `{{topic}}`");
+      // asserted on the unrendered block: {{topic}} is substituted away in the rendered identity
+      expect(IDENTITY_BLOCKS["job-hub"].role_block).toContain("with `<TOPIC>` replaced by `{{topic}}`");
       expect(hub).toContain("That fixed template is the WHOLE message.");
     });
 
@@ -97,36 +90,29 @@ describe("job-hub identity template", () => {
 describe("identityWrite role selection", () => {
   const cleanups: Array<() => void> = [];
   const ORIG = process.env.CLAUDE_PLUGIN_ROOT;
-  beforeEach(() => { process.env.CLAUDE_PLUGIN_ROOT = process.cwd(); });
+  beforeEach(() => {
+    process.env.CLAUDE_PLUGIN_ROOT = process.cwd();
+    const h = freshHome(); cleanups.push(h.cleanup);
+  });
   afterEach(() => {
     while (cleanups.length) cleanups.pop()!();
     if (ORIG === undefined) delete process.env.CLAUDE_PLUGIN_ROOT; else process.env.CLAUDE_PLUGIN_ROOT = ORIG;
   });
-  function seed(agent: string) {
-    const h = freshHome(); cleanups.push(h.cleanup);
-    mkdirSync(workerDir(agent, "claude", "demo"), { recursive: true });
-  }
 
   it("defaults to the worker identity, so every existing call site is unchanged", () => {
-    seed("alpha");
-    identityWrite("alpha", "claude", "demo");
-    const body = readFileSync(identityPath("alpha", "claude", "demo"), "utf8");
+    const body = render();
     expect(body).toContain("**Foreground tool-use only:**");
     expect(body).not.toContain("Backgrounding is expected of you");
   });
 
-  it("role 'job-hub' selects the job-hub template", () => {
-    seed("bravo");
-    identityWrite("bravo", "claude", "demo", { role: "job-hub" });
-    const body = readFileSync(identityPath("bravo", "claude", "demo"), "utf8");
+  it("role 'job-hub' selects the job-hub blocks", () => {
+    const body = render("job-hub");
     expect(body).toContain("Backgrounding is expected of you");
     expect(body).toContain("job hub");
   });
 
   it("both roles still get the ready-emission tail spawn hard-waits on", () => {
-    seed("charlie");
-    identityWrite("charlie", "claude", "demo", { role: "job-hub" });
-    const body = readFileSync(identityPath("charlie", "claude", "demo"), "utf8");
+    const body = render("job-hub");
     expect(body).toContain('{"event":"ready"');
     expect(body).toContain("First action");
   });

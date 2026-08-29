@@ -25,7 +25,7 @@ describe("stale-token gate", () => {
       out = execSync(
         `grep -rIn${ci ? "i" : ""} --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=docs ` +
         `--exclude-dir=.git --exclude=stale-tokens.test.ts -- ${JSON.stringify(token)} ` +
-        `src config commands hooks .claude-plugin || true`,
+        `src config commands .claude-plugin || true`,
         { cwd: process.cwd(), encoding: "utf8" },
       );
     } catch { /* grep exit 1 = no match */ }

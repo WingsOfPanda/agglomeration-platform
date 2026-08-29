@@ -10,14 +10,14 @@ import {
   resolveDrilldownPath, cascadeTargets, exportDocTo, type ResetPhase,
 } from "../core/design.js";
 import {
-  formatListFile, parseListFile, spawnAllBatch, verifyScopeFiles, type ListRow,
+  formatListFile, parseListFile, spawnAllBatch, verifyScopeFiles, type ListRow, type SpawnAllBatchDeps,
 } from "../core/roster.js";
 import { assembleDoc, SECTIONS_SINGLE, synthesizeSeeds } from "../core/designDoc.js";
 import { auditDoc } from "../core/audit.js";
 import { lintComponentsPaths } from "../core/implementScope.js";
 import { readProviderList } from "../core/providers.js";
 import { activeProvidersPath, repoRoot, topicDir } from "../core/paths.js";
-import { mainCheckoutRoot, orphanRefusal, orphanedTopicState, worktreeTopic } from "../core/job.js";
+import { withMainCheckout } from "../core/job.js";
 import { assertSlug } from "../core/slug.js";
 import { pickAgents } from "../core/agents.js";
 import { agentConsultValidated, consultTimeout } from "../core/contracts.js";
@@ -42,27 +42,8 @@ import { run as preflightRun } from "./preflight.js";
 function usage(): number { log.error("usage: design <init|assemble|spawn-all|research-send|research-wait|wait-gate|diff|verify-send|verify-wait|adjudicate|synthesize|walk-approve|walk-state|drilldown|offset-reset|export-doc|flag|forensics|archive> ..."); return 2; }
 
 export async function run(args: string[]): Promise<number> {
-  // ONE state tree per run, whatever directory the hub is standing in. Every state path derives from
-  // process.cwd() (paths.ts stateRoot + repoHash), so a verb invoked from inside the run's own
-  // worktree -- `<root>/.ap/worktrees/<topic>` -- hashed the WORKTREE and split the run across two
-  // trees: half its state written where the other half could not see it. `mainCheckoutRoot` re-roots
-  // ap-created run worktrees ONLY and leaves every other path (a user's own worktree included)
-  // exactly as git reported it. Outside a git repo repoRoot() falls back to cwd, so this is a no-op.
-  const origCwd = process.cwd();
-  const gitRoot = repoRoot();
-  const root = mainCheckoutRoot(gitRoot);
-  const wtTopic = worktreeTopic(gitRoot);
-  const stranded = orphanedTopicState(wtTopic, gitRoot, root);
-  if (stranded) { for (const l of orphanRefusal(wtTopic, stranded, root).split("\n")) log.error(l); return 2; }
-  if (root !== origCwd) process.chdir(root);
-  try {
-    return await dispatchVerb(args);
-  } finally {
-    // One verb per process on the CLI path (src/ap.ts exits right after), but tests import run() and
-    // share a process, so the cwd is restored rather than left moved. A cwd that has since been
-    // removed must not turn a completed verb into a throw.
-    if (root !== origCwd) { try { process.chdir(origCwd); } catch { /* the caller's cwd is gone */ } }
-  }
+  // ONE state tree per run, whatever directory the hub is standing in -- see `withMainCheckout`.
+  return withMainCheckout(() => dispatchVerb(args));
 }
 
 async function dispatchVerb(args: string[]): Promise<number> {
@@ -198,11 +179,7 @@ function exportDocRun(rest: string[]): number {
 
 // ---- Phase C: escalation (spawn-all → research → diff) ----
 
-export interface SpawnAllDeps {
-  preflight(args: string[]): Promise<number>;
-  spawn(args: string[]): Promise<number>;
-  repoRoot(): string;
-}
+export type SpawnAllDeps = SpawnAllBatchDeps;
 const liveSpawnAllDeps: SpawnAllDeps = { preflight: preflightRun, spawn: spawnRun, repoRoot };
 
 async function spawnAllRun(rest: string[]): Promise<number> {
@@ -330,7 +307,7 @@ export async function adjudicateRun(rest: string[]): Promise<number> {
     for (let i = 0; i < agents.length; i++) for (let j = i + 1; j < agents.length; j++) addBucket(`${agents[i]}+${agents[j]}_only.txt`);
   }
 
-  const input: AdjudicateInput = { workers: rows.map((r) => ({ agent: r.agent, provider: r.provider })), verify, vs, buckets };
+  const input: AdjudicateInput = { workers: rows.map((r) => ({ agent: r.agent })), verify, vs, buckets };
   atomicWrite(join(art, "adjudicated-draft.md"), adjudicate(input));
   log.ok(`design adjudicate: wrote ${join(art, "adjudicated-draft.md")}`);
   log.info("  cp adjudicated-draft.md -> adjudicated.md, then resolve every '- PENDING:' line");
@@ -350,7 +327,7 @@ export async function synthesizeRun(rest: string[]): Promise<number> {
   mkdirSync(draftDir, { recursive: true });
   // A section the walk already settled keeps its draft. Re-seeding it would overwrite the approved
   // (or skipped) text on every Stage-10 re-entry — destroying exactly the work the markers record.
-  const settled = new Set(walkSectionState(designWalkDir(topic)));
+  const settled = new Set(walkSectionState(designWalkDir(topic)).map((s) => s.name));
   const seeds = synthesizeSeeds(adjText).filter((s) => !settled.has(s.section));
   for (const s of seeds) atomicWrite(join(draftDir, `${s.section}.md`), s.body);
   if (settled.size) log.info(`design synthesize: kept ${[...settled].sort().join(", ")} (already walked; rm the .walk/<section>.state marker to re-seed)`);
@@ -377,7 +354,7 @@ export async function walkApproveRun(rest: string[]): Promise<number> {
 export async function walkStateRun(rest: string[]): Promise<number> {
   const topic = rest[0];
   if (!topic) { log.error("usage: design walk-state <topic>"); return 2; }
-  const states = walkSectionState(designWalkDir(topic), { withStatus: true });
+  const states = walkSectionState(designWalkDir(topic));
   for (const s of states) process.stdout.write(`${s.name}\t${s.status}\n`);
   return 0;
 }

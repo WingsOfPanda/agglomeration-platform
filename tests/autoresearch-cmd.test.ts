@@ -36,7 +36,6 @@ const okDeps = (over: Partial<AutoresearchInitDeps> = {}): AutoresearchInitDeps 
   haveCmd: () => true,
   agentBinary: (n) => (n === "codex" ? "codex" : undefined),
   now: () => "2026-05-30T00:00:00Z",
-  probeHardware: () => {},
   configRoot: () => process.cwd(),
   ...over,
 });
@@ -668,18 +667,6 @@ describe("autoresearch experiment-send", () => {
     expect(prompt).toContain("SPECIAL_CONTEXT_MARKER");
   });
 
-  it("--smoke-test failing -> rc 2, smoke-test.err written, state still idle", async () => {
-    const h = home();
-    const { art, sd } = scaffold(h);
-    const script = join(h.home, "smoke.sh");
-    writeFileSync(script, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
-    const rc = await experimentSendWith(["--smoke-test", script, TOPIC, INST, "exp-004", "x", "y"],
-      deps(h, { runSmokeTest: () => ({ ok: false, stderr: "boom" }) }));
-    expect(rc).toBe(2);
-    expect(readFileSync(join(art, "workers", INST, "experiments", "exp-004", "smoke-test.err"), "utf8")).toContain("boom");
-    expect(readFileSync(join(sd, "state.txt"), "utf8")).toContain("phase=idle");
-  });
-
   it("sota.md present -> prompt.md contains the SOTA reference heading", async () => {
     const h = home();
     const { art } = scaffold(h, { sota: "# SOTA reference — mnist\n\n| a | b |\n" });
@@ -873,7 +860,7 @@ describe("autoresearch score", () => {
     // Seed a ledger so the score-time tail engages (old campaigns without one skip entirely).
     writeFileSync(ledgerPath(art), appendEvent("", { gen: 1, ts: "T", kind: "campaign-init" }));
 
-    // Two runs with the default appendFile (real appendFileSync under the freshHome art dir).
+    // Two runs against the real ledger under the freshHome art dir.
     expect(await scoreWith(["topic"], SCORE_OPTS(h))).toBe(0);
     expect(await scoreWith(["topic"], SCORE_OPTS(h))).toBe(0);
 

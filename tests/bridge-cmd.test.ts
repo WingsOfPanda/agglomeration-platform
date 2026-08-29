@@ -161,7 +161,7 @@ describe("bridge branch", () => {
 });
 
 import { roundSendWith, roundWaitWith } from "../src/commands/bridge.js";
-import type { TurnSendDeps, TurnWaitDeps } from "../src/commands/bridge.js";
+import type { RoundSendDeps, RoundWaitDeps } from "../src/core/roundProtocol.js";
 import type { OutboxEvent } from "../src/core/ipc.js";
 import { noSleepClock } from "./helpers/clock.js";
 import { workerDir } from "../src/core/paths.js";
@@ -186,7 +186,7 @@ describe("bridge round-send / round-wait", () => {
   it("round-send 1 records OFFSET and sends the composed brief", async () => {
     seedPart("t", "/abs/repoB");
     let sent: string[] | undefined;
-    const deps: TurnSendDeps = { offsetFor: () => 0, send: async (a) => { sent = a; return 0; } };
+    const deps: RoundSendDeps = { offsetFor: () => 0, send: async (a) => { sent = a; return 0; } };
     const rc = await roundSendWith("t", 1, deps);
     expect(rc).toBe(0);
     expect(readFileSync(join(bridgeExecDir("t"), "round-1.txt"), "utf8")).toContain("OFFSET=0");
@@ -197,14 +197,14 @@ describe("bridge round-send / round-wait", () => {
 
   it("round-send 2 requires followup-2.md (rc 1 if missing)", async () => {
     seedPart("t", "/abs/repoB");
-    const deps: TurnSendDeps = { offsetFor: () => 0, send: async () => 0 };
+    const deps: RoundSendDeps = { offsetFor: () => 0, send: async () => 0 };
     expect(await roundSendWith("t", 2, deps)).toBe(1);
   });
 
   it("round-wait classifies done→ok and writes TS=ok", async () => {
     seedPart("t", "/abs/repoB");
     writeFileSync(join(bridgeExecDir("t"), "round-1.txt"), "OFFSET=0\n");
-    const deps: TurnWaitDeps = { wait: async () => ({ event: "done", summary: "x", ts: "now" } as OutboxEvent), clock: noSleepClock };
+    const deps: RoundWaitDeps = { wait: async () => ({ event: "done", summary: "x", ts: "now" } as OutboxEvent), clock: noSleepClock };
     expect(await roundWaitWith("t", 1, deps)).toBe(0);
     expect(readFileSync(join(bridgeExecDir("t"), "round-1.txt"), "utf8")).toContain("TS=ok");
   });
@@ -214,7 +214,7 @@ describe("bridge round-send / round-wait", () => {
     writeFileSync(join(bridgeExecDir("t"), "round-1.txt"), "OFFSET=0\n");
     // make the outbox non-empty so the bumped offset differs
     writeFileSync(join(workerDir("alpha", "codex", "t"), "outbox.jsonl"), '{"event":"question","question":"?","ts":"now"}\n');
-    const deps: TurnWaitDeps = { wait: async () => ({ event: "question", question: "?", ts: "now" } as unknown as OutboxEvent), clock: noSleepClock };
+    const deps: RoundWaitDeps = { wait: async () => ({ event: "question", question: "?", ts: "now" } as unknown as OutboxEvent), clock: noSleepClock };
     expect(await roundWaitWith("t", 1, deps)).toBe(0);
     const st = readFileSync(join(bridgeExecDir("t"), "round-1.txt"), "utf8");
     expect(st).toMatch(/TS=question/);

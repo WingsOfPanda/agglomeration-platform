@@ -79,22 +79,14 @@ export interface MetricThresholds {
   c1Budget?: number;
   /** optional metric.md `**select_k:**` worker-selection breadth; caller supplies default. */
   selectK?: number;
-  /** optional metric.md `**select_signal:**` selection signal (e.g. "held-out"); caller supplies default. */
-  selectSignal?: string;
-  /** optional metric.md `**max_workers:**` concurrent worker cap; caller supplies default. */
-  maxWorkers?: number;
   /** optional metric.md `**memory_half_life_days:**` memory decay half-life; caller supplies default. */
   memoryHalfLifeDays?: number;
   /** optional metric.md `**memory_max_age_days:**` hard memory age cutoff; caller supplies default. */
   memoryMaxAgeDays?: number;
   /** optional metric.md `**memory_min_corroboration:**` corroboration floor for memory reuse; caller supplies default. */
   memoryMinCorroboration?: number;
-  /** optional metric.md `**memory_scope:**` memory scope (e.g. "repo+family"); caller supplies default. */
-  memoryScope?: string;
   /** optional metric.md `**memory_write_rate_max:**` max memory writes per window; caller supplies default. */
   memoryWriteRateMax?: number;
-  /** optional metric.md `**marginal_gain_threshold:**` min marginal gain to keep dispatching; caller supplies default. */
-  marginalGainThreshold?: number;
   minOp?: string; minVal?: string;
   tgtOp?: string; tgtVal?: string;
   kRequired: number; plateauWindow: number; plateauThreshold: number;
@@ -103,53 +95,53 @@ export interface MetricThresholds {
 /** Parse the thresholds out of a rendered metric.md. `**min_acceptable:** >= 0.95` -> op ">=", val "0.95".
  *  Unparseable / "(not set)" values leave op/val as-is (a later numeric compare against them simply fails). */
 export function parseMetricMd(text: string): MetricThresholds {
-  let primaryMetric = "";
-  let direction: "maximize" | "minimize" | undefined;
-  let minOp: string | undefined, minVal: string | undefined;
-  let tgtOp: string | undefined, tgtVal: string | undefined;
-  let kRequired = 1, plateauWindow = 5, plateauThreshold = 0.01;
-  let verifyEpsilon: number | undefined;
-  let ceiling: number | undefined; let minRuntimeS: number | undefined;
-  let maxDebugAttempts: number | undefined;
-  let minFamilies = 2;
-  let c1Epsilon: number | undefined; let c1Budget: number | undefined;
-  let selectK: number | undefined; let selectSignal: string | undefined;
-  let maxWorkers: number | undefined;
-  let memoryHalfLifeDays: number | undefined; let memoryMaxAgeDays: number | undefined;
-  let memoryMinCorroboration: number | undefined;
-  let memoryScope: string | undefined; let memoryWriteRateMax: number | undefined;
-  let marginalGainThreshold: number | undefined;
-  const opVal = (s: string): [string, string] => {
-    const workers = s.trim().split(/\s+/);
-    return [workers[0] ?? "", workers.slice(1).join(" ")];
-  };
+  const kv: Record<string, string> = {};
   for (const line of text.split("\n")) {
-    let m: RegExpMatchArray | null;
-    if ((m = line.match(/^\*\*Primary metric:\*\*\s+(.*)$/))) { primaryMetric = m[1].trim(); }
-    else if ((m = line.match(/^\*\*Direction:\*\*\s+(.*)$/))) { const d = m[1].trim(); if (d === "maximize" || d === "minimize") direction = d; }
-    else if ((m = line.match(/^\*\*min_acceptable:\*\*\s+(.*)$/))) { [minOp, minVal] = opVal(m[1]); }
-    else if ((m = line.match(/^\*\*target:\*\*\s+(.*)$/))) { [tgtOp, tgtVal] = opVal(m[1]); }
-    else if ((m = line.match(/^\*\*K_corroboration:\*\*\s+(.*)$/))) { kRequired = parseInt(m[1].trim(), 10) || 1; }
-    else if ((m = line.match(/^\*\*plateau_window:\*\*\s+(.*)$/))) { plateauWindow = parseInt(m[1].trim(), 10) || 5; }
-    else if ((m = line.match(/^\*\*plateau_threshold:\*\*\s+(.*)$/))) { plateauThreshold = parseFloat(m[1].trim()) || 0.01; }
-    else if ((m = line.match(/^\*\*verify_epsilon:\*\*\s+(.*)$/))) { const n = parseFloat(m[1].trim()); if (!Number.isNaN(n)) verifyEpsilon = n; }
-    else if ((m = line.match(/^\*\*ceiling:\*\*\s+(.*)$/))) { const n = parseFloat(m[1].trim()); if (!Number.isNaN(n)) ceiling = n; }
-    else if ((m = line.match(/^\*\*min_runtime_s:\*\*\s+(.*)$/))) { const n = parseFloat(m[1].trim()); if (!Number.isNaN(n)) minRuntimeS = n; }
-    else if ((m = line.match(/^\*\*max_debug_attempts:\*\*\s+(.*)$/))) { const n = parseInt(m[1].trim(), 10); if (!Number.isNaN(n)) maxDebugAttempts = n; }
-    else if ((m = line.match(/^\*\*min_families:\*\*\s+(.*)$/))) { const n = parseInt(m[1].trim(), 10); if (!Number.isNaN(n)) minFamilies = Math.max(1, n); }
-    else if ((m = line.match(/^\*\*c1_epsilon:\*\*\s+(.*)$/))) { const n = parseFloat(m[1].trim()); if (!Number.isNaN(n)) c1Epsilon = n; }
-    else if ((m = line.match(/^\*\*c1_budget:\*\*\s+(.*)$/))) { const n = parseInt(m[1].trim(), 10); if (!Number.isNaN(n)) c1Budget = n; }
-    else if ((m = line.match(/^\*\*select_k:\*\*\s+(.*)$/))) { const n = parseInt(m[1].trim(), 10); if (!Number.isNaN(n)) selectK = n; }
-    else if ((m = line.match(/^\*\*select_signal:\*\*\s+(.*)$/))) { selectSignal = m[1].trim(); }
-    else if ((m = line.match(/^\*\*max_workers:\*\*\s+(.*)$/))) { const n = parseInt(m[1].trim(), 10); if (!Number.isNaN(n)) maxWorkers = n; }
-    else if ((m = line.match(/^\*\*memory_half_life_days:\*\*\s+(.*)$/))) { const n = parseFloat(m[1].trim()); if (!Number.isNaN(n)) memoryHalfLifeDays = n; }
-    else if ((m = line.match(/^\*\*memory_max_age_days:\*\*\s+(.*)$/))) { const n = parseFloat(m[1].trim()); if (!Number.isNaN(n)) memoryMaxAgeDays = n; }
-    else if ((m = line.match(/^\*\*memory_min_corroboration:\*\*\s+(.*)$/))) { const n = parseInt(m[1].trim(), 10); if (!Number.isNaN(n)) memoryMinCorroboration = n; }
-    else if ((m = line.match(/^\*\*memory_scope:\*\*\s+(.*)$/))) { memoryScope = m[1].trim(); }
-    else if ((m = line.match(/^\*\*memory_write_rate_max:\*\*\s+(.*)$/))) { const n = parseFloat(m[1].trim()); if (!Number.isNaN(n)) memoryWriteRateMax = n; }
-    else if ((m = line.match(/^\*\*marginal_gain_threshold:\*\*\s+(.*)$/))) { const n = parseFloat(m[1].trim()); if (!Number.isNaN(n)) marginalGainThreshold = n; }
+    const m = line.match(/^\*\*([A-Za-z_][A-Za-z_ 0-9]*):\*\*\s+(.*)$/);
+    if (m) {
+      // A later unparseable duplicate never erases an earlier numeric value (main parity).
+      const v = m[2].trim();
+      const prev = kv[m[1]];
+      kv[m[1]] = prev !== undefined && Number.isNaN(parseFloat(v)) && !Number.isNaN(parseFloat(prev)) ? prev : v;
+    }
   }
-  return { primaryMetric, direction, minOp, minVal, tgtOp, tgtVal, kRequired, plateauWindow, plateauThreshold, verifyEpsilon, ceiling, minRuntimeS, maxDebugAttempts, minFamilies, c1Epsilon, c1Budget, selectK, selectSignal, maxWorkers, memoryHalfLifeDays, memoryMaxAgeDays, memoryMinCorroboration, memoryScope, memoryWriteRateMax, marginalGainThreshold };
+  const num = (k: string): number | undefined => {
+    const n = parseFloat(kv[k]);
+    return Number.isNaN(n) ? undefined : n;
+  };
+  const int = (k: string): number | undefined => {
+    const n = parseInt(kv[k], 10);
+    return Number.isNaN(n) ? undefined : n;
+  };
+  /** ">= 0.95" -> [">=", "0.95"]; absent key -> [undefined, undefined]. */
+  const opVal = (k: string): [string | undefined, string | undefined] => {
+    if (kv[k] === undefined) return [undefined, undefined];
+    const parts = kv[k].split(/\s+/);
+    return [parts[0] ?? "", parts.slice(1).join(" ")];
+  };
+  const d = kv["Direction"];
+  const [minOp, minVal] = opVal("min_acceptable");
+  const [tgtOp, tgtVal] = opVal("target");
+  return {
+    primaryMetric: kv["Primary metric"] ?? "",
+    direction: d === "maximize" || d === "minimize" ? d : undefined,
+    minOp, minVal, tgtOp, tgtVal,
+    kRequired: int("K_corroboration") || 1,
+    plateauWindow: int("plateau_window") || 5,
+    plateauThreshold: num("plateau_threshold") || 0.01,
+    verifyEpsilon: num("verify_epsilon"),
+    ceiling: num("ceiling"),
+    minRuntimeS: num("min_runtime_s"),
+    maxDebugAttempts: int("max_debug_attempts"),
+    minFamilies: Math.max(1, int("min_families") ?? 2),
+    c1Epsilon: num("c1_epsilon"),
+    c1Budget: int("c1_budget"),
+    selectK: int("select_k"),
+    memoryHalfLifeDays: num("memory_half_life_days"),
+    memoryMaxAgeDays: num("memory_max_age_days"),
+    memoryMinCorroboration: int("memory_min_corroboration"),
+    memoryWriteRateMax: num("memory_write_rate_max"),
+  };
 }
 
 export interface ValidityThresholds {

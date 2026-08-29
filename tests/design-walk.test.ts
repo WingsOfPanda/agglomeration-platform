@@ -29,12 +29,12 @@ describe("parseWalkVerdict", () => {
 });
 
 describe("walkSectionState", () => {
-  it("names sorted; --with-status reports each marker's recorded verdict", () => {
+  it("sorted; reports each marker's recorded verdict", () => {
     const dir = mkdtempSync(join(tmpdir(), "walk-"));
     writeFileSync(join(dir, "goal.state"), "approved\n");
     writeFileSync(join(dir, "components.state"), "skipped\n");
-    expect(walkSectionState(dir)).toEqual(["components", "goal"]);
-    expect(walkSectionState(dir, { withStatus: true })).toEqual([
+    expect(walkSectionState(dir).map((s) => s.name)).toEqual(["components", "goal"]);
+    expect(walkSectionState(dir)).toEqual([
       { name: "components", status: "skipped" },
       { name: "goal", status: "approved" },
     ]);
@@ -44,13 +44,12 @@ describe("walkSectionState", () => {
     writeFileSync(join(dir, "goal.md"), "## Goal\n\nreal content\n");
     writeFileSync(join(dir, "components.md"), "_(skipped)_\n");
     expect(walkSectionState(dir)).toEqual([]);
-    expect(walkSectionState(dir, { withStatus: true })).toEqual([]);
   });
   it("a garbage marker is not a verdict — omitted, not guessed", () => {
     const dir = mkdtempSync(join(tmpdir(), "walk-"));
     writeFileSync(join(dir, "goal.state"), "approved\n");
     writeFileSync(join(dir, "testing.state"), "maybe\n");
-    expect(walkSectionState(dir)).toEqual(["goal"]);
+    expect(walkSectionState(dir).map((s) => s.name)).toEqual(["goal"]);
   });
   it("missing dir → []", () => { expect(walkSectionState("/no/such/dir")).toEqual([]); });
 });

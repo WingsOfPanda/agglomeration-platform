@@ -10,7 +10,8 @@
 import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, join, sep } from "node:path";
 import { readIfExists } from "./fsread.js";
-import { jobDir, topicDir } from "./paths.js";
+import { log } from "./log.js";
+import { jobDir, repoRoot, topicDir } from "./paths.js";
 import { validateSlug } from "./slug.js";
 import { ownsPane, verifiableNonce } from "./tmux.js";
 import { agentBootstrapSleep, agentReadyTimeout } from "./contracts.js";
@@ -145,6 +146,37 @@ export function orphanRefusal(topic: string, stranded: string, recovered: string
     `  ap will not move a run's state for you. Finish or tear the run down from its own worktree`,
     `  with the release it was started on, or move the topic dir to the main path above by hand.`,
   ].join("\n");
+}
+/** ONE state tree per run, whatever directory the hub is standing in — the re-rooting preamble the
+ *  12 re-rooting command verbs' `run()` open with (src/commands/job.ts keeps its own verbatim copy:
+ *  it passes origCwd to its dispatcher and has no orphan refusal; check/review never rooted). Every
+ *  state path derives from process.cwd() (paths.ts
+ *  stateRoot + repoHash), so a verb invoked from inside the run's own worktree --
+ *  `<root>/.ap/worktrees/<topic>` -- hashed the WORKTREE and split the run across two trees: half its
+ *  state written where the other half could not see it. `mainCheckoutRoot` re-roots ap-created run
+ *  worktrees ONLY and leaves every other path (a user's own worktree included) exactly as git
+ *  reported it. Outside a git repo repoRoot() falls back to cwd, so this is a no-op.
+ *
+ *  The orphan refusal is deliberately BEFORE the chdir, and therefore before any work the verb would
+ *  do: a pre-0.5.51 run whose state really is stranded under the worktree hash has to be refused by
+ *  name, never re-rooted over.
+ *
+ *  One verb per process on the CLI path (src/ap.ts exits right after), but tests import run() and
+ *  share a process, so the cwd is restored rather than left moved. A cwd that has since been removed
+ *  must not turn a completed verb into a throw. */
+export async function withMainCheckout(fn: () => Promise<number>): Promise<number> {
+  const origCwd = process.cwd();
+  const gitRoot = repoRoot();
+  const root = mainCheckoutRoot(gitRoot);
+  const wtTopic = worktreeTopic(gitRoot);
+  const stranded = orphanedTopicState(wtTopic, gitRoot, root);
+  if (stranded) { for (const l of orphanRefusal(wtTopic, stranded, root).split("\n")) log.error(l); return 2; }
+  if (root !== origCwd) process.chdir(root);
+  try {
+    return await fn();
+  } finally {
+    if (root !== origCwd) { try { process.chdir(origCwd); } catch { /* the caller's cwd is gone */ } }
+  }
 }
 /** Byte offset into the hub's outbox that the origin hub has already consumed. `job wait` resumes
  *  from it; `job relay` bumps it past the question it just answered, so the next wait does not

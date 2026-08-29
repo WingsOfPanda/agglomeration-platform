@@ -7,15 +7,15 @@ import { log } from "../core/log.js";
 import { applyArgsFile, kvParse } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
 import { repoRoot, repoStateDir } from "../core/paths.js";
-import { jobPath, keepOnBranch, mainCheckoutRoot, orphanRefusal, orphanedTopicState, worktreeTopic } from "../core/job.js";
+import { jobPath, keepOnBranch, withMainCheckout } from "../core/job.js";
 import { auditDoc } from "../core/audit.js";
 import {
   parseImplementArgs, deriveTopicFromPath, detectProvider,
-  implementArtDir, iterTargets, assertImplementTopic, ImplementArgError,
+  implementArtDir, targetCwd, assertImplementTopic, ImplementArgError,
 } from "../core/implement.js";
 import { isoUtc, archiveTopic } from "../core/archive.js";
 import { extractComponentsPaths, extractTestingPaths, lintComponentsPaths, matchDiffAgainstComponents, pathsInvisibleInTarget, testingBulletsWithoutPaths, unresolvedDeclaredPaths } from "../core/implementScope.js";
-import { runnerAt, preSnapshot, createOrResumeBranch, currentBranch, shortstat, finishBranchAction, hasDistinctBranch, targetProblem, type Runner } from "../core/gitwork.js";
+import { runnerAt, preSnapshot, createOrResumeBranch, currentBranch, shortstat, finishWork, hasDistinctBranch, targetProblem, type Runner } from "../core/gitwork.js";
 import { runForensics, runFlag, recordHubFlag } from "../core/forensics.js";
 import { haveCmd } from "../core/deps.js";
 import { implementState, composeRound1Prompt, composeFixPrompt } from "../core/implementTurn.js";
@@ -112,27 +112,8 @@ async function auditRun(rest: string[]): Promise<number> {
 }
 
 export async function run(args: string[]): Promise<number> {
-  // ONE state tree per run, whatever directory the hub is standing in. Every state path derives from
-  // process.cwd() (paths.ts stateRoot + repoHash), so a verb invoked from inside the run's own
-  // worktree -- `<root>/.ap/worktrees/<topic>` -- hashed the WORKTREE and split the run across two
-  // trees: half its state written where the other half could not see it. `mainCheckoutRoot` re-roots
-  // ap-created run worktrees ONLY and leaves every other path (a user's own worktree included)
-  // exactly as git reported it. Outside a git repo repoRoot() falls back to cwd, so this is a no-op.
-  const origCwd = process.cwd();
-  const gitRoot = repoRoot();
-  const root = mainCheckoutRoot(gitRoot);
-  const wtTopic = worktreeTopic(gitRoot);
-  const stranded = orphanedTopicState(wtTopic, gitRoot, root);
-  if (stranded) { for (const l of orphanRefusal(wtTopic, stranded, root).split("\n")) log.error(l); return 2; }
-  if (root !== origCwd) process.chdir(root);
-  try {
-    return await dispatchVerb(args);
-  } finally {
-    // One verb per process on the CLI path (src/ap.ts exits right after), but tests import run() and
-    // share a process, so the cwd is restored rather than left moved. A cwd that has since been
-    // removed must not turn a completed verb into a throw.
-    if (root !== origCwd) { try { process.chdir(origCwd); } catch { /* the caller's cwd is gone */ } }
-  }
+  // ONE state tree per run, whatever directory the hub is standing in -- see `withMainCheckout`.
+  return withMainCheckout(() => dispatchVerb(args));
 }
 
 async function dispatchVerb(args: string[]): Promise<number> {
@@ -330,9 +311,6 @@ async function resetStatusRun(rest: string[]): Promise<number> {
   return 0;
 }
 
-// ---- baseline tsv/map readers (port of deploy helpers) ----
-function isDir(p: string): boolean { try { return statSync(p).isDirectory(); } catch { return false; } }
-
 // ---- pre-snapshot (deploy-pre-snapshot.sh) ----
 async function preSnapshotRun(rest: string[]): Promise<number> {
   if (rest.length !== 1) { log.error("usage: implement pre-snapshot <topic>"); return 2; }
@@ -343,12 +321,12 @@ export async function preSnapshotWith(topic: string, opts: { home?: string; cwd?
   if (!existsSync(art)) { log.error(`implement pre-snapshot: art-dir missing: ${art} (run implement init first)`); return 1; }
   mkdirSync(join(art, "baselines"), { recursive: true });
   let clean = 0, committed = 0, blocked = 0;
-  for (const { slug, cwd } of iterTargets(topic, opts)) {
-    if (!slug || !cwd) continue;
+  const cwd = targetCwd(topic, opts);
+  if (cwd) {
     const snap = preSnapshot(runnerFor(cwd), "implement", topic);
     if (snap.state === "not-git") { log.error(`implement pre-snapshot: not a git repository: ${cwd}`); return 2; }
-    atomicWrite(join(art, "baselines", `${slug}.tsv`),
-      `slug=${slug}\ncwd=${cwd}\nbranch=${snap.branch}\nbaseline_sha=${snap.baseSha}\nstate=${snap.state}\nsnapshot_ts=${isoUtc()}\n`);
+    atomicWrite(join(art, "baselines", "main.tsv"),
+      `slug=main\ncwd=${cwd}\nbranch=${snap.branch}\nbaseline_sha=${snap.baseSha}\nstate=${snap.state}\nsnapshot_ts=${isoUtc()}\n`);
     if (snap.state === "clean") clean++; else if (snap.state === "wip-committed") committed++; else if (snap.state === "hook-blocked") blocked++;
   }
   log.ok(`implement pre-snapshot: ${clean} clean, ${committed} committed, ${blocked} hook-blocked`); return 0;
@@ -379,9 +357,9 @@ export async function branchWith(a: { topic: string; noBranch: boolean; branchNa
   // branch itself (the hub checked it out before pre-snapshot, so baseline and work branch are one
   // ref and every finish action is a no-op), or a detached HEAD (no branch to restore, and a merge
   // would integrate into whatever HEAD happens to be).
-  if (!a.noBranch) for (const { slug, cwd } of iterTargets(a.topic, opts)) {
-    if (!slug || !cwd) continue;
-    const baselineBranch = kvField(join(art, "baselines", `${slug}.tsv`), "branch");
+  const cwd = targetCwd(a.topic, opts);
+  if (!a.noBranch && cwd) {
+    const baselineBranch = kvField(join(art, "baselines", "main.tsv"), "branch");
     if (baselineBranch === defaultBranch) {
       log.error(`implement branch: HEAD was already ${defaultBranch} at pre-snapshot; checkout the intended base branch, re-run pre-snapshot, then branch, or pass --no-branch if implementing on the current branch is intended`);
       return 1;
@@ -391,9 +369,8 @@ export async function branchWith(a: { topic: string; noBranch: boolean; branchNa
       return 1;
     }
   }
-  const rows: string[] = [];
-  for (const { slug, cwd } of iterTargets(a.topic, opts)) {
-    if (!slug || !cwd) continue;
+  let row = "";
+  if (cwd) {
     const r = runnerFor(cwd); let recorded: string;
     if (a.noBranch) { recorded = currentBranch(r) || "(detached)"; log.info(`branch: (--no-branch) staying on ${recorded} in ${cwd}`); }
     else if (r.run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${defaultBranch}`]).code === 0) {
@@ -411,15 +388,15 @@ export async function branchWith(a: { topic: string; noBranch: boolean; branchNa
       if (outcome === "created") { log.info(`branch: created ${defaultBranch} in ${cwd}`); recorded = defaultBranch; }
       else { recorded = currentBranch(r) || "(detached)"; log.warn(`branch: checkout -b failed in ${cwd}; staying on current branch`); }
     }
-    rows.push(`${slug}\t${recorded}`);
-    const baseline = join(art, "baselines", `${slug}.tsv`);
+    row = `main\t${recorded}`;
+    const baseline = join(art, "baselines", "main.tsv");
     if (existsSync(baseline)) { const m = readFileSync(baseline, "utf8").match(/^baseline_sha=(.*)$/m); if (m) atomicWrite(join(art, "branch-base.sha"), m[1] + "\n"); }
   }
-  atomicWrite(join(art, "implement-branches.tsv"), rows.length ? rows.join("\n") + "\n" : "");
+  atomicWrite(join(art, "implement-branches.tsv"), row ? row + "\n" : "");
   // The INTENT, recorded: on disk a deliberate --no-branch run and a run that failed to leave the
   // baseline branch look identical, and finish must not read the second as the first.
   atomicWrite(join(art, "branch-mode.txt"), (a.noBranch ? "no-branch" : "branch") + "\n");
-  log.ok(`implement branch: ${rows.length} target(s) recorded`); return 0;
+  log.ok(`implement branch: ${row ? 1 : 0} target(s) recorded`); return 0;
 }
 
 // ---- scope-check (deploy-scope) ----
@@ -520,14 +497,15 @@ export async function summaryWith(topic: string, d: SummaryDeps): Promise<number
   const art = implementArtDir(topic);
   if (!existsSync(art)) { log.error(`implement summary: art-dir missing: ${art}`); return 1; }
   mkdirSync(join(art, "posts"), { recursive: true });
-  for (const t of iterTargets(topic)) {
-    if (!t.slug || !t.cwd) continue;
-    const baseline = join(art, "baselines", `${t.slug}.tsv`), post = join(art, "posts", `${t.slug}.tsv`);
-    if (!existsSync(baseline)) { log.error(`implement summary: baseline missing for slug=${t.slug} (${baseline})`); continue; }
-    if (!isDir(t.cwd)) { log.warn(`implement summary: target gone for slug=${t.slug} (cwd=${t.cwd}); omitting block`); continue; }
-    const r = d.runnerFor(t.cwd); postSweep(r, topic, baseline, post, d.now());
-    process.stdout.write(formatSummaryBlock(r, baseline, post) + "\n\n");
-  }
+  const cwd = targetCwd(topic);
+  if (!cwd) return 0;
+  const baseline = join(art, "baselines", "main.tsv"), post = join(art, "posts", "main.tsv");
+  if (!existsSync(baseline)) { log.error(`implement summary: baseline missing for slug=main (${baseline})`); return 0; }
+  let st: ReturnType<typeof statSync> | undefined;
+  try { st = statSync(cwd); } catch { /* target unusable (ENOENT/EACCES/ELOOP alike) */ }
+  if (!st?.isDirectory()) { log.warn(`implement summary: target gone for slug=main (cwd=${cwd}); omitting block`); return 0; }
+  const r = d.runnerFor(cwd); postSweep(r, topic, baseline, post, d.now());
+  process.stdout.write(formatSummaryBlock(r, baseline, post) + "\n\n");
   return 0;
 }
 function postSweep(r: Runner, topic: string, baseline: string, post: string, ts: string): void {
@@ -566,29 +544,29 @@ async function finishRun(rest: string[]): Promise<number> {
   if (!["merge", "pr", "keep", "discard"].includes(action)) { log.error(`implement finish: unknown action '${action}'`); return 2; }
   return finishWith(topic, action as "merge" | "pr" | "keep" | "discard", liveFinishDeps);
 }
-// Shared per-target finish body (deploy-finish.sh:1398-1419 / deploy.md:1398-1419). Resolves the
-// worker's feat branch + start branch, then delegates the branch action.
-function applyFinish(topic: string, art: string, t: { slug: string; cwd: string }, action: "merge" | "pr" | "keep" | "discard", d: FinishDeps): string {
-  const rec = readBranchRecord("implement", { dir: art, slug: t.slug });
+// The finish body (deploy-finish.sh:1398-1419 / deploy.md:1398-1419). Resolves the worker's feat
+// branch + start branch, then runs the action through finishWork.
+function applyFinish(topic: string, art: string, cwd: string, action: "merge" | "pr" | "keep" | "discard", d: FinishDeps): string {
+  const rec = readBranchRecord("implement", { dir: art, slug: "main" });
   // The recorded intent decides FIRST, in both directions: a --no-branch run must not act on a
   // branch it never created (a `feat/implement-<topic>` left behind by an earlier run is not this
   // run's to merge or delete), and a branch-mode run must not read a missing one as deliberate.
   if (rec.mode === "no-branch") return "no-branch";
   const branch = rec.branch;
   const startBranch = rec.startBranch;
-  const r = d.runnerFor(t.cwd);
+  const r = d.runnerFor(cwd);
   // A detached baseline names no branch to restore, yet `branch !== startBranch` passes: a merge
   // would report success having integrated into whatever HEAD was. `branch` refuses this baseline
   // now; art dirs written before it still arrive here.
   if (startBranch === "(detached)") {
-    log.warn(`finish: ${t.slug} baseline is a detached HEAD — no start branch to merge into or return to, so NOTHING was merged, pushed, or discarded`);
+    log.warn("finish: main baseline is a detached HEAD — no start branch to merge into or return to, so NOTHING was merged, pushed, or discarded");
     log.warn(`  recover: the work is on '${branch || "the current branch"}'; checkout the intended base branch, re-run pre-snapshot + branch, and finish again`);
     return "same-branch";
   }
   // Nothing to act on in a run that meant to branch: the work is sitting on the baseline branch and
   // every action would silently do nothing — say so instead.
   if (!hasDistinctBranch(r, branch, startBranch)) {
-    log.warn(`finish: ${t.slug} has no branch distinct from the baseline '${startBranch}' (recorded branch: '${branch || "none"}') — NOTHING was merged, pushed, or discarded`);
+    log.warn(`finish: main has no branch distinct from the baseline '${startBranch}' (recorded branch: '${branch || "none"}') — NOTHING was merged, pushed, or discarded`);
     log.warn("  recover: push and open the PR by hand, or checkout the intended base branch, re-run pre-snapshot + branch, and finish again");
     return "same-branch";
   }
@@ -596,7 +574,7 @@ function applyFinish(topic: string, art: string, t: { slug: string; cwd: string 
   // restoring the start branch would swap the tree under a job that may still be executing from it
   // (issue #165). Proven per target, never inferred from the record's mere existence: a
   // `--no-worktree` job runs in the operator's checkout, which still needs its branch back.
-  return finishBranchAction(r, { branch, startBranch, action, hasGh: d.hasGh, keepOnBranch: keepOnBranch(topic, t.cwd) });
+  return finishWork(r, { branch, base: startBranch, action, hasGh: d.hasGh, titlePrefix: "implement", keepOnBranch: keepOnBranch(topic, cwd) }).outcome;
 }
 export async function finishWith(topic: string, action: "merge" | "pr" | "keep" | "discard", d: FinishDeps): Promise<number> {
   const art = implementArtDir(topic);
@@ -615,13 +593,13 @@ export async function finishWith(topic: string, action: "merge" | "pr" | "keep" 
   }
   const results = join(art, "finish-results.tsv"); writeFileSync(results, "");
   let n = 0, stranded = 0, baseBlocked = 0;
-  for (const t of iterTargets(topic)) {
-    if (!t.slug || !t.cwd) continue;
-    const outcome = applyFinish(topic, art, { slug: t.slug, cwd: t.cwd }, action, d);
+  const cwd = targetCwd(topic);
+  if (cwd) {
+    const outcome = applyFinish(topic, art, cwd, action, d);
     if (outcome === "same-branch") stranded++;
     else if (outcome === "base-checkout-failed") baseBlocked++;
-    appendFileSync(results, `${t.slug}\t${action}\t${outcome}\n`);
-    log.info(`finish: ${t.slug} -> ${action} -> ${outcome}`); n++;
+    appendFileSync(results, `main\t${action}\t${outcome}\n`);
+    log.info(`finish: main -> ${action} -> ${outcome}`); n++;
   }
   // The defect this outcome exists to catch has to reach /ap:review, not just this session's log.
   if (stranded) runFlag("implement", topic, `finish ${action}: same-branch on ${stranded} target(s) — the work was left on the baseline branch (no distinct branch to act on), nothing merged, pushed, or discarded`);
