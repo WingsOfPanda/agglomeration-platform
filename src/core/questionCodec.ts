@@ -2,8 +2,8 @@
 // the hub uses to turn a worker's `question` outbox event into a question-<worker>-<round>.txt KV
 // payload and read it back. Byte-faithful port of the prior bash plugin's deploy-questions lib
 // (payload extractor) + the worker-question line validator, rebranded for ap. Pure: no filesystem,
-// no subprocess. The claim VERIFIER that consumes these payloads lives in implementQuestions.ts and
-// is parked (see that file's header).
+// no subprocess. The hub verifies the routed claim itself per commands/implement.md (the parked
+// claim-verify module was deleted in the 0.5.59 purge; see git history for implementQuestions.ts).
 import type { OutboxEvent } from "./ipc.js";
 
 /** Percent-decode the 6 escapes (TEXT field). %0A->nl, %09->tab, %22->", %5C->\, %2C->comma,
