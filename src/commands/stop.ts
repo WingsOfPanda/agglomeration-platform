@@ -1,8 +1,8 @@
 import { existsSync, readdirSync, rmSync, rmdirSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
-import { topicDir, repoStateDir, isArtifactDir, pluginRoot } from "../core/paths.js";
-import { jobPath } from "../core/job.js";
+import { topicDir, repoStateDir, isArtifactDir, pluginRoot, repoRoot } from "../core/paths.js";
+import { jobPath, mainCheckoutRoot, orphanRefusal, orphanedTopicState, worktreeTopic } from "../core/job.js";
 import { stateArchive } from "../core/archive.js";
 import { readIfExists } from "../core/fsread.js";
 import { paneMetaRead, paneMetaReadForDir, parseLastPane, type PaneOwner } from "../core/ipc.js";
@@ -132,6 +132,35 @@ export async function teardownTopic(topic: string): Promise<void> {
 function jobInFlight(topic: string): boolean { return existsSync(jobPath(topic)); }
 
 export async function run(args: string[]): Promise<number> {
+  // ONE state tree per run, whatever directory the operator is standing in. Every state path derives
+  // from process.cwd() (paths.ts stateRoot + repoHash), so a teardown issued from inside the run's
+  // own worktree -- `<root>/.ap/worktrees/<topic>` -- hashed the WORKTREE, read an empty tree, and
+  // answered `no worker '<agent>' on topic '<topic>'` while the worker was alive under the ROOT
+  // hash: panes left running and nothing archived (6 field occurrences, 2026-08-24..28).
+  // The orphan refusal is deliberately BEFORE the chdir, and therefore before any teardownBatch or
+  // cleanupTopicDir: a pre-0.5.51 run whose state really is stranded under the worktree hash has to
+  // be refused by name, never re-rooted over -- and stop must not archive or delete anything on the
+  // way to finding that out. `mainCheckoutRoot` re-roots ap-created run worktrees ONLY and leaves
+  // every other path (a user's own worktree included) exactly as git reported it; outside a git repo
+  // repoRoot() falls back to cwd, so this is a no-op there.
+  const origCwd = process.cwd();
+  const gitRoot = repoRoot();
+  const root = mainCheckoutRoot(gitRoot);
+  const wtTopic = worktreeTopic(gitRoot);
+  const stranded = orphanedTopicState(wtTopic, gitRoot, root);
+  if (stranded) { for (const l of orphanRefusal(wtTopic, stranded, root).split("\n")) log.error(l); return 2; }
+  if (root !== origCwd) process.chdir(root);
+  try {
+    return await dispatchVerb(args);
+  } finally {
+    // One verb per process on the CLI path (src/ap.ts exits right after), but tests import run() and
+    // share a process, so the cwd is restored rather than left moved. A cwd that has since been
+    // removed must not turn a completed verb into a throw.
+    if (root !== origCwd) { try { process.chdir(origCwd); } catch { /* the caller's cwd is gone */ } }
+  }
+}
+
+async function dispatchVerb(args: string[]): Promise<number> {
   const d = liveDeps();
   const a0 = args[0] ?? "";
   if (a0 === "" || a0 === "-h" || a0 === "--help") {

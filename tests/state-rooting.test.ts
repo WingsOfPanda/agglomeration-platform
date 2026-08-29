@@ -31,6 +31,10 @@ import { run as designRun } from "../src/commands/design.js";
 import { run as exploreRun } from "../src/commands/explore.js";
 import { run as bridgeRun } from "../src/commands/bridge.js";
 import { run as autoresearchRun } from "../src/commands/autoresearch.js";
+import { run as stopRun } from "../src/commands/stop.js";
+import { run as listRun } from "../src/commands/list.js";
+import { run as collectRun } from "../src/commands/collect.js";
+import { run as preflightRun } from "../src/commands/preflight.js";
 
 const TOPIC = "demo";
 const AGENT = "alpha";
@@ -134,6 +138,23 @@ function seedTopicDir(home: string, cwd: string, topic: string): string {
   return d;
 }
 
+/** One worker dir under a NAMED tree — the shape `stop`, `list` and `collect` all read: a pane.json
+ *  naming the pair and an empty outbox. NO pane id, deliberately: that is today's archive-only
+ *  teardown path, so nothing here depends on a tmux server having panes. */
+function seedWorker(home: string, cwd: string, model: string): string {
+  const wd = join(home, "state", repoHash(cwd), TOPIC, `${AGENT}-${model}`);
+  mkdirSync(wd, { recursive: true });
+  writeFileSync(join(wd, "pane.json"), JSON.stringify({ agent: AGENT, model, spawned_at: "t" }) + "\n");
+  writeFileSync(join(wd, "outbox.jsonl"), "");
+  return wd;
+}
+/** Both sides of a row: the tree under test, plus the decoy the OTHER tree gets (see decoyTree). */
+function seedWorkerPair(f: Fixture, treeCwd: string): void {
+  for (const [cwd, model] of [[treeCwd, MODEL], [decoyTree(f, treeCwd), DECOY_MODEL]] as const) {
+    if (cwd) seedWorker(f.home, cwd, model);
+  }
+}
+
 interface Row {
   family: string;
   /** Plants whatever the verb reads into the tree `treeCwd` resolves to — named explicitly, because
@@ -213,6 +234,36 @@ const ROWS: Row[] = [
     seed: () => { /* the missing-workers-dir error names the resolved path */ },
     invoke: () => autoresearchRun(["score", TOPIC]),
   },
+  {
+    family: "stop",
+    // The field symptom (#164): `no worker '<agent>' on topic '<topic>'` from a worktree cwd while
+    // the worker sat under the ROOT hash — teardown fell through, panes left alive, nothing
+    // archived. With the worker present, stop NAMES the archive it wrote, and that path carries the
+    // hash of whichever tree it resolved.
+    seed: (f, treeCwd) => seedWorkerPair(f, treeCwd),
+    invoke: () => stopRun([AGENT, TOPIC]),
+  },
+  {
+    family: "list",
+    // Either a worker row (naming the model the resolved tree recorded) or "no workers deployed"
+    // naming the state dir it looked in — two different answers from two different trees.
+    seed: (f, treeCwd) => seedWorkerPair(f, treeCwd),
+    invoke: () => listRun([TOPIC]),
+  },
+  {
+    family: "collect",
+    // resolveModel is the fork: the resolved tree's model in "tailing outbox for ...", or the same
+    // false "no worker" stop emitted. --timeout 1 so the tail path is a second, not ten minutes.
+    seed: (f, treeCwd) => seedWorkerPair(f, treeCwd),
+    invoke: () => collectRun([AGENT, TOPIC, "--timeout", "1"]),
+  },
+  {
+    family: "preflight",
+    // Nothing to seed: the observable is WHICH tree the default `_consult` art dir is created in
+    // (the `--art-dir` override takes an absolute path and was never cwd-sensitive).
+    seed: () => { /* the art-dir mkdir is the write this row is about */ },
+    invoke: () => preflightRun([TOPIC, "2", "--list", `${AGENT}:${MODEL},bravo:${MODEL}`]),
+  },
 ];
 
 interface Observation { rc: number; text: string; trees: string[]; }
@@ -235,7 +286,8 @@ async function observe(row: Row, from: "root" | "worktree"): Promise<Observation
     .split(wtHash).join("<WTHASH>")
     .split(f.home).join("<HOME>")
     .split(f.root).join("<ROOT>")
-    .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/g, "<TS>");
+    .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/g, "<TS>")
+    .replace(/\d{8}T\d{6}Z/g, "<TS>");   // archiveTs (separator-free), as it appears in stop's archive path
   const trees = treesCreated(f.home, before).map((t) => (t === rootHash ? "<ROOTHASH>" : t === wtHash ? "<WTHASH>" : t));
   return { rc: cap.rc, text, trees };
 }
@@ -285,7 +337,8 @@ describe("the over-broad guard: a user's OWN worktree is left exactly as git rep
       .split(f.home).join("<HOME>")
       .split(cwd).join("<CWD>")
       .split(f.root).join("<ROOT>")
-      .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/g, "<TS>");
+      .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/g, "<TS>")
+      .replace(/\d{8}T\d{6}Z/g, "<TS>");
     return { rc: cap.rc, text, trees: treesCreated(f.home, before).map(label) };
   }
 
@@ -339,6 +392,98 @@ describe("orphaned state — a run that started before uniform rooting fails CLO
     const cap = await capture(() => exploreRun(["survivors", TOPIC]));   // cwd is the ROOT
     expect(cap.rc).toBe(1);
     expect(cap.text).not.toContain("ap will not move a run's state for you");
+  });
+});
+
+// #164: the four verbs #155 missed. The table above already pins that each one RESOLVES the root
+// tree; these pin the two things a table of text comparisons cannot see — that stop's destructive
+// half (archive, .last_pane, the topic rmdir, the --all sweep) lands on the root tree, and that the
+// orphan refusal happens BEFORE any of it.
+describe("the four verbs #155 missed: stop/list/collect/preflight operate on the ROOT tree", () => {
+  it("stop archives the ROOT worker and cleans the ROOT topic dir, leaving the worktree tree alone", async () => {
+    const f = fixture();
+    const rootWorker = seedWorker(f.home, f.root, MODEL);
+    const rootTopic = join(f.home, "state", repoHash(f.root), TOPIC);
+    writeFileSync(join(rootTopic, ".last_pane"), "%9\tnonce\n");
+    // A topic dir under the WORKTREE tree too — so this is also the both-trees steady state (no
+    // refusal, the root wins) AND the decoy cleanupTopicDir would have deleted from a raw cwd.
+    const wtTopic = seedTopicDir(f.home, f.wt, TOPIC);
+    writeFileSync(join(wtTopic, ".last_pane"), "%8\tnonce\n");
+
+    process.chdir(f.wt);
+    const cap = await capture(() => stopRun([AGENT, TOPIC]));
+    process.chdir(f.root);
+
+    expect(cap.rc).toBe(0);
+    expect(cap.text).toContain(`archived ${AGENT}-${MODEL}`);
+    expect(existsSync(rootWorker)).toBe(false);                                   // moved to the archive
+    expect(readdirSync(join(f.home, "archive", repoHash(f.root), TOPIC))).toHaveLength(1);
+    expect(existsSync(join(rootTopic, ".last_pane"))).toBe(false);                // cleanupTopicDir ran here
+    expect(existsSync(rootTopic)).toBe(false);                                    // ...and emptied the dir
+    expect(existsSync(join(wtTopic, ".last_pane"))).toBe(true);                   // never the worktree tree
+    expect(existsSync(join(f.home, "archive", repoHash(f.wt)))).toBe(false);
+  });
+
+  it("stop --all from inside the run worktree sweeps the ROOT state dir", async () => {
+    const f = fixture();
+    const rootWorker = seedWorker(f.home, f.root, MODEL);
+    const stray = seedTopicDir(f.home, f.wt, "other");   // only in the worktree tree; not --all's to sweep
+    process.chdir(f.wt);
+    const cap = await capture(() => stopRun(["--all", "--yes"]));
+    process.chdir(f.root);
+    expect(cap.rc).toBe(0);
+    expect(cap.text).toContain(`archived ${AGENT}-${MODEL}`);
+    expect(existsSync(rootWorker)).toBe(false);
+    expect(existsSync(stray)).toBe(true);
+  });
+
+  it("list prints the ROOT-keyed worker's row from inside the run worktree", async () => {
+    const f = fixture();
+    seedWorker(f.home, f.root, MODEL);
+    process.chdir(f.wt);
+    const cap = await capture(() => listRun([TOPIC]));
+    process.chdir(f.root);
+    expect(cap.rc).toBe(0);
+    expect(cap.text).toMatch(new RegExp(`^${AGENT}\\s+${MODEL}\\s+${TOPIC}\\b`, "m"));
+    expect(cap.text).not.toContain("no workers deployed");
+  });
+
+  it("collect resolves the ROOT-keyed worker from inside the run worktree", async () => {
+    const f = fixture();
+    seedWorker(f.home, f.root, MODEL);
+    process.chdir(f.wt);
+    const cap = await capture(() => collectRun([AGENT, TOPIC, "--timeout", "1"]));
+    process.chdir(f.root);
+    expect(cap.text).toContain(`tailing outbox for ${AGENT}-${MODEL}`);
+    expect(cap.text).not.toContain(`no worker '${AGENT}'`);
+  });
+
+  it("preflight's default art dir lands under the ROOT topic dir", async () => {
+    const f = fixture();
+    process.chdir(f.wt);
+    await capture(() => preflightRun([TOPIC, "2", "--list", `${AGENT}:${MODEL},bravo:${MODEL}`]));
+    process.chdir(f.root);
+    expect(existsSync(join(f.home, "state", repoHash(f.root), TOPIC, "_consult"))).toBe(true);
+    expect(existsSync(join(f.home, "state", repoHash(f.wt)))).toBe(false);
+  });
+});
+
+describe("stop refuses a stranded run WITHOUT touching it", () => {
+  it("state only under the worktree hash -> rc 2, nothing archived and nothing deleted", async () => {
+    const f = fixture();
+    const strandedWorker = seedWorker(f.home, f.wt, MODEL);
+    const strandedTopic = join(f.home, "state", repoHash(f.wt), TOPIC);
+    writeFileSync(join(strandedTopic, ".last_pane"), "%7\tnonce\n");
+    process.chdir(f.wt);
+    const cap = await capture(() => stopRun([AGENT, TOPIC]));
+    process.chdir(f.root);
+    expect(cap.rc).toBe(2);
+    expect(cap.text).toContain("ap will not move a run's state for you");
+    // The refusal precedes teardownBatch AND cleanupTopicDir: the run the operator has to decide
+    // about is exactly as they left it.
+    expect(existsSync(strandedWorker)).toBe(true);
+    expect(existsSync(join(strandedTopic, ".last_pane"))).toBe(true);
+    expect(existsSync(join(f.home, "archive"))).toBe(false);
   });
 });
 
