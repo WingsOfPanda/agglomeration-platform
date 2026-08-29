@@ -101,7 +101,9 @@ function parkResult(outcome: StashPushOutcome, sha: string): StashPushResult {
  *  the pre-push sha of that name: only a sha that changed was created by this push. Caller must
  *  have established the tree is dirty. */
 export function stashPush(r: Runner, message: string): StashPushResult {
-  const before = stashShaFor(r, message);
+  // The sha of any entry ALREADY under this name, taken before the push so a leftover from an
+  // aborted run — same name, someone else's work — can never be mistaken for the one it created.
+  const before = stashEntry(r, message)?.sha ?? "";
   const rc = r.run("git", ["stash", "push", "--include-untracked", "-m", message]).code;
   const entry = stashEntry(r, message);
   if (!entry) return parkResult(rc === 0 ? "none" : "failed", "");
@@ -141,13 +143,6 @@ function stashList(r: Runner): RunResult {
 function stashEntry(r: Runner, message: string): { ref: string; sha: string } | null {
   const ref = findStashRef(stashList(r).stdout, message);
   return ref ? { ref, sha: r.run("git", ["rev-parse", ref]).stdout.trim() } : null;
-}
-
-/** The commit sha of the stash entry named `message` right now; "" when there is none (or it will
- *  not resolve). `stashPush` takes this before pushing so a leftover entry from an aborted run —
- *  same name, someone else's work — can never be mistaken for the one it just created. */
-function stashShaFor(r: Runner, message: string): string {
-  return stashEntry(r, message)?.sha ?? "";
 }
 
 export type StashPopOutcome = "popped" | "conflict-kept" | "not-found" | "list-failed" | "identity-mismatch";
@@ -387,20 +382,6 @@ export interface FinishResult { action: "pr" | "keep" | "none"; outcome: string;
 export function finishBranch(r: Runner, o: FinishOpts): FinishResult {
   const res = finishWork(r, { ...o, base: o.startBranch, action: "auto", titlePrefix: "quick" });
   return { action: res.action === "pr" || res.action === "keep" ? res.action : "none", outcome: res.outcome };
-}
-
-export interface FinishActionOpts {
-  branch: string; startBranch: string; action: "merge" | "pr" | "keep" | "discard";
-  hasGh: boolean; originUrl?: string; title?: string; body?: string;
-  /** Passed straight through to `finishWork` — see FinishWorkOpts.keepOnBranch. */
-  keepOnBranch?: boolean;
-}
-
-/** Action-driven finisher (port of deploy_finish_branch @ deploy.sh:651). Restores startBranch
- *  (best-effort) — except under `keepOnBranch`, where the `keep` arm leaves the run's own worktree on
- *  its branch. New additive export; the auto finishBranch (used by quick) is unchanged. */
-export function finishBranchAction(r: Runner, o: FinishActionOpts): string {
-  return finishWork(r, { ...o, base: o.startBranch, titlePrefix: "implement" }).outcome;
 }
 
 export interface PrMergeOpts {

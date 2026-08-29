@@ -5,11 +5,11 @@ import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, mkdtem
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
-import { implementArtDir, implementTopicDir } from "../src/core/implement.js";
+import { implementArtDir } from "../src/core/implement.js";
 import { formatJob, jobPath } from "../src/core/job.js";
 import type { Runner, RunResult } from "../src/core/gitwork.js";
 import { paneMetaWrite } from "../src/core/ipc.js";
-import { workerDir } from "../src/core/paths.js";
+import { topicDir, workerDir } from "../src/core/paths.js";
 import {
   preSnapshotWith, branchWith, scopeCheckWith, summaryWith, finishWith, archiveRun, run,
   turnSendWith, turnWaitWith,
@@ -512,7 +512,7 @@ describe("implement archive (real archiveTopic under AP_HOME)", () => {
   it("moves _implement under the archive root, rc 0", async () => {
     const art = seedArt(); // <topicDir>/_implement
     // seed a sibling worker dir with a status.json so finalizeArchived has something to touch.
-    const workerDir = join(implementTopicDir(TOPIC), "lead-codex");
+    const workerDir = join(topicDir(TOPIC), "lead-codex");
     mkdirSync(workerDir, { recursive: true });
     writeFileSync(join(workerDir, "status.json"), '{"state":"done"}');
     writeFileSync(join(art, "topic.txt"), TOPIC);

@@ -7,16 +7,9 @@ import { readFileSync, existsSync } from "node:fs";
 import { topicDir } from "./paths.js";
 import { kvParse } from "../args.js";
 
-/** `_implement` art dir for a topic. Honors AP_IMPLEMENT_ART_DIR_OVERRIDE; else <topicDir>/_implement. */
+/** `_implement` art dir for a topic: <topicDir>/_implement. */
 export function implementArtDir(topic: string, opts?: { home?: string; cwd?: string }): string {
-  const override = process.env.AP_IMPLEMENT_ART_DIR_OVERRIDE;
-  if (override) return override;
   return join(topicDir(topic, opts), "_implement");
-}
-
-/** Topic state dir for a implement invocation. */
-export function implementTopicDir(topic: string, opts?: { home?: string; cwd?: string }): string {
-  return topicDir(topic, opts);
 }
 
 /** Port of deploy_derive_topic: basename, strip leading YYYY-MM-DD-, then trailing -design.md else .md. */
@@ -87,15 +80,9 @@ export function detectProvider(repoRoot: string): "codex" | "claude" {
   return existsSync(join(repoRoot, ".claude-plugin", "plugin.json")) ? "claude" : "codex";
 }
 
-export interface IterTarget { slug: string; cwd: string; }
-
-/** Port of deploy_iter_targets. Single-repo synthesizes one 'main' row from target_cwd.txt; absent -> []. */
-export function iterTargets(topic: string, opts?: { home?: string; cwd?: string }): IterTarget[] {
-  const art = implementArtDir(topic, opts);
-  const targetCwdFile = join(art, "target_cwd.txt");
-  if (existsSync(targetCwdFile)) {
-    const cwd = readFileSync(targetCwdFile, "utf8").replace(/\n$/, "");
-    return [{ slug: "main", cwd }];
-  }
-  return [];
+/** The single target checkout recorded in target_cwd.txt; "" when the file is absent (single-repo:
+ *  its state files are all keyed by the literal slug "main"). */
+export function targetCwd(topic: string, opts?: { home?: string; cwd?: string }): string {
+  const f = join(implementArtDir(topic, opts), "target_cwd.txt");
+  return existsSync(f) ? readFileSync(f, "utf8").replace(/\n$/, "") : "";
 }
