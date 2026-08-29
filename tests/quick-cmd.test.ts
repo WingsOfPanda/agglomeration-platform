@@ -812,7 +812,7 @@ describe("quick finish: --stash-wip restore", () => {
     expect(readFileSync(join(exec, "finish-result.txt"), "utf8")).toBe("none\tbranch-only (kept feat/quick-auth)\n");
   });
 
-  it("finish path: pops after finishBranch restored the start branch, clears the marker", async () => {
+  it("finish path: pops after the finisher restored the start branch, clears the marker", async () => {
     const exec = await scaffold("yes", "stash999\tap-quick-auth-wip\n");
     const { r, calls } = fakeGit();
     expect(await finishWith("auth", r, true)).toBe(0);
