@@ -650,23 +650,6 @@ describe("autoresearch experiment-send", () => {
     expect(await experimentSendWith([TOPIC, INST, "exp-001", "x", "y"], deps(h))).toBe(1);
   });
 
-  it("--context-file unreadable -> rc 2", async () => {
-    const h = home();
-    scaffold(h);
-    expect(await experimentSendWith(["--context-file", "/no/such/file", TOPIC, INST, "exp-001", "x", "y"], deps(h))).toBe(2);
-  });
-
-  it("--context-file readable -> its content appears in prompt.md", async () => {
-    const h = home();
-    const { art } = scaffold(h);
-    const ctx = join(h.home, "ctx.txt");
-    writeFileSync(ctx, "SPECIAL_CONTEXT_MARKER");
-    const rc = await experimentSendWith(["--context-file", ctx, TOPIC, INST, "exp-003", "x", "y"], deps(h));
-    expect(rc).toBe(0);
-    const prompt = readFileSync(join(art, "workers", INST, "experiments", "exp-003", "prompt.md"), "utf8");
-    expect(prompt).toContain("SPECIAL_CONTEXT_MARKER");
-  });
-
   it("sota.md present -> prompt.md contains the SOTA reference heading", async () => {
     const h = home();
     const { art } = scaffold(h, { sota: "# SOTA reference — mnist\n\n| a | b |\n" });

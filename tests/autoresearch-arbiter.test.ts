@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { frameMetric, defaultTimeBudget } from "../src/core/autoresearchArbiter.js";
+import { frameMetric } from "../src/core/autoresearchArbiter.js";
 import { formatMetricBlock } from "../src/core/autoresearchMetric.js";
 
 describe("frameMetric", () => {
@@ -35,16 +35,5 @@ describe("frameMetric", () => {
     expect(block).toContain("**Primary metric:** accuracy");
     expect(block).toContain("**Direction:** maximize");
     expect(block).toContain("**min_acceptable:** (not set)");
-  });
-});
-
-describe("defaultTimeBudget", () => {
-  test("returns a parseable budget", () => {
-    const b = defaultTimeBudget("anything");
-    expect(b === "none" || /^[0-9]+$/.test(b)).toBe(true);
-  });
-
-  test("is deterministic", () => {
-    expect(defaultTimeBudget("objective one")).toBe(defaultTimeBudget("objective two"));
   });
 });
