@@ -27,7 +27,7 @@ const NOW = "2026-06-24T00:00:00Z";
 const REPO = "repoMemRetrieve";
 
 /** A verifier-passing draft under family `accuracy`. Two with distinct run_ids
- *  share a semanticFingerprint and corroborate (so they promote past minCorroboration=2). */
+ *  share a lesson id and corroborate (so they promote past minCorroboration=2). */
 function draftFor(runId: string, expId: string): any {
   return {
     claim: "dropout 0.5 helped on this family",

@@ -27,7 +27,7 @@ const policy: MemoryPolicy = {
 const now = "2026-06-24T00:00:00Z";
 
 /** A verifier-passing draft. Same scope (family/operator/knob/direction/delta) =>
- *  same semanticFingerprint, so two of these with distinct run_ids corroborate. */
+ *  same lesson id, so two of these with distinct run_ids corroborate. */
 function draftFor(runId: string, expId: string): any {
   return {
     claim: "dropout 0.5 helped on this family",

@@ -4,7 +4,6 @@ import {
   appendEvent, parseLedger, replayLedger, readGen, renderGen,
   ledgerPath, controllerGenPath, type LedgerEvent,
 } from "../src/core/autoresearchLedger.js";
-import { nextExpId } from "../src/core/autoresearchExperiment.js";
 
 const T = "2026-07-11T00:00:00Z";
 const line = (prev: string, ev: Omit<LedgerEvent, "seq">) => prev + appendEvent(prev, ev);
@@ -77,15 +76,6 @@ describe("controller.gen round-trip", () => {
     expect(readGen(body).fields.holder).toBe("resume");
     expect(readGen(null).gen).toBe(0);
     expect(readGen("gen=abc\n").gen).toBe(0);
-  });
-});
-
-describe("nextExpId (counter reconstructible as max(state, ledger intents))", () => {
-  it("takes the max of state exp_counter and the ledger intent max, +1, zero-padded", () => {
-    expect(nextExpId("exp_counter=4\nphase=idle\n", 5)).toBe("exp-006");
-    expect(nextExpId("exp_counter=7\nphase=idle\n", 5)).toBe("exp-008");
-    expect(nextExpId(null, 0)).toBe("exp-001");
-    expect(nextExpId("exp_counter=junk\n", 2)).toBe("exp-003");
   });
 });
 

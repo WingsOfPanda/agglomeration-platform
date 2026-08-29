@@ -66,7 +66,6 @@ export interface ReaderContext {
   metricFamily: string;
   objective: string;
   direction: "maximize" | "minimize";
-  riskBudget?: number; // max risky lessons per retrieval (default 1)
 }
 
 /**
@@ -125,8 +124,7 @@ function hasInjection(draft: any): boolean {
  * Deterministic internal id for a lesson draft — stable across re-derivations
  * so the same finding re-merges instead of duplicating. Hashes the *scope*
  * (metric_family|operator|knob|direction|rounded delta), not the prose claim.
- * djb2 over that basis; no crypto needed for an id. Task 9 wraps this as the
- * exported `semanticFingerprint`.
+ * djb2 over that basis; no crypto needed for an id.
  */
 function fingerprint(d: any): string {
   const basis = [
@@ -230,17 +228,6 @@ export function decayWeight(
  */
 export function isExpired(createdTs: string, now: string, maxAgeDays: number): boolean {
   return elapsedDays(createdTs, now) >= maxAgeDays;
-}
-
-/**
- * Exported wrapper over the SAME internal `fingerprint` used by filterLesson to
- * assign a lesson `id`. A re-derivation of the same finding therefore hashes to
- * the same id and dedup-merges into the existing record rather than spawning a
- * duplicate. Hashes the scope (metric_family|operator|knob|direction|delta),
- * not the prose claim — wording changes do not fork the id.
- */
-export function semanticFingerprint(draft: any): string {
-  return fingerprint(draft);
 }
 
 /**
@@ -409,7 +396,7 @@ function objectiveRelevance(l: Lesson, obj: string): number {
  * (recency * downstream success), highest first.
  *
  * Two aggregate guards shape the selection:
- *  - RISK BUDGET: at most `ctx.riskBudget ?? 1` lessons whose `risk_tags` is
+ *  - RISK BUDGET: at most ONE lesson whose `risk_tags` is
  *    non-empty may be returned, so a retrieval cannot be flooded with risky
  *    (reward-hacking / leakage / scope-drift) findings.
  *  - DIVERSITY FLOOR: the returned set must span at least
@@ -442,7 +429,7 @@ export function retrieveLessons(
     .map((x) => x.l);
 
   const k = policy.k;
-  const riskBudget = ctx.riskBudget ?? 1;
+  const riskBudget = 1;
   const distinctOps = new Set(ranked.map((l) => l.operator)).size;
   const floor = Math.min(policy.diversityFloor, distinctOps);
 

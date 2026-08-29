@@ -25,7 +25,6 @@ import {
   renderLesson,
   retrieveLessons,
   scopeKey,
-  semanticFingerprint,
   type Lesson,
   type LessonVerdict,
   type MemoryPolicy,
@@ -119,11 +118,6 @@ function readLessons(io: MemoryIo, path: string): Lesson[] {
   return out;
 }
 
-/** Serialize a store back to JSONL (one record per line, trailing newline). */
-function serialize(store: Lesson[]): string {
-  return store.map((l) => JSON.stringify(l)).join("\n") + "\n";
-}
-
 export interface WriteLessonsOpts {
   storeRoot: string;
   repoHash: string;
@@ -142,7 +136,7 @@ export interface WriteLessonsOpts {
  *     decision is `reject` (failed source / injection token / non-experiment
  *     provenance), the draft is dropped and nothing is written for it.
  *  2. Otherwise the normalized Lesson either merges into an existing record that
- *     shares its `semanticFingerprint` (== its `id`) via `mergeLesson` — which
+ *     shares its `id` via `mergeLesson` — which
  *     adds the corroborating run and recomputes reinforcement — or is appended
  *     as a new record.
  *  3. The whole scope file is rewritten ATOMICALLY (tmp-in-same-dir + rename) so
@@ -162,7 +156,7 @@ export function writeLessonsAtFinalize(io: MemoryIo, opts: WriteLessonsOpts): vo
   const path = lessonsPath(storeRoot, repoHash, metricFamily);
 
   const store = readLessons(io, path);
-  // Index by id (== semanticFingerprint) for O(1) merge lookup.
+  // Index by id for O(1) merge lookup.
   const byId = new Map<string, number>();
   store.forEach((l, i) => byId.set(l.id, i));
 
@@ -173,12 +167,11 @@ export function writeLessonsAtFinalize(io: MemoryIo, opts: WriteLessonsOpts): vo
     const gated = filterLesson(draft, verdict, policy, now);
     if (gated.decision === "reject" || !gated.normalized) continue;
 
-    const fp = semanticFingerprint(draft); // == gated.normalized.id
-    const at = byId.get(fp);
+    const at = byId.get(gated.normalized.id);
     if (at !== undefined) {
       store[at] = mergeLesson(store[at], draft, now, policy);
     } else {
-      byId.set(fp, store.length);
+      byId.set(gated.normalized.id, store.length);
       store.push(gated.normalized);
     }
     mutated = true;
@@ -186,7 +179,7 @@ export function writeLessonsAtFinalize(io: MemoryIo, opts: WriteLessonsOpts): vo
 
   if (!mutated) return; // every draft rejected -> create nothing
   io.mkdir(join(storeRoot, scopeKey(repoHash, metricFamily)));
-  io.writeAtomic(path, serialize(store));
+  io.writeAtomic(path, store.map((l) => JSON.stringify(l)).join("\n") + "\n");
 }
 
 export interface RetrieveOpts {
@@ -197,7 +190,6 @@ export interface RetrieveOpts {
   direction: "maximize" | "minimize";
   policy: MemoryPolicy;
   now: string; // ISO
-  riskBudget?: number;
 }
 
 /**
@@ -223,7 +215,6 @@ export function retrieveForDispatch(io: MemoryIo, opts: RetrieveOpts): string[] 
     metricFamily,
     objective,
     direction,
-    riskBudget: opts.riskBudget,
   };
   return retrieveLessons(store, ctx, policy, now).map((l) => renderLesson(l));
 }

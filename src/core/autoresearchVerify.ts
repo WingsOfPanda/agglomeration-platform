@@ -39,12 +39,11 @@ export function recomputedFromOutput(
   stdout: string, metricFrom: string, readJson: (path: string) => string | null,
 ): number | null {
   if (metricFrom === "marker") {
-    const lines = stdout.split("\n").map((l) => l.trim());
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const m = lines[i].match(MARKER_RE);
-      if (m) return parseFloat(m[1]);
-    }
-    return null;
+    const m = stdout.split("\n")
+      .map((l) => l.trim().match(MARKER_RE))
+      .filter((x): x is RegExpMatchArray => x !== null)
+      .at(-1);
+    return m ? parseFloat(m[1]) : null;
   }
   const raw = readJson(metricFrom);
   if (raw === null) return null;
