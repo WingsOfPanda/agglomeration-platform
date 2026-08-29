@@ -50,7 +50,12 @@ function evs(art: string) { return parseLedger(readFileSync(ledgerPath(art), "ut
 function state(sd: string) { return parseState(readFileSync(join(sd, "state.txt"), "utf8")); }
 
 function deps(h: { home: string }, over: Partial<AutoresearchResumeDeps> = {}): AutoresearchResumeDeps {
-  return { now: () => "T2", paneOwned: async () => true, freshWorker: vi.fn(async () => 0), opts: opts(h), ...over };
+  // Default snapshot: the scaffolded pane %9 is live and still carries our nonce.
+  return {
+    now: () => "T2",
+    livePaneNonces: async () => new Map([["%9", "99999999-9999-4999-8999-999999999999"]]),
+    freshWorker: vi.fn(async () => 0), opts: opts(h), ...over,
+  };
 }
 async function run(h: { home: string }, d: AutoresearchResumeDeps) {
   const out: string[] = [];
@@ -174,7 +179,7 @@ describe("resume: crash matrix", () => {
     const { art, sd } = scaffold(h, { phase: "working", expCounter: "1", currentExp: "exp-001" });
     ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-intent", agent: INST, exp_id: "exp-001" });
     const fresh = vi.fn(async () => 0);
-    const { rc, out } = await run(h, deps(h, { paneOwned: async () => false, freshWorker: fresh }));
+    const { rc, out } = await run(h, deps(h, { livePaneNonces: async () => new Map(), freshWorker: fresh }));
     expect(rc).toBe(0);
     expect(evs(art).some((e) => e.kind === "interrupted" && e.exp_id === "exp-001")).toBe(true);
     const st = state(sd);
@@ -329,8 +334,9 @@ describe("resume: a legacy (nonce-less) pane.json is unknown, never dead", () =>
     ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-intent", agent: INST, exp_id: "exp-001" });
     ledgerAdd(art, { gen: 1, ts: "T", kind: "dispatch-delivered", agent: INST, exp_id: "exp-001" });
     const fresh = vi.fn(async () => 0);
-    // The probe answers false for an unverifiable record — the point is that nobody acts on it.
-    const { rc, out } = await run(h, deps(h, { paneOwned: async () => false, freshWorker: fresh }));
+    // The snapshot has no %9 at all — the point is that nobody acts on that for an
+    // unverifiable record.
+    const { rc, out } = await run(h, deps(h, { livePaneNonces: async () => new Map(), freshWorker: fresh }));
     expect(rc).toBe(0);
     expect(fresh).not.toHaveBeenCalled();
     expect(evs(art).some((e) => e.kind === "interrupted")).toBe(false);
@@ -345,12 +351,12 @@ describe("resume: a legacy (nonce-less) pane.json is unknown, never dead", () =>
     const h = home();
     scaffold(h, { phase: "idle", legacyPane: true });
     const fresh = vi.fn(async () => 0);
-    const { rc, out } = await run(h, deps(h, { paneOwned: async () => false, freshWorker: fresh }));
+    const { rc, out } = await run(h, deps(h, { livePaneNonces: async () => new Map(), freshWorker: fresh }));
     expect(rc).toBe(0);
     expect(fresh).not.toHaveBeenCalled();
     expect(out).toContain("WORKER=bravo:idle:yes");
   });
-  it("the snapshot path agrees with the per-pane path (no interrupt, no respawn)", async () => {
+  it("a live pane carrying a stranger's nonce is still unknown (no interrupt, no respawn)", async () => {
     const h = home();
     const { sd } = scaffold(h, { phase: "working", currentExp: "exp-001", legacyPane: true });
     const fresh = vi.fn(async () => 0);
