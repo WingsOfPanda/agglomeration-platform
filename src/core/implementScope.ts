@@ -62,10 +62,6 @@ function baseOf(p: string): string { const i = p.lastIndexOf("/"); return i < 0 
  *  the whitespace split, leaving the unmatchable tail `label](src/a.ts`. Applied to the whole line
  *  (not per token) for exactly that reason. */
 const MD_LINK = /\[[^\]\n]*\]\(([^)\s]*)\)/g;
-/** Single-character emphasis markers, peeled one PAIRED layer at a time (so `**x**` takes two
- *  passes, `_x_` one). `__` needs no entry of its own for the same reason. */
-const EMPHASIS = ["*", "_"];
-
 /** Strip PAIRED markdown emphasis wrappers from one token. STRICTLY paired at both ends and never
  *  one-sided: `_quick/topic-text.txt` opens with `_` and does not close with one, so it survives
  *  intact — that exact string is the state-relative citation `quick branch`'s brief lint exists to
@@ -73,14 +69,9 @@ const EMPHASIS = ["*", "_"];
  *  the same reason (no leading marker at all). */
 function stripEmphasis(tok: string): string {
   let s = tok;
-  for (;;) {
-    let next = s;
-    for (const m of EMPHASIS) {
-      if (s.length > 2 && s.startsWith(m) && s.endsWith(m)) { next = s.slice(1, -1); break; }
-    }
-    if (next === s) return s;
-    s = next;
-  }
+  // One PAIRED layer per pass, SAME marker at both ends (the backreference), so `**x**` takes two.
+  while (s.length > 2 && /^([*_])[\s\S]*\1$/.test(s)) s = s.slice(1, -1);
+  return s;
 }
 
 /** Extract every path-like token from a free-form bullet line: strip backticks, collapse markdown
@@ -133,12 +124,7 @@ function sectionPathsByLine(docText: string, header: RegExp, prefix: RegExp): { 
   for (const record of sectionLines(docText, header, prefix)) {
     if (TABLE_ROW.test(record)) {
       if (SEPARATOR_ROW.test(record)) continue;
-      let line = record;
-      line = line.replace(/^[ \t]*\|[ \t]*/, "");
-      line = line.replace(/[ \t]*\|.*$/, "");
-      line = line.replace(/`/g, "");
-      line = line.replace(/^[ \t]+/, "");
-      line = line.replace(/[ \t]+$/, "");
+      const line = record.replace(/^[ \t]*\|[ \t]*/, "").replace(/[ \t]*\|.*$/, "").replace(/`/g, "").trim();
       if (HEADER_CELL.test(line)) continue;
       if (HAS_SLASH.test(line) || ENDS_WITH_EXT.test(line)) out.push({ line: record, paths: [line] });
     } else {
@@ -165,16 +151,12 @@ function componentsPathsByLine(docText: string): { line: string; paths: string[]
  *  rows. Returns [] when no section / no path-like token. The table branch stays first-cell-only
  *  (structured columns); bullets and prose are unstructured, so every token is scanned. */
 export function extractComponentsPaths(docText: string): string[] {
-  const out: string[] = [];
-  for (const rec of componentsPathsByLine(docText)) out.push(...rec.paths);
-  return out;
+  return componentsPathsByLine(docText).flatMap((r) => r.paths);
 }
 
 /** Extract path-like tokens from the design's `## Testing` section with Components semantics. */
 export function extractTestingPaths(docText: string): string[] {
-  const out: string[] = [];
-  for (const rec of sectionPathsByLine(docText, TESTING_HEADER, ANY_TESTING_PREFIX)) out.push(...rec.paths);
-  return out;
+  return sectionPathsByLine(docText, TESTING_HEADER, ANY_TESTING_PREFIX).flatMap((r) => r.paths);
 }
 
 /** A declared token that names a FILE (carries an extension) or an explicit directory (trailing

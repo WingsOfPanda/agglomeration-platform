@@ -12,7 +12,7 @@ import { runForensics, runFlag } from "../core/forensics.js";
 import { agentBinary } from "../core/contracts.js";
 import { haveCmd } from "../core/deps.js";
 import { pickRandomAgent } from "../core/agents.js";
-import { runnerAt, preSnapshot, createOrResumeBranch, finishBranch, classifyDirty, currentBranch, hasDistinctBranch, stashPush, stashPopOnBranch, targetProblem } from "../core/gitwork.js";
+import { runnerAt, preSnapshot, createOrResumeBranch, finishWork, classifyDirty, currentBranch, hasDistinctBranch, stashPush, stashPopOnBranch, targetProblem } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
 import { outboxOffset, outboxPath } from "../core/ipc.js";
 import { composeRound1Prompt, composeFixPrompt } from "../core/turn.js";
@@ -433,8 +433,8 @@ export async function finishWith(topic: string, r: Runner, hasGh: boolean): Prom
   }
   const brief = readIfExists(join(quickArtDir(topic), "task-brief.md"));
   const verify = readField(join(exec, "verify-result.txt"));
-  const res = finishBranch(r, {
-    branch, startBranch, hasGh,
+  const res = finishWork(r, {
+    branch, base: startBranch, action: "auto", hasGh, titlePrefix: "quick",
     title: `quick: ${branch}`,
     body: `${brief}\n\nVerify: ${verify}\n\n(Automated quick branch — review and merge into ${startBranch}.)`,
   });

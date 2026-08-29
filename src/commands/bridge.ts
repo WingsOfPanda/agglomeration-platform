@@ -8,7 +8,7 @@ import { isoUtc } from "../core/archive.js";
 import { agentBinary } from "../core/contracts.js";
 import { haveCmd } from "../core/deps.js";
 import { pickRandomAgent } from "../core/agents.js";
-import { runnerAt, preSnapshot, createOrResumeBranch, currentBranch, finishBranchPrMerge, shortstat } from "../core/gitwork.js";
+import { runnerAt, preSnapshot, createOrResumeBranch, currentBranch, finishWork, shortstat } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
 import { readIfExists, readField, kvField } from "../core/fsread.js";
 import { branchNameFor, readBranchRecord } from "../core/branchRecord.js";
@@ -247,8 +247,8 @@ export async function finishWith(topic: string, r: Runner, hasGh: boolean): Prom
   }
   const task = readIfExists(join(bridgeArtDir(topic), "topic-text.txt"));
   const verify = readField(join(exec, "verify-result.txt"));
-  const res = finishBranchPrMerge(r, {
-    branch, base: startBranch, hasGh,
+  const res = finishWork(r, {
+    branch, base: startBranch, action: "pr-merge", hasGh, titlePrefix: "bridge",
     title: `bridge: ${branch}`,
     body: `${task}\n\nVerify: ${verify}\n\n(Automated bridge branch — merged into ${startBranch}.)`,
   });
