@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, statSync, copyFileSync } from "node:fs";
+import { cpSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { topicDir } from "./paths.js";
 import { EXP_ID_RE } from "./autoresearchExperiment.js";
@@ -47,13 +47,6 @@ export function seedLib(art: string, configRoot: string): void {
   try {
     const seedDir = join(configRoot, "config", "autoresearch-lib-seed");
     if (!existsSync(seedDir)) return;
-    const dest = join(art, "lib");
-    mkdirSync(dest, { recursive: true });
-    for (const name of readdirSync(seedDir)) {
-      const src = join(seedDir, name);
-      if (!statSync(src).isFile()) continue;
-      const target = join(dest, name);
-      if (!existsSync(target)) copyFileSync(src, target);
-    }
+    cpSync(seedDir, join(art, "lib"), { recursive: true, force: false });
   } catch { /* best-effort; never fatal to init */ }
 }

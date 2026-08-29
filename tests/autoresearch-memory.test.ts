@@ -12,7 +12,6 @@ import {
   renderLesson,
   retrieveLessons,
   scopeKey,
-  semanticFingerprint,
   type Lesson,
   type MemoryPolicy,
   type ReaderContext,
@@ -283,15 +282,12 @@ describe("isExpired — hard age cutoff", () => {
   });
 });
 
-describe("semanticFingerprint — re-derivation dedup id", () => {
-  test("equals the id filterLesson assigns to the same draft", () => {
-    const id = filterLesson(draft, "a1-verified", policy, "2026-06-24T00:00:00Z").normalized!.id;
-    expect(semanticFingerprint(draft)).toBe(id);
-  });
+describe("lesson id — re-derivation dedup fingerprint", () => {
+  const idOf = (d: any, now: string) => filterLesson(d, "a1-verified", policy, now).normalized!.id;
 
   test("is stable regardless of now / prose claim wording", () => {
-    const a = semanticFingerprint(draft);
-    const b = semanticFingerprint({ ...draft, claim: "a completely different wording" });
+    const a = idOf(draft, "2026-06-24T00:00:00Z");
+    const b = idOf({ ...draft, claim: "a completely different wording" }, "2027-01-01T00:00:00Z");
     expect(a).toBe(b);
   });
 });
@@ -530,7 +526,7 @@ describe("Task 11 — promotable / outcomeWeight / retrieveLessons", () => {
     const safe = L({ id: "safe", corr: 2, runs: ["r1", "r2"] });
     const risky1 = L({ id: "risky1", corr: 2, runs: ["r3", "r4"], risk_tags: ["leakage"] });
     const risky2 = L({ id: "risky2", corr: 2, runs: ["r5", "r6"], risk_tags: ["scope_drift"] });
-    // riskBudget defaults to 1 -> at most one risky lesson.
+    // The risk budget is 1 -> at most one risky lesson.
     const out = retrieveLessons([safe, risky1, risky2], ctx, policy, now);
     const risky = out.filter((l) => l.risk_tags.length > 0);
     expect(risky).toHaveLength(1);

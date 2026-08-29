@@ -3,12 +3,7 @@
 // assembly, dispatch state transition). Pure; FS/subprocess happen in the verb.
 import { mergeState } from "./autoresearchState.js";
 
-/** Expanded one-variable operator set. Each operator carries a single variable and resolves
- *  through the unchanged parent/knob lineage classification (see autoresearchLineage.ts) — the
- *  label is carried on the dispatch, not derived here. */
-export const OPERATORS = ["draft", "improve", "debug", "ablate", "replicate", "crossover", "literature-refresh"] as const;
-
-/** The dispatch-flag subset of OPERATORS shipped in phase A. `debug`/`crossover`
+/** The dispatch-flag operator set shipped in phase A. `debug`/`crossover`
  *  stay lesson-enum-only; `literature-refresh` is reserved pending a literature gate. */
 export const DISPATCH_OPERATORS = ["draft", "improve", "ablate", "replicate"] as const;
 
@@ -124,13 +119,4 @@ export function buildDispatchState(existing: string | null, expId: string, nowIs
     phase: "working", current_exp_id: expId, exp_counter: String(n + 1),
     last_event: "dispatched", last_event_ts: nowIso,
   });
-}
-
-/** Next dispatch id from the reconstructible counter rule: max(state.txt
- *  exp_counter, the ledger's highest intent number for the agent) + 1 —
- *  a crash that lost the state bump can never cause an exp-id reuse. */
-export function nextExpId(stateText: string | null, ledgerIntentMax: number): string {
-  const prev = stateText?.split("\n").find((l) => l.startsWith("exp_counter="))?.slice("exp_counter=".length) ?? "";
-  const n = /^[0-9]+$/.test(prev.trim()) ? parseInt(prev, 10) : 0;
-  return `exp-${String(Math.max(n, ledgerIntentMax) + 1).padStart(3, "0")}`;
 }
