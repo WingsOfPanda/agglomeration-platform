@@ -43,7 +43,8 @@ This command has two entry paths. Which one you are on is decided **once**, befo
      so the user keeps their checkout for the whole run. `--no-worktree` opts out — only for a repo
      whose suite genuinely cannot run outside the blessed checkout.
    - **rc 2** — a launch-time refusal (unknown argument, topic already in flight, unreadable args
-     file). Surface it and stop.
+     file, or a design doc that is uncommitted and so invisible to the worktree —
+     `--allow-invisible-doc` overrides). Surface it and stop.
    - **rc 1** — no free agent, the worktree could not be created, or the job hub failed to
      bootstrap. Surface it; if a record was left behind, `/ap:job stop <TOPIC>` clears it.
 3. Arm the watch as a persistent **Monitor**, never a plain background shell:

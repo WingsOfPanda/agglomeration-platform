@@ -17059,13 +17059,17 @@ function stripFlags(text, valueFlags) {
   }
   return out.join(" ");
 }
+function docFromImplementArgs(text) {
+  const toks = text.split(/\s+/).filter(Boolean);
+  return toks.find((t) => !t.startsWith("-") && t.endsWith(".md")) ?? "";
+}
 function topicFromImplementArgs(text) {
   const toks = text.split(/\s+/).filter(Boolean);
   const i2 = toks.indexOf("--topic");
   if (i2 >= 0 && toks[i2 + 1]) return toks[i2 + 1];
   const eq = toks.find((t) => t.startsWith("--topic="));
   if (eq) return eq.slice("--topic=".length);
-  const doc = toks.find((t) => !t.startsWith("-") && t.endsWith(".md"));
+  const doc = docFromImplementArgs(text);
   return doc ? deriveTopicFromPath(doc) : "";
 }
 function worktreeLines(j) {
@@ -30204,7 +30208,7 @@ __export(job_exports, {
 });
 function usage7() {
   process.stderr.write(
-    "Usage: job start --command <implement|quick> --args-file <path> [--topic slug] [--provider p]\n                 [--budget-hours N] [--max-rounds N] [--hub-model claude]\n                 [--no-worktree]   work in the main checkout, as 0.5.35 did\n       job status <topic>          one-screen composite: what was launched, is it alive, where is it\n       job wait <topic>            block until the job hub emits done/error/question\n       job relay <topic> <msg|@file>   answer a parked question\n       job attach <topic>          re-arm block, after the origin hub restarted\n       job list                    every job in this repo\n       job stop <topic>            tear down, sweep the session, clear the record\n       job mode <topic>            DETACHED=1 (exit 0) / DETACHED=0 (exit 1)\n       job budget-check <topic>    BUDGET=within (exit 0) / exceeded (exit 1)\n"
+    "Usage: job start --command <implement|quick> --args-file <path> [--topic slug] [--provider p]\n                 [--budget-hours N] [--max-rounds N] [--hub-model claude]\n                 [--no-worktree]   work in the main checkout, as 0.5.35 did\n                 [--allow-invisible-doc]  launch even when the implement design doc is uncommitted\n       job status <topic>          one-screen composite: what was launched, is it alive, where is it\n       job wait <topic>            block until the job hub emits done/error/question\n       job relay <topic> <msg|@file>   answer a parked question\n       job attach <topic>          re-arm block, after the origin hub restarted\n       job list                    every job in this repo\n       job stop <topic>            tear down, sweep the session, clear the record\n       job mode <topic>            DETACHED=1 (exit 0) / DETACHED=0 (exit 1)\n       job budget-check <topic>    BUDGET=within (exit 0) / exceeded (exit 1)\n"
   );
   return 2;
 }
@@ -30448,9 +30452,19 @@ gh pr create --head ${branch}
 `
   );
 }
+function refuseInvisibleDoc(argsText, root, origCwd, r) {
+  const doc = docFromImplementArgs(argsText);
+  if (!doc) return 0;
+  const abs = (0, import_node_path56.isAbsolute)(doc) ? doc : (0, import_node_path56.resolve)(origCwd, doc);
+  const rel = (0, import_node_path56.relative)(root, abs);
+  const covers = (p) => p === rel || p.endsWith("/") && rel.startsWith(p);
+  if (!dirtyPaths(r.run("git", ["status", "--porcelain"]).stdout).some(covers)) return 0;
+  log.error(`job start: the design doc ${rel} exists only as uncommitted work in ${root} \u2014 the run's worktree forks committed HEAD and cannot see it. Commit it and start again, or pass --allow-invisible-doc to launch anyway.`);
+  return 2;
+}
 async function startRun(rest, origCwd) {
   let command = "", argsFile = "", topic = "", provider = "", hubModel = "claude";
-  let budgetHours = 6, maxRounds = 5, useWorktree = true;
+  let budgetHours = 6, maxRounds = 5, useWorktree = true, allowInvisibleDoc = false;
   for (let i2 = 0; i2 < rest.length; i2++) {
     const a2 = rest[i2];
     const take = () => {
@@ -30459,6 +30473,7 @@ async function startRun(rest, origCwd) {
       return r2.value;
     };
     if (a2 === "--no-worktree") useWorktree = false;
+    else if (a2 === "--allow-invisible-doc") allowInvisibleDoc = true;
     else if (a2 === "--command" || a2.startsWith("--command=")) command = take();
     else if (a2 === "--args-file" || a2.startsWith("--args-file=")) argsFile = take();
     else if (a2 === "--topic" || a2.startsWith("--topic=")) topic = take();
@@ -30512,6 +30527,10 @@ async function startRun(rest, origCwd) {
   }
   const root = repoRoot();
   const r = runnerAt(root);
+  if (command === "implement" && useWorktree && !allowInvisibleDoc) {
+    const rc2 = refuseInvisibleDoc(argsText, root, origCwd, r);
+    if (rc2) return rc2;
+  }
   const startBranch = currentBranch(r);
   const originSession = await currentSessionName();
   const wt = useWorktree ? startWorktree(root, topic, r) : null;
