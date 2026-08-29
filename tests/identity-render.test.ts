@@ -6,7 +6,7 @@
 // any drift in the shared body, either role's blocks, or the appendix fails here.
 //
 // The fixtures are a deliberate freeze of shipped prompt text. Editing the prompt means
-// REGENERATING them (see the header of each fixture), never hand-patching the assertion.
+// REGENERATING them, never hand-patching the assertion.
 import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";

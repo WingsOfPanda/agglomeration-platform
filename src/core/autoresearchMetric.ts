@@ -98,7 +98,12 @@ export function parseMetricMd(text: string): MetricThresholds {
   const kv: Record<string, string> = {};
   for (const line of text.split("\n")) {
     const m = line.match(/^\*\*([A-Za-z_][A-Za-z_ 0-9]*):\*\*\s+(.*)$/);
-    if (m) kv[m[1]] = m[2].trim();
+    if (m) {
+      // A later unparseable duplicate never erases an earlier numeric value (main parity).
+      const v = m[2].trim();
+      const prev = kv[m[1]];
+      kv[m[1]] = prev !== undefined && Number.isNaN(parseFloat(v)) && !Number.isNaN(parseFloat(prev)) ? prev : v;
+    }
   }
   const num = (k: string): number | undefined => {
     const n = parseFloat(kv[k]);

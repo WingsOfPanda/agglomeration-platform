@@ -147,8 +147,10 @@ export function orphanRefusal(topic: string, stranded: string, recovered: string
     `  with the release it was started on, or move the topic dir to the main path above by hand.`,
   ].join("\n");
 }
-/** ONE state tree per run, whatever directory the hub is standing in — the re-rooting preamble every
- *  command verb's `run()` opens with. Every state path derives from process.cwd() (paths.ts
+/** ONE state tree per run, whatever directory the hub is standing in — the re-rooting preamble the
+ *  12 re-rooting command verbs' `run()` open with (src/commands/job.ts keeps its own verbatim copy:
+ *  it passes origCwd to its dispatcher and has no orphan refusal; check/review never rooted). Every
+ *  state path derives from process.cwd() (paths.ts
  *  stateRoot + repoHash), so a verb invoked from inside the run's own worktree --
  *  `<root>/.ap/worktrees/<topic>` -- hashed the WORKTREE and split the run across two trees: half its
  *  state written where the other half could not see it. `mainCheckoutRoot` re-roots ap-created run

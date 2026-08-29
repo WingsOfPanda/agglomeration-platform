@@ -25,4 +25,10 @@ describe("parseMetricMd autonomous-bundle knobs", () => {
     const t = parseMetricMd("# Research goal\n**Primary metric:** loss\n**Direction:** minimize\n");
     expect(t.selectK).toBeUndefined();
   });
+
+  test("a later unparseable duplicate key never erases an earlier numeric value (main parity)", () => {
+    const r = parseMetricMd("**ceiling:** 0.9\n**ceiling:** (not set)\n**min_families:** 3\n**min_families:** TBD\n");
+    expect(r.ceiling).toBe(0.9);
+    expect(r.minFamilies).toBe(3);
+  });
 });

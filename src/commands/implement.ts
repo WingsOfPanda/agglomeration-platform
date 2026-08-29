@@ -501,7 +501,9 @@ export async function summaryWith(topic: string, d: SummaryDeps): Promise<number
   if (!cwd) return 0;
   const baseline = join(art, "baselines", "main.tsv"), post = join(art, "posts", "main.tsv");
   if (!existsSync(baseline)) { log.error(`implement summary: baseline missing for slug=main (${baseline})`); return 0; }
-  if (!(statSync(cwd, { throwIfNoEntry: false })?.isDirectory() ?? false)) { log.warn(`implement summary: target gone for slug=main (cwd=${cwd}); omitting block`); return 0; }
+  let st: ReturnType<typeof statSync> | undefined;
+  try { st = statSync(cwd); } catch { /* target unusable (ENOENT/EACCES/ELOOP alike) */ }
+  if (!st?.isDirectory()) { log.warn(`implement summary: target gone for slug=main (cwd=${cwd}); omitting block`); return 0; }
   const r = d.runnerFor(cwd); postSweep(r, topic, baseline, post, d.now());
   process.stdout.write(formatSummaryBlock(r, baseline, post) + "\n\n");
   return 0;
