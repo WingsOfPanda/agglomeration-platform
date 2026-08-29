@@ -85,7 +85,7 @@ describe("corpus-digest verb", () => {
     const writes: string[] = [];
     const out: string[] = [];
     const rc = await corpusDigestWith([TOPIC], {
-      now: () => "T", opts: o, archiveRoot, forensicsRoot,
+      opts: o, archiveRoot, forensicsRoot,
       writeAtomic: (p, b) => { writes.push(p); writeFileSync(p, b); },
       stdout: (l) => out.push(l),
     });
@@ -109,7 +109,7 @@ describe("corpus-digest verb", () => {
     writeFileSync(join(archiveRoot, "prior-run", "_autoresearch-20260701T000000Z", "metric.md"),
       "# Research goal\n\n**Primary metric:** latency\n**Direction:** minimize\n");
     const out: string[] = [];
-    const rc = await corpusDigestWith([TOPIC], { now: () => "T", opts: o, archiveRoot, forensicsRoot, stdout: (l) => out.push(l) });
+    const rc = await corpusDigestWith([TOPIC], { opts: o, archiveRoot, forensicsRoot, stdout: (l) => out.push(l) });
     expect(rc).toBe(0);
     expect(out.join("")).not.toContain("prior-run");
     expect(readFileSync(join(art, "corpus-digest.md"), "utf8")).toContain("no prior same-family campaigns");
@@ -117,7 +117,7 @@ describe("corpus-digest verb", () => {
 
   it("missing art dir -> rc 1; missing topic arg -> rc 2", async () => {
     const h = home();
-    expect(await corpusDigestWith(["nope"], { now: () => "T", opts: opts(h) })).toBe(1);
-    expect(await corpusDigestWith([], { now: () => "T", opts: opts(h) })).toBe(2);
+    expect(await corpusDigestWith(["nope"], { opts: opts(h) })).toBe(1);
+    expect(await corpusDigestWith([], { opts: opts(h) })).toBe(2);
   });
 });

@@ -1,7 +1,7 @@
 // /ap:autoresearch CLI verbs. Ports deep-research-init.sh
 // (slug/codex-gate/flags/scaffolding) + the deep-research.md Phase 0-3 surface.
 // Phase C: experiment-send (dispatch ONE experiment to a persistent codex worker).
-import { accessSync, appendFileSync, closeSync, constants as fsConstants, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { log } from "../core/log.js";
@@ -72,7 +72,7 @@ type LedgerEventArgs = { gen: number; ts: string; kind: LedgerEventKind; agent?:
 /** An appender that reads the campaign ledger ONCE and threads the accumulated text through
  *  successive appends, so a verb emitting many events does not re-read + re-parse the whole
  *  (growing) ledger per event. Seq numbers and the bytes on disk are identical to repeated
- *  ledgerAppend calls. Always false (no-op) when the ledger file is absent. */
+ *  single-event appends. Always false (no-op) when the ledger file is absent. */
 function ledgerAppender(art: string): (ev: LedgerEventArgs) => boolean {
   const path = ledgerPath(art);
   if (!existsSync(path)) return () => false;
@@ -83,13 +83,6 @@ function ledgerAppender(art: string): (ev: LedgerEventArgs) => boolean {
     text += line;
     return true;
   };
-}
-
-/** Append ONE event to the campaign ledger (single-line appendFileSync; append-only
- *  JSONL). No-op returning false when the ledger file is absent — old campaigns
- *  never grow one. Throws on a stale gen (appendEvent's fencing). */
-function ledgerAppend(art: string, ev: LedgerEventArgs): boolean {
-  return ledgerAppender(art)(ev);
 }
 
 /** Current controller generation: controller.gen, falling back to the ledger's
@@ -110,7 +103,6 @@ export interface AutoresearchInitDeps {
   agentBinary(name: string): string | undefined;
   now(): string;
   configRoot(): string;
-  probeHardware?(path: string): void;
   stdout?: (line: string) => void;
   opts?: PathOpts;
 }
@@ -191,7 +183,6 @@ export async function initWith(args: string[], deps: AutoresearchInitDeps): Prom
   atomicWrite(join(art, "topic.txt"), p.topic);
   atomicWrite(join(art, "metric.txt"), extractMetric(p.topic) + "\n");
   if (p.seedFrom) atomicWrite(join(art, "seed-from.txt"), p.seedFrom + "\n");
-  (deps.probeHardware ?? ((): void => {}))(join(art, "hardware.txt"));
 
   if (p.metric !== undefined) {
     try { atomicWrite(join(art, "metric.md"), formatMetricBlock(parseKv(p.metric))); }
@@ -528,8 +519,6 @@ export interface ExperimentSendDeps {
   paneSend(pane: string, line: string): Promise<void>; // injected (tmux); tests pass a fake/throwing one
   paneOwned?(pane: string, nonce: string): Promise<boolean>; // ownership gate for that nudge; defaults to the real probe
   consultTimeout(): number;                            // per-experiment cap (e.g. 1800); from contracts
-  runSmokeTest?(script: string, cwd: string, timeoutSec: number): { ok: boolean; stderr: string };
-  smokeTimeoutSec?: number;                            // default 60
   dryRun?: boolean;                                    // skip the pane nudge (tests)
   inboxWrite?: typeof inboxWrite;                      // DI seam (crash-injection tests)
   stdout?: (line: string) => void;
@@ -538,21 +527,19 @@ export interface ExperimentSendDeps {
 
 interface ExperimentSendArgs {
   topic: string; agent: string; expId: string; approachLabel: string; approachBrief: string;
-  inputs?: string; contextFile?: string; smokeTest?: string; timeout?: string; parentId?: string; gen?: string;
+  contextFile?: string; timeout?: string; parentId?: string; gen?: string;
   operator?: string;
   badArgs?: boolean;
 }
 
 /** Flags-first then exactly 5 positionals (port of experiment-send.sh's getopts loop). */
 function parseExperimentSendArgs(args: string[]): ExperimentSendArgs {
-  let inputs: string | undefined, contextFile: string | undefined, smokeTest: string | undefined, timeout: string | undefined, parentId: string | undefined, gen: string | undefined, operator: string | undefined;
+  let contextFile: string | undefined, timeout: string | undefined, parentId: string | undefined, gen: string | undefined, operator: string | undefined;
   let i = 0;
   for (; i < args.length; i++) {
     const a = args[i];
     if (!a.startsWith("--")) break;
-    if (a === "--inputs" || a.startsWith("--inputs=")) { const r = kvParse(a, args[i + 1]); inputs = r.value; i += r.shift - 1; }
-    else if (a === "--context-file" || a.startsWith("--context-file=")) { const r = kvParse(a, args[i + 1]); contextFile = r.value; i += r.shift - 1; }
-    else if (a === "--smoke-test" || a.startsWith("--smoke-test=")) { const r = kvParse(a, args[i + 1]); smokeTest = r.value; i += r.shift - 1; }
+    if (a === "--context-file" || a.startsWith("--context-file=")) { const r = kvParse(a, args[i + 1]); contextFile = r.value; i += r.shift - 1; }
     else if (a === "--timeout" || a.startsWith("--timeout=")) { const r = kvParse(a, args[i + 1]); timeout = r.value; i += r.shift - 1; }
     else if (a === "--parent" || a.startsWith("--parent=")) { const r = kvParse(a, args[i + 1]); parentId = r.value; i += r.shift - 1; }
     else if (a === "--gen" || a.startsWith("--gen=")) { const r = kvParse(a, args[i + 1]); gen = r.value; i += r.shift - 1; }
@@ -562,7 +549,7 @@ function parseExperimentSendArgs(args: string[]): ExperimentSendArgs {
   const pos = args.slice(i);
   if (pos.length !== 5) return { topic: "", agent: "", expId: "", approachLabel: "", approachBrief: "", badArgs: true };
   const [topic, agent, expId, approachLabel, approachBrief] = pos;
-  return { topic, agent, expId, approachLabel, approachBrief, inputs, contextFile, smokeTest, timeout, parentId, gen, operator };
+  return { topic, agent, expId, approachLabel, approachBrief, contextFile, timeout, parentId, gen, operator };
 }
 
 /** Best-effort peer snapshot for the {{PEERS_BLOCK}} slot. Reads workers.txt (one agent/line)
@@ -606,20 +593,12 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   const opts = deps.opts;
   const fail = (m: string, rc = 2): number => { log.error(`autoresearch experiment-send: ${m}`); return rc; };
   const p = parseExperimentSendArgs(args);
-  if (p.badArgs) return fail("usage: [--inputs csv] [--context-file path] [--smoke-test script] [--timeout N] [--parent exp-id] <topic> <agent> <exp-id> <approach-label> <approach-brief>");
+  if (p.badArgs) return fail("usage: [--context-file path] [--timeout N] [--parent exp-id] <topic> <agent> <exp-id> <approach-label> <approach-brief>");
   const { topic, agent, expId, approachLabel, approachBrief } = p;
 
   if (!EXP_ID_RE.test(expId)) return fail(`exp-id must match exp-[0-9]+; got '${expId}'`);
   if (!AGENT_RE.test(agent)) return fail(`agent must match [a-z][a-z0-9-]*; got '${agent}'`);
 
-  // --inputs: each csv path must be readable.
-  if (p.inputs) {
-    for (const path of p.inputs.split(",")) {
-      if (!path) continue;
-      try { accessSync(path, fsConstants.R_OK); }
-      catch { return fail(`cannot read input path '${path}'`); }
-    }
-  }
   // --timeout: positive integer seconds.
   if (p.timeout !== undefined && !/^[1-9][0-9]*$/.test(p.timeout)) {
     return fail(`--timeout must be a positive integer (seconds); got '${p.timeout}'`);
@@ -631,11 +610,6 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   // --operator: the dispatch-flag subset of the operator enum.
   if (p.operator !== undefined && !(DISPATCH_OPERATORS as readonly string[]).includes(p.operator)) {
     return fail(`--operator must be one of ${DISPATCH_OPERATORS.join("|")}; got '${p.operator}'`);
-  }
-  // --smoke-test: file must exist + be executable.
-  if (p.smokeTest) {
-    try { accessSync(p.smokeTest, fsConstants.X_OK); }
-    catch { return fail(`smoke-test script not executable: ${p.smokeTest}`); }
   }
   // --context-file: readable; read into taskContext.
   let taskContext = "";
@@ -677,16 +651,9 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
     if (!existsSync(experimentDir(art, agent, p.parentId))) return fail(`--parent ${p.parentId} has no experiment dir under ${agent}`, 1);
   }
 
-  // Branch dir + smoke-test BEFORE any state mutation.
+  // Branch dir BEFORE any state mutation.
   const branchDir = experimentDir(art, agent, expId);
   mkdirSync(join(branchDir, "code"), { recursive: true });
-  if (p.smokeTest) {
-    const r = deps.runSmokeTest!(p.smokeTest, join(branchDir, "code"), deps.smokeTimeoutSec ?? 60);
-    if (!r.ok) {
-      atomicWrite(join(branchDir, "smoke-test.err"), r.stderr);
-      return fail(`smoke-test failed for ${agent}/${expId}; stderr -> ${join(branchDir, "smoke-test.err")}`);
-    }
-  }
 
   const model = resolveModel(agent, topic);
   if (!model) return fail(`no worker '${agent}' on topic '${topic}' (resolveModel null)`, 1);
@@ -736,7 +703,7 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   // than sending the operator after a generation that is not the problem.
   const fencedAppend = (ev: LedgerEventArgs): number | null => {
     if (!hasLedger) return null;
-    try { ledgerAppend(art, ev); return null; }
+    try { ledgerAppender(art)(ev); return null; }
     catch (e) {
       if (!isStaleGenError(e)) throw e;
       return fail(`${(e as Error).message}; re-enter via 'autoresearch resume ${topic}'`, 3);
@@ -784,10 +751,6 @@ const liveExperimentSendDeps: ExperimentSendDeps = {
   probeHardware: liveProbeHardware,
   paneSend,
   consultTimeout: () => experimentTimeoutDefault(),
-  runSmokeTest: (script, cwd, timeoutSec) => {
-    try { execFileSync(script, [], { cwd, timeout: timeoutSec * 1000, encoding: "utf8" }); return { ok: true, stderr: "" }; }
-    catch (e) { const err = e as { stderr?: string; message?: string }; return { ok: false, stderr: err.stderr ?? err.message ?? "" }; }
-  },
   dryRun: process.env.AP_DRY_RUN === "1",
 };
 
@@ -818,8 +781,6 @@ export interface AutoresearchScoreDeps {
   writeAtomic(path: string, content: string): void;
   removeFile(path: string): void;
   now(): string;
-  stdout?: (line: string) => void;
-  appendFile?(path: string, text: string): void;       // ledger tail (default appendFileSync)
   opts?: PathOpts;
 }
 
@@ -854,7 +815,6 @@ export async function scoreWith(args: string[], deps: AutoresearchScoreDeps): Pr
   try {
     const lp = ledgerPath(art);
     if (deps.fs.exists(lp)) {
-      const append = deps.appendFile ?? appendFileSync;
       const gen = readGen(deps.fs.read(controllerGenPath(art))).gen || 1;
       // ONE ledger read for the whole tail: successive appends thread the accumulated text
       // (identical seq numbers + bytes) instead of re-reading the ledger per event.
@@ -865,7 +825,7 @@ export async function scoreWith(args: string[], deps: AutoresearchScoreDeps): Pr
         const [expId, agent] = line.split("\t");
         if (!expId || !agent || seen.has(`${agent}/${expId}`)) continue;
         const ev = appendEvent(text, { gen, ts: deps.now(), kind: "result-recorded", agent, exp_id: expId });
-        append(lp, ev);
+        appendFileSync(lp, ev);
         text += ev;
         seen.add(`${agent}/${expId}`);
       }
@@ -1167,12 +1127,6 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
 // The steps themselves live in core/autoresearchFinalize.ts; what stays here is the
 // sequencing plus the two per-worker FS gathers the summary render needs.
 
-/** Step 2: per-worker reconcile + phase normalization — the lane module's finalize flavor (which
- *  documents why its tail slice diverges from resume's shrink-guarded one). */
-function reconcileWorkerPhases(art: string, agents: string[], topic: string): void {
-  for (const agent of agents) reconcileLaneAtFinalize(art, agent, topic);
-}
-
 /** Step 9 (gather): one StatusRow per worker off its state.txt; a worker with no state file still
  *  gets a row, all-"?" — the summary lists the roster, never a subset of it. */
 function gatherStatusRows(art: string, agents: string[]): StatusRow[] {
@@ -1234,8 +1188,9 @@ export async function finalizeWith(args: string[], deps: AutoresearchFinalizeDep
   const workersFile = join(art, "workers.txt");
   const agents = existsSync(workersFile) ? splitNonCommentLines(readFileSync(workersFile, "utf8")) : [];
 
-  // 2. Per-worker reconcile + phase normalization.
-  reconcileWorkerPhases(art, agents, topic);
+  // 2. Per-worker reconcile + phase normalization (the lane module's finalize flavor, which
+  //    documents why its tail slice diverges from resume's shrink-guarded one).
+  for (const agent of agents) reconcileLaneAtFinalize(art, agent, topic);
 
   // 3. (OMIT active-marker removal — ap has no active-marker lifecycle.)
 
@@ -1338,7 +1293,6 @@ const liveFinalizeDeps: AutoresearchFinalizeDeps = {
 export interface AutoresearchRefineDeps {
   send(args: string[]): Promise<number>;
   dryRun?: boolean;
-  stdout?: (l: string) => void;
   opts?: PathOpts;
 }
 
@@ -1399,8 +1353,6 @@ const liveRefineDeps: AutoresearchRefineDeps = {
 
 export interface AutoresearchHandoffDeps {
   now(): string;
-  stdout?: (line: string) => void;
-  opts?: PathOpts;
 }
 
 /** Read result.json under art and parse it; {} on any failure. */
@@ -1480,7 +1432,6 @@ export interface AutoresearchTeardownDeps {
    *  live pane still carries the nonce preflight recorded for it. */
   livePaneNonces(): Promise<Map<string, string>>;
   archiveTopic(topic: string, suite: "autoresearch"): string | null;
-  now(): string;
   stdout?: (l: string) => void;
   opts?: PathOpts;
 }
@@ -1573,7 +1524,6 @@ const liveTeardownDeps: AutoresearchTeardownDeps = {
   killPane: (p) => killNow(p),
   livePaneNonces: () => livePaneNonces(),
   archiveTopic: (t, s) => archiveTopic(t, s),
-  now: () => isoUtc(),
 };
 
 // ---- Phase D: forensics — delegates to core runForensics (mirrors score.ts::forensicsRun). ----
@@ -1592,7 +1542,6 @@ export interface AutoresearchFreshWorkerDeps {
   teardown(topic: string, agent: string): Promise<void>;
   spawn(args: string[]): Promise<number>;
   now(): string;
-  stdout?: (line: string) => void;
   opts?: PathOpts;
 }
 
@@ -1653,10 +1602,8 @@ const liveFreshWorkerDeps: AutoresearchFreshWorkerDeps = {
 
 export interface AutoresearchResumeDeps {
   now(): string;
-  paneOwned(pane: string, nonce: string): Promise<boolean>;
-  /** ONE server-wide pane+nonce snapshot for the whole liveness pass (the live wiring); callers that
-   *  only inject paneOwned keep the per-pane probe. */
-  livePaneNonces?(): Promise<Map<string, string>>;
+  /** ONE server-wide pane+nonce snapshot for the whole liveness pass. */
+  livePaneNonces(): Promise<Map<string, string>>;
   freshWorker(topic: string, agent: string): Promise<number>;
   stdout?: (line: string) => void;
   opts?: PathOpts;
@@ -1770,7 +1717,7 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
   // full-server scan N times); a tmux-less server yields an empty map = every pane dead. Liveness
   // here means OURS-and-live: a pane id a restarted tmux reassigned must not keep a dead lane from
   // being respawned (nor report the lane as alive).
-  const live = deps.livePaneNonces ? await deps.livePaneNonces().catch(() => new Map<string, string>()) : null;
+  const live = await deps.livePaneNonces().catch(() => new Map<string, string>());
   const rows: string[] = [];
   const monitors: string[] = [];
   for (const agent of agents) {
@@ -1785,10 +1732,7 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
     // `stop --pairs` correctly refuses to kill the unverifiable pane but still archives the worker
     // dir, so the original keeps writing to paths that moved out from under it.
     const unverifiable = owner !== null && owner.nonce === "";
-    if (owner && !unverifiable) {
-      if (live) alive = ownsPane(live, owner.paneId, owner.nonce);
-      else { try { alive = await deps.paneOwned(owner.paneId, owner.nonce); } catch { alive = false; } }
-    }
+    if (owner && !unverifiable) alive = ownsPane(live, owner.paneId, owner.nonce);
 
     const raw = readOr(stateTxt);
     const st = parseState(raw);
@@ -1833,7 +1777,6 @@ export async function resumeWith(args: string[], deps: AutoresearchResumeDeps): 
 
 const liveResumeDeps: AutoresearchResumeDeps = {
   now: () => isoUtc(),
-  paneOwned,
   livePaneNonces: () => livePaneNonces(),
   freshWorker: (t, i) => freshWorkerWith([t, i], liveFreshWorkerDeps),
 };
@@ -1847,7 +1790,6 @@ export interface AutoresearchAbortDeps {
   finalize(topic: string): Promise<number>;
   teardown(topic: string): Promise<number>;
   now(): string;
-  stdout?: (line: string) => void;
   opts?: PathOpts;
 }
 
@@ -1903,8 +1845,6 @@ const liveAbortDeps: AutoresearchAbortDeps = {
 
 export interface AutoresearchConsensusDeps {
   now(): string;
-  epsilon?: number;
-  stdout?: (line: string) => void;
   opts?: PathOpts;
 }
 
@@ -1926,7 +1866,7 @@ export async function consensusWith(args: string[], deps: AutoresearchConsensusD
   const p = parseConsensusArgs(args);
   if (p.badArgs) { log.error("autoresearch consensus: unknown flag"); return 2; }
   if (!p.topic) { log.error("autoresearch consensus: topic required"); return 2; }
-  const epsilon = deps.epsilon ?? p.epsilon;
+  const epsilon = p.epsilon;
 
   const art = autoresearchArtDir(p.topic, deps.opts);
   const workersRoot = workersDir(art);
@@ -2013,7 +1953,6 @@ const liveMemoryRetrieveDeps: MemoryRetrieveDeps = { now: () => isoUtc() };
 // ---- Campaign spine: corpus-digest — governed read-only digest of prior campaigns. ----
 
 export interface CorpusDigestDeps {
-  now(): string;
   writeAtomic?(path: string, body: string): void;   // spy seam: the ONLY writer this verb uses
   stdout?: (line: string) => void;
   opts?: PathOpts;
@@ -2086,8 +2025,6 @@ export async function corpusDigestWith(args: string[], deps: CorpusDigestDeps): 
   if (block) for (const line of block.split("\n")) if (line) out(line);
   return 0;
 }
-
-const liveCorpusDigestDeps: CorpusDigestDeps = { now: () => isoUtc() };
 
 const readMetricMd = (art: string): string | null => readIfExistsOrNull(join(art, "metric.md"));
 /** The reads both -check verbs share; only the row writer differs between them. */
@@ -2166,7 +2103,7 @@ async function dispatchVerb(args: string[]): Promise<number> {
     case "abort": return abortWith(applyArgsFile(rest), liveAbortDeps);
     case "consensus": return consensusWith(rest, liveConsensusDeps);
     case "memory-retrieve": return memoryRetrieveWith(rest, liveMemoryRetrieveDeps);
-    case "corpus-digest": return corpusDigestWith(rest, liveCorpusDigestDeps);
+    case "corpus-digest": return corpusDigestWith(rest, {});
     default: return usage();
   }
 }
