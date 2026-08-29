@@ -60,7 +60,7 @@ export function finalizeArchived(td: string, opts?: { now?: Date }): void {
 
 export function archiveTopic(
   topic: string,
-  suite: "consult" | "deploy" | "meditate" | "design" | "implement" | "autoresearch" | "explore",
+  suite: "design" | "implement" | "autoresearch" | "explore",
   opts?: { now?: Date },
 ): string | null {
   const td = topicDir(topic);
