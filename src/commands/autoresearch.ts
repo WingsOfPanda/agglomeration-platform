@@ -16,7 +16,7 @@ import { extractMetric, formatMetricBlock, formatSotaBlock, parseMetricMd, resol
 import { autoresearchArtDir, workersDir, workerStateDir, experimentsDir, experimentDir, seedLib, latestExpDir } from "../core/autoresearch.js";
 import { computeScore, type ScoreFs, type ScoreComputation } from "../core/autoresearchScore.js";
 import { sanityRow, sanityTsvPath, parseSanityRows, SANITY_TSV_HEADER } from "../core/autoresearchSanity.js";
-import { coverageRow, coverageTsvPath, parseCoverageRows, COVERAGE_TSV_HEADER, type CoverageRow } from "../core/autoresearchCoverage.js";
+import { coverageRow, coverageTsvPath, parseCoverageRows, COVERAGE_TSV_HEADER } from "../core/autoresearchCoverage.js";
 import { lineageRow, lineageTsvPath, parseLineageRows, LINEAGE_TSV_HEADER } from "../core/autoresearchLineage.js";
 import { parseState, readHaltFlag } from "../core/autoresearchState.js";
 import {
@@ -39,7 +39,7 @@ import {
 import { runForensics, runFlag } from "../core/forensics.js";
 import { parseScoreboard, buildHandoffKv, type HandoffInput } from "../core/autoresearchHandoff.js";
 import { buildConsensus } from "../core/autoresearchConsensus.js";
-import { frameMetric, defaultTimeBudget } from "../core/autoresearchArbiter.js";
+import { frameMetric } from "../core/autoresearchArbiter.js";
 import { parseVerifyBlock, planVerify, checkVerify, recomputedFromOutput, verificationTsvPath, parseVerificationRows, type VerifyManifest, type VerificationRow } from "../core/autoresearchVerify.js";
 import { classifyInspect, inspectionTsvPath, parseInspections, parseInspectionRows, type InspectVerdict, type InspectionRow } from "../core/autoresearchInspect.js";
 import { appendVerificationRow, appendInspectionRow, readExperimentResult, inspectionCount } from "../core/autoresearchValidity.js";
@@ -50,7 +50,7 @@ import { buildCorpusDigest, leaderMetricOf, type CorpusEntry } from "../core/aut
 import { agentBinary, consultTimeout } from "../core/contracts.js";
 import { inboxWrite, inboxPath, outboxPath, outboxOffset, paneMetaRead, resolveModel, parseEvent } from "../core/ipc.js";
 import { ledgerPath, controllerGenPath, appendEvent, replayLedger, readGen, renderGen, isStaleGenError, type LedgerEventKind } from "../core/autoresearchLedger.js";
-import { paneSend, killNow, paneOwned, livePaneNonces, ownsPane } from "../core/tmux.js";
+import { paneSend, killNow, paneOwned, livePaneNonces, ownsPane, killPreflightOrphans } from "../core/tmux.js";
 import { haveCmd } from "../core/deps.js";
 import { spawnListArg, parsePanesFile, spawnResultsTsv, spawnTally, type SpawnResult } from "../core/roster.js";
 import { pickAgents } from "../core/agents.js";
@@ -191,7 +191,7 @@ export async function initWith(args: string[], deps: AutoresearchInitDeps): Prom
     atomicWrite(join(art, "metric.md"), formatMetricBlock(frameMetric(p.topic)));
   }
   if (resolvedBudget === undefined && autonomous) {
-    resolvedBudget = resolveTimeBudget(defaultTimeBudget(p.topic));
+    resolvedBudget = "none";
   }
   if (resolvedBudget !== undefined) {
     atomicWrite(join(art, "time-budget.txt"), resolvedBudget + "\n");
@@ -367,6 +367,35 @@ export interface ValidityCheckDeps<R> extends ValidityDeps<R>, MetricMdDep {
   readJson(path: string): string | null;
 }
 
+/** The target of a validity verb, or the rc that refused it. Guard order (slug -> exp-id ->
+ *  result.json) is load-bearing: tests/slug-containment.test.ts pins it. */
+type ValidityTarget =
+  | { rc: number }
+  | { rc: null; art: string; topic: string; agent: string; expId: string; result: Record<string, unknown> };
+
+/** The preamble the four validity verbs share, after each has checked its own positional count. */
+function validityTarget(verb: string, pos: string[], deps: Pick<ValidityDeps<never>, "readResult" | "opts">): ValidityTarget {
+  const [topic, agent, expId] = pos;
+  assertSlug("agent", agent); // <art>/workers/<agent>/... — the lane path, never a workerDir join
+  if (!EXP_ID_RE.test(expId)) { log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`); return { rc: 2 }; } // the next segment down
+  const art = autoresearchArtDir(topic, deps.opts);
+  const result = deps.readResult(art, agent, expId);
+  if (result === null) { log.error(`autoresearch ${verb}: result.json missing for ${agent}/${expId}`); return { rc: 1 }; }
+  return { rc: null, art, topic, agent, expId, result };
+}
+
+/** Split a -check verb's args into positionals + the --stdout-file value. The other flags are
+ *  read with args.includes, so they only need skipping here. */
+function takeStdoutFile(args: string[]): { pos: string[]; stdoutFile?: string } {
+  const pos: string[] = [];
+  let stdoutFile: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--stdout-file") stdoutFile = args[++i];
+    else if (!args[i].startsWith("--")) pos.push(args[i]);
+  }
+  return { pos, stdoutFile };
+}
+
 // ---- A1: verify-plan — plan the harness re-execution + persist terminal verdicts ----
 export interface VerifyPlanDeps extends ValidityDeps<VerificationRow> {
   readManifest(art: string, agent: string, expId: string): VerifyManifest | null;
@@ -377,12 +406,9 @@ export async function verifyPlanWith(args: string[], deps: VerifyPlanDeps): Prom
   const authorize = args.includes("--authorize-rerun");
   const pos = args.filter((a) => !a.startsWith("--"));
   if (pos.length !== 3) { log.error("autoresearch verify-plan: usage: <topic> <agent> <exp-id> [--authorize-rerun]"); return 2; }
-  const [topic, agent, expId] = pos;
-  assertSlug("agent", agent); // <art>/workers/<agent>/... — the lane path, never a workerDir join
-  if (!EXP_ID_RE.test(expId)) { log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`); return 2; } // the next segment down
-  const art = autoresearchArtDir(topic, deps.opts);
-  const result = deps.readResult(art, agent, expId);
-  if (result === null) { log.error(`autoresearch verify-plan: result.json missing for ${agent}/${expId}`); return 1; }
+  const t = validityTarget("verify-plan", pos, deps);
+  if (t.rc !== null) return t.rc;
+  const { art, agent, expId, result } = t;
   const block = parseVerifyBlock(result);
   const manifest = deps.readManifest(art, agent, expId);
   const plan = planVerify({ block, manifest, authorizeRerun: authorize, readInput: (rel) => deps.readInput(art, agent, expId, rel) });
@@ -403,21 +429,12 @@ export type VerifyCheckDeps = ValidityCheckDeps<VerificationRow>;
 
 export async function verifyCheckWith(args: string[], deps: VerifyCheckDeps): Promise<number> {
   const runFailed = args.includes("--run-failed");
-  let stdoutFile: string | undefined;
-  const pos: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--stdout-file") { stdoutFile = args[++i]; }
-    else if (args[i] === "--run-failed") { /* flag */ }
-    else if (!args[i].startsWith("--")) pos.push(args[i]);
-  }
+  const { pos, stdoutFile } = takeStdoutFile(args);
   if (pos.length !== 3) { log.error("autoresearch verify-check: usage: <topic> <agent> <exp-id> (--stdout-file <path> | --run-failed)"); return 2; }
   if (!runFailed && stdoutFile === undefined) { log.error("autoresearch verify-check: need --stdout-file <path> or --run-failed"); return 2; }
-  const [topic, agent, expId] = pos;
-  assertSlug("agent", agent); // <art>/workers/<agent>/... — the lane path, never a workerDir join
-  if (!EXP_ID_RE.test(expId)) { log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`); return 2; } // the next segment down
-  const art = autoresearchArtDir(topic, deps.opts);
-  const result = deps.readResult(art, agent, expId);
-  if (result === null) { log.error(`autoresearch verify-check: result.json missing for ${agent}/${expId}`); return 1; }
+  const t = validityTarget("verify-check", pos, deps);
+  if (t.rc !== null) return t.rc;
+  const { art, agent, expId, result } = t;
   const reported = typeof result.metric_value === "number" ? result.metric_value : null;
   const block = parseVerifyBlock(result);
   const metricFrom = block?.metric_from ?? "marker";
@@ -445,12 +462,9 @@ export async function inspectPlanWith(args: string[], deps: InspectPlanDeps): Pr
   const authorize = args.includes("--authorize-inspect");
   const pos = args.filter((a) => !a.startsWith("--"));
   if (pos.length !== 3) { log.error("autoresearch inspect-plan: usage: <topic> <agent> <exp-id> [--authorize-inspect]"); return 2; }
-  const [topic, agent, expId] = pos;
-  assertSlug("agent", agent); // <art>/workers/<agent>/... — the lane path, never a workerDir join
-  if (!EXP_ID_RE.test(expId)) { log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`); return 2; } // the next segment down
-  const art = autoresearchArtDir(topic, deps.opts);
-  const result = deps.readResult(art, agent, expId);
-  if (result === null) { log.error(`autoresearch inspect-plan: result.json missing for ${agent}/${expId}`); return 1; }
+  const t = validityTarget("inspect-plan", pos, deps);
+  if (t.rc !== null) return t.rc;
+  const { art, topic, agent, expId, result } = t;
   const out = deps.stdout ?? stdoutLine;
   const term = (verdict: InspectVerdict, reason: string): number => {
     deps.writeRow(art, agent, expId, { expId, agent, verdict, reason, reimplMetric: "", ts: deps.now() });
@@ -479,21 +493,12 @@ export type InspectCheckDeps = ValidityCheckDeps<InspectionRow>;
 export async function inspectCheckWith(args: string[], deps: InspectCheckDeps): Promise<number> {
   const runFailed = args.includes("--run-failed");
   const integrityRefuted = args.includes("--integrity-refuted");
-  let stdoutFile: string | undefined;
-  const pos: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--stdout-file") { stdoutFile = args[++i]; }
-    else if (args[i] === "--run-failed" || args[i] === "--integrity-refuted") { /* flags */ }
-    else if (!args[i].startsWith("--")) pos.push(args[i]);
-  }
+  const { pos, stdoutFile } = takeStdoutFile(args);
   if (pos.length !== 3) { log.error("autoresearch inspect-check: usage: <topic> <agent> <exp-id> (--stdout-file <path> | --run-failed) [--integrity-refuted]"); return 2; }
   if (!runFailed && !integrityRefuted && stdoutFile === undefined) { log.error("autoresearch inspect-check: need --stdout-file <path> or --run-failed or --integrity-refuted"); return 2; }
-  const [topic, agent, expId] = pos;
-  assertSlug("agent", agent); // <art>/workers/<agent>/... — the lane path, never a workerDir join
-  if (!EXP_ID_RE.test(expId)) { log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`); return 2; } // the next segment down
-  const art = autoresearchArtDir(topic, deps.opts);
-  const result = deps.readResult(art, agent, expId);
-  if (result === null) { log.error(`autoresearch inspect-check: result.json missing for ${agent}/${expId}`); return 1; }
+  const t = validityTarget("inspect-check", pos, deps);
+  if (t.rc !== null) return t.rc;
+  const { art, agent, expId, result } = t;
   const reported = typeof result.metric_value === "number" ? result.metric_value : null;
   const { c1Epsilon } = resolveValidityThresholds(deps.readMetricMd(art));
   let reimplMetric: number | null = null;
@@ -527,20 +532,19 @@ export interface ExperimentSendDeps {
 
 interface ExperimentSendArgs {
   topic: string; agent: string; expId: string; approachLabel: string; approachBrief: string;
-  contextFile?: string; timeout?: string; parentId?: string; gen?: string;
+  timeout?: string; parentId?: string; gen?: string;
   operator?: string;
   badArgs?: boolean;
 }
 
 /** Flags-first then exactly 5 positionals (port of experiment-send.sh's getopts loop). */
 function parseExperimentSendArgs(args: string[]): ExperimentSendArgs {
-  let contextFile: string | undefined, timeout: string | undefined, parentId: string | undefined, gen: string | undefined, operator: string | undefined;
+  let timeout: string | undefined, parentId: string | undefined, gen: string | undefined, operator: string | undefined;
   let i = 0;
   for (; i < args.length; i++) {
     const a = args[i];
     if (!a.startsWith("--")) break;
-    if (a === "--context-file" || a.startsWith("--context-file=")) { const r = kvParse(a, args[i + 1]); contextFile = r.value; i += r.shift - 1; }
-    else if (a === "--timeout" || a.startsWith("--timeout=")) { const r = kvParse(a, args[i + 1]); timeout = r.value; i += r.shift - 1; }
+    if (a === "--timeout" || a.startsWith("--timeout=")) { const r = kvParse(a, args[i + 1]); timeout = r.value; i += r.shift - 1; }
     else if (a === "--parent" || a.startsWith("--parent=")) { const r = kvParse(a, args[i + 1]); parentId = r.value; i += r.shift - 1; }
     else if (a === "--gen" || a.startsWith("--gen=")) { const r = kvParse(a, args[i + 1]); gen = r.value; i += r.shift - 1; }
     else if (a === "--operator" || a.startsWith("--operator=")) { const r = kvParse(a, args[i + 1]); operator = r.value; i += r.shift - 1; }
@@ -549,7 +553,7 @@ function parseExperimentSendArgs(args: string[]): ExperimentSendArgs {
   const pos = args.slice(i);
   if (pos.length !== 5) return { topic: "", agent: "", expId: "", approachLabel: "", approachBrief: "", badArgs: true };
   const [topic, agent, expId, approachLabel, approachBrief] = pos;
-  return { topic, agent, expId, approachLabel, approachBrief, contextFile, timeout, parentId, gen, operator };
+  return { topic, agent, expId, approachLabel, approachBrief, timeout, parentId, gen, operator };
 }
 
 /** Best-effort peer snapshot for the {{PEERS_BLOCK}} slot. Reads workers.txt (one agent/line)
@@ -593,7 +597,7 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   const opts = deps.opts;
   const fail = (m: string, rc = 2): number => { log.error(`autoresearch experiment-send: ${m}`); return rc; };
   const p = parseExperimentSendArgs(args);
-  if (p.badArgs) return fail("usage: [--context-file path] [--timeout N] [--parent exp-id] <topic> <agent> <exp-id> <approach-label> <approach-brief>");
+  if (p.badArgs) return fail("usage: [--timeout N] [--parent exp-id] <topic> <agent> <exp-id> <approach-label> <approach-brief>");
   const { topic, agent, expId, approachLabel, approachBrief } = p;
 
   if (!EXP_ID_RE.test(expId)) return fail(`exp-id must match exp-[0-9]+; got '${expId}'`);
@@ -611,13 +615,6 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
   if (p.operator !== undefined && !(DISPATCH_OPERATORS as readonly string[]).includes(p.operator)) {
     return fail(`--operator must be one of ${DISPATCH_OPERATORS.join("|")}; got '${p.operator}'`);
   }
-  // --context-file: readable; read into taskContext.
-  let taskContext = "";
-  if (p.contextFile) {
-    try { taskContext = readFileSync(p.contextFile, "utf8"); }
-    catch { return fail(`cannot read --context-file: ${p.contextFile}`); }
-  }
-
   const art = autoresearchArtDir(topic, opts);
   if (!existsSync(art)) return fail(`topic state dir missing: ${art} (was autoresearch init run?)`, 1);
   const metricMd = join(art, "metric.md");
@@ -687,7 +684,7 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
     prompt = renderExperimentPrompt(template, {
       metricBlock, hardwareBlock, outboxPath: outbox, topicText, expId,
       approachLabel, approachBrief, branchDir, metricName, timeBudgetS,
-      taskContext, sotaBlock, peersBlock, artDir: art,
+      sotaBlock, peersBlock, artDir: art,
     });
   } catch (e) { return fail((e as Error).message, 1); }
   if (prompt.trim() === "") return fail(`prompt rendered empty (template substitution failed)`, 1);
@@ -1086,32 +1083,24 @@ export async function statusBriefWith(args: string[], v: VerbOpts & { stdout?: (
 
   // Each block: absent file -> undefined (the brief omits the section); present -> parsed rows,
   // with the selection predicate kept here (the parsers only name columns).
-  const vraw = readIfExistsOrNull(verificationTsvPath(art));
-  const verdicts = vraw === null ? undefined : parseVerdicts(vraw);     // empty -> {} (last write wins)
+  const ifPresent = <T>(path: string, parse: (raw: string) => T): T | undefined => {
+    const raw = readIfExistsOrNull(path);
+    return raw === null ? undefined : parse(raw);
+  };
 
-  const sraw = readIfExistsOrNull(sanityTsvPath(art));
-  let suspects: Record<string, string[]> | undefined;
-  if (sraw !== null) {
-    suspects = {};
-    for (const r of parseSanityRows(sraw)) if (r.expId && r.agent && r.flag) (suspects[`${r.agent}/${r.expId}`] ??= []).push(r.flag);
-  }
-
-  const craw = readIfExistsOrNull(coverageTsvPath(art));
-  let coverage: CoverageRow[] | undefined;
-  if (craw !== null) {
-    coverage = [];
-    for (const r of parseCoverageRows(craw)) if (r.family) coverage.push(r);
-  }
-
-  const lraw = readIfExistsOrNull(lineageTsvPath(art));
-  let multiChange: Record<string, boolean> | undefined;
-  if (lraw !== null) {
-    multiChange = {};
-    for (const r of parseLineageRows(lraw)) if (r.expId && r.agent && r.verdict === "improve-multi") multiChange[`${r.agent}/${r.expId}`] = true;
-  }
-
-  const iraw = readIfExistsOrNull(inspectionTsvPath(art));
-  const inspections = iraw === null ? undefined : parseInspections(iraw);  // empty -> {}
+  const verdicts = ifPresent(verificationTsvPath(art), parseVerdicts);     // empty -> {} (last write wins)
+  const suspects = ifPresent(sanityTsvPath(art), (raw) => {
+    const m: Record<string, string[]> = {};
+    for (const r of parseSanityRows(raw)) if (r.expId && r.agent && r.flag) (m[`${r.agent}/${r.expId}`] ??= []).push(r.flag);
+    return m;
+  });
+  const coverage = ifPresent(coverageTsvPath(art), (raw) => parseCoverageRows(raw).filter((r) => r.family));
+  const multiChange = ifPresent(lineageTsvPath(art), (raw) => {
+    const m: Record<string, boolean> = {};
+    for (const r of parseLineageRows(raw)) if (r.expId && r.agent && r.verdict === "improve-multi") m[`${r.agent}/${r.expId}`] = true;
+    return m;
+  });
+  const inspections = ifPresent(inspectionTsvPath(art), parseInspections);  // empty -> {}
 
   const latest = p.latestAgent && p.latestExp ? { agent: p.latestAgent, exp: p.latestExp } : undefined;
   out(buildStatusBrief({ workers, scoreboardMd, completion, latest, verdicts, suspects, coverage, multiChange, inspections }));
@@ -1296,20 +1285,11 @@ export interface AutoresearchRefineDeps {
   opts?: PathOpts;
 }
 
-interface RefineArgs { topic: string; agent: string; expId: string; text: string; ok: boolean }
-
-/** EXACTLY 4 positionals: <topic> <agent> <exp-id> <refinement-text>. The
- *  quoted multi-word refinement-text already arrives as one token (applyArgsFile). */
-function parseRefineArgs(args: string[]): RefineArgs {
-  if (args.length !== 4) return { topic: "", agent: "", expId: "", text: "", ok: false };
-  const [topic, agent, expId, text] = args;
-  return { topic, agent, expId, text, ok: true };
-}
-
 export async function refineWith(args: string[], deps: AutoresearchRefineDeps): Promise<number> {
-  const p = parseRefineArgs(args);
-  if (!p.ok) { log.error("autoresearch refine: usage: <topic> <agent> <exp-id> <refinement-text>"); return 2; }
-  const { topic, agent, expId, text } = p;
+  // EXACTLY 4 positionals: <topic> <agent> <exp-id> <refinement-text>. The
+  // quoted multi-word refinement-text already arrives as one token (applyArgsFile).
+  if (args.length !== 4) { log.error("autoresearch refine: usage: <topic> <agent> <exp-id> <refinement-text>"); return 2; }
+  const [topic, agent, expId, text] = args;
 
   if (!AGENT_RE.test(agent)) { log.error(`agent must match [a-z][a-z0-9-]*; got '${agent}'`); return 2; }
   if (!EXP_ID_RE.test(expId)) { log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`); return 2; }
@@ -1464,18 +1444,8 @@ export async function teardownWith(args: string[], deps: AutoresearchTeardownDep
 
   // 1. Preflight orphan kill (best-effort). Normally already dead from `stop
   //    --pairs`; no-op when preflight-panes.txt is absent (tests/dogfood).
-  const pf = join(art, "preflight-panes.txt");
-  if (existsSync(pf)) {
-    const live = await deps.livePaneNonces().catch(() => new Map<string, string>());
-    for (const pin of parsePanesFile(readFileSync(pf, "utf8")).values()) {
-      if (!ownsPane(live, pin.pane, pin.nonce)) {
-        if (live.has(pin.pane)) log.warn(`[teardown] pane ${pin.pane} is live but is not ours (nonce mismatch) — not killing it`);
-        continue;
-      }
-      try { await deps.killPane(pin.pane); } catch { /* best-effort */ }
-    }
-    try { rmSync(pf, { force: true }); } catch { /* best-effort */ }
-  }
+  await killPreflightOrphans(art, deps, "[teardown]");
+  try { rmSync(join(art, "preflight-panes.txt"), { force: true }); } catch { /* best-effort */ }
 
   if (panesOnly) {
     // spawn-all self-clears spawn-results.tsv + rewrites workers.txt/preflight-panes.txt on retry,
@@ -1882,12 +1852,9 @@ export async function consensusWith(args: string[], deps: AutoresearchConsensusD
     const expsRoot = experimentsDir(art, agent);
     let names: string[];
     try { names = readdirSync(expsRoot).filter((n) => EXP_ID_RE.test(n)).sort(); } catch { continue; }
-    let newest = "";
-    for (const exp of names) {
+    for (const exp of names) {   // names is lexically ascending -> the last ok wins
       const parsed = readJsonOr<Record<string, unknown>>(join(experimentDir(art, agent, exp), "result.json"), null);
-      if (parsed === null) continue;
-      if (parsed.status !== "ok") continue;
-      if (exp > newest) { newest = exp; latestOk[agent] = parsed; }
+      if (parsed?.status === "ok") latestOk[agent] = parsed;
     }
   }
 

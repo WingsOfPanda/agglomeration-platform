@@ -232,16 +232,15 @@ export function artifactBackstop(opts: {
   stateText: string; key: string;
   /** The artifact bytes the CALLER already read and is about to parse. Passing them closes the
    *  TOCTOU window in which a worker's `mv` lands between the check and the caller's own read. */
-  text?: string;
+  text: string;
 }): ArtifactVerdict {
-  const text = opts.text ?? readIf(opts.artifact);
   const accept = lastTag(opts.stateText, ARTIFACT_ACCEPT_KEY);
-  if (hasArtifactSentinel(text) || accept === "unchecked" || WAIT_ACCEPTED.has(accept ?? "")) {
+  if (hasArtifactSentinel(opts.text) || accept === "unchecked" || WAIT_ACCEPTED.has(accept ?? "")) {
     clearArtifactStrikes(opts.art, opts.agent, opts.artifact);
     return "complete";
   }
   if (accept === "expired" || lastTag(opts.stateText, opts.key) === "failed") return "drop";
-  const { strikes, total } = recordStillWriting(opts.art, opts.agent, opts.artifact, Buffer.byteLength(text));
+  const { strikes, total } = recordStillWriting(opts.art, opts.agent, opts.artifact, Buffer.byteLength(opts.text));
   if (strikes >= NO_GROWTH_STRIKES || total >= MAX_REFUSALS) {
     const reason = strikes >= NO_GROWTH_STRIKES
       ? `${strikes} refusals with no growth`

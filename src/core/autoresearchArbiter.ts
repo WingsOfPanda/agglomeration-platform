@@ -1,6 +1,6 @@
 // Pure, deterministic metric arbiter for /ap:autoresearch (capability A).
 // Frames a measurable metric (primary_metric + direction + min_acceptable) from a
-// free-text objective, and supplies a default time budget. No fs/clock/IO/LLM:
+// free-text objective. No fs/clock/IO/LLM:
 // same objective -> byte-identical result. The arbiter is the PRODUCER of MetricFields
 // (memory later consumes this shape); do NOT import the type from memory.
 
@@ -34,13 +34,4 @@ export function frameMetric(objective: string): MetricFields {
     direction: minimize ? "minimize" : "maximize",
     min_acceptable: "(not set)",
   };
-}
-
-/**
- * Default time budget for an autoresearch run. Returns a parseable budget:
- * 'none' (unbounded) or a string of seconds. The pure core returns 'none';
- * the verb may override from flags/config.
- */
-export function defaultTimeBudget(_objective: string): string {
-  return "none";
 }

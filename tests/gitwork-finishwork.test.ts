@@ -1,6 +1,6 @@
-// tests/gitwork-finishwork.test.ts — the deep finisher the three exported wrappers share.
+// tests/gitwork-finishwork.test.ts — the one finisher every command calls.
 import { describe, it, expect } from "vitest";
-import { finishWork, finishBranch } from "../src/core/gitwork.js";
+import { finishWork } from "../src/core/gitwork.js";
 import type { Runner, RunResult, FinishWorkOpts } from "../src/core/gitwork.js";
 
 function fakeRunner(replies: Record<string, RunResult>) {
@@ -177,12 +177,12 @@ describe("finishWork pr-merge arm", () => {
   });
 });
 
-// The wrappers' guard mapping — a hand-rolled finishBranch body (the pre-collapse one, which had no
-// guard) pushes a branch that does not exist and fails here.
-describe("finishBranch wrapper", () => {
+// The guard under quick's own option set — a hand-rolled finish body (the pre-collapse one, which
+// had no guard) pushes a branch that does not exist and fails here.
+describe("finishWork under quick's options", () => {
   it("ref missing → none/no-branch, nothing pushed", () => {
     const { r, calls } = fakeRunner({ [REF("feat/quick-auth")]: { code: 1, stdout: "" } });
-    expect(finishBranch(r, { branch: "feat/quick-auth", startBranch: "main", hasGh: true }))
+    expect(finishWork(r, { branch: "feat/quick-auth", base: "main", action: "auto", hasGh: true, titlePrefix: "quick" }))
       .toEqual({ action: "none", outcome: "no-branch" });
     expect(calls.some((c) => c[1] === "push" || c[0] === "gh")).toBe(false);
   });

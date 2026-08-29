@@ -374,9 +374,8 @@ export function outboxDump(i: string, m: string, t: string): string {
  *  id alone is not evidence: tmux restarts %N from 0 on a fresh server, so a pane.json that outlived
  *  its pane can name a stranger's pane. Every reader that acts on the pane re-checks the two
  *  together. Required, so no spawn path can persist an unverifiable id by omission. */
-export function paneMetaWrite(i: string, m: string, t: string, paneId: string, nonce: string, opts?: { now?: Date }): void {
-  const spawned = isoUtc(opts?.now);
-  atomicWrite(paneMetaPath(i, m, t), JSON.stringify({ pane_id: paneId, pane_nonce: nonce, agent: i, model: m, spawned_at: spawned }) + "\n");
+export function paneMetaWrite(i: string, m: string, t: string, paneId: string, nonce: string): void {
+  atomicWrite(paneMetaPath(i, m, t), JSON.stringify({ pane_id: paneId, pane_nonce: nonce, agent: i, model: m, spawned_at: isoUtc() }) + "\n");
 }
 
 export interface PaneMeta { agent: string; model: string; paneId: string; nonce: string; }

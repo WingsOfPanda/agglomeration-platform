@@ -33,7 +33,7 @@ import { teardownTopic } from "./stop.js";
 function usage(): number {
   process.stderr.write(
     "Usage: job start --command <implement|quick> --args-file <path> [--topic slug] [--provider p]\n" +
-    "                 [--budget-hours N] [--max-rounds N] [--hub-model claude]\n" +
+    "                 [--budget-hours N] [--max-rounds N]\n" +
     "                 [--no-worktree]   work in the main checkout, as 0.5.35 did\n" +
     "                 [--allow-invisible-doc]  launch even when the implement design doc is uncommitted\n" +
     "       job status <topic>          one-screen composite: what was launched, is it alive, where is it\n" +
@@ -382,7 +382,7 @@ function refuseInvisibleDoc(argsText: string, root: string, origCwd: string, r: 
 }
 
 async function startRun(rest: string[], origCwd: string): Promise<number> {
-  let command = "", argsFile = "", topic = "", provider = "", hubModel = "claude";
+  let command = "", argsFile = "", topic = "", provider = "";
   let budgetHours = 6, maxRounds = 5, useWorktree = true, allowInvisibleDoc = false;
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
@@ -393,7 +393,6 @@ async function startRun(rest: string[], origCwd: string): Promise<number> {
     else if (a === "--args-file" || a.startsWith("--args-file=")) argsFile = take();
     else if (a === "--topic" || a.startsWith("--topic=")) topic = take();
     else if (a === "--provider" || a.startsWith("--provider=")) provider = take();
-    else if (a === "--hub-model" || a.startsWith("--hub-model=")) hubModel = take();
     else if (a === "--budget-hours" || a.startsWith("--budget-hours=")) budgetHours = Number(take());
     else if (a === "--max-rounds" || a.startsWith("--max-rounds=")) maxRounds = Number(take());
     else { log.error(`job start: unknown argument '${a}'`); return 2; }
@@ -447,7 +446,8 @@ async function startRun(rest: string[], origCwd: string): Promise<number> {
 
   const rec: J.JobRecord = {
     command, topic, session,
-    hub: { agent, model: hubModel },
+    // The detached job hub is always claude — never an option (a codex/agy hub was never wired).
+    hub: { agent, model: "claude" },
     // Literal, never an option: a detached run has exactly one legal ending — it stops on its
     // branch and the OPERATOR finishes it. The `pr` opt-in was removed 2026-08-18 having never run
     // live, so `--finish` now falls into the unknown-argument refusal above.
@@ -462,13 +462,13 @@ async function startRun(rest: string[], origCwd: string): Promise<number> {
   // knows the name of.
   atomicWrite(J.jobPath(topic), J.formatJob(rec));
 
-  const rc = await spawnRun([agent, hubModel, topic, "--session", session, "--role", "job-hub", "--cwd", root, J.jobBrief(rec)]);
+  const rc = await spawnRun([agent, "claude", topic, "--session", session, "--role", "job-hub", "--cwd", root, J.jobBrief(rec)]);
   if (rc !== 0) {
     log.error(`job start: the job hub failed to spawn (rc ${rc}); the record is left at ${J.jobPath(topic)} — clear it with 'ap job stop ${topic}'${wt ? ` (which also removes the worktree ${wt.worktree})` : ""}`);
     return rc;
   }
   process.stdout.write(
-    `TOPIC=${topic}\nSESSION=${session}\nHUB=${agent}-${hubModel}\nJOB=${J.jobPath(topic)}\n` +
+    `TOPIC=${topic}\nSESSION=${session}\nHUB=${agent}-claude\nJOB=${J.jobPath(topic)}\n` +
     `WORKTREE=${wt ? wt.worktree : "(none — --no-worktree)"}\nBASE=${wt ? wt.baseSha : ""}\n` +
     `ATTACH=tmux attach -t ${session}\n`);
   return 0;

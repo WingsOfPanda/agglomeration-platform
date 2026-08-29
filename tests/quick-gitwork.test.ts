@@ -2,7 +2,7 @@
 import { describe, it, expect } from "vitest";
 import { classifyDirty, finishAutoAction, currentBranch } from "../src/core/gitwork.js";
 import { preSnapshot, createOrResumeBranch, shortstat } from "../src/core/gitwork.js";
-import { finishBranch, stashPush, stashPopByMessage, stashPopOnBranch, findStashRef } from "../src/core/gitwork.js";
+import { finishWork, stashPush, stashPopByMessage, stashPopOnBranch, findStashRef } from "../src/core/gitwork.js";
 import type { Runner, RunResult } from "../src/core/gitwork.js";
 
 /** Fake runner: `replies` maps a "cmd arg arg" key to a scripted RunResult; default {code:0,stdout:""}. */
@@ -273,10 +273,10 @@ describe("shortstat", () => {
   });
 });
 
-describe("finishBranch", () => {
+describe("finishWork under quick's options (auto action + quick: PR branding)", () => {
   it("no remote → keep, restores start branch", () => {
     const { r, calls } = fakeRunner({ "git remote": { code: 0, stdout: "" } });
-    expect(finishBranch(r, { branch: "feat/quick-auth", startBranch: "main", hasGh: true }))
+    expect(finishWork(r, { branch: "feat/quick-auth", base: "main", action: "auto", hasGh: true, titlePrefix: "quick" }))
       .toEqual({ action: "keep", outcome: "kept" });
     expect(calls).toContainEqual(["git", "checkout", "-q", "main"]);
   });
@@ -286,7 +286,7 @@ describe("finishBranch", () => {
       "git push -q -u origin feat/quick-auth": { code: 0, stdout: "" },
       "git remote get-url origin": { code: 0, stdout: "git@example:me/r.git\n" },
     });
-    const res = finishBranch(r, { branch: "feat/quick-auth", startBranch: "main", hasGh: true, title: "quick: feat/quick-auth", body: "b" });
+    const res = finishWork(r, { branch: "feat/quick-auth", base: "main", action: "auto", hasGh: true, titlePrefix: "quick", title: "quick: feat/quick-auth", body: "b" });
     expect(res).toEqual({ action: "pr", outcome: "pr-opened" });
     expect(calls.some((c) => c[0] === "gh" && c[1] === "pr" && c[2] === "create")).toBe(true);
     expect(calls).toContainEqual(["git", "checkout", "-q", "main"]);
@@ -297,7 +297,7 @@ describe("finishBranch", () => {
       "git push -q -u origin feat/quick-auth": { code: 0, stdout: "" },
       "git remote get-url origin": { code: 0, stdout: "git@example:me/r.git\n" },
     });
-    finishBranch(r, { branch: "feat/quick-auth", startBranch: "main", hasGh: true });
+    finishWork(r, { branch: "feat/quick-auth", base: "main", action: "auto", hasGh: true, titlePrefix: "quick" });
     expect(calls.find((c) => c[0] === "gh")).toEqual(["gh", "pr", "create", "--repo", "git@example:me/r.git", "--base", "main", "--head", "feat/quick-auth",
       "--title", "quick: feat/quick-auth", "--body", "Automated quick branch. Review and merge into main."]);
   });
@@ -307,7 +307,7 @@ describe("finishBranch", () => {
       "git push -q -u origin feat/quick-auth": { code: 0, stdout: "" },
       "git remote get-url origin": { code: 0, stdout: "url" },
     });
-    expect(finishBranch(r, { branch: "feat/quick-auth", startBranch: "main", hasGh: false }).outcome).toBe("pr-pushed-no-gh");
+    expect(finishWork(r, { branch: "feat/quick-auth", base: "main", action: "auto", hasGh: false, titlePrefix: "quick" }).outcome).toBe("pr-pushed-no-gh");
     expect(calls.some((c) => c[0] === "gh")).toBe(false);
   });
   it("push fails → pr-failed-kept", () => {
@@ -315,6 +315,6 @@ describe("finishBranch", () => {
       "git remote": { code: 0, stdout: "origin" },
       "git push -q -u origin feat/quick-auth": { code: 1, stdout: "" },
     });
-    expect(finishBranch(r, { branch: "feat/quick-auth", startBranch: "main", hasGh: true }).outcome).toBe("pr-failed-kept");
+    expect(finishWork(r, { branch: "feat/quick-auth", base: "main", action: "auto", hasGh: true, titlePrefix: "quick" }).outcome).toBe("pr-failed-kept");
   });
 });

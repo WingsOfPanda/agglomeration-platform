@@ -37,6 +37,7 @@ describe("autoresearch init --autonomous", () => {
     expect(metricMd).toMatch(/Primary metric:.*accuracy/);
     expect(metricMd).not.toContain("AskUserQuestion");
     expect(existsSync(join(art, "time-budget.txt"))).toBe(true);
+    expect(readFileSync(join(art, "time-budget.txt"), "utf8").trim()).toBe("none");
     expect(existsSync(join(art, "session-start.txt"))).toBe(true);
     expect(readFileSync(join(art, "session-start.txt"), "utf8").trim()).toBe("2026-05-30T00:00:00Z");
     expect(existsSync(join(art, "autonomous.txt"))).toBe(true);

@@ -294,8 +294,7 @@ function onBase(r: Runner, o: FinishWorkOpts): boolean {
 }
 
 /** The one finisher: guard the branch, act, restore the base checkout. Every arm is best-effort —
- *  a finish that cannot do its job records what happened instead of failing the run. The three
- *  exported finishers below are wrappers over this; each keeps its own return shape.
+ *  a finish that cannot do its job records what happened instead of failing the run.
  *  `auto` resolves to `pr` when a remote exists and `keep` when none does (quick's semantics). */
 export function finishWork(r: Runner, o: FinishWorkOpts): FinishWorkResult {
   if (!hasDistinctBranch(r, o.branch, o.base)) return { action: "none", outcome: "no-branch" };
@@ -366,38 +365,4 @@ function prMerge(r: Runner, o: FinishWorkOpts): FinishWorkResult {
     return { action: "pr-merge", outcome: "pr-merged-pull-failed" };
   }
   return { action: "pr-merge", outcome: "pr-merged-pulled" };
-}
-
-export interface FinishOpts {
-  branch: string;
-  startBranch: string;
-  hasGh: boolean;
-  originUrl?: string;
-  title?: string;
-  body?: string;
-}
-export interface FinishResult { action: "pr" | "keep" | "none"; outcome: string; }
-
-/** Auto finish: remote → push + gh PR; none → keep. Always restores the start-branch checkout. Best-effort. */
-export function finishBranch(r: Runner, o: FinishOpts): FinishResult {
-  const res = finishWork(r, { ...o, base: o.startBranch, action: "auto", titlePrefix: "quick" });
-  return { action: res.action === "pr" || res.action === "keep" ? res.action : "none", outcome: res.outcome };
-}
-
-export interface PrMergeOpts {
-  branch: string;
-  base: string;
-  hasGh: boolean;
-  originUrl?: string;
-  title?: string;
-  body?: string;
-}
-export interface PrMergeResult { action: "pr-merge" | "local-merge" | "push-only" | "none"; outcome: string; }
-
-/** bridge's finisher: the pr-merge arm, in bridge's own return shape. */
-export function finishBranchPrMerge(r: Runner, o: PrMergeOpts): PrMergeResult {
-  const res = finishWork(r, { ...o, action: "pr-merge", titlePrefix: "bridge" });
-  // Narrowing only: the pr-merge arm returns exactly these four actions.
-  const a = res.action;
-  return { action: a === "pr-merge" || a === "local-merge" || a === "push-only" ? a : "none", outcome: res.outcome };
 }

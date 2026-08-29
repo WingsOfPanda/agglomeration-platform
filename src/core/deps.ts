@@ -19,10 +19,8 @@ export function tmuxVersionString(): string | null {
   }
 }
 
-export function tmuxVersionOk(versionString?: string): boolean {
-  const v = versionString ?? tmuxVersionString();
-  if (!v) return false;
-  const stripped = v.replace(/^tmux /, "");
+export function tmuxVersionOk(versionString: string): boolean {
+  const stripped = versionString.replace(/^tmux /, "");
   const majorRaw = stripped.split(".")[0] ?? "";
   const major = parseInt(majorRaw.replace(/[^0-9]/g, ""), 10);
   return Number.isInteger(major) && major >= 3;

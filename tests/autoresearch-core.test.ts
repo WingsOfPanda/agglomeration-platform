@@ -657,16 +657,16 @@ describe("autoresearchExperiment", () => {
     expect(AGENT_RE.test("1st")).toBe(false);
   });
 
-  it("renderExperimentPrompt substitutes all 14 tokens literally", () => {
+  it("renderExperimentPrompt substitutes all 13 tokens literally", () => {
     const tpl = "M={{METRIC_BLOCK}} H={{HARDWARE_BLOCK}} O={{OUTBOX_PATH}} T={{TOPIC}} " +
       "E={{EXP_ID}} L={{APPROACH_LABEL}} B={{APPROACH_BRIEF}} D={{BRANCH_DIR}} " +
-      "N={{METRIC_NAME}} S={{TIME_BUDGET_S}} C={{TASK_CONTEXT}} W={{SOTA_BLOCK}} P={{PEERS_BLOCK}} A={{ART_DIR}}";
+      "N={{METRIC_NAME}} S={{TIME_BUDGET_S}} W={{SOTA_BLOCK}} P={{PEERS_BLOCK}} A={{ART_DIR}}";
     const out = renderExperimentPrompt(tpl, {
       metricBlock: "mb", hardwareBlock: "hb", outboxPath: "/o", topicText: "topic",
       expId: "exp-001", approachLabel: "lab", approachBrief: "brief", branchDir: "/bd",
-      metricName: "accuracy", timeBudgetS: "1800", taskContext: "", sotaBlock: "", peersBlock: "", artDir: "/a",
+      metricName: "accuracy", timeBudgetS: "1800", sotaBlock: "", peersBlock: "", artDir: "/a",
     });
-    expect(out).toBe("M=mb H=hb O=/o T=topic E=exp-001 L=lab B=brief D=/bd N=accuracy S=1800 C= W= P= A=/a");
+    expect(out).toBe("M=mb H=hb O=/o T=topic E=exp-001 L=lab B=brief D=/bd N=accuracy S=1800 W= P= A=/a");
   });
 
   it("renderExperimentPrompt treats $-sequences in values as literal", () => {
@@ -740,7 +740,7 @@ describe("autoresearchExperiment", () => {
 function zeroFields() {
   return { metricBlock: "", hardwareBlock: "", outboxPath: "", topicText: "", expId: "",
     approachLabel: "", approachBrief: "", branchDir: "", metricName: "", timeBudgetS: "",
-    taskContext: "", sotaBlock: "", peersBlock: "", artDir: "" };
+    sotaBlock: "", peersBlock: "", artDir: "" };
 }
 
 describe("autoresearch experiment template", () => {
@@ -748,7 +748,7 @@ describe("autoresearch experiment template", () => {
 
   it("contains all 14 placeholders and no stale clone-wars terms", () => {
     for (const t of ["METRIC_BLOCK","HARDWARE_BLOCK","OUTBOX_PATH","TOPIC","EXP_ID","APPROACH_LABEL",
-      "APPROACH_BRIEF","BRANCH_DIR","METRIC_NAME","TIME_BUDGET_S","TASK_CONTEXT","SOTA_BLOCK","PEERS_BLOCK","ART_DIR"]) {
+      "APPROACH_BRIEF","BRANCH_DIR","METRIC_NAME","TIME_BUDGET_S","SOTA_BLOCK","PEERS_BLOCK","ART_DIR"]) {
       expect(tpl).toContain(`{{${t}}}`);
     }
     expect(tpl).not.toMatch(/trooper|commander|master[- ]?yoda|\byoda\b|clone-wars/i);
@@ -771,7 +771,7 @@ describe("autoresearch experiment template", () => {
     const out = renderExperimentPrompt(tpl, {
       metricBlock: "MB", hardwareBlock: "HB", outboxPath: "/o.jsonl", topicText: "the topic",
       expId: "exp-001", approachLabel: "baseline", approachBrief: "do the thing", branchDir: "/bd",
-      metricName: "accuracy", timeBudgetS: "1800", taskContext: "", sotaBlock: "", peersBlock: "", artDir: "/a",
+      metricName: "accuracy", timeBudgetS: "1800", sotaBlock: "", peersBlock: "", artDir: "/a",
     });
     expect(out).not.toMatch(/\{\{[A-Z_]+\}\}/);
   });

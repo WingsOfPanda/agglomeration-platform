@@ -236,7 +236,7 @@ describe("bridge finish", () => {
     expect(await finishRun(["finish", "t"])).toBe(1);
   });
 
-  it("branch mode: writes diff-stats + finish-result via finishBranchPrMerge (pr-merged-pulled)", async () => {
+  it("branch mode: writes diff-stats + finish-result via finishWork's pr-merge arm (pr-merged-pulled)", async () => {
     const exec = bridgeExecDir("t"); mkdirSync(exec, { recursive: true });
     writeFileSync(join(exec, "mode.txt"), "branch\n");
     writeFileSync(join(exec, "branch.txt"), "feat/bridge-t\n");
@@ -361,7 +361,7 @@ describe("bridge branch: branch.txt records the branch the run ACTUALLY ended on
 
   it("STALE REF: a leftover feat/bridge-t + a failed checkout for THIS run → finish refuses, MERGES nothing", async () => {
     // Where bridge's defect bites hardest: its finish MERGES the PR, so an intended-name record
-    // hands the leftover ref to finishBranchPrMerge and ships a merge containing none of this run's work.
+    // hands the leftover ref to finishWork and ships a merge containing none of this run's work.
     const exec = bridgeExecDir("t");
     const cut = fakeRepo({ refExists: true, checkoutOk: false });
     expect(await branchWith("t", "/abs/repoB", cut.r)).toBe(0);

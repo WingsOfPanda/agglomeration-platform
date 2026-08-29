@@ -4,11 +4,11 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { log } from "../core/log.js";
 import { haveCmd, inTmuxSession, tmuxVersionOk, tmuxVersionString } from "../core/deps.js";
-import { paneBorderArgs } from "../core/tmux.js";
+import { ensurePaneBorders } from "../core/tmux.js";
 import { globalRoot, pluginRoot } from "../core/paths.js";
 import { atomicWrite } from "../core/atomic.js";
 import { contractsExist, contractsPath, listAgents, agentBinary, agentConsultValidated } from "../core/contracts.js";
-import { readProviderList, planList, formatActiveFile, formatProviderFile } from "../core/providers.js";
+import { readProviderList, planList, formatProviderFile } from "../core/providers.js";
 import { isoUtc } from "../core/archive.js";
 
 export interface PermissionResult { rc: 0 | 1 | 2; message?: string; configPath?: string; }
@@ -41,15 +41,14 @@ export async function run(args: string[]): Promise<number> {
   return healthCheck();
 }
 
-function partitionAvailable(): { available: string[]; detected: string[]; skipped: string[] } {
-  const available = readProviderList(availablePath());
+function partitionAvailable(): { detected: string[]; skipped: string[] } {
   const detected: string[] = [];
   const skipped: string[] = [];
-  for (const p of available) {
+  for (const p of readProviderList(availablePath())) {
     if (agentConsultValidated(p)) detected.push(p);
     else skipped.push(`${p} (consult_validated: false)`);
   }
-  return { available, detected, skipped };
+  return { detected, skipped };
 }
 
 function listPlan(): number {
@@ -73,7 +72,7 @@ function listSet(providers: string[]): number {
   }
   const root = globalRoot();
   mkdirSync(root, { recursive: true });
-  atomicWrite(activePath(), formatActiveFile(providers, isoUtc()));
+  atomicWrite(activePath(), formatProviderFile(providers, isoUtc(), "active providers selected by user"));
   process.stdout.write(`active set: ${providers.join(", ")} (written to providers-active.txt)\n`);
   return 0;
 }
@@ -102,13 +101,6 @@ function tmuxGlobalOption(name: string): string {
   try { return execFileSync("tmux", ["show-options", "-gv", name], { encoding: "utf8" }).trim(); } catch { return ""; }
 }
 
-/** Apply ap's pane-border globals synchronously (idempotent `set -g`), best-effort. Mirrors spawn's
- *  async ensurePaneBorders() but via the sync tmux calls check already uses, so a fresh install
- *  renders worker labels and check reports green instead of warning about an unset format. */
-function applyPaneBorders(): void {
-  for (const a of paneBorderArgs()) { try { execFileSync("tmux", a, { stdio: "ignore" }); } catch { /* diagnosed below */ } }
-}
-
 /** Self-heal: ~/.ap/<file> config shadows are no longer read (the plugin reads the shipped,
  *  versioned config directly). Back up + remove any leftover shadow so it can't mask shipped
  *  updates. Best-effort and idempotent: no shadow -> no-op. */
@@ -123,7 +115,7 @@ function migrateConfigShadow(): void {
   }
 }
 
-function healthCheck(): number {
+async function healthCheck(): Promise<number> {
   let fail = 0, warn = 0, ok = 0, total = 0;
   const root = globalRoot();
   try { mkdirSync(root, { recursive: true }); } catch { /* writable check below reports it */ }
@@ -135,7 +127,7 @@ function healthCheck(): number {
 
   if (inTmuxSession()) {
     log.ok(`tmux session: ${process.env.TMUX} is set`);
-    applyPaneBorders(); // self-heal: apply the same globals spawn does, so fresh installs render labels + report green
+    await ensurePaneBorders(); // self-heal: apply the same globals spawn does, so fresh installs render labels + report green
     const diag = paneBorderDiagnosis(tmuxGlobalOption("pane-border-status"), tmuxGlobalOption("pane-border-format"));
     if (diag.ok) log.ok(`  ${diag.lines[0]}`);
     else { for (const l of diag.lines) log.warn(l); warn = 1; }

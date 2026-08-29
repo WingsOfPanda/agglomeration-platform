@@ -384,9 +384,7 @@ function tmuxVersionString() {
   }
 }
 function tmuxVersionOk(versionString) {
-  const v = versionString ?? tmuxVersionString();
-  if (!v) return false;
-  const stripped = v.replace(/^tmux /, "");
+  const stripped = versionString.replace(/^tmux /, "");
   const majorRaw = stripped.split(".")[0] ?? "";
   const major = parseInt(majorRaw.replace(/[^0-9]/g, ""), 10);
   return Number.isInteger(major) && major >= 3;
@@ -438,6 +436,146 @@ var init_fsread = __esm({
   "src/core/fsread.ts"() {
     "use strict";
     import_node_fs3 = require("node:fs");
+  }
+});
+
+// src/core/atomic.ts
+function atomicWrite(dest, content) {
+  if (!dest) throw new Error("atomicWrite: missing dest path");
+  const tmp = `${dest}.tmp.${process.pid}.${(0, import_node_crypto2.randomBytes)(4).toString("hex")}`;
+  try {
+    (0, import_node_fs4.writeFileSync)(tmp, content);
+    (0, import_node_fs4.renameSync)(tmp, dest);
+  } catch (e) {
+    try {
+      (0, import_node_fs4.rmSync)(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
+var import_node_fs4, import_node_crypto2;
+var init_atomic = __esm({
+  "src/core/atomic.ts"() {
+    "use strict";
+    import_node_fs4 = require("node:fs");
+    import_node_crypto2 = require("node:crypto");
+  }
+});
+
+// src/core/text.ts
+function splitNonCommentLines(text) {
+  return text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#"));
+}
+var init_text = __esm({
+  "src/core/text.ts"() {
+    "use strict";
+  }
+});
+
+// src/core/roster.ts
+function formatListFile(rows, isoStamp) {
+  const body = rows.map((r) => `${r.provider}	${r.agent}`).join("\n");
+  return `# generated ${isoStamp} by /ap:design
+${body}${rows.length ? "\n" : ""}`;
+}
+function parseListFile(text) {
+  return splitNonCommentLines(text).map((l) => {
+    const [provider, agent] = l.split("	");
+    return { provider, agent };
+  }).filter((r) => r.provider && r.agent);
+}
+function spawnListArg(rows) {
+  return rows.map((r) => `${r.agent}:${r.provider}`).join(",");
+}
+function spawnResultsTsv(results) {
+  if (!results.length) return "";
+  return results.map((r) => `${r.agent}	${r.provider}	${r.rc}	${r.rc === 0 ? "" : "spawn-failed"}`).join("\n") + "\n";
+}
+function spawnTally(rcs) {
+  const ok = rcs.filter((rc) => rc === 0).length;
+  if (ok === rcs.length) return 0;
+  if (ok === 0) return 2;
+  return 1;
+}
+function parsePanesFile(text) {
+  const m = /* @__PURE__ */ new Map();
+  for (const t of splitNonCommentLines(text)) {
+    const [agent, pane, nonce] = t.split("	");
+    if (agent && pane) m.set(agent, { pane, nonce: nonce ?? "" });
+  }
+  return m;
+}
+async function spawnAllBatch(label, topic, art, d) {
+  const listPath = (0, import_node_path2.join)(art, "list.txt");
+  if (!(0, import_node_fs5.existsSync)(listPath)) {
+    log.error(`${label} spawn-all: list.txt missing at ${listPath} (run ${label} init)`);
+    return 2;
+  }
+  const rows = parseListFile((0, import_node_fs5.readFileSync)(listPath, "utf8"));
+  if (rows.length < 2) {
+    log.error(`${label} spawn-all: need >=2 workers in list.txt, got ${rows.length}`);
+    return 2;
+  }
+  const pf = await d.preflight([topic, String(rows.length), "--list", spawnListArg(rows), "--art-dir", art]);
+  if (pf !== 0) {
+    log.error(`${label} spawn-all: preflight failed (rc=${pf})`);
+    return 2;
+  }
+  const panesPath = (0, import_node_path2.join)(art, "preflight-panes.txt");
+  if (!(0, import_node_fs5.existsSync)(panesPath)) {
+    log.error(`${label} spawn-all: preflight wrote no ${panesPath}`);
+    return 2;
+  }
+  const panes = parsePanesFile((0, import_node_fs5.readFileSync)(panesPath, "utf8"));
+  const orphans = rows.filter((r) => !panes.has(r.agent));
+  if (orphans.length) {
+    log.error(`${label} spawn-all: workers missing a preflight pane: ${orphans.map((r) => r.agent).join(", ")}`);
+    return 2;
+  }
+  const cwd = d.repoRoot();
+  const results = await Promise.all(rows.map(async (r) => {
+    const rc2 = await d.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent).pane, "--cwd", cwd, "--preflight-art-dir", art]);
+    return { agent: r.agent, provider: r.provider, rc: rc2 };
+  }));
+  atomicWrite((0, import_node_path2.join)(art, "spawn-results.tsv"), spawnResultsTsv(results));
+  const rc = spawnTally(results.map((r) => r.rc));
+  const nOk = results.filter((r) => r.rc === 0).length;
+  if (rc === 0) log.ok(`${label} spawn-all: ${nOk}/${rows.length} workers ready`);
+  else log.warn(`${label} spawn-all: ${nOk}/${rows.length} workers ready (rc=${rc})`);
+  return rc;
+}
+function paneNonceFor(panesTsv, agent, pane) {
+  const pin = parsePanesFile(panesTsv).get(agent);
+  return pin && pin.pane === pane ? pin.nonce : null;
+}
+function verifyScopeFiles(target, agents) {
+  const out = [];
+  for (const c of agents) if (c !== target) out.push(`${c}_only_items.txt`);
+  if (agents.length >= 3) {
+    for (let i = 0; i < agents.length; i++) {
+      for (let j = i + 1; j < agents.length; j++) {
+        const a = agents[i], b = agents[j];
+        if (a !== target && b !== target) out.push(`${a}+${b}_only.txt`);
+      }
+    }
+  }
+  return out;
+}
+function lastTag(text, tag) {
+  const re = new RegExp(`^${tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}=(.*)$`, "gm");
+  const ms = [...text.matchAll(re)];
+  return ms.length ? ms[ms.length - 1][1].trim() : null;
+}
+var import_node_path2, import_node_fs5;
+var init_roster = __esm({
+  "src/core/roster.ts"() {
+    "use strict";
+    import_node_path2 = require("node:path");
+    import_node_fs5 = require("node:fs");
+    init_atomic();
+    init_log();
+    init_text();
   }
 });
 
@@ -559,7 +697,7 @@ function paneBorderArgs() {
 function windowBorderStatusArgs(target) {
   return ["set-option", "-w", "-t", target, "pane-border-status", "top"];
 }
-function wrapLaunch(launch, hasBashrc = (0, import_node_fs4.existsSync)((0, import_node_path2.join)((0, import_node_os2.homedir)(), ".bashrc"))) {
+function wrapLaunch(launch, hasBashrc = (0, import_node_fs6.existsSync)((0, import_node_path3.join)((0, import_node_os2.homedir)(), ".bashrc"))) {
   return hasBashrc ? `bash -ic 'exec ${launch}'` : launch;
 }
 function sentinelCommand(coloredLabel) {
@@ -643,6 +781,21 @@ async function paneOwned(pane, nonce) {
   if (!NONCE_RE.test(nonce)) return false;
   return ownsPane(await livePaneNonces(), pane, nonce);
 }
+async function killPreflightOrphans(art, deps, label) {
+  const pf = (0, import_node_path3.join)(art, "preflight-panes.txt");
+  if (!(0, import_node_fs6.existsSync)(pf)) return;
+  const live = await deps.livePaneNonces().catch(() => /* @__PURE__ */ new Map());
+  for (const pin of parsePanesFile((0, import_node_fs6.readFileSync)(pf, "utf8")).values()) {
+    if (!ownsPane(live, pin.pane, pin.nonce)) {
+      if (live.has(pin.pane)) log.warn(`${label} pane ${pin.pane} is live but is not ours (nonce mismatch) \u2014 not killing it`);
+      continue;
+    }
+    try {
+      await deps.killPane(pin.pane);
+    } catch {
+    }
+  }
+}
 async function paneNonceSet(pane, nonce) {
   try {
     await run(paneNonceSetArgs(pane, nonce));
@@ -709,11 +862,11 @@ async function killGraceful(pane, pluginRoot2, owned) {
   if (!owned) return;
   const label = await paneOption(pane, "#{@ap_label}") || "worker";
   const color = await paneOption(pane, "#{@ap_color}");
-  const snap = (0, import_node_path2.join)((0, import_node_fs4.mkdtempSync)((0, import_node_path2.join)((0, import_node_os2.tmpdir)(), "cs-snap-")), "snap.txt");
+  const snap = (0, import_node_path3.join)((0, import_node_fs6.mkdtempSync)((0, import_node_path3.join)((0, import_node_os2.tmpdir)(), "cs-snap-")), "snap.txt");
   try {
-    (0, import_node_fs4.writeFileSync)(snap, await run(["capture-pane", "-p", "-e", "-t", pane]));
+    (0, import_node_fs6.writeFileSync)(snap, await run(["capture-pane", "-p", "-e", "-t", pane]));
   } catch {
-    (0, import_node_fs4.writeFileSync)(snap, "");
+    (0, import_node_fs6.writeFileSync)(snap, "");
   }
   await respawn(pane, gracefulRespawnCommand(snap, pluginRoot2, label, color));
 }
@@ -729,7 +882,7 @@ async function preflightLayout(topic, list, opts) {
       const args = [...preflightSplitArgs(flag, prev, e.cwd), sentinel];
       const pane = (await run(args)).trim();
       created.push(pane);
-      const nonce = (0, import_node_crypto2.randomUUID)();
+      const nonce = (0, import_node_crypto3.randomUUID)();
       if (!await paneNonceSet(pane, nonce)) throw new Error(`could not stamp @ap_nonce on ${pane}`);
       await paneLabelSet(pane, e.agent, e.model, topic);
       out.push({ agent: e.agent, pane, nonce });
@@ -750,17 +903,19 @@ async function preflightLayout(topic, list, opts) {
     throw e;
   }
 }
-var import_node_child_process3, import_node_util, import_node_crypto2, import_node_os2, import_node_fs4, import_node_path2, SESSION_NAME_RE, PANE_ID_RE, NONCE_RE, execFileP, splitRight, splitDown, respawn, newSession, newWindow;
+var import_node_child_process3, import_node_util, import_node_crypto3, import_node_os2, import_node_fs6, import_node_path3, SESSION_NAME_RE, PANE_ID_RE, NONCE_RE, execFileP, splitRight, splitDown, respawn, newSession, newWindow;
 var init_tmux = __esm({
   "src/core/tmux.ts"() {
     "use strict";
     import_node_child_process3 = require("node:child_process");
     import_node_util = require("node:util");
-    import_node_crypto2 = require("node:crypto");
+    import_node_crypto3 = require("node:crypto");
     import_node_os2 = require("node:os");
-    import_node_fs4 = require("node:fs");
-    import_node_path2 = require("node:path");
+    import_node_fs6 = require("node:fs");
+    import_node_path3 = require("node:path");
     init_colors();
+    init_log();
+    init_roster();
     SESSION_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
     PANE_ID_RE = /^%\d+$/;
     NONCE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -8105,12 +8260,12 @@ var require_dist = __commonJS({
 
 // src/core/contracts.ts
 function contractsPath() {
-  return (0, import_node_path3.join)(pluginRoot(), "config", "contracts.yaml");
+  return (0, import_node_path4.join)(pluginRoot(), "config", "contracts.yaml");
 }
 function readDoc(p) {
-  if (!(0, import_node_fs5.existsSync)(p)) return {};
+  if (!(0, import_node_fs7.existsSync)(p)) return {};
   try {
-    return (0, import_yaml.parse)((0, import_node_fs5.readFileSync)(p, "utf8")) ?? {};
+    return (0, import_yaml.parse)((0, import_node_fs7.readFileSync)(p, "utf8")) ?? {};
   } catch {
     return {};
   }
@@ -8156,7 +8311,6 @@ function agentTimeoutMultiplier(name) {
   return "1.0";
 }
 function agentConsultValidated(name) {
-  if (!name) throw new TypeError("agentConsultValidated: missing provider arg");
   return inst(name)?.consult_validated === true;
 }
 function consultTimeout(kind) {
@@ -8167,14 +8321,14 @@ function consultTimeout(kind) {
   return POSITIVE_INT.test(String(v)) ? Number(v) : CONSULT_DEFAULTS[kind];
 }
 function contractsExist() {
-  return (0, import_node_fs5.existsSync)(contractsPath());
+  return (0, import_node_fs7.existsSync)(contractsPath());
 }
-var import_node_fs5, import_node_path3, import_yaml, DOCS, CONSULT_DEFAULTS, POSITIVE_INT;
+var import_node_fs7, import_node_path4, import_yaml, DOCS, CONSULT_DEFAULTS, POSITIVE_INT;
 var init_contracts = __esm({
   "src/core/contracts.ts"() {
     "use strict";
-    import_node_fs5 = require("node:fs");
-    import_node_path3 = require("node:path");
+    import_node_fs7 = require("node:fs");
+    import_node_path4 = require("node:path");
     import_yaml = __toESM(require_dist(), 1);
     init_paths();
     DOCS = /* @__PURE__ */ new Map();
@@ -8185,11 +8339,11 @@ var init_contracts = __esm({
 
 // src/core/implement.ts
 function implementArtDir(topic, opts) {
-  return (0, import_node_path4.join)(topicDir(topic, opts), "_implement");
+  return (0, import_node_path5.join)(topicDir(topic, opts), "_implement");
 }
 function deriveTopicFromPath(p) {
   if (!p) return "";
-  let base = (0, import_node_path4.basename)(p);
+  let base = (0, import_node_path5.basename)(p);
   base = base.replace(/^\d{4}-\d{2}-\d{2}-/, "");
   if (base.endsWith("-design.md")) base = base.slice(0, -"-design.md".length);
   else if (base.endsWith(".md")) base = base.slice(0, -".md".length);
@@ -8242,47 +8396,23 @@ function parseImplementArgs(tokens) {
   return { rest: rest.join(" "), branchMode, branchName, topic, target, force };
 }
 function detectProvider(repoRoot2) {
-  return (0, import_node_fs6.existsSync)((0, import_node_path4.join)(repoRoot2, ".claude-plugin", "plugin.json")) ? "claude" : "codex";
+  return (0, import_node_fs8.existsSync)((0, import_node_path5.join)(repoRoot2, ".claude-plugin", "plugin.json")) ? "claude" : "codex";
 }
 function targetCwd(topic, opts) {
-  const f = (0, import_node_path4.join)(implementArtDir(topic, opts), "target_cwd.txt");
-  return (0, import_node_fs6.existsSync)(f) ? (0, import_node_fs6.readFileSync)(f, "utf8").replace(/\n$/, "") : "";
+  const f = (0, import_node_path5.join)(implementArtDir(topic, opts), "target_cwd.txt");
+  return (0, import_node_fs8.existsSync)(f) ? (0, import_node_fs8.readFileSync)(f, "utf8").replace(/\n$/, "") : "";
 }
-var import_node_path4, import_node_fs6, ImplementArgError;
+var import_node_path5, import_node_fs8, ImplementArgError;
 var init_implement = __esm({
   "src/core/implement.ts"() {
     "use strict";
-    import_node_path4 = require("node:path");
-    import_node_fs6 = require("node:fs");
+    import_node_path5 = require("node:path");
+    import_node_fs8 = require("node:fs");
     init_paths();
     init_args();
     ImplementArgError = class extends Error {
       code = 2;
     };
-  }
-});
-
-// src/core/atomic.ts
-function atomicWrite(dest, content) {
-  if (!dest) throw new Error("atomicWrite: missing dest path");
-  const tmp = `${dest}.tmp.${process.pid}.${(0, import_node_crypto3.randomBytes)(4).toString("hex")}`;
-  try {
-    (0, import_node_fs7.writeFileSync)(tmp, content);
-    (0, import_node_fs7.renameSync)(tmp, dest);
-  } catch (e) {
-    try {
-      (0, import_node_fs7.rmSync)(tmp, { force: true });
-    } catch {
-    }
-    throw e;
-  }
-}
-var import_node_fs7, import_node_crypto3;
-var init_atomic = __esm({
-  "src/core/atomic.ts"() {
-    "use strict";
-    import_node_fs7 = require("node:fs");
-    import_node_crypto3 = require("node:crypto");
   }
 });
 
@@ -8295,43 +8425,43 @@ function isoUtc(now = /* @__PURE__ */ new Date()) {
 }
 function stateInit(agent, model, topic) {
   const dir = workerDir(agent, model, topic);
-  (0, import_node_fs8.mkdirSync)(dir, { recursive: true });
-  for (const f of STALE) (0, import_node_fs8.rmSync)((0, import_node_path5.join)(dir, f), { force: true });
-  (0, import_node_fs8.closeSync)((0, import_node_fs8.openSync)((0, import_node_path5.join)(dir, "outbox.jsonl"), "w"));
-  atomicWrite((0, import_node_path5.join)(dir, ".session_id"), `${process.env.CLAUDE_CODE_SESSION_ID ?? "unknown"}
+  (0, import_node_fs9.mkdirSync)(dir, { recursive: true });
+  for (const f of STALE) (0, import_node_fs9.rmSync)((0, import_node_path6.join)(dir, f), { force: true });
+  (0, import_node_fs9.closeSync)((0, import_node_fs9.openSync)((0, import_node_path6.join)(dir, "outbox.jsonl"), "w"));
+  atomicWrite((0, import_node_path6.join)(dir, ".session_id"), `${process.env.CLAUDE_CODE_SESSION_ID ?? "unknown"}
 `);
 }
 function uniqueDest(base) {
-  if (!(0, import_node_fs8.existsSync)(base)) return base;
+  if (!(0, import_node_fs9.existsSync)(base)) return base;
   for (let n = 2; n <= 999; n++) {
     const c = `${base}-${n}`;
-    if (!(0, import_node_fs8.existsSync)(c)) return c;
+    if (!(0, import_node_fs9.existsSync)(c)) return c;
   }
   throw new Error("too many same-second archive collisions; aborting");
 }
 function moveToArchive(src, base) {
   const dest = uniqueDest(base);
-  (0, import_node_fs8.mkdirSync)((0, import_node_path5.dirname)(dest), { recursive: true });
-  (0, import_node_fs8.renameSync)(src, dest);
+  (0, import_node_fs9.mkdirSync)((0, import_node_path6.dirname)(dest), { recursive: true });
+  (0, import_node_fs9.renameSync)(src, dest);
   return dest;
 }
 function stateArchive(agent, model, topic, suffix, opts) {
   const src = workerDir(agent, model, topic);
-  if (!(0, import_node_fs8.existsSync)(src)) return null;
+  if (!(0, import_node_fs9.existsSync)(src)) return null;
   const ts = archiveTs(opts?.now);
-  let base = (0, import_node_path5.join)(globalRoot(), "archive", repoHash(), topic, `${agent}-${model}-${ts}`);
+  let base = (0, import_node_path6.join)(globalRoot(), "archive", repoHash(), topic, `${agent}-${model}-${ts}`);
   if (suffix) base += `-${suffix}`;
   return moveToArchive(src, base);
 }
 function finalizeArchived(td, opts) {
-  if (!(0, import_node_fs8.existsSync)(td)) return;
+  if (!(0, import_node_fs9.existsSync)(td)) return;
   const now = isoUtc(opts?.now);
-  for (const name of (0, import_node_fs8.readdirSync)(td)) {
-    const sj = (0, import_node_path5.join)(td, name, "status.json");
-    if (!(0, import_node_fs8.existsSync)(sj)) continue;
+  for (const name of (0, import_node_fs9.readdirSync)(td)) {
+    const sj = (0, import_node_path6.join)(td, name, "status.json");
+    if (!(0, import_node_fs9.existsSync)(sj)) continue;
     let obj;
     try {
-      obj = JSON.parse((0, import_node_fs8.readFileSync)(sj, "utf8"));
+      obj = JSON.parse((0, import_node_fs9.readFileSync)(sj, "utf8"));
     } catch {
       continue;
     }
@@ -8343,24 +8473,24 @@ function finalizeArchived(td, opts) {
 function archiveTopic(topic, suite, opts) {
   const td = topicDir(topic);
   finalizeArchived(td, opts);
-  const art = (0, import_node_path5.join)(td, `_${suite}`);
+  const art = (0, import_node_path6.join)(td, `_${suite}`);
   let dest = null;
-  if ((0, import_node_fs8.existsSync)(art)) {
-    const base = (0, import_node_path5.join)(globalRoot(), "archive", repoHash(), topic, `_${suite}-${archiveTs(opts?.now)}`);
+  if ((0, import_node_fs9.existsSync)(art)) {
+    const base = (0, import_node_path6.join)(globalRoot(), "archive", repoHash(), topic, `_${suite}-${archiveTs(opts?.now)}`);
     dest = moveToArchive(art, base);
   }
   try {
-    (0, import_node_fs8.rmSync)(td, { recursive: false, force: false });
+    (0, import_node_fs9.rmSync)(td, { recursive: false, force: false });
   } catch {
   }
   return dest;
 }
-var import_node_fs8, import_node_path5, STALE;
+var import_node_fs9, import_node_path6, STALE;
 var init_archive = __esm({
   "src/core/archive.ts"() {
     "use strict";
-    import_node_fs8 = require("node:fs");
-    import_node_path5 = require("node:path");
+    import_node_fs9 = require("node:fs");
+    import_node_path6 = require("node:path");
     init_paths();
     init_atomic();
     STALE = ["identity.md", "inbox.md", "outbox.jsonl", "status.json", "pane.json", ".session_id"];
@@ -8369,26 +8499,26 @@ var init_archive = __esm({
 
 // src/core/ipc.ts
 function inboxPath(i, m, t) {
-  return (0, import_node_path6.join)(workerDir(i, m, t), "inbox.md");
+  return (0, import_node_path7.join)(workerDir(i, m, t), "inbox.md");
 }
 function outboxPath(i, m, t) {
-  return (0, import_node_path6.join)(workerDir(i, m, t), "outbox.jsonl");
+  return (0, import_node_path7.join)(workerDir(i, m, t), "outbox.jsonl");
 }
 function identityPath(i, m, t) {
-  return (0, import_node_path6.join)(workerDir(i, m, t), "identity.md");
+  return (0, import_node_path7.join)(workerDir(i, m, t), "identity.md");
 }
 function statusPath(i, m, t) {
-  return (0, import_node_path6.join)(workerDir(i, m, t), "status.json");
+  return (0, import_node_path7.join)(workerDir(i, m, t), "status.json");
 }
 function paneMetaPath(i, m, t) {
-  return (0, import_node_path6.join)(workerDir(i, m, t), "pane.json");
+  return (0, import_node_path7.join)(workerDir(i, m, t), "pane.json");
 }
 function workerBusyState(i, m, t) {
   const sp = statusPath(i, m, t);
-  if (!(0, import_node_fs9.existsSync)(sp)) return null;
+  if (!(0, import_node_fs10.existsSync)(sp)) return null;
   let text;
   try {
-    text = (0, import_node_fs9.readFileSync)(sp, "utf8");
+    text = (0, import_node_fs10.readFileSync)(sp, "utf8");
   } catch {
     return STATUS_UNREADABLE;
   }
@@ -8404,7 +8534,7 @@ function workerStatusReport(i, m, t) {
 }
 function workerSendGate(i, m, t, label, unit) {
   const outbox = outboxPath(i, m, t);
-  if (!(0, import_node_fs9.existsSync)(outbox)) {
+  if (!(0, import_node_fs10.existsSync)(outbox)) {
     log.error(`${label}: outbox not found at ${outbox} \u2014 was ${i} spawned?`);
     return false;
   }
@@ -8434,8 +8564,8 @@ ${doneInstruction}END_OF_INSTRUCTION
 }
 function identityWrite(i, m, t, opts) {
   const root = pluginRoot();
-  const tplPath = (0, import_node_path6.join)(root, "config", "prompt-templates", "identity.md");
-  if (!(0, import_node_fs9.existsSync)(tplPath)) {
+  const tplPath = (0, import_node_path7.join)(root, "config", "prompt-templates", "identity.md");
+  if (!(0, import_node_fs10.existsSync)(tplPath)) {
     throw new Error(
       `identityWrite: identity template not found at ${tplPath} (resolved pluginRoot=${root}). Set CLAUDE_PLUGIN_ROOT to the ap plugin directory, or run ap from it.`
     );
@@ -8443,7 +8573,7 @@ function identityWrite(i, m, t, opts) {
   const stateDir = workerDir(i, m, t);
   const outbox = outboxPath(i, m, t);
   const blocks = IDENTITY_BLOCKS[opts?.role ?? "worker"];
-  let body = (0, import_node_fs9.readFileSync)(tplPath, "utf8").replaceAll("{{intro}}", blocks.intro).replaceAll("{{role_block}}", blocks.role_block).replaceAll("{{signoff}}", blocks.signoff).replaceAll("{{agent}}", i).replaceAll("{{model}}", m).replaceAll("{{topic}}", t).replaceAll("{{state_dir}}", stateDir);
+  let body = (0, import_node_fs10.readFileSync)(tplPath, "utf8").replaceAll("{{intro}}", blocks.intro).replaceAll("{{role_block}}", blocks.role_block).replaceAll("{{signoff}}", blocks.signoff).replaceAll("{{agent}}", i).replaceAll("{{model}}", m).replaceAll("{{topic}}", t).replaceAll("{{state_dir}}", stateDir);
   body += `
 
 ---
@@ -8477,7 +8607,7 @@ function parseEvent(line) {
 }
 function outboxOffset(path) {
   try {
-    return (0, import_node_fs9.statSync)(path).size;
+    return (0, import_node_fs10.statSync)(path).size;
   } catch {
     return 0;
   }
@@ -8487,13 +8617,13 @@ function readFrom(path, offset) {
     const size = outboxOffset(path);
     const start = size < offset ? 0 : offset;
     if (size <= start) return "";
-    const fd = (0, import_node_fs9.openSync)(path, "r");
+    const fd = (0, import_node_fs10.openSync)(path, "r");
     try {
       const buf = Buffer.alloc(size - start);
-      (0, import_node_fs9.readSync)(fd, buf, 0, buf.length, start);
+      (0, import_node_fs10.readSync)(fd, buf, 0, buf.length, start);
       return buf.toString("utf8");
     } finally {
-      (0, import_node_fs9.closeSync)(fd);
+      (0, import_node_fs10.closeSync)(fd);
     }
   } catch {
     return "";
@@ -8561,13 +8691,12 @@ async function outboxWaitSince(i, m, t, offset, events, timeoutSec, live, clock 
 function outboxDump(i, m, t) {
   return readIfExists(outboxPath(i, m, t));
 }
-function paneMetaWrite(i, m, t, paneId, nonce, opts) {
-  const spawned = isoUtc(opts?.now);
-  atomicWrite(paneMetaPath(i, m, t), JSON.stringify({ pane_id: paneId, pane_nonce: nonce, agent: i, model: m, spawned_at: spawned }) + "\n");
+function paneMetaWrite(i, m, t, paneId, nonce) {
+  atomicWrite(paneMetaPath(i, m, t), JSON.stringify({ pane_id: paneId, pane_nonce: nonce, agent: i, model: m, spawned_at: isoUtc() }) + "\n");
 }
 function readPaneJson(dir) {
   try {
-    return JSON.parse((0, import_node_fs9.readFileSync)((0, import_node_path6.join)(dir, "pane.json"), "utf8"));
+    return JSON.parse((0, import_node_fs10.readFileSync)((0, import_node_path7.join)(dir, "pane.json"), "utf8"));
   } catch {
     return null;
   }
@@ -8592,18 +8721,18 @@ function parseLastPane(text) {
 }
 function resolveModel(agent, topic) {
   const td = topicDir(topic);
-  if (!(0, import_node_fs9.existsSync)(td)) return null;
-  const d = (0, import_node_fs9.readdirSync)(td, { withFileTypes: true }).find((e) => e.isDirectory() && e.name.startsWith(`${agent}-`));
+  if (!(0, import_node_fs10.existsSync)(td)) return null;
+  const d = (0, import_node_fs10.readdirSync)(td, { withFileTypes: true }).find((e) => e.isDirectory() && e.name.startsWith(`${agent}-`));
   if (!d) return null;
   const model = d.name.slice(agent.length + 1);
   return readPaneJson(workerDir(agent, model, topic))?.model ?? model;
 }
-var import_node_fs9, import_node_path6, TERMINAL_WORKER_STATES, STATUS_UNREADABLE, SENDER_RE, IDENTITY_BLOCKS, TERMINAL_EVENTS, realClock, PANE_DIED_NOTE;
+var import_node_fs10, import_node_path7, TERMINAL_WORKER_STATES, STATUS_UNREADABLE, SENDER_RE, IDENTITY_BLOCKS, TERMINAL_EVENTS, realClock, PANE_DIED_NOTE;
 var init_ipc = __esm({
   "src/core/ipc.ts"() {
     "use strict";
-    import_node_fs9 = require("node:fs");
-    import_node_path6 = require("node:path");
+    import_node_fs10 = require("node:fs");
+    import_node_path7 = require("node:path");
     init_paths();
     init_atomic();
     init_archive();
@@ -8678,21 +8807,21 @@ function isJobCommand(s) {
   return JOB_COMMANDS.includes(s);
 }
 function jobPath(topic) {
-  return (0, import_node_path7.join)(jobDir(topic), "job.json");
+  return (0, import_node_path8.join)(jobDir(topic), "job.json");
 }
 function worktreePathFor(root, topic) {
-  return (0, import_node_path7.join)(root, ".ap", "worktrees", topic);
+  return (0, import_node_path8.join)(root, ".ap", "worktrees", topic);
 }
 function worktreeProvenanced(path, root) {
-  return path.startsWith((0, import_node_path7.join)(root, ".ap", "worktrees") + import_node_path7.sep) && path.length > (0, import_node_path7.join)(root, ".ap", "worktrees").length + import_node_path7.sep.length;
+  return path.startsWith((0, import_node_path8.join)(root, ".ap", "worktrees") + import_node_path8.sep) && path.length > (0, import_node_path8.join)(root, ".ap", "worktrees").length + import_node_path8.sep.length;
 }
 function mainCheckoutRoot(root) {
-  const recovered = (0, import_node_path7.dirname)((0, import_node_path7.dirname)((0, import_node_path7.dirname)(root)));
+  const recovered = (0, import_node_path8.dirname)((0, import_node_path8.dirname)((0, import_node_path8.dirname)(root)));
   return worktreeProvenanced(root, recovered) ? recovered : root;
 }
 function worktreeTopic(root) {
   if (mainCheckoutRoot(root) === root) return "";
-  const topic = (0, import_node_path7.basename)(root);
+  const topic = (0, import_node_path8.basename)(root);
   return validateSlug(topic) ? topic : "";
 }
 function keepOnBranch(topic, targetCwd2) {
@@ -8700,16 +8829,16 @@ function keepOnBranch(topic, targetCwd2) {
   const wt = parseJob(readIfExists(jobPath(topic)))?.worktree ?? "";
   if (!wt || mainCheckoutRoot(wt) === wt) return false;
   try {
-    return (0, import_node_fs10.realpathSync)(wt) === (0, import_node_fs10.realpathSync)(targetCwd2);
+    return (0, import_node_fs11.realpathSync)(wt) === (0, import_node_fs11.realpathSync)(targetCwd2);
   } catch {
     return false;
   }
 }
 function orphanedTopicState(topic, root, recovered) {
   if (!topic || recovered === root || !validateSlug(topic)) return null;
-  if ((0, import_node_fs10.existsSync)(topicDir(topic, { cwd: recovered }))) return null;
+  if ((0, import_node_fs11.existsSync)(topicDir(topic, { cwd: recovered }))) return null;
   const stranded = topicDir(topic, { cwd: root });
-  return (0, import_node_fs10.existsSync)(stranded) ? stranded : null;
+  return (0, import_node_fs11.existsSync)(stranded) ? stranded : null;
 }
 function orphanRefusal(topic, stranded, recovered) {
   return [
@@ -8743,10 +8872,10 @@ async function withMainCheckout(fn) {
   }
 }
 function jobCursorPath(topic) {
-  return (0, import_node_path7.join)(jobDir(topic), "cursor.txt");
+  return (0, import_node_path8.join)(jobDir(topic), "cursor.txt");
 }
 function panesEvidencePath(topic) {
-  return (0, import_node_path7.join)(jobDir(topic), "panes.json");
+  return (0, import_node_path8.join)(jobDir(topic), "panes.json");
 }
 function formatJob(j) {
   return JSON.stringify(j) + "\n";
@@ -8816,7 +8945,7 @@ function seedExpired(rec, now) {
   return now - t > bootstrapDeadlineS(rec.model) * 1e3;
 }
 function workerLivenessPath(topic) {
-  return (0, import_node_path7.join)(jobDir(topic), "worker-liveness.json");
+  return (0, import_node_path8.join)(jobDir(topic), "worker-liveness.json");
 }
 function parseWorkerMisses(text) {
   let o;
@@ -8959,12 +9088,12 @@ function jobBrief(j) {
     `gate's answer, or discarding finished work because a gate went unanswered, are both failures.`
   ].join("\n");
 }
-var import_node_fs10, import_node_path7, JOB_COMMANDS, WORKER_DEAD_EVENT, WORKER_MISS_LIMIT, BOOTSTRAP_GRACE_S, LIVENESS_OVER_STATES;
+var import_node_fs11, import_node_path8, JOB_COMMANDS, WORKER_DEAD_EVENT, WORKER_MISS_LIMIT, BOOTSTRAP_GRACE_S, LIVENESS_OVER_STATES;
 var init_job = __esm({
   "src/core/job.ts"() {
     "use strict";
-    import_node_fs10 = require("node:fs");
-    import_node_path7 = require("node:path");
+    import_node_fs11 = require("node:fs");
+    import_node_path8 = require("node:path");
     init_fsread();
     init_log();
     init_paths();
@@ -8978,122 +9107,6 @@ var init_job = __esm({
     WORKER_MISS_LIMIT = 3;
     BOOTSTRAP_GRACE_S = 60;
     LIVENESS_OVER_STATES = /* @__PURE__ */ new Set(["done", "complete", "error"]);
-  }
-});
-
-// src/core/text.ts
-function splitNonCommentLines(text) {
-  return text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#"));
-}
-var init_text = __esm({
-  "src/core/text.ts"() {
-    "use strict";
-  }
-});
-
-// src/core/roster.ts
-function formatListFile(rows, isoStamp) {
-  const body = rows.map((r) => `${r.provider}	${r.agent}`).join("\n");
-  return `# generated ${isoStamp} by /ap:design
-${body}${rows.length ? "\n" : ""}`;
-}
-function parseListFile(text) {
-  return splitNonCommentLines(text).map((l) => {
-    const [provider, agent] = l.split("	");
-    return { provider, agent };
-  }).filter((r) => r.provider && r.agent);
-}
-function spawnListArg(rows) {
-  return rows.map((r) => `${r.agent}:${r.provider}`).join(",");
-}
-function spawnResultsTsv(results) {
-  if (!results.length) return "";
-  return results.map((r) => `${r.agent}	${r.provider}	${r.rc}	${r.rc === 0 ? "" : "spawn-failed"}`).join("\n") + "\n";
-}
-function spawnTally(rcs) {
-  const ok = rcs.filter((rc) => rc === 0).length;
-  if (ok === rcs.length) return 0;
-  if (ok === 0) return 2;
-  return 1;
-}
-function parsePanesFile(text) {
-  const m = /* @__PURE__ */ new Map();
-  for (const t of splitNonCommentLines(text)) {
-    const [agent, pane, nonce] = t.split("	");
-    if (agent && pane) m.set(agent, { pane, nonce: nonce ?? "" });
-  }
-  return m;
-}
-async function spawnAllBatch(label, topic, art, d) {
-  const listPath = (0, import_node_path8.join)(art, "list.txt");
-  if (!(0, import_node_fs11.existsSync)(listPath)) {
-    log.error(`${label} spawn-all: list.txt missing at ${listPath} (run ${label} init)`);
-    return 2;
-  }
-  const rows = parseListFile((0, import_node_fs11.readFileSync)(listPath, "utf8"));
-  if (rows.length < 2) {
-    log.error(`${label} spawn-all: need >=2 workers in list.txt, got ${rows.length}`);
-    return 2;
-  }
-  const pf = await d.preflight([topic, String(rows.length), "--list", spawnListArg(rows), "--art-dir", art]);
-  if (pf !== 0) {
-    log.error(`${label} spawn-all: preflight failed (rc=${pf})`);
-    return 2;
-  }
-  const panesPath = (0, import_node_path8.join)(art, "preflight-panes.txt");
-  if (!(0, import_node_fs11.existsSync)(panesPath)) {
-    log.error(`${label} spawn-all: preflight wrote no ${panesPath}`);
-    return 2;
-  }
-  const panes = parsePanesFile((0, import_node_fs11.readFileSync)(panesPath, "utf8"));
-  const orphans = rows.filter((r) => !panes.has(r.agent));
-  if (orphans.length) {
-    log.error(`${label} spawn-all: workers missing a preflight pane: ${orphans.map((r) => r.agent).join(", ")}`);
-    return 2;
-  }
-  const cwd = d.repoRoot();
-  const results = await Promise.all(rows.map(async (r) => {
-    const rc2 = await d.spawn([r.agent, r.provider, topic, "--target-pane", panes.get(r.agent).pane, "--cwd", cwd, "--preflight-art-dir", art]);
-    return { agent: r.agent, provider: r.provider, rc: rc2 };
-  }));
-  atomicWrite((0, import_node_path8.join)(art, "spawn-results.tsv"), spawnResultsTsv(results));
-  const rc = spawnTally(results.map((r) => r.rc));
-  const nOk = results.filter((r) => r.rc === 0).length;
-  if (rc === 0) log.ok(`${label} spawn-all: ${nOk}/${rows.length} workers ready`);
-  else log.warn(`${label} spawn-all: ${nOk}/${rows.length} workers ready (rc=${rc})`);
-  return rc;
-}
-function paneNonceFor(panesTsv, agent, pane) {
-  const pin = parsePanesFile(panesTsv).get(agent);
-  return pin && pin.pane === pane ? pin.nonce : null;
-}
-function verifyScopeFiles(target, agents) {
-  const out = [];
-  for (const c of agents) if (c !== target) out.push(`${c}_only_items.txt`);
-  if (agents.length >= 3) {
-    for (let i = 0; i < agents.length; i++) {
-      for (let j = i + 1; j < agents.length; j++) {
-        const a = agents[i], b = agents[j];
-        if (a !== target && b !== target) out.push(`${a}+${b}_only.txt`);
-      }
-    }
-  }
-  return out;
-}
-function lastTag(text, tag) {
-  const re = new RegExp(`^${tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}=(.*)$`, "gm");
-  const ms = [...text.matchAll(re)];
-  return ms.length ? ms[ms.length - 1][1].trim() : null;
-}
-var import_node_path8, import_node_fs11;
-var init_roster = __esm({
-  "src/core/roster.ts"() {
-    "use strict";
-    import_node_path8 = require("node:path");
-    import_node_fs11 = require("node:fs");
-    init_atomic();
-    init_log();
-    init_text();
   }
 });
 
@@ -9458,9 +9471,6 @@ function runForensics(command, artDirFor, topic) {
   } else log.info(`${command} forensics: no mechanical findings (no file written)`);
   return 0;
 }
-function bootstrapFailureArgs(ev, failureReportPath) {
-  return ev ? { reason: "error_event", detail: JSON.stringify(ev), failureReportPath } : { reason: "timeout", detail: NO_EVENT_SENTINEL, failureReportPath };
-}
 function captureSpawnFailure(opts) {
   try {
     const ctx = `worker=${opts.agent}-${opts.model}`;
@@ -9534,6 +9544,7 @@ var spawn_exports = {};
 __export(spawn_exports, {
   READY_EVENTS: () => READY_EVENTS,
   SPAWN_KILLED_EXIT: () => SPAWN_KILLED_EXIT,
+  bootstrapFailureDetail: () => bootstrapFailureDetail,
   bootstrapFailureReason: () => bootstrapFailureReason,
   paneStateStamp: () => paneStateStamp,
   parseSpawnArgs: () => parseSpawnArgs,
@@ -9819,7 +9830,14 @@ ${ob}
         { agent, model, topic, paneId: pane, reason, eventLine: ev ? JSON.stringify(ev) : void 0, readyTimeout },
         { workerDir, capturePane: (p, n) => capturePane(p, n), atomicWriteSync: (d, c) => (0, import_node_fs15.writeFileSync)(d, c), isWritableDir: (d) => (0, import_node_fs15.existsSync)(d), now: () => isoUtc() }
       );
-      captureSpawnFailure({ agent, model, topic, ...bootstrapFailureArgs(ev ?? null, fr.ok ? fr.path : void 0), reason });
+      captureSpawnFailure({
+        agent,
+        model,
+        topic,
+        reason,
+        detail: bootstrapFailureDetail(ev),
+        failureReportPath: fr.ok ? fr.path : void 0
+      });
       await killNow(pane);
       writeWorkerStatus(agent, model, topic, "error", "bootstrap-failed");
       const arch = stateArchive(agent, model, topic, "FAILED");
@@ -9847,7 +9865,7 @@ ${sessionLine}  state:   ${workerDir(agent, model, topic)}
     throw e;
   }
 }
-var import_node_fs15, import_node_crypto4, import_node_path11, sleep, READY_EVENTS, SPAWN_KILLED_EXIT;
+var import_node_fs15, import_node_crypto4, import_node_path11, sleep, READY_EVENTS, SPAWN_KILLED_EXIT, bootstrapFailureDetail;
 var init_spawn = __esm({
   "src/commands/spawn.ts"() {
     "use strict";
@@ -9874,6 +9892,7 @@ var init_spawn = __esm({
     sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     READY_EVENTS = ["ready", "error"];
     SPAWN_KILLED_EXIT = 143;
+    bootstrapFailureDetail = (ev) => ev ? JSON.stringify(ev) : NO_EVENT_SENTINEL;
   }
 });
 
@@ -10331,9 +10350,6 @@ function formatProviderFile(providers, isoStamp, subtitle) {
 # ${subtitle}
 ${providers.join("\n")}${providers.length ? "\n" : ""}`;
 }
-function formatActiveFile(providers, isoStamp) {
-  return formatProviderFile(providers, isoStamp, "active providers selected by user");
-}
 var import_node_fs19;
 var init_providers = __esm({
   "src/core/providers.ts"() {
@@ -10378,14 +10394,13 @@ async function run7(args) {
   return healthCheck();
 }
 function partitionAvailable() {
-  const available = readProviderList(availablePath());
   const detected = [];
   const skipped = [];
-  for (const p of available) {
+  for (const p of readProviderList(availablePath())) {
     if (agentConsultValidated(p)) detected.push(p);
     else skipped.push(`${p} (consult_validated: false)`);
   }
-  return { available, detected, skipped };
+  return { detected, skipped };
 }
 function listPlan() {
   const { detected, skipped } = partitionAvailable();
@@ -10407,7 +10422,7 @@ function listSet(providers) {
   }
   const root = globalRoot();
   (0, import_node_fs20.mkdirSync)(root, { recursive: true });
-  atomicWrite(activePath(), formatActiveFile(providers, isoUtc()));
+  atomicWrite(activePath(), formatProviderFile(providers, isoUtc(), "active providers selected by user"));
   process.stdout.write(`active set: ${providers.join(", ")} (written to providers-active.txt)
 `);
   return 0;
@@ -10433,14 +10448,6 @@ function tmuxGlobalOption(name) {
     return "";
   }
 }
-function applyPaneBorders() {
-  for (const a of paneBorderArgs()) {
-    try {
-      (0, import_node_child_process4.execFileSync)("tmux", a, { stdio: "ignore" });
-    } catch {
-    }
-  }
-}
 function migrateConfigShadow() {
   for (const f of ["contracts.yaml", "agents.yaml"]) {
     const shadow = (0, import_node_path15.join)(globalRoot(), f);
@@ -10453,7 +10460,7 @@ function migrateConfigShadow() {
     }
   }
 }
-function healthCheck() {
+async function healthCheck() {
   let fail = 0, warn = 0, ok = 0, total = 0;
   const root = globalRoot();
   try {
@@ -10470,7 +10477,7 @@ function healthCheck() {
   } else log.ok(`tmux: ${ver}`);
   if (inTmuxSession()) {
     log.ok(`tmux session: ${process.env.TMUX} is set`);
-    applyPaneBorders();
+    await ensurePaneBorders();
     const diag = paneBorderDiagnosis(tmuxGlobalOption("pane-border-status"), tmuxGlobalOption("pane-border-format"));
     if (diag.ok) log.ok(`  ${diag.lines[0]}`);
     else {
@@ -10993,15 +11000,6 @@ function prMerge(r, o) {
   }
   return { action: "pr-merge", outcome: "pr-merged-pulled" };
 }
-function finishBranch(r, o) {
-  const res = finishWork(r, { ...o, base: o.startBranch, action: "auto", titlePrefix: "quick" });
-  return { action: res.action === "pr" || res.action === "keep" ? res.action : "none", outcome: res.outcome };
-}
-function finishBranchPrMerge(r, o) {
-  const res = finishWork(r, { ...o, action: "pr-merge", titlePrefix: "bridge" });
-  const a = res.action;
-  return { action: a === "pr-merge" || a === "local-merge" || a === "push-only" ? a : "none", outcome: res.outcome };
-}
 var import_node_child_process5, import_node_fs23, import_node_path18;
 var init_gitwork = __esm({
   "src/core/gitwork.ts"() {
@@ -11175,14 +11173,13 @@ function clearAgentStrikes(art, agent) {
   for (const n of names) if (n.startsWith(strikePrefix(agent))) (0, import_node_fs24.rmSync)((0, import_node_path19.join)(art, n), { force: true });
 }
 function artifactBackstop(opts) {
-  const text = opts.text ?? readIfExists(opts.artifact);
   const accept = lastTag(opts.stateText, ARTIFACT_ACCEPT_KEY);
-  if (hasArtifactSentinel(text) || accept === "unchecked" || WAIT_ACCEPTED.has(accept ?? "")) {
+  if (hasArtifactSentinel(opts.text) || accept === "unchecked" || WAIT_ACCEPTED.has(accept ?? "")) {
     clearArtifactStrikes(opts.art, opts.agent, opts.artifact);
     return "complete";
   }
   if (accept === "expired" || lastTag(opts.stateText, opts.key) === "failed") return "drop";
-  const { strikes, total } = recordStillWriting(opts.art, opts.agent, opts.artifact, Buffer.byteLength(text));
+  const { strikes, total } = recordStillWriting(opts.art, opts.agent, opts.artifact, Buffer.byteLength(opts.text));
   if (strikes >= NO_GROWTH_STRIKES || total >= MAX_REFUSALS) {
     const reason = strikes >= NO_GROWTH_STRIKES ? `${strikes} refusals with no growth` : `${total} refusals (cap ${MAX_REFUSALS})`;
     log.warn(`${opts.label}: ${opts.agent} still has no ${END_OF_ARTIFACT} after ${reason} \u2014 dropping as empty`);
@@ -11257,8 +11254,7 @@ function boundWait(d) {
   return d.wait ?? ((i, m, t, off, ev, to) => liveOutboxWait(i, m, t, off, ev, to, d.clock));
 }
 function latestTerminal(events) {
-  for (let k = events.length - 1; k >= 0; k--) if (TERMINAL_EVENTS.includes(events[k].event)) return events[k];
-  return null;
+  return events.filter((e) => TERMINAL_EVENTS.includes(e.event)).at(-1) ?? null;
 }
 async function confirmedTerminal(i, m, t, offset, timeoutS, d) {
   const { now } = clockOf(d);
@@ -11498,17 +11494,8 @@ function baseOf(p) {
 }
 function stripEmphasis(tok) {
   let s = tok;
-  for (; ; ) {
-    let next = s;
-    for (const m of EMPHASIS) {
-      if (s.length > 2 && s.startsWith(m) && s.endsWith(m)) {
-        next = s.slice(1, -1);
-        break;
-      }
-    }
-    if (next === s) return s;
-    s = next;
-  }
+  while (s.length > 2 && /^([*_])[\s\S]*\1$/.test(s)) s = s.slice(1, -1);
+  return s;
 }
 function pathTokensFrom(text) {
   const out = [];
@@ -11542,12 +11529,7 @@ function sectionPathsByLine(docText, header, prefix) {
   for (const record of sectionLines(docText, header, prefix)) {
     if (TABLE_ROW.test(record)) {
       if (SEPARATOR_ROW.test(record)) continue;
-      let line = record;
-      line = line.replace(/^[ \t]*\|[ \t]*/, "");
-      line = line.replace(/[ \t]*\|.*$/, "");
-      line = line.replace(/`/g, "");
-      line = line.replace(/^[ \t]+/, "");
-      line = line.replace(/[ \t]+$/, "");
+      const line = record.replace(/^[ \t]*\|[ \t]*/, "").replace(/[ \t]*\|.*$/, "").replace(/`/g, "").trim();
       if (HEADER_CELL.test(line)) continue;
       if (HAS_SLASH.test(line) || ENDS_WITH_EXT.test(line)) out.push({ line: record, paths: [line] });
     } else {
@@ -11561,14 +11543,10 @@ function componentsPathsByLine(docText) {
   return sectionPathsByLine(docText, COMPONENTS_HEADER, ANY_COMPONENTS_PREFIX);
 }
 function extractComponentsPaths(docText) {
-  const out = [];
-  for (const rec of componentsPathsByLine(docText)) out.push(...rec.paths);
-  return out;
+  return componentsPathsByLine(docText).flatMap((r) => r.paths);
 }
 function extractTestingPaths(docText) {
-  const out = [];
-  for (const rec of sectionPathsByLine(docText, TESTING_HEADER, ANY_TESTING_PREFIX)) out.push(...rec.paths);
-  return out;
+  return sectionPathsByLine(docText, TESTING_HEADER, ANY_TESTING_PREFIX).flatMap((r) => r.paths);
 }
 function fileShaped(tok) {
   return ENDS_WITH_EXT.test(tok) || tok.endsWith("/");
@@ -11653,7 +11631,7 @@ function matchDiffAgainstComponents(diffPaths, compPaths) {
   }
   return out;
 }
-var import_node_fs28, import_node_path22, COMPONENTS_HEADER, TESTING_HEADER, OTHER_H2, ANY_COMPONENTS_PREFIX, ANY_TESTING_PREFIX, TABLE_ROW, SEPARATOR_ROW, BULLET_MARKER, HEADER_CELL, HAS_SLASH, ENDS_WITH_EXT, ON_BOX_TAG, MD_LINK, EMPHASIS;
+var import_node_fs28, import_node_path22, COMPONENTS_HEADER, TESTING_HEADER, OTHER_H2, ANY_COMPONENTS_PREFIX, ANY_TESTING_PREFIX, TABLE_ROW, SEPARATOR_ROW, BULLET_MARKER, HEADER_CELL, HAS_SLASH, ENDS_WITH_EXT, ON_BOX_TAG, MD_LINK;
 var init_implementScope = __esm({
   "src/core/implementScope.ts"() {
     "use strict";
@@ -11672,7 +11650,6 @@ var init_implementScope = __esm({
     ENDS_WITH_EXT = /\.[a-zA-Z]+$/;
     ON_BOX_TAG = "[on-box]";
     MD_LINK = /\[[^\]\n]*\]\(([^)\s]*)\)/g;
-    EMPHASIS = ["*", "_"];
   }
 });
 
@@ -12015,10 +11992,12 @@ async function finishWith(topic, r, hasGh) {
   }
   const brief = readIfExists((0, import_node_path23.join)(quickArtDir(topic), "task-brief.md"));
   const verify = readField((0, import_node_path23.join)(exec, "verify-result.txt"));
-  const res = finishBranch(r, {
+  const res = finishWork(r, {
     branch,
-    startBranch,
+    base: startBranch,
+    action: "auto",
     hasGh,
+    titlePrefix: "quick",
     title: `quick: ${branch}`,
     body: `${brief}
 
@@ -12225,17 +12204,15 @@ function resolveDrilldownPath(scratchDir, section, agent) {
   }
   return (0, import_node_path25.join)(scratchDir, `${cand}.md`);
 }
-function designExportDocPath(repoRoot2, basename6) {
-  return (0, import_node_path25.join)(repoRoot2, "docs", "ap", "specs", basename6);
-}
 function exportDocTo(topic, destRoot, opts) {
   const ddir = (0, import_node_path25.join)(designArtDir(topic, opts), "design-doc");
   if (!(0, import_node_fs31.existsSync)(ddir)) return null;
   const hits = (0, import_node_fs31.readdirSync)(ddir).filter((f) => f.endsWith(`-${topic}-design.md`)).sort();
   if (hits.length === 0) return null;
   const basename6 = hits[hits.length - 1];
-  const dest = designExportDocPath(destRoot, basename6);
-  (0, import_node_fs31.mkdirSync)((0, import_node_path25.join)(destRoot, "docs", "ap", "specs"), { recursive: true });
+  const dir = (0, import_node_path25.join)(destRoot, "docs", "ap", "specs");
+  (0, import_node_fs31.mkdirSync)(dir, { recursive: true });
+  const dest = (0, import_node_path25.join)(dir, basename6);
   atomicWrite(dest, (0, import_node_fs31.readFileSync)((0, import_node_path25.join)(ddir, basename6), "utf8"));
   return dest;
 }
@@ -12508,10 +12485,6 @@ function researchState(ev, findingsText) {
   if (ev.event === "done") return findingsStatus(findingsText);
   return "failed";
 }
-function lastKeyedValue(text, key) {
-  const matches = text.split("\n").filter((l) => l.startsWith(`${key}=`));
-  return matches.length ? matches[matches.length - 1].slice(key.length + 1).trim() : null;
-}
 function composeResearchPrompt(topicText, findingsPath) {
   const topic = topicText.trim();
   return [
@@ -12561,7 +12534,7 @@ function verifyState(ev, verifyText) {
 }
 function gateState(workers, key) {
   return workers.map((p) => {
-    const last = lastKeyedValue(p.stateText ?? "", key);
+    const last = lastTag(p.stateText ?? "", key);
     const status = last === "question" ? "question" : p.doneExists && last !== null ? "terminal" : "pending";
     return { agent: p.agent, status };
   });
@@ -12570,7 +12543,7 @@ function gateAnomalies(workers, key) {
   const out = [];
   for (const p of workers) {
     if (!p.doneExists) continue;
-    const last = lastKeyedValue(p.stateText ?? "", key);
+    const last = lastTag(p.stateText ?? "", key);
     if (last === "timeout" || last === "failed" || last === "missing") out.push({ agent: p.agent, value: last });
   }
   return out;
@@ -12633,6 +12606,7 @@ var init_designTurn = __esm({
     "use strict";
     init_designDiff();
     init_artifact();
+    init_roster();
     RESEARCH_BLOCKERS = 'IF YOU ARE BLOCKED:\n- If a referenced path, file, command, env var, or assumption is wrong or missing, do NOT guess\n  or silently work around it. Append a question event to your outbox and stop:\n  {"event":"question","message":"<what you need and why>","ts":"<iso>"}\n  The Hub will reply via your inbox, then re-engage you.\n';
   }
 });
@@ -12862,6 +12836,45 @@ function surveyPhaseArtifact(row, w, ctx) {
     })
   };
 }
+function diffVerb(row, topic, o) {
+  const label = `${row.cmd} diff`;
+  const art = row.artDir(topic);
+  if (!(0, import_node_fs33.existsSync)(art)) {
+    log.error(`${label}: ${art} not found${o.notFoundHint ?? ""}`);
+    return 1;
+  }
+  if ((0, import_node_fs33.existsSync)((0, import_node_path27.join)(art, "diff.md"))) {
+    log.error(`${label}: diff.md exists; rm to retry`);
+    return 1;
+  }
+  const listPath = (0, import_node_path27.join)(art, "list.txt");
+  if (!(0, import_node_fs33.existsSync)(listPath)) {
+    log.error(`${label}: list.txt missing \u2014 run ${row.cmd} init first`);
+    return 1;
+  }
+  const rows = parseListFile((0, import_node_fs33.readFileSync)(listPath, "utf8"));
+  if (rows.length < 2) {
+    log.error(`${label}: need >=2 workers in list.txt, got ${rows.length}`);
+    return 1;
+  }
+  const workers = [];
+  for (const r of rows) {
+    const f = row.artifactFor(art, r.agent, r.provider, topic);
+    if (!(0, import_node_fs33.existsSync)(f)) {
+      log.error(`${label}: ${r.agent} ${o.artifactNoun} missing: ${f}`);
+      return 1;
+    }
+    const { text, verdict } = surveyPhaseArtifact(row, r, { topic, label, emptyIsComplete: false });
+    if (verdict === "still-writing") return 1;
+    workers.push({ name: r.agent, findings: verdict === "drop" ? "" : text });
+  }
+  const result = diffFindings(workers, o.headings);
+  for (const file of result.files) atomicWrite((0, import_node_path27.join)(art, file.filename), file.content);
+  atomicWrite((0, import_node_path27.join)(art, "diff.md"), result.diffMd);
+  const summary = result.files.filter((f) => f.filename.endsWith("_only_items.txt") || f.filename === "consensus.txt").map((f) => `${f.filename.replace(/\.txt$/, "")}=${f.content.split("\n").filter(Boolean).length}`).join(" ");
+  log.ok(`${label}: wrote ${(0, import_node_path27.join)(art, "diff.md")} (${rows.length} workers) ${summary}`);
+  return 0;
+}
 function rowFor(cmd, stem) {
   return (cmd === "explore" ? PHASES : DESIGN_PHASES).find((p) => p.phase === stem) ?? null;
 }
@@ -12915,6 +12928,7 @@ var init_phaseTable = __esm({
     init_atomic();
     init_fsread();
     init_design();
+    init_designDiff();
     init_roster();
     init_explore();
     init_paths();
@@ -13088,25 +13102,23 @@ function emitSections(secs) {
   return secs.map((s) => s.header + "\n" + (s.comment ? s.comment + "\n" : "") + (s.acc.length ? s.acc.join("\n") + "\n" : "")).join("\n");
 }
 function adjudicate(input) {
-  return input.workers.length === 2 ? adjudicateN2(input) : adjudicateNge3(input);
+  return input.agents.length === 2 ? adjudicateN2(input) : adjudicateNge3(input);
 }
 function adjudicateN2(input) {
-  const [p0, p1] = input.workers;
-  const c0 = p0.agent, c1 = p1.agent;
-  const uc = (s) => s.toUpperCase();
+  const [c0, c1] = input.agents;
   const vs0 = input.vs[c0] ?? "skipped";
   const vs1 = input.vs[c1] ?? "skipped";
   const v0 = parseVerdicts(input.verify[c0] ?? "");
   const v1 = parseVerdicts(input.verify[c1] ?? "");
   const cross = [];
-  for (const v of v1) if (v.tag === "AGREE") cross.push(`- [${v.cite}] ${v.text} \u2014 ${uc(c1)} confirmed: ${v.evidence || v.text}`);
-  for (const v of v0) if (v.tag === "AGREE") cross.push(`- [${v.cite}] ${v.text} \u2014 ${uc(c0)} confirmed: ${v.evidence || v.text}`);
+  for (const v of v1) if (v.tag === "AGREE") cross.push(`- [${v.cite}] ${v.text} \u2014 ${c1.toUpperCase()} confirmed: ${v.evidence || v.text}`);
+  for (const v of v0) if (v.tag === "AGREE") cross.push(`- [${v.cite}] ${v.text} \u2014 ${c0.toUpperCase()} confirmed: ${v.evidence || v.text}`);
   const adjudicated = [];
-  for (const v of v1) if (v.tag !== "AGREE") adjudicated.push(`- PENDING: [${v.cite}] ${v.text} \u2014 ${uc(c1)} ${v.tag}: ${v.evidence || v.text}`);
-  for (const v of v0) if (v.tag !== "AGREE") adjudicated.push(`- PENDING: [${v.cite}] ${v.text} \u2014 ${uc(c0)} ${v.tag}: ${v.evidence || v.text}`);
+  for (const v of v1) if (v.tag !== "AGREE") adjudicated.push(`- PENDING: [${v.cite}] ${v.text} \u2014 ${c1.toUpperCase()} ${v.tag}: ${v.evidence || v.text}`);
+  for (const v of v0) if (v.tag !== "AGREE") adjudicated.push(`- PENDING: [${v.cite}] ${v.text} \u2014 ${c0.toUpperCase()} ${v.tag}: ${v.evidence || v.text}`);
   const notVerified = [];
-  if (vs0 !== "ok" && vs0 !== "skipped") for (const l of nonEmptyLines(input.buckets[`${c1}_only_items.txt`])) notVerified.push(`- ${l} \u2014 ${uc(c0)} verify dispatch ${vs0}`);
-  if (vs1 !== "ok" && vs1 !== "skipped") for (const l of nonEmptyLines(input.buckets[`${c0}_only_items.txt`])) notVerified.push(`- ${l} \u2014 ${uc(c1)} verify dispatch ${vs1}`);
+  if (vs0 !== "ok" && vs0 !== "skipped") for (const l of nonEmptyLines(input.buckets[`${c1}_only_items.txt`])) notVerified.push(`- ${l} \u2014 ${c0.toUpperCase()} verify dispatch ${vs0}`);
+  if (vs1 !== "ok" && vs1 !== "skipped") for (const l of nonEmptyLines(input.buckets[`${c0}_only_items.txt`])) notVerified.push(`- ${l} \u2014 ${c1.toUpperCase()} verify dispatch ${vs1}`);
   return emitSections([
     { header: "## Cross-verified", acc: cross },
     { header: "## Adjudicated", acc: adjudicated, comment: N2_ADJUDICATED_NOTE },
@@ -13122,10 +13134,10 @@ function classify(na, nd, nu, k, owners) {
   return "CONTESTED";
 }
 function adjudicateNge3(input) {
-  const agents = input.workers.map((p) => p.agent);
+  const agents = input.agents;
   const n = agents.length;
   const verdictMap = /* @__PURE__ */ new Map();
-  for (const p of input.workers) for (const v of parseVerdicts(input.verify[p.agent] ?? "")) verdictMap.set(`${p.agent}__${v.cite}`, v.tag);
+  for (const a of agents) for (const v of parseVerdicts(input.verify[a] ?? "")) verdictMap.set(`${a}__${v.cite}`, v.tag);
   const cross = [], contested = [], refuted = [], pending = [];
   const allCsv = agents.join("+");
   const consensus = nonEmptyLines(input.buckets["consensus.txt"]).map((l) => `- ${l} [${allCsv}]`);
@@ -13417,46 +13429,7 @@ async function diffRun(rest) {
     log.error("usage: design diff <topic>");
     return 2;
   }
-  const art = designArtDir(topic);
-  if (!(0, import_node_fs35.existsSync)(art)) {
-    log.error(`design diff: ${art} not found`);
-    return 1;
-  }
-  if ((0, import_node_fs35.existsSync)((0, import_node_path29.join)(art, "diff.md"))) {
-    log.error("design diff: diff.md exists; rm to retry");
-    return 1;
-  }
-  const listPath = (0, import_node_path29.join)(art, "list.txt");
-  if (!(0, import_node_fs35.existsSync)(listPath)) {
-    log.error("design diff: list.txt missing \u2014 run design init first");
-    return 1;
-  }
-  const rows = parseListFile((0, import_node_fs35.readFileSync)(listPath, "utf8"));
-  if (rows.length < 2) {
-    log.error(`design diff: need >=2 workers in list.txt, got ${rows.length}`);
-    return 1;
-  }
-  const workers = [];
-  for (const r of rows) {
-    const f = RESEARCH.artifactFor(art, r.agent, r.provider, topic);
-    if (!(0, import_node_fs35.existsSync)(f)) {
-      log.error(`design diff: ${r.agent} findings.md missing: ${f}`);
-      return 1;
-    }
-    const { text, verdict } = surveyPhaseArtifact(RESEARCH, r, {
-      topic,
-      label: "design diff",
-      emptyIsComplete: false
-    });
-    if (verdict === "still-writing") return 1;
-    workers.push({ name: r.agent, findings: verdict === "drop" ? "" : text });
-  }
-  const result = diffFindings(workers);
-  for (const file of result.files) atomicWrite((0, import_node_path29.join)(art, file.filename), file.content);
-  atomicWrite((0, import_node_path29.join)(art, "diff.md"), result.diffMd);
-  const summary = result.files.filter((f) => f.filename.endsWith("_only_items.txt") || f.filename === "consensus.txt").map((f) => `${f.filename.replace(/\.txt$/, "")}=${f.content.split("\n").filter(Boolean).length}`).join(" ");
-  log.ok(`design diff: wrote ${(0, import_node_path29.join)(art, "diff.md")} (${rows.length} workers) ${summary}`);
-  return 0;
+  return diffVerb(RESEARCH, topic, { artifactNoun: "findings.md" });
 }
 async function verifySendWith(topic, agent, provider, d) {
   const art = designArtDir(topic);
@@ -13540,7 +13513,7 @@ async function adjudicateRun(rest) {
     addBucket("consensus.txt");
     for (let i = 0; i < agents.length; i++) for (let j = i + 1; j < agents.length; j++) addBucket(`${agents[i]}+${agents[j]}_only.txt`);
   }
-  const input = { workers: rows.map((r) => ({ agent: r.agent })), verify, vs, buckets };
+  const input = { agents, verify, vs, buckets };
   atomicWrite((0, import_node_path29.join)(art, "adjudicated-draft.md"), adjudicate(input));
   log.ok(`design adjudicate: wrote ${(0, import_node_path29.join)(art, "adjudicated-draft.md")}`);
   log.info("  cp adjudicated-draft.md -> adjudicated.md, then resolve every '- PENDING:' line");
@@ -13749,7 +13722,6 @@ var init_design2 = __esm({
     init_env();
     init_forensics();
     init_artifact();
-    init_designDiff();
     init_designAdjudicate();
     init_designSkill();
     init_fsread();
@@ -14095,17 +14067,8 @@ function usage3() {
   log.error("usage: implement <init|audit|set-provider|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|verify-tests|summary|finish|forensics|archive|find-latest-doc> ...");
   return 2;
 }
-async function findLatestDocRun(rest) {
-  let cwd;
-  for (let i = 0; i < rest.length; i++) {
-    if (rest[i] === "--cwd") {
-      cwd = rest[i + 1];
-      i++;
-    } else if (rest[i].startsWith("--cwd=")) {
-      cwd = rest[i].slice("--cwd=".length);
-    }
-  }
-  const stateDir = repoStateDir(cwd ? { cwd } : void 0);
+async function findLatestDocRun() {
+  const stateDir = repoStateDir();
   let best = null;
   if ((0, import_node_fs36.existsSync)(stateDir)) for (const topic of (0, import_node_fs36.readdirSync)(stateDir)) {
     const dd = (0, import_node_path31.join)(stateDir, topic, "_design", "design-doc");
@@ -14201,7 +14164,11 @@ async function dispatchVerb9(args) {
     case "archive":
       return archiveRun2(rest);
     case "find-latest-doc":
-      return findLatestDocRun(rest);
+      if (rest.length) {
+        log.error("implement find-latest-doc: takes no arguments");
+        return 2;
+      }
+      return findLatestDocRun();
     default:
       return usage3();
   }
@@ -15401,7 +15368,6 @@ var init_autoresearchExperiment = __esm({
       ["{{BRANCH_DIR}}", "branchDir"],
       ["{{METRIC_NAME}}", "metricName"],
       ["{{TIME_BUDGET_S}}", "timeBudgetS"],
-      ["{{TASK_CONTEXT}}", "taskContext"],
       ["{{SOTA_BLOCK}}", "sotaBlock"],
       ["{{PEERS_BLOCK}}", "peersBlock"],
       ["{{ART_DIR}}", "artDir"]
@@ -15439,14 +15405,7 @@ function seedLib(art, configRoot) {
   try {
     const seedDir = (0, import_node_path33.join)(configRoot, "config", "autoresearch-lib-seed");
     if (!(0, import_node_fs38.existsSync)(seedDir)) return;
-    const dest = (0, import_node_path33.join)(art, "lib");
-    (0, import_node_fs38.mkdirSync)(dest, { recursive: true });
-    for (const name of (0, import_node_fs38.readdirSync)(seedDir)) {
-      const src = (0, import_node_path33.join)(seedDir, name);
-      if (!(0, import_node_fs38.statSync)(src).isFile()) continue;
-      const target = (0, import_node_path33.join)(dest, name);
-      if (!(0, import_node_fs38.existsSync)(target)) (0, import_node_fs38.copyFileSync)(src, target);
-    }
+    (0, import_node_fs38.cpSync)(seedDir, (0, import_node_path33.join)(art, "lib"), { recursive: true, force: false });
   } catch {
   }
 }
@@ -15589,12 +15548,8 @@ function hashContent(content) {
 }
 function recomputedFromOutput(stdout, metricFrom, readJson) {
   if (metricFrom === "marker") {
-    const lines = stdout.split("\n").map((l) => l.trim());
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const m = lines[i].match(MARKER_RE);
-      if (m) return parseFloat(m[1]);
-    }
-    return null;
+    const m = stdout.split("\n").map((l) => l.trim().match(MARKER_RE)).filter((x) => x !== null).at(-1);
+    return m ? parseFloat(m[1]) : null;
   }
   const raw = readJson(metricFrom);
   if (raw === null) return null;
@@ -15985,9 +15940,6 @@ function decayWeight(score, createdTs, now, halfLifeDays) {
 function isExpired(createdTs, now, maxAgeDays) {
   return elapsedDays(createdTs, now) >= maxAgeDays;
 }
-function semanticFingerprint(draft) {
-  return fingerprint(draft);
-}
 function mergeLesson(existing, draft, _now, policy) {
   const runId = draft?.provenance?.run_id;
   const seen = runId == null || existing.corroborating_runs.includes(runId);
@@ -16043,7 +15995,7 @@ function retrieveLessons(store, ctx, policy, now) {
     w: decayWeight(l.score, l.created_ts, now, policy.halfLifeDays) * outcomeWeight(l)
   })).sort((a, b) => b.w - a.w).map((x) => x.l);
   const k = policy.k;
-  const riskBudget = ctx.riskBudget ?? 1;
+  const riskBudget = 1;
   const distinctOps = new Set(ranked.map((l) => l.operator)).size;
   const floor = Math.min(policy.diversityFloor, distinctOps);
   const out = [];
@@ -16201,9 +16153,6 @@ function readLessons(io, path) {
   }
   return out;
 }
-function serialize(store) {
-  return store.map((l) => JSON.stringify(l)).join("\n") + "\n";
-}
 function writeLessonsAtFinalize(io, opts) {
   const { storeRoot, repoHash: repoHash2, metricFamily, drafts, verdicts, policy, now } = opts;
   const path = lessonsPath(storeRoot, repoHash2, metricFamily);
@@ -16216,19 +16165,18 @@ function writeLessonsAtFinalize(io, opts) {
     const verdict = verdicts[i];
     const gated = filterLesson(draft, verdict, policy, now);
     if (gated.decision === "reject" || !gated.normalized) continue;
-    const fp = semanticFingerprint(draft);
-    const at = byId.get(fp);
+    const at = byId.get(gated.normalized.id);
     if (at !== void 0) {
       store[at] = mergeLesson(store[at], draft, now, policy);
     } else {
-      byId.set(fp, store.length);
+      byId.set(gated.normalized.id, store.length);
       store.push(gated.normalized);
     }
     mutated = true;
   }
   if (!mutated) return;
   io.mkdir((0, import_node_path39.join)(storeRoot, scopeKey(repoHash2, metricFamily)));
-  io.writeAtomic(path, serialize(store));
+  io.writeAtomic(path, store.map((l) => JSON.stringify(l)).join("\n") + "\n");
 }
 function retrieveForDispatch(io, opts) {
   const { storeRoot, repoHash: repoHash2, metricFamily, objective, direction, policy, now } = opts;
@@ -16239,8 +16187,7 @@ function retrieveForDispatch(io, opts) {
     repoHash: repoHash2,
     metricFamily,
     objective,
-    direction,
-    riskBudget: opts.riskBudget
+    direction
   };
   return retrieveLessons(store, ctx, policy, now).map((l) => renderLesson(l));
 }
@@ -17251,9 +17198,6 @@ function frameMetric(objective) {
     min_acceptable: "(not set)"
   };
 }
-function defaultTimeBudget(_objective) {
-  return "none";
-}
 var MINIMIZE_METRICS, MINIMIZE_WORDS;
 var init_autoresearchArbiter = __esm({
   "src/core/autoresearchArbiter.ts"() {
@@ -17620,7 +17564,7 @@ async function initWith4(args, deps) {
     atomicWrite((0, import_node_path45.join)(art, "metric.md"), formatMetricBlock(frameMetric(p.topic)));
   }
   if (resolvedBudget === void 0 && autonomous) {
-    resolvedBudget = resolveTimeBudget(defaultTimeBudget(p.topic));
+    resolvedBudget = "none";
   }
   if (resolvedBudget !== void 0) {
     atomicWrite((0, import_node_path45.join)(art, "time-budget.txt"), resolvedBudget + "\n");
@@ -17770,6 +17714,30 @@ async function dropWorkerWith(rest, deps, opts) {
 `);
   return 0;
 }
+function validityTarget(verb, pos, deps) {
+  const [topic, agent, expId] = pos;
+  assertSlug("agent", agent);
+  if (!EXP_ID_RE.test(expId)) {
+    log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`);
+    return { rc: 2 };
+  }
+  const art = autoresearchArtDir(topic, deps.opts);
+  const result = deps.readResult(art, agent, expId);
+  if (result === null) {
+    log.error(`autoresearch ${verb}: result.json missing for ${agent}/${expId}`);
+    return { rc: 1 };
+  }
+  return { rc: null, art, topic, agent, expId, result };
+}
+function takeStdoutFile(args) {
+  const pos = [];
+  let stdoutFile;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--stdout-file") stdoutFile = args[++i];
+    else if (!args[i].startsWith("--")) pos.push(args[i]);
+  }
+  return { pos, stdoutFile };
+}
 async function verifyPlanWith(args, deps) {
   const authorize = args.includes("--authorize-rerun");
   const pos = args.filter((a) => !a.startsWith("--"));
@@ -17777,18 +17745,9 @@ async function verifyPlanWith(args, deps) {
     log.error("autoresearch verify-plan: usage: <topic> <agent> <exp-id> [--authorize-rerun]");
     return 2;
   }
-  const [topic, agent, expId] = pos;
-  assertSlug("agent", agent);
-  if (!EXP_ID_RE.test(expId)) {
-    log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`);
-    return 2;
-  }
-  const art = autoresearchArtDir(topic, deps.opts);
-  const result = deps.readResult(art, agent, expId);
-  if (result === null) {
-    log.error(`autoresearch verify-plan: result.json missing for ${agent}/${expId}`);
-    return 1;
-  }
+  const t = validityTarget("verify-plan", pos, deps);
+  if (t.rc !== null) return t.rc;
+  const { art, agent, expId, result } = t;
   const block = parseVerifyBlock(result);
   const manifest = deps.readManifest(art, agent, expId);
   const plan = planVerify({ block, manifest, authorizeRerun: authorize, readInput: (rel) => deps.readInput(art, agent, expId, rel) });
@@ -17805,14 +17764,7 @@ async function verifyPlanWith(args, deps) {
 }
 async function verifyCheckWith(args, deps) {
   const runFailed = args.includes("--run-failed");
-  let stdoutFile;
-  const pos = [];
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--stdout-file") {
-      stdoutFile = args[++i];
-    } else if (args[i] === "--run-failed") {
-    } else if (!args[i].startsWith("--")) pos.push(args[i]);
-  }
+  const { pos, stdoutFile } = takeStdoutFile(args);
   if (pos.length !== 3) {
     log.error("autoresearch verify-check: usage: <topic> <agent> <exp-id> (--stdout-file <path> | --run-failed)");
     return 2;
@@ -17821,18 +17773,9 @@ async function verifyCheckWith(args, deps) {
     log.error("autoresearch verify-check: need --stdout-file <path> or --run-failed");
     return 2;
   }
-  const [topic, agent, expId] = pos;
-  assertSlug("agent", agent);
-  if (!EXP_ID_RE.test(expId)) {
-    log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`);
-    return 2;
-  }
-  const art = autoresearchArtDir(topic, deps.opts);
-  const result = deps.readResult(art, agent, expId);
-  if (result === null) {
-    log.error(`autoresearch verify-check: result.json missing for ${agent}/${expId}`);
-    return 1;
-  }
+  const t = validityTarget("verify-check", pos, deps);
+  if (t.rc !== null) return t.rc;
+  const { art, agent, expId, result } = t;
   const reported = typeof result.metric_value === "number" ? result.metric_value : null;
   const block = parseVerifyBlock(result);
   const metricFrom = block?.metric_from ?? "marker";
@@ -17855,18 +17798,9 @@ async function inspectPlanWith(args, deps) {
     log.error("autoresearch inspect-plan: usage: <topic> <agent> <exp-id> [--authorize-inspect]");
     return 2;
   }
-  const [topic, agent, expId] = pos;
-  assertSlug("agent", agent);
-  if (!EXP_ID_RE.test(expId)) {
-    log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`);
-    return 2;
-  }
-  const art = autoresearchArtDir(topic, deps.opts);
-  const result = deps.readResult(art, agent, expId);
-  if (result === null) {
-    log.error(`autoresearch inspect-plan: result.json missing for ${agent}/${expId}`);
-    return 1;
-  }
+  const t = validityTarget("inspect-plan", pos, deps);
+  if (t.rc !== null) return t.rc;
+  const { art, topic, agent, expId, result } = t;
   const out = deps.stdout ?? stdoutLine;
   const term = (verdict, reason) => {
     deps.writeRow(art, agent, expId, { expId, agent, verdict, reason, reimplMetric: "", ts: deps.now() });
@@ -17892,14 +17826,7 @@ async function inspectPlanWith(args, deps) {
 async function inspectCheckWith(args, deps) {
   const runFailed = args.includes("--run-failed");
   const integrityRefuted = args.includes("--integrity-refuted");
-  let stdoutFile;
-  const pos = [];
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--stdout-file") {
-      stdoutFile = args[++i];
-    } else if (args[i] === "--run-failed" || args[i] === "--integrity-refuted") {
-    } else if (!args[i].startsWith("--")) pos.push(args[i]);
-  }
+  const { pos, stdoutFile } = takeStdoutFile(args);
   if (pos.length !== 3) {
     log.error("autoresearch inspect-check: usage: <topic> <agent> <exp-id> (--stdout-file <path> | --run-failed) [--integrity-refuted]");
     return 2;
@@ -17908,18 +17835,9 @@ async function inspectCheckWith(args, deps) {
     log.error("autoresearch inspect-check: need --stdout-file <path> or --run-failed or --integrity-refuted");
     return 2;
   }
-  const [topic, agent, expId] = pos;
-  assertSlug("agent", agent);
-  if (!EXP_ID_RE.test(expId)) {
-    log.error(`exp-id must match 'exp-[0-9]+'; got '${expId}'`);
-    return 2;
-  }
-  const art = autoresearchArtDir(topic, deps.opts);
-  const result = deps.readResult(art, agent, expId);
-  if (result === null) {
-    log.error(`autoresearch inspect-check: result.json missing for ${agent}/${expId}`);
-    return 1;
-  }
+  const t = validityTarget("inspect-check", pos, deps);
+  if (t.rc !== null) return t.rc;
+  const { art, agent, expId, result } = t;
   const reported = typeof result.metric_value === "number" ? result.metric_value : null;
   const { c1Epsilon } = resolveValidityThresholds(deps.readMetricMd(art));
   let reimplMetric = null;
@@ -17934,16 +17852,12 @@ async function inspectCheckWith(args, deps) {
   return 0;
 }
 function parseExperimentSendArgs(args) {
-  let contextFile, timeout, parentId, gen, operator;
+  let timeout, parentId, gen, operator;
   let i = 0;
   for (; i < args.length; i++) {
     const a = args[i];
     if (!a.startsWith("--")) break;
-    if (a === "--context-file" || a.startsWith("--context-file=")) {
-      const r = kvParse(a, args[i + 1]);
-      contextFile = r.value;
-      i += r.shift - 1;
-    } else if (a === "--timeout" || a.startsWith("--timeout=")) {
+    if (a === "--timeout" || a.startsWith("--timeout=")) {
       const r = kvParse(a, args[i + 1]);
       timeout = r.value;
       i += r.shift - 1;
@@ -17966,7 +17880,7 @@ function parseExperimentSendArgs(args) {
   const pos = args.slice(i);
   if (pos.length !== 5) return { topic: "", agent: "", expId: "", approachLabel: "", approachBrief: "", badArgs: true };
   const [topic, agent, expId, approachLabel, approachBrief] = pos;
-  return { topic, agent, expId, approachLabel, approachBrief, contextFile, timeout, parentId, gen, operator };
+  return { topic, agent, expId, approachLabel, approachBrief, timeout, parentId, gen, operator };
 }
 function gatherPeers(art, self) {
   const workersFile = (0, import_node_path45.join)(art, "workers.txt");
@@ -18006,7 +17920,7 @@ async function experimentSendWith(args, deps) {
     return rc;
   };
   const p = parseExperimentSendArgs(args);
-  if (p.badArgs) return fail("usage: [--context-file path] [--timeout N] [--parent exp-id] <topic> <agent> <exp-id> <approach-label> <approach-brief>");
+  if (p.badArgs) return fail("usage: [--timeout N] [--parent exp-id] <topic> <agent> <exp-id> <approach-label> <approach-brief>");
   const { topic, agent, expId, approachLabel, approachBrief } = p;
   if (!EXP_ID_RE.test(expId)) return fail(`exp-id must match exp-[0-9]+; got '${expId}'`);
   if (!AGENT_RE.test(agent)) return fail(`agent must match [a-z][a-z0-9-]*; got '${agent}'`);
@@ -18018,14 +17932,6 @@ async function experimentSendWith(args, deps) {
   }
   if (p.operator !== void 0 && !DISPATCH_OPERATORS.includes(p.operator)) {
     return fail(`--operator must be one of ${DISPATCH_OPERATORS.join("|")}; got '${p.operator}'`);
-  }
-  let taskContext = "";
-  if (p.contextFile) {
-    try {
-      taskContext = (0, import_node_fs43.readFileSync)(p.contextFile, "utf8");
-    } catch {
-      return fail(`cannot read --context-file: ${p.contextFile}`);
-    }
   }
   const art = autoresearchArtDir(topic, opts);
   if (!(0, import_node_fs43.existsSync)(art)) return fail(`topic state dir missing: ${art} (was autoresearch init run?)`, 1);
@@ -18083,7 +17989,6 @@ async function experimentSendWith(args, deps) {
       branchDir,
       metricName,
       timeBudgetS,
-      taskContext,
       sotaBlock,
       peersBlock,
       artDir: art
@@ -18388,28 +18293,23 @@ async function statusBriefWith(args, v = {}) {
     }
   }
   const { scoreboardMd, completion } = gatherCompletion(art);
-  const vraw = readIfExistsOrNull(verificationTsvPath(art));
-  const verdicts = vraw === null ? void 0 : parseVerdicts2(vraw);
-  const sraw = readIfExistsOrNull(sanityTsvPath(art));
-  let suspects;
-  if (sraw !== null) {
-    suspects = {};
-    for (const r of parseSanityRows(sraw)) if (r.expId && r.agent && r.flag) (suspects[`${r.agent}/${r.expId}`] ??= []).push(r.flag);
-  }
-  const craw = readIfExistsOrNull(coverageTsvPath(art));
-  let coverage;
-  if (craw !== null) {
-    coverage = [];
-    for (const r of parseCoverageRows(craw)) if (r.family) coverage.push(r);
-  }
-  const lraw = readIfExistsOrNull(lineageTsvPath(art));
-  let multiChange;
-  if (lraw !== null) {
-    multiChange = {};
-    for (const r of parseLineageRows(lraw)) if (r.expId && r.agent && r.verdict === "improve-multi") multiChange[`${r.agent}/${r.expId}`] = true;
-  }
-  const iraw = readIfExistsOrNull(inspectionTsvPath(art));
-  const inspections = iraw === null ? void 0 : parseInspections(iraw);
+  const ifPresent = (path, parse3) => {
+    const raw = readIfExistsOrNull(path);
+    return raw === null ? void 0 : parse3(raw);
+  };
+  const verdicts = ifPresent(verificationTsvPath(art), parseVerdicts2);
+  const suspects = ifPresent(sanityTsvPath(art), (raw) => {
+    const m = {};
+    for (const r of parseSanityRows(raw)) if (r.expId && r.agent && r.flag) (m[`${r.agent}/${r.expId}`] ??= []).push(r.flag);
+    return m;
+  });
+  const coverage = ifPresent(coverageTsvPath(art), (raw) => parseCoverageRows(raw).filter((r) => r.family));
+  const multiChange = ifPresent(lineageTsvPath(art), (raw) => {
+    const m = {};
+    for (const r of parseLineageRows(raw)) if (r.expId && r.agent && r.verdict === "improve-multi") m[`${r.agent}/${r.expId}`] = true;
+    return m;
+  });
+  const inspections = ifPresent(inspectionTsvPath(art), parseInspections);
   const latest = p.latestAgent && p.latestExp ? { agent: p.latestAgent, exp: p.latestExp } : void 0;
   out(buildStatusBrief({ workers, scoreboardMd, completion, latest, verdicts, suspects, coverage, multiChange, inspections }));
   return 0;
@@ -18528,18 +18428,12 @@ async function finalizeWith(args, deps) {
   log.ok("finalize: cleanup complete");
   return 0;
 }
-function parseRefineArgs(args) {
-  if (args.length !== 4) return { topic: "", agent: "", expId: "", text: "", ok: false };
-  const [topic, agent, expId, text] = args;
-  return { topic, agent, expId, text, ok: true };
-}
 async function refineWith(args, deps) {
-  const p = parseRefineArgs(args);
-  if (!p.ok) {
+  if (args.length !== 4) {
     log.error("autoresearch refine: usage: <topic> <agent> <exp-id> <refinement-text>");
     return 2;
   }
-  const { topic, agent, expId, text } = p;
+  const [topic, agent, expId, text] = args;
   if (!AGENT_RE.test(agent)) {
     log.error(`agent must match [a-z][a-z0-9-]*; got '${agent}'`);
     return 2;
@@ -18671,23 +18565,10 @@ async function teardownWith(args, deps) {
     log.error(`${art} not found`);
     return 1;
   }
-  const pf = (0, import_node_path45.join)(art, "preflight-panes.txt");
-  if ((0, import_node_fs43.existsSync)(pf)) {
-    const live = await deps.livePaneNonces().catch(() => /* @__PURE__ */ new Map());
-    for (const pin of parsePanesFile((0, import_node_fs43.readFileSync)(pf, "utf8")).values()) {
-      if (!ownsPane(live, pin.pane, pin.nonce)) {
-        if (live.has(pin.pane)) log.warn(`[teardown] pane ${pin.pane} is live but is not ours (nonce mismatch) \u2014 not killing it`);
-        continue;
-      }
-      try {
-        await deps.killPane(pin.pane);
-      } catch {
-      }
-    }
-    try {
-      (0, import_node_fs43.rmSync)(pf, { force: true });
-    } catch {
-    }
+  await killPreflightOrphans(art, deps, "[teardown]");
+  try {
+    (0, import_node_fs43.rmSync)((0, import_node_path45.join)(art, "preflight-panes.txt"), { force: true });
+  } catch {
   }
   if (panesOnly) {
     try {
@@ -19011,15 +18892,9 @@ async function consensusWith(args, deps) {
     } catch {
       continue;
     }
-    let newest = "";
     for (const exp of names) {
       const parsed = readJsonOr((0, import_node_path45.join)(experimentDir(art, agent, exp), "result.json"), null);
-      if (parsed === null) continue;
-      if (parsed.status !== "ok") continue;
-      if (exp > newest) {
-        newest = exp;
-        latestOk[agent] = parsed;
-      }
+      if (parsed?.status === "ok") latestOk[agent] = parsed;
     }
   }
   if (Object.keys(latestOk).length === 0) {
@@ -20555,46 +20430,11 @@ async function diffExploreRun(rest) {
     log.error("usage: explore diff <topic>");
     return 2;
   }
-  const art = exploreArtDir(topic);
-  if (!(0, import_node_fs45.existsSync)(art)) {
-    log.error(`explore diff: ${art} not found \u2014 run explore init`);
-    return 1;
-  }
-  if ((0, import_node_fs45.existsSync)((0, import_node_path48.join)(art, "diff.md"))) {
-    log.error("explore diff: diff.md exists; rm to retry");
-    return 1;
-  }
-  const listPath = (0, import_node_path48.join)(art, "list.txt");
-  if (!(0, import_node_fs45.existsSync)(listPath)) {
-    log.error("explore diff: list.txt missing \u2014 run explore init first");
-    return 1;
-  }
-  const rows = parseListFile((0, import_node_fs45.readFileSync)(listPath, "utf8"));
-  if (rows.length < 2) {
-    log.error(`explore diff: need >=2 workers in list.txt, got ${rows.length}`);
-    return 1;
-  }
-  const workers = [];
-  for (const r of rows) {
-    const f = RESEARCH2.artifactFor(art, r.agent, r.provider, topic);
-    if (!(0, import_node_fs45.existsSync)(f)) {
-      log.error(`explore diff: ${r.agent} findings missing: ${f}`);
-      return 1;
-    }
-    const { text, verdict } = surveyPhaseArtifact(RESEARCH2, r, {
-      topic,
-      label: "explore diff",
-      emptyIsComplete: false
-    });
-    if (verdict === "still-writing") return 1;
-    workers.push({ name: r.agent, findings: verdict === "drop" ? "" : text });
-  }
-  const result = diffFindings(workers, ["Approaches"]);
-  for (const file of result.files) atomicWrite((0, import_node_path48.join)(art, file.filename), file.content);
-  atomicWrite((0, import_node_path48.join)(art, "diff.md"), result.diffMd);
-  const summary = result.files.filter((f) => f.filename.endsWith("_only_items.txt") || f.filename === "consensus.txt").map((f) => `${f.filename.replace(/\.txt$/, "")}=${f.content.split("\n").filter(Boolean).length}`).join(" ");
-  log.ok(`explore diff: wrote ${(0, import_node_path48.join)(art, "diff.md")} (${rows.length} workers) ${summary}`);
-  return 0;
+  return diffVerb(RESEARCH2, topic, {
+    headings: ["Approaches"],
+    notFoundHint: " \u2014 run explore init",
+    artifactNoun: "findings"
+  });
 }
 async function crossverifySendWith(topic, agent, provider, d) {
   return phaseSend(CROSSVERIFY, { topic, agent, provider }, d, {
@@ -21054,20 +20894,7 @@ async function teardownWith2(args, deps) {
     log.error(`${art} not found`);
     return 1;
   }
-  const pf = (0, import_node_path48.join)(art, "preflight-panes.txt");
-  if ((0, import_node_fs45.existsSync)(pf)) {
-    const live = await deps.livePaneNonces().catch(() => /* @__PURE__ */ new Map());
-    for (const pin of parsePanesFile((0, import_node_fs45.readFileSync)(pf, "utf8")).values()) {
-      if (!ownsPane(live, pin.pane, pin.nonce)) {
-        if (live.has(pin.pane)) log.warn(`explore teardown: pane ${pin.pane} is live but is not ours (nonce mismatch) \u2014 not killing it`);
-        continue;
-      }
-      try {
-        await deps.killPane(pin.pane);
-      } catch {
-      }
-    }
-  }
+  await killPreflightOrphans(art, deps, "explore teardown:");
   if (panesOnly) {
     for (const f of ["preflight-panes.txt", "spawn-results.tsv"]) {
       try {
@@ -21131,7 +20958,6 @@ var init_explore2 = __esm({
     init_fsread();
     init_exploreOpenq();
     init_exploreVerdict();
-    init_designDiff();
     init_exploreRebuttal();
     init_exploreSelfAssess();
     init_exploreContribution();
@@ -21544,10 +21370,12 @@ async function finishWith3(topic, r, hasGh) {
   }
   const task = readIfExists((0, import_node_path50.join)(bridgeArtDir(topic), "topic-text.txt"));
   const verify = readField((0, import_node_path50.join)(exec, "verify-result.txt"));
-  const res = finishBranchPrMerge(r, {
+  const res = finishWork(r, {
     branch,
     base: startBranch,
+    action: "pr-merge",
     hasGh,
+    titlePrefix: "bridge",
     title: `bridge: ${branch}`,
     body: `${task}
 
@@ -21697,7 +21525,7 @@ __export(job_exports, {
 });
 function usage7() {
   process.stderr.write(
-    "Usage: job start --command <implement|quick> --args-file <path> [--topic slug] [--provider p]\n                 [--budget-hours N] [--max-rounds N] [--hub-model claude]\n                 [--no-worktree]   work in the main checkout, as 0.5.35 did\n                 [--allow-invisible-doc]  launch even when the implement design doc is uncommitted\n       job status <topic>          one-screen composite: what was launched, is it alive, where is it\n       job wait <topic>            block until the job hub emits done/error/question\n       job relay <topic> <msg|@file>   answer a parked question\n       job attach <topic>          re-arm block, after the origin hub restarted\n       job list                    every job in this repo\n       job stop <topic>            tear down, sweep the session, clear the record\n       job mode <topic>            DETACHED=1 (exit 0) / DETACHED=0 (exit 1)\n       job budget-check <topic>    BUDGET=within (exit 0) / exceeded (exit 1)\n"
+    "Usage: job start --command <implement|quick> --args-file <path> [--topic slug] [--provider p]\n                 [--budget-hours N] [--max-rounds N]\n                 [--no-worktree]   work in the main checkout, as 0.5.35 did\n                 [--allow-invisible-doc]  launch even when the implement design doc is uncommitted\n       job status <topic>          one-screen composite: what was launched, is it alive, where is it\n       job wait <topic>            block until the job hub emits done/error/question\n       job relay <topic> <msg|@file>   answer a parked question\n       job attach <topic>          re-arm block, after the origin hub restarted\n       job list                    every job in this repo\n       job stop <topic>            tear down, sweep the session, clear the record\n       job mode <topic>            DETACHED=1 (exit 0) / DETACHED=0 (exit 1)\n       job budget-check <topic>    BUDGET=within (exit 0) / exceeded (exit 1)\n"
   );
   return 2;
 }
@@ -21928,7 +21756,7 @@ function refuseInvisibleDoc(argsText, root, origCwd, r) {
   return 2;
 }
 async function startRun(rest, origCwd) {
-  let command = "", argsFile = "", topic = "", provider = "", hubModel = "claude";
+  let command = "", argsFile = "", topic = "", provider = "";
   let budgetHours = 6, maxRounds = 5, useWorktree = true, allowInvisibleDoc = false;
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
@@ -21943,7 +21771,6 @@ async function startRun(rest, origCwd) {
     else if (a === "--args-file" || a.startsWith("--args-file=")) argsFile = take();
     else if (a === "--topic" || a.startsWith("--topic=")) topic = take();
     else if (a === "--provider" || a.startsWith("--provider=")) provider = take();
-    else if (a === "--hub-model" || a.startsWith("--hub-model=")) hubModel = take();
     else if (a === "--budget-hours" || a.startsWith("--budget-hours=")) budgetHours = Number(take());
     else if (a === "--max-rounds" || a.startsWith("--max-rounds=")) maxRounds = Number(take());
     else {
@@ -22004,7 +21831,8 @@ async function startRun(rest, origCwd) {
     command,
     topic,
     session,
-    hub: { agent, model: hubModel },
+    // The detached job hub is always claude — never an option (a codex/agy hub was never wired).
+    hub: { agent, model: "claude" },
     // Literal, never an option: a detached run has exactly one legal ending — it stops on its
     // branch and the OPERATOR finishes it. The `pr` opt-in was removed 2026-08-18 having never run
     // live, so `--finish` now falls into the unknown-argument refusal above.
@@ -22021,7 +21849,7 @@ async function startRun(rest, origCwd) {
   };
   (0, import_node_fs47.mkdirSync)(jobDir(topic), { recursive: true });
   atomicWrite(jobPath(topic), formatJob(rec));
-  const rc = await run3([agent, hubModel, topic, "--session", session, "--role", "job-hub", "--cwd", root, jobBrief(rec)]);
+  const rc = await run3([agent, "claude", topic, "--session", session, "--role", "job-hub", "--cwd", root, jobBrief(rec)]);
   if (rc !== 0) {
     log.error(`job start: the job hub failed to spawn (rc ${rc}); the record is left at ${jobPath(topic)} \u2014 clear it with 'ap job stop ${topic}'${wt ? ` (which also removes the worktree ${wt.worktree})` : ""}`);
     return rc;
@@ -22029,7 +21857,7 @@ async function startRun(rest, origCwd) {
   process.stdout.write(
     `TOPIC=${topic}
 SESSION=${session}
-HUB=${agent}-${hubModel}
+HUB=${agent}-claude
 JOB=${jobPath(topic)}
 WORKTREE=${wt ? wt.worktree : "(none \u2014 --no-worktree)"}
 BASE=${wt ? wt.baseSha : ""}

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readProviderList, planList, formatActiveFile, formatProviderFile } from "../src/core/providers.js";
+import { readProviderList, planList, formatProviderFile } from "../src/core/providers.js";
 
 describe("readProviderList", () => {
   it("missing file → []", () => {
@@ -41,14 +41,15 @@ describe("planList", () => {
   });
 });
 
-describe("formatActiveFile", () => {
+describe("the providers-active.txt body", () => {
+  const ACTIVE = "active providers selected by user";
   it("header + one provider per line + trailing newline", () => {
-    expect(formatActiveFile(["codex", "claude"], "2026-05-29T00:00:00Z")).toBe(
+    expect(formatProviderFile(["codex", "claude"], "2026-05-29T00:00:00Z", ACTIVE)).toBe(
       "# generated 2026-05-29T00:00:00Z by /ap:check\n# active providers selected by user\ncodex\nclaude\n",
     );
   });
   it("empty set → headers only, no trailing provider newline", () => {
-    expect(formatActiveFile([], "2026-05-29T00:00:00Z")).toBe(
+    expect(formatProviderFile([], "2026-05-29T00:00:00Z", ACTIVE)).toBe(
       "# generated 2026-05-29T00:00:00Z by /ap:check\n# active providers selected by user\n",
     );
   });

@@ -58,11 +58,6 @@ export function resolveDrilldownPath(scratchDir: string, section: string, agent:
   return join(scratchDir, `${cand}.md`);
 }
 
-/** Canonical export location for a finished design doc: <repoRoot>/docs/ap/specs/<basename>. */
-export function designExportDocPath(repoRoot: string, basename: string): string {
-  return join(repoRoot, "docs", "ap", "specs", basename);
-}
-
 /** Copy the single assembled `*-<topic>-design.md` out of `_design/design-doc/` into
  *  `<destRoot>/docs/ap/specs/`. Returns the dest path, or null if no assembled doc exists
  *  (assemble must have run first). Overwrites on re-run (latest assembled doc wins). */
@@ -72,8 +67,9 @@ export function exportDocTo(topic: string, destRoot: string, opts?: { home?: str
   const hits = readdirSync(ddir).filter((f) => f.endsWith(`-${topic}-design.md`)).sort();
   if (hits.length === 0) return null;
   const basename = hits[hits.length - 1];
-  const dest = designExportDocPath(destRoot, basename);
-  mkdirSync(join(destRoot, "docs", "ap", "specs"), { recursive: true });
+  const dir = join(destRoot, "docs", "ap", "specs");
+  mkdirSync(dir, { recursive: true });
+  const dest = join(dir, basename);
   atomicWrite(dest, readFileSync(join(ddir, basename), "utf8"));
   return dest;
 }
