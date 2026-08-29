@@ -7,7 +7,7 @@ import { log } from "../core/log.js";
 import { applyArgsFile, kvParse } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
 import { repoRoot, repoStateDir } from "../core/paths.js";
-import { jobPath, mainCheckoutRoot, orphanRefusal, orphanedTopicState, worktreeTopic } from "../core/job.js";
+import { jobPath, keepOnBranch, mainCheckoutRoot, orphanRefusal, orphanedTopicState, worktreeTopic } from "../core/job.js";
 import { auditDoc } from "../core/audit.js";
 import {
   parseImplementArgs, deriveTopicFromPath, detectProvider,
@@ -568,7 +568,7 @@ async function finishRun(rest: string[]): Promise<number> {
 }
 // Shared per-target finish body (deploy-finish.sh:1398-1419 / deploy.md:1398-1419). Resolves the
 // worker's feat branch + start branch, then delegates the branch action.
-function applyFinish(art: string, t: { slug: string; cwd: string }, action: "merge" | "pr" | "keep" | "discard", d: FinishDeps): string {
+function applyFinish(topic: string, art: string, t: { slug: string; cwd: string }, action: "merge" | "pr" | "keep" | "discard", d: FinishDeps): string {
   const rec = readBranchRecord("implement", { dir: art, slug: t.slug });
   // The recorded intent decides FIRST, in both directions: a --no-branch run must not act on a
   // branch it never created (a `feat/implement-<topic>` left behind by an earlier run is not this
@@ -592,7 +592,11 @@ function applyFinish(art: string, t: { slug: string; cwd: string }, action: "mer
     log.warn("  recover: push and open the PR by hand, or checkout the intended base branch, re-run pre-snapshot + branch, and finish again");
     return "same-branch";
   }
-  return finishBranchAction(r, { branch, startBranch, action, hasGh: d.hasGh });
+  // `keep` is the detached run's only ending, and a detached run's target is its OWN worktree — where
+  // restoring the start branch would swap the tree under a job that may still be executing from it
+  // (issue #165). Proven per target, never inferred from the record's mere existence: a
+  // `--no-worktree` job runs in the operator's checkout, which still needs its branch back.
+  return finishBranchAction(r, { branch, startBranch, action, hasGh: d.hasGh, keepOnBranch: keepOnBranch(topic, t.cwd) });
 }
 export async function finishWith(topic: string, action: "merge" | "pr" | "keep" | "discard", d: FinishDeps): Promise<number> {
   const art = implementArtDir(topic);
@@ -613,7 +617,7 @@ export async function finishWith(topic: string, action: "merge" | "pr" | "keep" 
   let n = 0, stranded = 0, baseBlocked = 0;
   for (const t of iterTargets(topic)) {
     if (!t.slug || !t.cwd) continue;
-    const outcome = applyFinish(art, { slug: t.slug, cwd: t.cwd }, action, d);
+    const outcome = applyFinish(topic, art, { slug: t.slug, cwd: t.cwd }, action, d);
     if (outcome === "same-branch") stranded++;
     else if (outcome === "base-checkout-failed") baseBlocked++;
     appendFileSync(results, `${t.slug}\t${action}\t${outcome}\n`);

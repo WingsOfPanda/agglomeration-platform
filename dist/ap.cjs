@@ -448,6 +448,45 @@ var init_deps = __esm({
   }
 });
 
+// src/core/fsread.ts
+function readIfExists(path6) {
+  return (0, import_node_fs4.existsSync)(path6) ? (0, import_node_fs4.readFileSync)(path6, "utf8") : "";
+}
+function readIfExistsOrNull(path6) {
+  return (0, import_node_fs4.existsSync)(path6) ? (0, import_node_fs4.readFileSync)(path6, "utf8") : null;
+}
+function readOr(path6, fallback = "") {
+  try {
+    return (0, import_node_fs4.readFileSync)(path6, "utf8");
+  } catch {
+    return fallback;
+  }
+}
+function readJsonOr(path6, fallback) {
+  if (!(0, import_node_fs4.existsSync)(path6)) return fallback;
+  try {
+    return JSON.parse((0, import_node_fs4.readFileSync)(path6, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+function readField(path6) {
+  return readIfExists(path6).split("\n")[0].trim();
+}
+function kvField(path6, key) {
+  if (!(0, import_node_fs4.existsSync)(path6)) return "";
+  const k = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = (0, import_node_fs4.readFileSync)(path6, "utf8").match(new RegExp(`^${k}=(.*)$`, "m"));
+  return m ? m[1].trim() : "";
+}
+var import_node_fs4;
+var init_fsread = __esm({
+  "src/core/fsread.ts"() {
+    "use strict";
+    import_node_fs4 = require("node:fs");
+  }
+});
+
 // node_modules/is-plain-obj/index.js
 function isPlainObject(value) {
   if (typeof value !== "object" || value === null) {
@@ -3408,10 +3447,10 @@ Please rename it to one of: ${correctEncodings}.`);
 });
 
 // node_modules/execa/lib/arguments/cwd.js
-var import_node_fs4, import_node_path5, import_node_process7, normalizeCwd, getDefaultCwd, fixCwdError;
+var import_node_fs5, import_node_path5, import_node_process7, normalizeCwd, getDefaultCwd, fixCwdError;
 var init_cwd = __esm({
   "node_modules/execa/lib/arguments/cwd.js"() {
-    import_node_fs4 = require("node:fs");
+    import_node_fs5 = require("node:fs");
     import_node_path5 = __toESM(require("node:path"), 1);
     import_node_process7 = __toESM(require("node:process"), 1);
     init_file_url();
@@ -3434,7 +3473,7 @@ ${error.message}`;
       }
       let cwdStat;
       try {
-        cwdStat = (0, import_node_fs4.statSync)(cwd);
+        cwdStat = (0, import_node_fs5.statSync)(cwd);
       } catch (error) {
         return `The "cwd" option is invalid: ${cwd}.
 ${error.message}
@@ -4977,10 +5016,10 @@ var init_stdio_option = __esm({
 });
 
 // node_modules/execa/lib/stdio/native.js
-var import_node_fs5, import_node_tty2, handleNativeStream, handleNativeStreamSync, getTargetFd, getTargetFdNumber, handleNativeStreamAsync, getStandardStream;
+var import_node_fs6, import_node_tty2, handleNativeStream, handleNativeStreamSync, getTargetFd, getTargetFdNumber, handleNativeStreamAsync, getStandardStream;
 var init_native = __esm({
   "node_modules/execa/lib/stdio/native.js"() {
-    import_node_fs5 = require("node:fs");
+    import_node_fs6 = require("node:fs");
     import_node_tty2 = __toESM(require("node:tty"), 1);
     init_is_stream();
     init_standard_stream();
@@ -5018,7 +5057,7 @@ var init_native = __esm({
       if (import_node_tty2.default.isatty(targetFdNumber)) {
         throw new TypeError(`The \`${optionName}: ${serializeOptionValue(value)}\` option is invalid: it cannot be a TTY with synchronous methods.`);
       }
-      return { type: "uint8Array", value: bufferToUint8Array((0, import_node_fs5.readFileSync)(targetFdNumber)), optionName };
+      return { type: "uint8Array", value: bufferToUint8Array((0, import_node_fs6.readFileSync)(targetFdNumber)), optionName };
     };
     getTargetFdNumber = (value, fdNumber) => {
       if (value === "inherit") {
@@ -5354,10 +5393,10 @@ For example, you can use the \`pathToFileURL()\` method of the \`url\` core modu
 });
 
 // node_modules/execa/lib/stdio/handle-sync.js
-var import_node_fs6, handleStdioSync, forbiddenIfSync, forbiddenNativeIfSync, throwInvalidSyncValue, addProperties, addPropertiesSync;
+var import_node_fs7, handleStdioSync, forbiddenIfSync, forbiddenNativeIfSync, throwInvalidSyncValue, addProperties, addPropertiesSync;
 var init_handle_sync = __esm({
   "node_modules/execa/lib/stdio/handle-sync.js"() {
-    import_node_fs6 = require("node:fs");
+    import_node_fs7 = require("node:fs");
     init_uint_array();
     init_handle();
     init_type();
@@ -5388,8 +5427,8 @@ var init_handle_sync = __esm({
     addPropertiesSync = {
       input: {
         ...addProperties,
-        fileUrl: ({ value }) => ({ contents: [bufferToUint8Array((0, import_node_fs6.readFileSync)(value))] }),
-        filePath: ({ value: { file } }) => ({ contents: [bufferToUint8Array((0, import_node_fs6.readFileSync)(file))] }),
+        fileUrl: ({ value }) => ({ contents: [bufferToUint8Array((0, import_node_fs7.readFileSync)(value))] }),
+        filePath: ({ value: { file } }) => ({ contents: [bufferToUint8Array((0, import_node_fs7.readFileSync)(file))] }),
         fileNumber: forbiddenIfSync,
         iterable: ({ value }) => ({ contents: [...value] }),
         string: ({ value }) => ({ contents: [value] }),
@@ -5823,10 +5862,10 @@ var init_output = __esm({
 });
 
 // node_modules/execa/lib/io/output-sync.js
-var import_node_fs7, transformOutputSync, transformOutputResultSync, runOutputGeneratorsSync, serializeChunks, logOutputSync, writeToFiles;
+var import_node_fs8, transformOutputSync, transformOutputResultSync, runOutputGeneratorsSync, serializeChunks, logOutputSync, writeToFiles;
 var init_output_sync = __esm({
   "node_modules/execa/lib/io/output-sync.js"() {
-    import_node_fs7 = require("node:fs");
+    import_node_fs8 = require("node:fs");
     init_output();
     init_generator();
     init_split();
@@ -5927,10 +5966,10 @@ var init_output_sync = __esm({
       for (const { path: path6, append } of stdioItems.filter(({ type }) => FILE_TYPES.has(type))) {
         const pathString = typeof path6 === "string" ? path6 : path6.toString();
         if (append || outputFiles.has(pathString)) {
-          (0, import_node_fs7.appendFileSync)(path6, serializedResult);
+          (0, import_node_fs8.appendFileSync)(path6, serializedResult);
         } else {
           outputFiles.add(pathString);
-          (0, import_node_fs7.writeFileSync)(path6, serializedResult);
+          (0, import_node_fs8.writeFileSync)(path6, serializedResult);
         }
       }
     };
@@ -6442,10 +6481,10 @@ var init_early_error = __esm({
 });
 
 // node_modules/execa/lib/stdio/handle-async.js
-var import_node_fs8, import_node_buffer3, import_node_stream3, handleStdioAsync, forbiddenIfAsync, addProperties2, addPropertiesAsync;
+var import_node_fs9, import_node_buffer3, import_node_stream3, handleStdioAsync, forbiddenIfAsync, addProperties2, addPropertiesAsync;
 var init_handle_async = __esm({
   "node_modules/execa/lib/stdio/handle-async.js"() {
-    import_node_fs8 = require("node:fs");
+    import_node_fs9 = require("node:fs");
     import_node_buffer3 = require("node:buffer");
     import_node_stream3 = require("node:stream");
     init_generator();
@@ -6472,8 +6511,8 @@ var init_handle_async = __esm({
     addPropertiesAsync = {
       input: {
         ...addProperties2,
-        fileUrl: ({ value }) => ({ stream: (0, import_node_fs8.createReadStream)(value) }),
-        filePath: ({ value: { file } }) => ({ stream: (0, import_node_fs8.createReadStream)(file) }),
+        fileUrl: ({ value }) => ({ stream: (0, import_node_fs9.createReadStream)(value) }),
+        filePath: ({ value: { file } }) => ({ stream: (0, import_node_fs9.createReadStream)(file) }),
         webStream: ({ value }) => ({ stream: import_node_stream3.Readable.fromWeb(value) }),
         iterable: ({ value }) => ({ stream: import_node_stream3.Readable.from(value) }),
         asyncIterable: ({ value }) => ({ stream: import_node_stream3.Readable.from(value) }),
@@ -6482,8 +6521,8 @@ var init_handle_async = __esm({
       },
       output: {
         ...addProperties2,
-        fileUrl: ({ value }) => ({ stream: (0, import_node_fs8.createWriteStream)(value) }),
-        filePath: ({ value: { file, append } }) => ({ stream: (0, import_node_fs8.createWriteStream)(file, append ? { flags: "a" } : {}) }),
+        fileUrl: ({ value }) => ({ stream: (0, import_node_fs9.createWriteStream)(value) }),
+        filePath: ({ value: { file, append } }) => ({ stream: (0, import_node_fs9.createWriteStream)(file, append ? { flags: "a" } : {}) }),
         webStream: ({ value }) => ({ stream: import_node_stream3.Writable.fromWeb(value) }),
         iterable: forbiddenIfAsync,
         asyncIterable: forbiddenIfAsync,
@@ -8793,7 +8832,7 @@ function paneBorderArgs() {
 function windowBorderStatusArgs(target) {
   return ["set-option", "-w", "-t", target, "pane-border-status", "top"];
 }
-function wrapLaunch(launch, hasBashrc = (0, import_node_fs9.existsSync)((0, import_node_path7.join)((0, import_node_os5.homedir)(), ".bashrc"))) {
+function wrapLaunch(launch, hasBashrc = (0, import_node_fs10.existsSync)((0, import_node_path7.join)((0, import_node_os5.homedir)(), ".bashrc"))) {
   return hasBashrc ? `bash -ic 'exec ${launch}'` : launch;
 }
 function sentinelCommand(coloredLabel) {
@@ -8944,12 +8983,12 @@ async function killGraceful(pane, pluginRoot2, owned) {
   if (!owned) return;
   const label = await paneOption(pane, "#{@ap_label}") || "worker";
   const color = await paneOption(pane, "#{@ap_color}");
-  const snap = (0, import_node_path7.join)((0, import_node_fs9.mkdtempSync)((0, import_node_path7.join)((0, import_node_os5.tmpdir)(), "cs-snap-")), "snap.txt");
+  const snap = (0, import_node_path7.join)((0, import_node_fs10.mkdtempSync)((0, import_node_path7.join)((0, import_node_os5.tmpdir)(), "cs-snap-")), "snap.txt");
   try {
     const { stdout } = await execa("tmux", ["capture-pane", "-p", "-e", "-t", pane]);
-    (0, import_node_fs9.writeFileSync)(snap, stdout);
+    (0, import_node_fs10.writeFileSync)(snap, stdout);
   } catch {
-    (0, import_node_fs9.writeFileSync)(snap, "");
+    (0, import_node_fs10.writeFileSync)(snap, "");
   }
   await respawn(pane, gracefulRespawnCommand(snap, pluginRoot2, label, color));
 }
@@ -8987,14 +9026,14 @@ async function preflightLayout(topic, list, opts) {
     throw e;
   }
 }
-var import_node_crypto3, import_node_os5, import_node_fs9, import_node_path7, SESSION_NAME_RE, PANE_ID_RE, NONCE_RE, splitRight, splitDown, respawn, newSession, newWindow;
+var import_node_crypto3, import_node_os5, import_node_fs10, import_node_path7, SESSION_NAME_RE, PANE_ID_RE, NONCE_RE, splitRight, splitDown, respawn, newSession, newWindow;
 var init_tmux = __esm({
   "src/core/tmux.ts"() {
     "use strict";
     init_execa();
     import_node_crypto3 = require("node:crypto");
     import_node_os5 = require("node:os");
-    import_node_fs9 = require("node:fs");
+    import_node_fs10 = require("node:fs");
     import_node_path7 = require("node:path");
     init_colors();
     SESSION_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -16343,9 +16382,9 @@ function contractsPath() {
   return (0, import_node_path8.join)(pluginRoot(), "config", "contracts.yaml");
 }
 function readDoc(p) {
-  if (!(0, import_node_fs10.existsSync)(p)) return {};
+  if (!(0, import_node_fs11.existsSync)(p)) return {};
   try {
-    return (0, import_yaml.parse)((0, import_node_fs10.readFileSync)(p, "utf8")) ?? {};
+    return (0, import_yaml.parse)((0, import_node_fs11.readFileSync)(p, "utf8")) ?? {};
   } catch {
     return {};
   }
@@ -16402,13 +16441,13 @@ function consultTimeout(kind) {
   return POSITIVE_INT.test(String(v)) ? Number(v) : CONSULT_DEFAULTS[kind];
 }
 function contractsExist() {
-  return (0, import_node_fs10.existsSync)(contractsPath());
+  return (0, import_node_fs11.existsSync)(contractsPath());
 }
-var import_node_fs10, import_node_path8, import_yaml, DOCS, CONSULT_DEFAULTS, POSITIVE_INT;
+var import_node_fs11, import_node_path8, import_yaml, DOCS, CONSULT_DEFAULTS, POSITIVE_INT;
 var init_contracts = __esm({
   "src/core/contracts.ts"() {
     "use strict";
-    import_node_fs10 = require("node:fs");
+    import_node_fs11 = require("node:fs");
     import_node_path8 = require("node:path");
     import_yaml = __toESM(require_dist(), 1);
     init_paths();
@@ -16479,23 +16518,23 @@ function parseImplementArgs(tokens) {
   return { rest: rest.join(" "), branchMode, branchName, topic, target, force };
 }
 function detectProvider(repoRoot2) {
-  return (0, import_node_fs11.existsSync)((0, import_node_path9.join)(repoRoot2, ".claude-plugin", "plugin.json")) ? "claude" : "codex";
+  return (0, import_node_fs12.existsSync)((0, import_node_path9.join)(repoRoot2, ".claude-plugin", "plugin.json")) ? "claude" : "codex";
 }
 function iterTargets(topic, opts) {
   const art = implementArtDir(topic, opts);
   const targetCwdFile = (0, import_node_path9.join)(art, "target_cwd.txt");
-  if ((0, import_node_fs11.existsSync)(targetCwdFile)) {
-    const cwd = (0, import_node_fs11.readFileSync)(targetCwdFile, "utf8").replace(/\n$/, "");
+  if ((0, import_node_fs12.existsSync)(targetCwdFile)) {
+    const cwd = (0, import_node_fs12.readFileSync)(targetCwdFile, "utf8").replace(/\n$/, "");
     return [{ slug: "main", cwd }];
   }
   return [];
 }
-var import_node_path9, import_node_fs11, ImplementArgError;
+var import_node_path9, import_node_fs12, ImplementArgError;
 var init_implement = __esm({
   "src/core/implement.ts"() {
     "use strict";
     import_node_path9 = require("node:path");
-    import_node_fs11 = require("node:fs");
+    import_node_fs12 = require("node:fs");
     init_paths();
     init_args();
     ImplementArgError = class extends Error {
@@ -16513,43 +16552,43 @@ function isoUtc(now = /* @__PURE__ */ new Date()) {
 }
 function stateInit(agent, model, topic) {
   const dir = workerDir(agent, model, topic);
-  (0, import_node_fs12.mkdirSync)(dir, { recursive: true });
-  for (const f of STALE) (0, import_node_fs12.rmSync)((0, import_node_path10.join)(dir, f), { force: true });
-  (0, import_node_fs12.closeSync)((0, import_node_fs12.openSync)((0, import_node_path10.join)(dir, "outbox.jsonl"), "w"));
+  (0, import_node_fs13.mkdirSync)(dir, { recursive: true });
+  for (const f of STALE) (0, import_node_fs13.rmSync)((0, import_node_path10.join)(dir, f), { force: true });
+  (0, import_node_fs13.closeSync)((0, import_node_fs13.openSync)((0, import_node_path10.join)(dir, "outbox.jsonl"), "w"));
   atomicWrite((0, import_node_path10.join)(dir, ".session_id"), `${process.env.CLAUDE_CODE_SESSION_ID ?? "unknown"}
 `);
 }
 function uniqueDest(base) {
-  if (!(0, import_node_fs12.existsSync)(base)) return base;
+  if (!(0, import_node_fs13.existsSync)(base)) return base;
   for (let n2 = 2; n2 <= 999; n2++) {
     const c3 = `${base}-${n2}`;
-    if (!(0, import_node_fs12.existsSync)(c3)) return c3;
+    if (!(0, import_node_fs13.existsSync)(c3)) return c3;
   }
   throw new Error("too many same-second archive collisions; aborting");
 }
 function moveToArchive(src, base) {
   const dest = uniqueDest(base);
-  (0, import_node_fs12.mkdirSync)((0, import_node_path10.dirname)(dest), { recursive: true });
-  (0, import_node_fs12.renameSync)(src, dest);
+  (0, import_node_fs13.mkdirSync)((0, import_node_path10.dirname)(dest), { recursive: true });
+  (0, import_node_fs13.renameSync)(src, dest);
   return dest;
 }
 function stateArchive(agent, model, topic, suffix, opts) {
   const src = workerDir(agent, model, topic);
-  if (!(0, import_node_fs12.existsSync)(src)) return null;
+  if (!(0, import_node_fs13.existsSync)(src)) return null;
   const ts = archiveTs(opts?.now);
   let base = (0, import_node_path10.join)(globalRoot(), "archive", repoHash(), topic, `${agent}-${model}-${ts}`);
   if (suffix) base += `-${suffix}`;
   return moveToArchive(src, base);
 }
 function finalizeArchived(td, opts) {
-  if (!(0, import_node_fs12.existsSync)(td)) return;
+  if (!(0, import_node_fs13.existsSync)(td)) return;
   const now = isoUtc(opts?.now);
-  for (const name of (0, import_node_fs12.readdirSync)(td)) {
+  for (const name of (0, import_node_fs13.readdirSync)(td)) {
     const sj = (0, import_node_path10.join)(td, name, "status.json");
-    if (!(0, import_node_fs12.existsSync)(sj)) continue;
+    if (!(0, import_node_fs13.existsSync)(sj)) continue;
     let obj;
     try {
-      obj = JSON.parse((0, import_node_fs12.readFileSync)(sj, "utf8"));
+      obj = JSON.parse((0, import_node_fs13.readFileSync)(sj, "utf8"));
     } catch {
       continue;
     }
@@ -16563,64 +16602,25 @@ function archiveTopic(topic, suite, opts) {
   finalizeArchived(td, opts);
   const art = (0, import_node_path10.join)(td, `_${suite}`);
   let dest = null;
-  if ((0, import_node_fs12.existsSync)(art)) {
+  if ((0, import_node_fs13.existsSync)(art)) {
     const base = (0, import_node_path10.join)(globalRoot(), "archive", repoHash(), topic, `_${suite}-${archiveTs(opts?.now)}`);
     dest = moveToArchive(art, base);
   }
   try {
-    (0, import_node_fs12.rmSync)(td, { recursive: false, force: false });
+    (0, import_node_fs13.rmSync)(td, { recursive: false, force: false });
   } catch {
   }
   return dest;
 }
-var import_node_fs12, import_node_path10, STALE;
+var import_node_fs13, import_node_path10, STALE;
 var init_archive = __esm({
   "src/core/archive.ts"() {
     "use strict";
-    import_node_fs12 = require("node:fs");
+    import_node_fs13 = require("node:fs");
     import_node_path10 = require("node:path");
     init_paths();
     init_atomic();
     STALE = ["identity.md", "inbox.md", "outbox.jsonl", "status.json", "pane.json", ".session_id"];
-  }
-});
-
-// src/core/fsread.ts
-function readIfExists(path6) {
-  return (0, import_node_fs13.existsSync)(path6) ? (0, import_node_fs13.readFileSync)(path6, "utf8") : "";
-}
-function readIfExistsOrNull(path6) {
-  return (0, import_node_fs13.existsSync)(path6) ? (0, import_node_fs13.readFileSync)(path6, "utf8") : null;
-}
-function readOr(path6, fallback = "") {
-  try {
-    return (0, import_node_fs13.readFileSync)(path6, "utf8");
-  } catch {
-    return fallback;
-  }
-}
-function readJsonOr(path6, fallback) {
-  if (!(0, import_node_fs13.existsSync)(path6)) return fallback;
-  try {
-    return JSON.parse((0, import_node_fs13.readFileSync)(path6, "utf8"));
-  } catch {
-    return fallback;
-  }
-}
-function readField(path6) {
-  return readIfExists(path6).split("\n")[0].trim();
-}
-function kvField(path6, key) {
-  if (!(0, import_node_fs13.existsSync)(path6)) return "";
-  const k = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const m = (0, import_node_fs13.readFileSync)(path6, "utf8").match(new RegExp(`^${k}=(.*)$`, "m"));
-  return m ? m[1].trim() : "";
-}
-var import_node_fs13;
-var init_fsread = __esm({
-  "src/core/fsread.ts"() {
-    "use strict";
-    import_node_fs13 = require("node:fs");
   }
 });
 
@@ -16905,6 +16905,16 @@ function worktreeTopic(root) {
   const topic = (0, import_node_path12.basename)(root);
   return validateSlug(topic) ? topic : "";
 }
+function keepOnBranch(topic, targetCwd) {
+  if (!targetCwd) return false;
+  const wt = parseJob(readIfExists(jobPath(topic)))?.worktree ?? "";
+  if (!wt || mainCheckoutRoot(wt) === wt) return false;
+  try {
+    return (0, import_node_fs15.realpathSync)(wt) === (0, import_node_fs15.realpathSync)(targetCwd);
+  } catch {
+    return false;
+  }
+}
 function orphanedTopicState(topic, root, recovered) {
   if (!topic || recovered === root || !validateSlug(topic)) return null;
   if ((0, import_node_fs15.existsSync)(topicDir(topic, { cwd: recovered }))) return null;
@@ -17143,6 +17153,7 @@ var init_job = __esm({
     "use strict";
     import_node_fs15 = require("node:fs");
     import_node_path12 = require("node:path");
+    init_fsread();
     init_paths();
     init_slug();
     init_tmux();
@@ -19164,6 +19175,7 @@ function finishWork(r, o2) {
       r.run("git", ["merge", "--abort"]);
       return { action: "merge", outcome: "merge-conflict-left" };
     case "keep":
+      if (o2.keepOnBranch) return { action: "keep", outcome: "kept-on-branch" };
       r.run("git", ["checkout", "-q", o2.base]);
       return { action: "keep", outcome: "kept" };
     case "discard":
@@ -20228,11 +20240,18 @@ async function finishWith(topic, r, hasGh) {
   if (detachedJob) log.warn(`quick finish: a detached job record is present (${jobPath(topic)}) \u2014 publication is disabled; the run ends on its branch and the operator finishes it`);
   const doFinish = readField((0, import_node_path28.join)(exec, "finish.txt")) === "yes" && !detachedJob;
   if (!doFinish) {
-    r.run("git", ["checkout", "-q", startBranch]);
+    const target = readField((0, import_node_path28.join)(exec, "target_cwd.txt"));
+    const onBranch = keepOnBranch(topic, target);
+    if (onBranch) {
+      log.warn(`quick finish: kept-on-branch \u2014 a live detached job runs from this worktree (${target}); NOT restoring '${startBranch}'`);
+    } else {
+      r.run("git", ["checkout", "-q", startBranch]);
+    }
     const kept2 = restoreStashWip(topic, exec, r, startBranch);
-    atomicWrite((0, import_node_path28.join)(exec, "finish-result.txt"), `none	branch-only (kept ${branch})
+    const outcome = onBranch ? `kept-on-branch (kept ${branch})` : `branch-only (kept ${branch})`;
+    atomicWrite((0, import_node_path28.join)(exec, "finish-result.txt"), `none	${outcome}
 ` + kept2);
-    log.ok(`quick finish: branch-only \u2014 kept ${branch}, restored ${startBranch}`);
+    log.ok(onBranch ? `quick finish: kept-on-branch \u2014 kept ${branch}, left the run's worktree on it` : `quick finish: branch-only \u2014 kept ${branch}, restored ${startBranch}`);
     return 0;
   }
   if (!hasDistinctBranch(r, branch, startBranch)) {
@@ -23069,7 +23088,7 @@ async function finishRun2(rest) {
   }
   return finishWith2(topic, action, liveFinishDeps);
 }
-function applyFinish(art, t, action, d) {
+function applyFinish(topic, art, t, action, d) {
   const rec = readBranchRecord("implement", { dir: art, slug: t.slug });
   if (rec.mode === "no-branch") return "no-branch";
   const branch = rec.branch;
@@ -23085,7 +23104,7 @@ function applyFinish(art, t, action, d) {
     log.warn("  recover: push and open the PR by hand, or checkout the intended base branch, re-run pre-snapshot + branch, and finish again");
     return "same-branch";
   }
-  return finishBranchAction(r, { branch, startBranch, action, hasGh: d.hasGh });
+  return finishBranchAction(r, { branch, startBranch, action, hasGh: d.hasGh, keepOnBranch: keepOnBranch(topic, t.cwd) });
 }
 async function finishWith2(topic, action, d) {
   const art = implementArtDir(topic);
@@ -23103,7 +23122,7 @@ async function finishWith2(topic, action, d) {
   let n2 = 0, stranded = 0, baseBlocked = 0;
   for (const t of iterTargets(topic)) {
     if (!t.slug || !t.cwd) continue;
-    const outcome = applyFinish(art, { slug: t.slug, cwd: t.cwd }, action, d);
+    const outcome = applyFinish(topic, art, { slug: t.slug, cwd: t.cwd }, action, d);
     if (outcome === "same-branch") stranded++;
     else if (outcome === "base-checkout-failed") baseBlocked++;
     (0, import_node_fs41.appendFileSync)(results, `${t.slug}	${action}	${outcome}

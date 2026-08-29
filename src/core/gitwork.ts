@@ -230,7 +230,11 @@ export type FinishOutcome =
   // The base checkout was refused, so NOTHING was merged, deleted, or pulled: the work is still on
   // `branch` and HEAD is still there. Written by the four load-bearing checkouts (see `onBase`).
   | "base-checkout-failed"
-  | "kept" | "merged" | "merge-conflict-left" | "discarded"
+  | "kept"
+  // `keep`, minus the start-branch restore: the target IS the run's own worktree and a job may still
+  // be executing out of it, so the checkout is left where the run put it (FinishWorkOpts.keepOnBranch).
+  | "kept-on-branch"
+  | "merged" | "merge-conflict-left" | "discarded"
   | "pr-opened" | "pr-pushed-no-gh" | "pr-failed-kept"
   | "local-merged-no-remote" | "local-merge-conflict-left"
   | "push-failed" | "pushed-no-gh"
@@ -248,6 +252,11 @@ export interface FinishWorkOpts {
   /** Branding for the default PR title/body. Closed: a finisher brands its PRs as one of the three
    *  commands that own one, and a typo would ship as the PR's title. */
   titlePrefix: "quick" | "implement" | "bridge";
+  /** Leave the checkout ON the feature branch instead of restoring `base` — set only when the caller
+   *  has PROVEN this target is the run's dedicated worktree (`keepOnBranch`, src/core/job.ts). Read
+   *  by the `keep` arm alone: keep is the only ending a detached run has, and the other arms merge,
+   *  push or delete, which need the base checkout to mean anything. */
+  keepOnBranch?: boolean;
 }
 export interface FinishWorkResult {
   action: "pr" | "keep" | "merge" | "discard" | "pr-merge" | "local-merge" | "push-only" | "none";
@@ -302,7 +311,11 @@ export function finishWork(r: Runner, o: FinishWorkOpts): FinishWorkResult {
       if (!onBase(r, o)) return { action: "merge", outcome: "base-checkout-failed" };
       if (r.run("git", ["merge", "--no-edit", "-q", o.branch]).code === 0) { r.run("git", ["branch", "-q", "-D", o.branch]); return { action: "merge", outcome: "merged" }; }
       r.run("git", ["merge", "--abort"]); return { action: "merge", outcome: "merge-conflict-left" };
-    case "keep":    r.run("git", ["checkout", "-q", o.base]); return { action: "keep", outcome: "kept" };
+    case "keep":
+      // The restore hands the OPERATOR's checkout back; a dedicated run worktree has none to hand
+      // back and may still have a live job running out of it, so there it is skipped (issue #165).
+      if (o.keepOnBranch) return { action: "keep", outcome: "kept-on-branch" };
+      r.run("git", ["checkout", "-q", o.base]); return { action: "keep", outcome: "kept" };
     case "discard":
       if (!onBase(r, o)) return { action: "discard", outcome: "base-checkout-failed" };
       r.run("git", ["branch", "-q", "-D", o.branch]); return { action: "discard", outcome: "discarded" };
@@ -379,10 +392,13 @@ export function finishBranch(r: Runner, o: FinishOpts): FinishResult {
 export interface FinishActionOpts {
   branch: string; startBranch: string; action: "merge" | "pr" | "keep" | "discard";
   hasGh: boolean; originUrl?: string; title?: string; body?: string;
+  /** Passed straight through to `finishWork` — see FinishWorkOpts.keepOnBranch. */
+  keepOnBranch?: boolean;
 }
 
 /** Action-driven finisher (port of deploy_finish_branch @ deploy.sh:651). Restores startBranch
- *  (best-effort). New additive export; the auto finishBranch (used by quick) is unchanged. */
+ *  (best-effort) — except under `keepOnBranch`, where the `keep` arm leaves the run's own worktree on
+ *  its branch. New additive export; the auto finishBranch (used by quick) is unchanged. */
 export function finishBranchAction(r: Runner, o: FinishActionOpts): string {
   return finishWork(r, { ...o, base: o.startBranch, titlePrefix: "implement" }).outcome;
 }
