@@ -480,16 +480,3 @@ export function retrieveLessons(
 
   return out;
 }
-
-/**
- * Run revocation: drop every lesson that the named run touched. A run found to
- * be gamed/invalid taints the lessons it produced OR corroborated, so a lesson
- * is removed if `runId` appears in its `corroborating_runs` OR is its
- * originating `provenance.run_id`. Returns a new store with those lessons gone;
- * input is not mutated.
- */
-export function revokeByRun(store: Lesson[], runId: string): Lesson[] {
-  return store.filter(
-    (l) => !l.corroborating_runs.includes(runId) && l.provenance.run_id !== runId,
-  );
-}

@@ -32,16 +32,16 @@ function cmp(a: string, op: string | undefined, b: string | undefined): boolean 
   }
 }
 
-interface SbRow { exp: string; agent: string; metric: string; status: string; metricName: string; approach: string; }
+export interface SbRow { rank: string; exp: string; agent: string; metric: string; status: string; metricName: string; approach: string; }
 
 /** Parse plain-rank data rows (| <int> | exp-… |). Excludes header/sep and ~-prefixed partial rows. */
-function parseRows(scoreboardMd: string): SbRow[] {
+export function parseScoreboardDataRows(scoreboardMd: string): SbRow[] {
   const out: SbRow[] = [];
   for (const line of scoreboardMd.split("\n")) {
     if (!/^\|\s+\d+\s+\|\s+exp-/.test(line)) continue;
     const c = line.split("|").map((s) => s.trim());
     // c[0]="" c[1]=rank c[2]=exp c[3]=agent c[4]=metric c[5]=status c[6]=runtime c[7]=approach c[8]=metric_name
-    out.push({ exp: c[2], agent: c[3], metric: c[4], status: c[5], metricName: c[8] ?? "", approach: c[7] ?? "" });
+    out.push({ rank: c[1], exp: c[2], agent: c[3], metric: c[4], status: c[5], metricName: c[8] ?? "", approach: c[7] ?? "" });
   }
   return out;
 }
@@ -51,7 +51,7 @@ export function checkCompletion(scoreboardMd: string, metricMd: string, completi
   const t = parseMetricMd(metricMd);
   const matchesMetric = (r: SbRow) => !(t.primaryMetric && r.metricName && r.metricName !== t.primaryMetric);
 
-  const allRows = parseRows(scoreboardMd).filter(matchesMetric);
+  const allRows = parseScoreboardDataRows(scoreboardMd).filter(matchesMetric);
   const okRows = allRows.filter((r) => r.status === "ok" && NUM.test(r.metric));
 
   // floor / target + the ordered ok-metric list for plateau.

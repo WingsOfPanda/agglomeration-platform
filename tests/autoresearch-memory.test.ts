@@ -11,7 +11,6 @@ import {
   promotable,
   renderLesson,
   retrieveLessons,
-  revokeByRun,
   scopeKey,
   semanticFingerprint,
   type Lesson,
@@ -429,9 +428,9 @@ describe("canReadLesson — same-family ABAC read gate", () => {
   });
 });
 
-// --- Task 11: promotable / outcomeWeight / retrieveLessons / revokeByRun -----
+// --- Task 11: promotable / outcomeWeight / retrieveLessons -------------------
 
-describe("Task 11 — promotable / outcomeWeight / retrieveLessons / revokeByRun", () => {
+describe("Task 11 — promotable / outcomeWeight / retrieveLessons", () => {
   // Lesson factory: a sensible verified-positive default, overridable per-field.
   const L = (o: any): Lesson =>
     ({
@@ -580,16 +579,4 @@ describe("Task 11 — promotable / outcomeWeight / retrieveLessons / revokeByRun
     expect(outcomeWeight(L({ hits: 3, misses: 1 }))).toBeCloseTo(4 / 6, 6);
   });
 
-  test("revokeByRun purges every lesson from a gamed run (by corroborating_runs or provenance)", () => {
-    const a = L({ id: "a", run: "rA", runs: ["r1"] }); // by corroborating_runs
-    const b = L({ id: "b", run: "r1", runs: ["rX"] }); // by provenance.run_id
-    const c = L({ id: "c", run: "r2", runs: ["r2"] }); // survives
-    const after = revokeByRun([a, b, c], "r1");
-    expect(after.map((l) => l.id)).toEqual(["c"]);
-  });
-
-  test("revokeByRun purges a lesson when the run is one of several corroborating runs", () => {
-    const multi = L({ id: "m", corr: 3, runs: ["r1", "r2", "r3"] });
-    expect(revokeByRun([multi], "r2")).toHaveLength(0);
-  });
 });

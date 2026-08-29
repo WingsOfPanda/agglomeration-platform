@@ -5,6 +5,7 @@
 // line uses the modernized field layout (booleans -> yes/no; separate K_so_far /
 // K_required, single-spaced) rather than the bash's combined "K_so_far=N/Kr" form.
 
+import { parseScoreboardDataRows } from "./autoresearchComplete.js";
 import type { CompletionSignals } from "./autoresearchComplete.js";
 import type { CoverageRow } from "./autoresearchCoverage.js";
 
@@ -31,21 +32,6 @@ export interface StatusBriefInput {
   multiChange?: Record<string, boolean>;
   /** agent/exp -> C1 verdict (reproduced|not-reproduced|inconclusive), joined from inspection.tsv. */
   inspections?: Record<string, string>;
-}
-
-interface SbTop { rank: string; exp: string; agent: string; metric: string; metricName: string; }
-
-/** Parse the plain-rank OK data rows (| <int> | exp-… | …), in existing rank order.
- *  Same row-parse shape as checkCompletion's private parseRows:
- *  c[1]=rank c[2]=exp c[3]=agent c[4]=metric c[8]=metric_name. */
-function parseTopRows(scoreboardMd: string): SbTop[] {
-  const out: SbTop[] = [];
-  for (const line of scoreboardMd.split("\n")) {
-    if (!/^\|\s+\d+\s+\|\s+exp-/.test(line)) continue;
-    const c = line.split("|").map((s) => s.trim());
-    out.push({ rank: c[1], exp: c[2], agent: c[3], metric: c[4], metricName: c[8] ?? "" });
-  }
-  return out;
 }
 
 function yn(b: boolean): string {
@@ -79,7 +65,7 @@ export function buildStatusBrief(input: StatusBriefInput): string {
   if (input.scoreboardMd === null) {
     sb.push("_(scoreboard absent)_");
   } else {
-    const rows = parseTopRows(input.scoreboardMd).slice(0, 3);
+    const rows = parseScoreboardDataRows(input.scoreboardMd).slice(0, 3);
     if (rows.length === 0) {
       sb.push("_(no scored experiments yet)_");
     } else {
