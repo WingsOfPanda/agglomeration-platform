@@ -83,11 +83,6 @@ export function hasArtifactSentinel(text: string | null): boolean {
   return lines.length > 1 && lines[lines.length - 1] === END_OF_ARTIFACT;
 }
 
-/** hasArtifactSentinel by path — an absent artifact reads as incomplete, not as complete. */
-export function artifactComplete(path: string): boolean {
-  return hasArtifactSentinel(readIfExistsOrNull(path));
-}
-
 /** The shared contract block every phase composer appends, naming ITS artifact's final path.
  *  `alsoPaths` names any SECONDARY file of the same turn (the research phase's self-assessment) that
  *  must follow the same sequence. Carries no done-event line and no END_OF_INSTRUCTION — `send` ->

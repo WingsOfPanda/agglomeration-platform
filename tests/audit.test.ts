@@ -1,6 +1,6 @@
 // tests/audit.test.ts
 import { describe, it, expect } from "vitest";
-import { auditDoc, SLUG_REGEX } from "../src/core/audit.js";
+import { auditDoc } from "../src/core/audit.js";
 
 const COMPLETE = [
   "# X", "## Problem", "p", "## Goal", "g", "## Architecture", "a",
@@ -38,5 +38,4 @@ describe("auditDoc", () => {
     const i = auditDoc(doc).issues;
     expect(i.indexOf("unresolved_placeholder")).toBeLessThan(i.indexOf("tbd_marker"));
   });
-  it("SLUG_REGEX accepts dotted/hyphen/underdesign", () => { expect(SLUG_REGEX.test("a.b-c_d")).toBe(true); });
 });

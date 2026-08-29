@@ -1,8 +1,8 @@
 // src/commands/review.ts — /ap:review verbs. survey = read-only list + trend digest;
 // archive = accrue trend + move surveyed files to .reviewed/. Logic lives in core/review.ts.
 // Port of the prior plugin's review-forensics.sh + forensics-mark-reviewed.sh (review half).
-import { existsSync, readdirSync, readFileSync, statSync, mkdirSync, renameSync, type Dirent } from "node:fs";
-import { join, dirname } from "node:path";
+import { readdirSync, readFileSync, statSync, mkdirSync, renameSync } from "node:fs";
+import { join, dirname, sep } from "node:path";
 import { log } from "../core/log.js";
 import { globalRoot } from "../core/paths.js";
 import { atomicWrite } from "../core/atomic.js";
@@ -13,22 +13,15 @@ import {
 
 function forensicsRoot(): string { return join(globalRoot(), "forensics"); }
 
-/** Walk forensicsRoot for *.md files; exclude the top-level `.reviewed/` subtree unless included. */
+/** Walk forensicsRoot for *.md files; exclude the top-level `.reviewed/` subtree unless included.
+ *  An absent/unreadable root reads as empty. */
 function walkForensics(root: string, includeReviewed: boolean): string[] {
-  const out: string[] = [];
-  const walk = (dir: string): void => {
-    let entries: Dirent[];
-    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const e of entries) {
-      const p = join(dir, e.name);
-      if (e.isDirectory()) {
-        if (dir === root && e.name === ".reviewed" && !includeReviewed) continue;
-        walk(p);
-      } else if (e.isFile() && e.name.endsWith(".md")) out.push(p);
-    }
-  };
-  if (existsSync(root)) walk(root);
-  return out.sort();
+  try {
+    return readdirSync(root, { recursive: true, encoding: "utf8" })
+      .filter((n) => n.endsWith(".md") && (includeReviewed || !n.startsWith(`.reviewed${sep}`)))
+      .map((n) => join(root, n))
+      .sort();
+  } catch { return []; }
 }
 
 function readLedgerText(root: string): string | null {

@@ -9,7 +9,11 @@ import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { captureStdout } from "./helpers/captureStdout.js";
 import { sendDeps, waitDeps } from "./helpers/phaseDeps.js";
-import { END_OF_ARTIFACT, artifactGraceS, artifactComplete } from "../src/core/artifact.js";
+import { END_OF_ARTIFACT, artifactGraceS, hasArtifactSentinel } from "../src/core/artifact.js";
+import { readIfExistsOrNull } from "../src/core/fsread.js";
+
+// The composition the two real call sites use.
+const artifactComplete = (p: string): boolean => hasArtifactSentinel(readIfExistsOrNull(p));
 import { exploreArtDir } from "../src/core/explore.js";
 import { designArtDir } from "../src/core/design.js";
 import { statusPath } from "../src/core/ipc.js";

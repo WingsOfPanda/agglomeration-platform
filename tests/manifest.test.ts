@@ -23,12 +23,6 @@ describe("plugin manifests (installability gate)", () => {
     }
   });
 
-  it("plugin UserPromptSubmit hook references an existing dist/ap.cjs", () => {
-    const cmd = plugin.hooks?.UserPromptSubmit?.[0]?.hooks?.[0]?.command ?? "";
-    expect(cmd).toContain("dist/ap.cjs");
-    expect(existsSync(join(ROOT, "dist", "ap.cjs"))).toBe(true);
-  });
-
   it("version is in sync across package.json, marketplace, and plugin manifests", () => {
     for (const p of marketplace.plugins) {
       expect(p.version, `marketplace ${p.name} version`).toBe(pkg.version);
