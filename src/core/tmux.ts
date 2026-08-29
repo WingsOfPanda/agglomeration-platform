@@ -1,4 +1,5 @@
-import { execa } from "execa";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -110,7 +111,7 @@ const NONCE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
 
 /** Parse `list-panes -a -F '#{pane_id}\t#{@ap_nonce}'` output into id -> nonce. A pane with no
  *  @ap_nonce (never ours, or pre-nonce) yields an empty field, i.e. "". Blank lines are skipped.
- *  Shared with the @ap_state snapshot (livePaneStates): the format and every hardening rule below
+ *  Shared with the @ap_state snapshot (livePaneOption): the format and every hardening rule below
  *  are identical, only the option name in the -F string differs.
  *
  *  Hardened against a forged option value: tmux allows a NEWLINE inside a pane option, so a pane
@@ -185,10 +186,18 @@ export function sentinelCommand(coloredLabel: string): string {
   return `printf '%s\\n  preflight pane reserved — awaiting spawn...\\n' ${JSON.stringify(coloredLabel)}; while :; do sleep 3600; done`;
 }
 
-// ---------- execa wrappers (live tmux) ----------
+// ---------- subprocess wrappers (live tmux) ----------
+const execFileP = promisify(execFile);
+/** One `tmux` invocation, its stdout stripped of the single trailing newline tmux emits — the shape
+ *  every caller below was written against. Rejects on a non-zero exit (and on ENOENT), which is what
+ *  the fail-quiet try/catch sites read as "no tmux answer". maxBuffer is raised off execFile's 1MB
+ *  default so a full `capture-pane -e` can never truncate into a spurious rejection. */
+async function run(args: string[]): Promise<string> {
+  const { stdout } = await execFileP("tmux", args, { maxBuffer: 100_000_000 });
+  return stdout.replace(/\r?\n$/, "");
+}
 async function tmux(args: string[]): Promise<string> {
-  const { stdout } = await execa("tmux", args);
-  return stdout.trim();
+  return (await run(args)).trim();
 }
 export const splitRight = (launch: string, target?: string, cwd?: string) => tmux(splitRightArgs(launch, target, cwd));
 export const splitDown = (launch: string, target: string, cwd?: string) => tmux(splitDownArgs(launch, target, cwd));
@@ -206,8 +215,7 @@ export const newWindow = (session: string, launch: string, cwd?: string) => tmux
  *  one that makes sessionKillable answer "nothing to kill" rather than "kill it". */
 export async function sessionPaneIds(session: string): Promise<string[]> {
   try {
-    const { stdout } = await execa("tmux", sessionPanesArgs(session));
-    return stdout.split("\n").filter(Boolean);
+    return (await run(sessionPanesArgs(session))).split("\n").filter(Boolean);
   } catch { return []; }
 }
 /** Kill an entire session; false on any tmux error (never throws). The CALLER must have proven every
@@ -216,7 +224,7 @@ export async function sessionPaneIds(session: string): Promise<string[]> {
  *  swallowed the failure would report a teardown it cannot prove and then clear the record that was
  *  the only evidence of what to finish. */
 export async function killSession(session: string): Promise<boolean> {
-  try { await execa("tmux", killSessionArgs(session)); return true; } catch { return false; }
+  try { await run(killSessionArgs(session)); return true; } catch { return false; }
 }
 
 /** The tmux session THIS process is running inside, "" when there is none to name. Guarded by
@@ -232,7 +240,7 @@ export async function currentSessionName(): Promise<string> {
 /** Does this EXACT session exist? Never throws: no tmux server and no tmux binary both answer "no",
  *  which is the create-it direction, and the same fail-quiet posture livePaneNonces takes. */
 export async function sessionExists(session: string): Promise<boolean> {
-  try { await execa("tmux", hasSessionArgs(session)); return true; } catch { return false; }
+  try { await run(hasSessionArgs(session)); return true; } catch { return false; }
 }
 
 /** Apply the orchestra pane-border config (idempotent `set -g`) so worker labels render on the
@@ -274,16 +282,11 @@ export async function livePaneNonces(): Promise<Map<string, string>> {
 async function livePaneOption(opt: string): Promise<Map<string, string>> {
   try {
     const [ids, pairs] = await Promise.all([
-      execa("tmux", ["list-panes", "-a", "-F", "#{pane_id}"]),
-      execa("tmux", ["list-panes", "-a", "-F", `#{pane_id}\t#{${opt}}`]),
+      run(["list-panes", "-a", "-F", "#{pane_id}"]),
+      run(["list-panes", "-a", "-F", `#{pane_id}\t#{${opt}}`]),
     ]);
-    return parsePaneNonces(pairs.stdout, new Set(ids.stdout.split("\n").filter(Boolean)));
+    return parsePaneNonces(pairs, new Set(ids.split("\n").filter(Boolean)));
   } catch { return new Map(); }
-}
-
-/** Every live pane's @ap_state stamp (the state dir its worker was given). */
-export async function livePaneStates(): Promise<Map<string, string>> {
-  return livePaneOption("@ap_state");
 }
 
 /** The state dir stamped on `pane`, or "" when there is none to compare: an unstamped pane (a worker
@@ -291,7 +294,7 @@ export async function livePaneStates(): Promise<Map<string, string>> {
  *  never "mismatched" -- the caller must proceed on it, exactly as classifyTestRun refuses to read a
  *  check that could not run as a failure. Never throws. */
 export async function paneStateRead(pane: string): Promise<string> {
-  return (await livePaneStates()).get(pane) ?? "";
+  return (await livePaneOption("@ap_state")).get(pane) ?? "";
 }
 
 /** Is `pane` live and ours (its live @ap_nonce is the one we recorded)? The single-pane form of
@@ -307,35 +310,35 @@ export async function paneOwned(pane: string, nonce: string): Promise<boolean> {
  *  never be proven ours again, so the CALLER must fail closed rather than record a nonce the pane
  *  does not carry. */
 export async function paneNonceSet(pane: string, nonce: string): Promise<boolean> {
-  try { await execa("tmux", paneNonceSetArgs(pane, nonce)); return true; } catch { return false; }
+  try { await run(paneNonceSetArgs(pane, nonce)); return true; } catch { return false; }
 }
 
 /** Stamp the pane's state dir; false on any tmux error (never throws). Load-bearing exactly as
  *  paneNonceSet is: a pane that did not take this stamp can never prove which tree its worker reads,
  *  so the CALLER must fail closed rather than leave the pane half-stamped. */
 export async function paneStateSet(pane: string, dir: string): Promise<boolean> {
-  try { await execa("tmux", paneStateSetArgs(pane, dir)); return true; } catch { return false; }
+  try { await run(paneStateSetArgs(pane, dir)); return true; } catch { return false; }
 }
 
 export async function paneSend(pane: string, line: string): Promise<void> {
-  await execa("tmux", sendKeysLiteralArgs(pane, line));
+  await run(sendKeysLiteralArgs(pane, line));
   await new Promise((r) => setTimeout(r, 300)); // load-bearing beat before Enter
-  await execa("tmux", sendKeysEnterArgs(pane));
+  await run(sendKeysEnterArgs(pane));
 }
 
 export async function capturePane(pane: string, lines?: number): Promise<string> {
   try {
-    const { stdout } = await execa("tmux", ["capture-pane", "-p", "-t", pane]);
-    return lines ? stdout.split("\n").slice(-lines).join("\n") : stdout;
+    const out = await run(["capture-pane", "-p", "-t", pane]);
+    return lines ? out.split("\n").slice(-lines).join("\n") : out;
   } catch { return ""; }
 }
 
 export async function killNow(pane: string): Promise<void> {
-  try { await execa("tmux", ["kill-pane", "-t", pane]); } catch { /* tolerate */ }
+  try { await run(["kill-pane", "-t", pane]); } catch { /* tolerate */ }
 }
 
 export async function selectLayoutMainVertical(target: string): Promise<void> {
-  await execa("tmux", ["select-layout", "-t", target, "main-vertical"]);
+  await run(["select-layout", "-t", target, "main-vertical"]);
 }
 
 export async function conductorPane(): Promise<string> {
@@ -353,7 +356,7 @@ export function paneLabelSetArgs(pane: string, agent: string, model: string, top
 }
 export async function paneLabelSet(pane: string, agent: string, model: string, topic: string): Promise<void> {
   // The three @ap_* set-options are independent — issue them together.
-  await Promise.all(paneLabelSetArgs(pane, agent, model, topic).map((args) => execa("tmux", args)));
+  await Promise.all(paneLabelSetArgs(pane, agent, model, topic).map((args) => run(args)));
 }
 
 // --- graceful kill with DONE banner ---
@@ -362,7 +365,7 @@ export function gracefulRespawnCommand(snap: string, pluginRoot: string, label: 
 }
 
 async function paneOption(pane: string, opt: string): Promise<string> {
-  try { return (await execa("tmux", ["display-message", "-p", "-t", pane, opt])).stdout; } catch { return ""; }
+  try { return await run(["display-message", "-p", "-t", pane, opt]); } catch { return ""; }
 }
 
 /** `owned` is the caller's ownership verdict from its livePaneNonces() snapshot — required, not a
@@ -374,8 +377,7 @@ export async function killGraceful(pane: string, pluginRoot: string, owned: bool
   const color = await paneOption(pane, "#{@ap_color}");
   const snap = join(mkdtempSync(join(tmpdir(), "cs-snap-")), "snap.txt");
   try {
-    const { stdout } = await execa("tmux", ["capture-pane", "-p", "-e", "-t", pane]);
-    writeFileSync(snap, stdout);
+    writeFileSync(snap, await run(["capture-pane", "-p", "-e", "-t", pane]));
   } catch { writeFileSync(snap, ""); }
   await respawn(pane, gracefulRespawnCommand(snap, pluginRoot, label, color));
 }
@@ -392,8 +394,7 @@ export async function preflightLayout(topic: string, list: PreflightEntry[], opt
     for (const e of list) {
       const sentinel = sentinelCommand(labelFmt(e.agent, e.model, topic));
       const args = [...preflightSplitArgs(flag, prev, e.cwd), sentinel];
-      const { stdout } = await execa("tmux", args);
-      const pane = stdout.trim();
+      const pane = (await run(args)).trim();
       created.push(pane);
       // Stamp ownership at CREATION: preflight-panes.txt outlives the tmux server (teardown sweeps
       // it much later), so its ids need the same proof pane.json's do. spawn re-stamps the same
@@ -412,7 +413,7 @@ export async function preflightLayout(topic: string, list: PreflightEntry[], opt
     opts.writePanes(out.map((o) => `${o.agent}\t${o.pane}\t${o.nonce}`).join("\n") + "\n");
     return out;
   } catch (e) {
-    for (const p of created) { try { await execa("tmux", ["kill-pane", "-t", p]); } catch { /* */ } }
+    for (const p of created) { try { await run(["kill-pane", "-t", p]); } catch { /* */ } }
     throw e;
   }
 }

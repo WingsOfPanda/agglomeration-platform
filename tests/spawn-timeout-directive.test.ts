@@ -8,12 +8,16 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentBootstrapSleep, agentReadyTimeout } from "../src/core/contracts.js";
+import { IDENTITY_BLOCKS } from "../src/core/ipc.js";
 
-/** Every directive text that tells a hub to run `spawn`. */
-const SPAWN_DIRECTIVES = [
-  join("commands", "quick.md"),
-  join("commands", "implement.md"),
-  join("config", "prompt-templates", "job-hub.md"),
+const md = (...p: string[]) => readFileSync(join(process.cwd(), ...p), "utf8");
+
+/** Every directive text that tells a hub to run `spawn`. The job hub's is no longer a file: it is
+ *  the role block the one identity template is rendered with. */
+const SPAWN_DIRECTIVES: Array<[string, string]> = [
+  [join("commands", "quick.md"), md("commands", "quick.md")],
+  [join("commands", "implement.md"), md("commands", "implement.md")],
+  ["the job-hub identity block", IDENTITY_BLOCKS["job-hub"].role_block],
 ];
 
 const TIMEOUT_SENTENCE = "MUST carry `timeout: 300000`";
@@ -22,9 +26,7 @@ const NO_UNBOUNDED = "unbounded `until ... sleep` loop";
 const KILLED_RC = "exits **143**";
 
 describe("spawn Bash-call contract <-> the directives that issue it", () => {
-  for (const rel of SPAWN_DIRECTIVES) {
-    const md = readFileSync(join(process.cwd(), rel), "utf8");
-
+  for (const [rel, md] of SPAWN_DIRECTIVES) {
     it(`${rel} bounds the spawn call at 300000ms`, () => {
       expect(md, `${rel} lets a hub spawn on the Bash tool's 120s default, which always loses to bootstrap`)
         .toContain(TIMEOUT_SENTENCE);

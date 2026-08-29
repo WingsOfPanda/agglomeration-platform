@@ -1,5 +1,5 @@
 // src/core/waitLive.ts — the live wiring of outboxWaitSince's pane-liveness escape hatch.
-// Kept out of ipc.ts so ipc stays free of the tmux/execa dependency (outboxWaitSince takes the
+// Kept out of ipc.ts so ipc stays free of the tmux dependency (outboxWaitSince takes the
 // probe as an injected function; this is the one place that binds it to the real tmux probe).
 import { outboxWaitSince, paneMetaRead, type Clock, type OutboxEvent } from "./ipc.js";
 import { paneOwned } from "./tmux.js";

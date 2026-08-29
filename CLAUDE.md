@@ -81,7 +81,7 @@ is intentionally **not** banned (false positives). Fix the offending file; never
   `src/commands/<verb>.run(args)`). Logic in `src/core/*`; one file per responsibility.
 - **`dist/` is committed** (zero-build install). After changing `src/`, run `npm run build` and
   commit the refreshed `dist/ap.cjs`.
-- **tmux is the only subprocess surface** (via `execa`). Test tmux code as **pure arg-array
+- **tmux is the only subprocess surface** (via `node:child_process` execFile). Test tmux code as **pure arg-array
   builders**; never spawn real panes in unit tests (live behavior = the dogfood).
 - **Typed objects + `JSON.parse`, not shell parsing.** Event matching is `JSON.parse(line)` then
   `obj.event === name` (never the anchored regex). Skip non-JSON lines.

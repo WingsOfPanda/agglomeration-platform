@@ -6,8 +6,13 @@ on:
   pull_request:
 
 jobs:
+  # Both platforms ap actually runs on (issue #143). No tmux needed — the suite never spawns live panes.
   check:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,22 +27,8 @@ jobs:
       # dist/ap.cjs is committed (zero-build install). Fail if it drifts from a fresh build of src —
       # a contributor must run `npm run build` and commit the result. (tests/dist-fresh.test.ts
       # enforces the same invariant locally; this is the clean CI-level signal.)
+      # ubuntu only: esbuild byte-determinism across platforms is not a bet worth making a merge
+      # depend on, so Linux holds this line alone (tests/dist-fresh.test.ts skips on darwin too).
       - name: dist/ap.cjs is in sync with src
+        if: matrix.os == 'ubuntu-latest'
         run: git diff --exit-code -- dist/ap.cjs
-
-  # The second platform ap actually runs on (issue #143). Same gate, minus the dist-sync diff:
-  # esbuild byte-determinism across platforms is not a bet worth making a merge depend on, and the
-  # ubuntu job above already holds that line. No tmux needed — the suite never spawns live panes.
-  check-macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm run lint
-      - run: npm run test
-      - run: npm run build

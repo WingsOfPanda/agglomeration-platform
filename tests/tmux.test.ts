@@ -134,7 +134,7 @@ describe("pane ownership nonce", () => {
     });
   });
   it("paneOwned short-circuits an empty recorded nonce without touching tmux", async () => {
-    // No tmux server is reachable in the suite: reaching execa would reject, not return false.
+    // No tmux server is reachable in the suite: reaching tmux would reject, not return false.
     await expect(T.paneOwned("%1", "")).resolves.toBe(false);
   });
 });
