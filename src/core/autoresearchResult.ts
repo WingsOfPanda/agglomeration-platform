@@ -77,7 +77,7 @@ const NUM_RE = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 /** Render the value-bearing tail of one scoreboard row:
  *  "<metric%.4f|verbatim> | <status> | <runtime%.2fs|verbatim> | <approach> | <metric_name>".
  *  Each cell is `|`/newline-scrubbed: the scoreboard is re-parsed positionally by `split("|")`
- *  (checkCompletion.parseRows), so a worker-controlled `|` in any verbatim/text cell (approach_label,
+ *  (parseScoreboardDataRows), so a worker-controlled `|` in any verbatim/text cell (approach_label,
  *  a non-numeric metric, an infeasible reason) would shift every later column and silently drop the
  *  row from floor/target/plateau accounting. */
 export function renderScoreboardRow(

@@ -58,7 +58,7 @@ The current (de-musicalized) vocabulary:
 | teardown banner | **DONE** |
 | namespace / env / state dir / tmux opts / bundle | `ap` (`/ap:<verb>`) / `AP_HOME` / `.ap/` / `@ap_*` / `dist/ap.cjs` |
 | commands | `design` `explore` `autoresearch` `implement` `quick` `review` `list` `stop` `check` `bridge` |
-| primitives (CLI-internal plumbing) | `spawn` `send` `collect` `preflight` `hook` — unchanged |
+| primitives (CLI-internal plumbing) | `spawn` `send` `collect` `preflight` — unchanged |
 
 **FROZEN — never rename** (drop-in compatibility with the external model binaries depends on it):
 event names `ready/ack/progress/done/error/question`; sentinel `END_OF_INSTRUCTION`; JSON fields
@@ -70,7 +70,7 @@ internal **scoreboard** metric (`buildScoreboard`/`ScoreRow`) — that `score` i
 from the retired `score` command (now `design`); do not rename it.
 
 A `tests/stale-tokens.test.ts` gate fails the build if removed brand/metaphor tokens reappear in
-shipped `src`/`config`/`commands`/`hooks`/`.claude-plugin`: case-sensitive `clone-wars`/`cw_`/
+shipped `src`/`config`/`commands`/`.claude-plugin`: case-sensitive `clone-wars`/`cw_`/
 `master-yoda`/`MISSION ACCOMPLISHED`/`@cw_`/`cs_`/`@cs_`; case-insensitive `trooper`/`commander`/
 `consort`/`maestro`/`instrument`. Generic English (`part`/`section`/`score`/`perform`/`solo`/`fine`)
 is intentionally **not** banned (false positives). Fix the offending file; never weaken the gate.

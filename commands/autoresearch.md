@@ -278,7 +278,7 @@ Initialize `RAN_SCORE=0`, `LAST_AGENT=`, `LAST_EXP=`. Route each queued notifica
 - **`question`** → surface the worker's question to the user in chat; set that worker's `phase=blocked`. Do
   **NOT** auto-dispatch it — wait for user direction.
   - **Autonomous mode (`$ART/autonomous.txt` present):** do **NOT** set `phase=blocked` (no user is
-    watching). Apply the `decideQuestion` answer-or-fail-closed policy instead: if the question is grounded
+    watching). Apply the answer-or-fail-closed policy instead: if the question is grounded
     by the locked run context (a multiple-choice pick, or a closed factual question the
     objective/metric/budget already answers), **answer the worker from context** —
     `$CS send --from hub <agent> <TOPIC> "<answer>"`, then set `phase=working` and continue. If the
