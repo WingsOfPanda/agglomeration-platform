@@ -4,7 +4,7 @@
 // in the MAIN checkout. Branch checkout and the index are global to a checkout, so that froze the
 // origin session out of its own repo for the run's duration. Nothing here goes near tmux — a shim
 // earlier on PATH makes every tmux call fail, which is the same answer a tmux-less CI box gives.
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -549,5 +549,140 @@ describe("job stop — the sweep and the FINISH hint, through the verb", () => {
     expect(rc).toBe(0);
     expect(out).not.toContain("FINISH=pending");
     expect(existsSync(jobPath(TOPIC))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// issue #160. The run's worktree forks COMMITTED HEAD, so a design doc that exists only as
+// uncommitted work in the operator's checkout is invisible to the worker — the one input the run
+// exists to consume. `startWorktree` warned about it, but only after the worktree, the base branch
+// and a ~30s hub bootstrap were already paid for. It is refused here instead, before any of that.
+//
+// The ORDER is the property, and it is asserted two ways: by what is NOT on disk after a refusal,
+// and by pre-planting a `base/<topic>` branch that `startWorktree` itself refuses over — a launch
+// that reaches startWorktree says so in its own words, and one that never gets there cannot.
+describe("job start — an invisible design doc is refused before anything is created", () => {
+  // These drive the whole `start` verb, which picks a hub agent out of `config/agents.yaml`, so the
+  // pool has to be findable from a cwd that is a throwaway repo. Captured at collection time, when
+  // the cwd is still this checkout.
+  const PLUGIN_ROOT = process.cwd();
+  const savedPluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+  beforeEach(() => { process.env.CLAUDE_PLUGIN_ROOT = PLUGIN_ROOT; });
+  afterEach(() => {
+    if (savedPluginRoot === undefined) delete process.env.CLAUDE_PLUGIN_ROOT;
+    else process.env.CLAUDE_PLUGIN_ROOT = savedPluginRoot;
+  });
+
+  /** An args file naming `text`, written outside the repo so it is never itself dirty. */
+  function args(text: string): string {
+    const f = join(mkdtempSync(join(tmpdir(), "ap-args-")), "args");
+    writeFileSync(f, text);
+    return f;
+  }
+  /** `docs/t-design.md`, untracked unless `commit` is set. */
+  function doc(root: string, opts: { commit?: boolean } = {}): string {
+    mkdirSync(join(root, "docs"), { recursive: true });
+    writeFileSync(join(root, "docs", "t-design.md"), "# design\n");
+    if (opts.commit) { git(root, "add", "-A"); git(root, "commit", "-q", "-m", "the design doc"); }
+    return "docs/t-design.md";
+  }
+  const start = (f: string, ...extra: string[]) =>
+    capture(() => run(["start", "--command", "implement", "--args-file", f, "--topic", TOPIC, ...extra]));
+
+  it("REFUSES an uncommitted doc with rc 2, and creates NOTHING", async () => {
+    const root = repo();
+    const d = doc(root);
+    // The `docs/` directory is itself brand new here, so git reports it COLLAPSED — the doc is never
+    // named in the porcelain, and a plain equality match would have missed the whole scenario.
+    expect(git(root, "status", "--porcelain")).toContain("?? docs/");
+    expect(git(root, "status", "--porcelain")).not.toContain(d);
+    const { rc, err } = await start(args(d));
+    expect(rc).toBe(2);
+    expect(err).toContain(`the design doc ${d} exists only as uncommitted work in ${root}`);
+    expect(err).toContain("--allow-invisible-doc");
+    // The whole point of moving the check: no worktree, no base branch, no record, no `.ap` tree.
+    expect(existsSync(worktreePathFor(root, TOPIC))).toBe(false);
+    expect(git(root, "worktree", "list").split("\n")).toHaveLength(1);
+    expect(git(root, "branch", "--list", `base/${TOPIC}`)).toBe("");
+    expect(existsSync(jobPath(TOPIC))).toBe(false);
+  });
+
+  it("refuses an untracked doc inside a TRACKED directory, where git names the file itself", async () => {
+    const root = repo();
+    doc(root, { commit: true });                                   // now `docs/` is tracked
+    writeFileSync(join(root, "docs", "u-design.md"), "# other\n");  // and this one is not
+    expect(git(root, "status", "--porcelain")).toContain("?? docs/u-design.md");
+    const { rc, err } = await start(args("docs/u-design.md"));
+    expect(rc).toBe(2);
+    expect(err).toContain("the design doc docs/u-design.md exists only as uncommitted work");
+    expect(existsSync(worktreePathFor(root, TOPIC))).toBe(false);
+  });
+
+  it("refuses a MODIFIED tracked doc too — committed once is not committed now", async () => {
+    const root = repo();
+    const d = doc(root, { commit: true });
+    writeFileSync(join(root, d), "# design, rewritten\n");
+    const { rc, err } = await start(args(d));
+    expect(rc).toBe(2);
+    expect(err).toContain("exists only as uncommitted work");
+    expect(existsSync(worktreePathFor(root, TOPIC))).toBe(false);
+  });
+
+  it("the refusal PRECEDES startWorktree — the base-branch refusal it would have hit never fires", async () => {
+    const root = repo();
+    git(root, "branch", `base/${TOPIC}`);
+    const { rc, err } = await start(args(doc(root)));
+    expect(rc).toBe(2);
+    expect(err).toContain("exists only as uncommitted work");
+    expect(err).not.toContain(`branch base/${TOPIC} already exists`);
+  });
+
+  it("a COMMITTED doc proceeds past the gate — the identical launch reaches startWorktree", async () => {
+    const root = repo();
+    git(root, "branch", `base/${TOPIC}`);
+    const { rc, err } = await start(args(doc(root, { commit: true })));
+    expect(rc).toBe(1);
+    expect(err).not.toContain("exists only as uncommitted work");
+    expect(err).toContain(`branch base/${TOPIC} already exists`);
+  });
+
+  it("--allow-invisible-doc launches anyway: the gate is passed, the generic warning still owns it", async () => {
+    const root = repo();
+    git(root, "branch", `base/${TOPIC}`);
+    const { rc, err } = await start(args(doc(root)), "--allow-invisible-doc");
+    expect(rc).toBe(1);
+    expect(err).not.toContain("exists only as uncommitted work");
+    expect(err).toContain(`branch base/${TOPIC} already exists`);
+  });
+
+  it("--no-worktree is not gated — there is no fork for the doc to be invisible to", async () => {
+    const root = repo();
+    git(root, "branch", `base/${TOPIC}`);
+    doc(root);
+    // Reaches the spawn rather than startWorktree, so only the ABSENCE of the refusal is asserted.
+    const { err } = await start(args("docs/t-design.md"), "--no-worktree");
+    expect(err).not.toContain("exists only as uncommitted work");
+  });
+
+  it("--command quick is not gated — its task is inline text, not a path the run must read", async () => {
+    const root = repo();
+    git(root, "branch", `base/${TOPIC}`);
+    doc(root);
+    const f = args("implement what docs/t-design.md says");
+    const { rc, err } = await capture(() =>
+      run(["start", "--command", "quick", "--args-file", f, "--topic", TOPIC]));
+    expect(rc).toBe(1);
+    expect(err).not.toContain("exists only as uncommitted work");
+    expect(err).toContain(`branch base/${TOPIC} already exists`);
+  });
+
+  it("an args file with no doc positional is not gated, however dirty the tree is", async () => {
+    const root = repo();
+    git(root, "branch", `base/${TOPIC}`);
+    doc(root);
+    const { rc, err } = await start(args("--no-branch"));
+    expect(rc).toBe(1);
+    expect(err).not.toContain("exists only as uncommitted work");
+    expect(err).toContain(`branch base/${TOPIC} already exists`);
   });
 });

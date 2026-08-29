@@ -7,7 +7,7 @@
 // running worker's inbox task and the worker idles.
 
 import { existsSync, mkdirSync, readdirSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { kvParse } from "../args.js";
 import { log } from "../core/log.js";
 import { atomicWrite } from "../core/atomic.js";
@@ -35,6 +35,7 @@ function usage(): number {
     "Usage: job start --command <implement|quick> --args-file <path> [--topic slug] [--provider p]\n" +
     "                 [--budget-hours N] [--max-rounds N] [--hub-model claude]\n" +
     "                 [--no-worktree]   work in the main checkout, as 0.5.35 did\n" +
+    "                 [--allow-invisible-doc]  launch even when the implement design doc is uncommitted\n" +
     "       job status <topic>          one-screen composite: what was launched, is it alive, where is it\n" +
     "       job wait <topic>            block until the job hub emits done/error/question\n" +
     "       job relay <topic> <msg|@file>   answer a parked question\n" +
@@ -367,13 +368,48 @@ export function finishHint(rec: J.JobRecord, r: Runner): void {
 
 // ---------- start ----------
 
+/** REFUSE the launch when the design doc the run exists to implement is uncommitted, and therefore
+ *  invisible to the worktree that forks committed HEAD (issue #160). `startWorktree` already warns
+ *  about a dirty tree and names the files, but it warns AFTER the worktree, the base branch and the
+ *  ~30s hub bootstrap are already paid for, and the operator's only remedy is `job stop`, commit,
+ *  relaunch. The one input without which the run is guaranteed to fail is mechanically detectable
+ *  before a single resource is created, so it is checked here instead — a refusal, not a warning.
+ *
+ *  Only the doc POSITIONAL is fatal enough to refuse over: every other dirty file is WIP the run may
+ *  legitimately be forking away from, and those keep the warning. `--allow-invisible-doc` is the
+ *  escape hatch for an operator who means it (a doc the worker will write itself, say), and the
+ *  generic warning still names the file on that path. `quick` is deliberately not gated: its task
+ *  is inline text in the args file, not a path the run must read.
+ *
+ *  Returns 2 to refuse, or 0 to proceed. */
+function refuseInvisibleDoc(argsText: string, root: string, origCwd: string, r: Runner): number {
+  const doc = J.docFromImplementArgs(argsText);
+  if (!doc) return 0;   // no doc positional; `implement init` owns whatever that turns out to be
+  // Resolved exactly as `--args-file` is: against the ORIGIN's cwd, because that is where the
+  // operator typed it. `git status --porcelain` reports repo-relative paths, so the comparison has
+  // to happen in that frame — an absolute doc from another repo simply will not match, which is the
+  // right answer (this gate is not the missing-file check; `implement init` is).
+  const abs = isAbsolute(doc) ? doc : resolve(origCwd, doc);
+  const rel = relative(root, abs);
+  // A wholly-untracked DIRECTORY is reported collapsed, as `?? docs/` — git stops descending once it
+  // knows the directory is untracked, so the doc inside it is never named. That is exactly the case
+  // this gate exists for (a brand-new specs directory), so a trailing-slash entry is matched as the
+  // prefix it is. `-uall` would expand it instead, at the cost of walking every untracked tree in
+  // the repo on every launch.
+  const covers = (p: string): boolean => p === rel || (p.endsWith("/") && rel.startsWith(p));
+  if (!dirtyPaths(r.run("git", ["status", "--porcelain"]).stdout).some(covers)) return 0;
+  log.error(`job start: the design doc ${rel} exists only as uncommitted work in ${root} — the run's worktree forks committed HEAD and cannot see it. Commit it and start again, or pass --allow-invisible-doc to launch anyway.`);
+  return 2;
+}
+
 async function startRun(rest: string[], origCwd: string): Promise<number> {
   let command = "", argsFile = "", topic = "", provider = "", hubModel = "claude";
-  let budgetHours = 6, maxRounds = 5, useWorktree = true;
+  let budgetHours = 6, maxRounds = 5, useWorktree = true, allowInvisibleDoc = false;
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     const take = (): string => { const r = kvParse(a, rest[i + 1]); i += r.shift - 1; return r.value; };
     if (a === "--no-worktree") useWorktree = false;
+    else if (a === "--allow-invisible-doc") allowInvisibleDoc = true;
     else if (a === "--command" || a.startsWith("--command=")) command = take();
     else if (a === "--args-file" || a.startsWith("--args-file=")) argsFile = take();
     else if (a === "--topic" || a.startsWith("--topic=")) topic = take();
@@ -418,6 +454,10 @@ async function startRun(rest: string[], origCwd: string): Promise<number> {
   // re-open the namespace split 0.5.34 closed. Only the WORKER's target moves.
   const root = repoRoot();
   const r = runnerAt(root);
+  if (command === "implement" && useWorktree && !allowInvisibleDoc) {
+    const rc = refuseInvisibleDoc(argsText, root, origCwd, r);
+    if (rc) return rc;
+  }
   const startBranch = currentBranch(r);
   // The return address for the hub's completion hint, captured here because this is the only moment
   // the ORIGIN's own session is observable: the hub runs in a detached session of ap's making and

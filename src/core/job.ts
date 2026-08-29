@@ -409,6 +409,16 @@ export function stripFlags(text: string, valueFlags: Set<string>): string {
   return out.join(" ");
 }
 
+/** The design-doc positional an `implement` args file names, or "" when it names none — the first
+ *  bare token ending `.md`, which is the rule `implement init` itself reads the doc by. Extracted
+ *  from `topicFromImplementArgs` because two callers now need the PATH and not just the topic it
+ *  derives to: the topic answers "which run is this", and the path answers "can the run even see
+ *  the one input it exists to consume" (`job start`'s invisible-doc preflight, issue #160). */
+export function docFromImplementArgs(text: string): string {
+  const toks = text.split(/\s+/).filter(Boolean);
+  return toks.find((t) => !t.startsWith("-") && t.endsWith(".md")) ?? "";
+}
+
 /** The topic an `implement` args file resolves to — the same answer `implement init` will reach, so
  *  the job record and the run it launches cannot disagree about which topic they are. An explicit
  *  `--topic` wins, exactly as it does in init; otherwise it derives from the design-doc positional. */
@@ -418,7 +428,7 @@ export function topicFromImplementArgs(text: string): string {
   if (i >= 0 && toks[i + 1]) return toks[i + 1];
   const eq = toks.find((t) => t.startsWith("--topic="));
   if (eq) return eq.slice("--topic=".length);
-  const doc = toks.find((t) => !t.startsWith("-") && t.endsWith(".md"));
+  const doc = docFromImplementArgs(text);
   return doc ? deriveTopicFromPath(doc) : "";
 }
 

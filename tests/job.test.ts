@@ -236,6 +236,32 @@ describe("topic derivation", () => {
     expect(J.topicFromImplementArgs("--no-branch")).toBe("");
     expect(J.topicFromImplementArgs("")).toBe("");
   });
+  // docFromImplementArgs is the topic rule's other half: `job start`'s invisible-doc preflight needs
+  // the PATH, not the slug it derives to. The two must stay one rule — a preflight that disagrees
+  // with init about which token is the doc gates the wrong file.
+  it("docFromImplementArgs returns the design-doc positional", () => {
+    expect(J.docFromImplementArgs("docs/superpowers/specs/x-design.md")).toBe("docs/superpowers/specs/x-design.md");
+    expect(J.docFromImplementArgs("  docs/x-design.md  ")).toBe("docs/x-design.md");
+  });
+  it("docFromImplementArgs skips flag TOKENS and takes the first bare .md", () => {
+    expect(J.docFromImplementArgs("--provider codex docs/x-design.md")).toBe("docs/x-design.md");
+    expect(J.docFromImplementArgs("-p docs/x-design.md")).toBe("docs/x-design.md");
+    expect(J.docFromImplementArgs("docs/first.md docs/second.md")).toBe("docs/first.md");
+    // A flag's VALUE is not skipped — the rule looks at leading `-` only. Deliberately unchanged:
+    // this is byte-for-byte what `implement init` reads the doc by, and a preflight that disagreed
+    // with init about which token is the doc would gate the wrong file.
+    expect(J.docFromImplementArgs("--args-file notes.md docs/x-design.md")).toBe("notes.md");
+  });
+  it("docFromImplementArgs yields empty when nothing names a doc", () => {
+    expect(J.docFromImplementArgs("--no-branch")).toBe("");
+    expect(J.docFromImplementArgs("")).toBe("");
+    expect(J.docFromImplementArgs("fix the bug in src/foo.ts")).toBe("");
+  });
+  it("--topic steers the TOPIC and leaves the doc alone — the preflight still gates the file", () => {
+    expect(J.docFromImplementArgs("docs/x-design.md --topic chosen")).toBe("docs/x-design.md");
+    expect(J.docFromImplementArgs("docs/x-design.md --topic=chosen")).toBe("docs/x-design.md");
+    expect(J.topicFromImplementArgs("docs/x-design.md --topic chosen")).toBe("chosen");
+  });
   it("stripFlags drops flags and the values of value-flags, leaving the free text", () => {
     expect(J.stripFlags("fix the bug --provider codex --no-finish", new Set(["--provider"]))).toBe("fix the bug");
     expect(J.stripFlags("--provider codex", new Set(["--provider"]))).toBe("");
