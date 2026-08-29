@@ -2,8 +2,8 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { kvParse } from "../args.js";
 import { log } from "../core/log.js";
-import { topicDir, repoRoot } from "../core/paths.js";
-import { mainCheckoutRoot, orphanRefusal, orphanedTopicState, worktreeTopic } from "../core/job.js";
+import { topicDir } from "../core/paths.js";
+import { withMainCheckout } from "../core/job.js";
 import { assertSlug } from "../core/slug.js";
 import { atomicWrite } from "../core/atomic.js";
 import { preflightLayout, PreflightEntry } from "../core/tmux.js";
@@ -14,20 +14,7 @@ export async function run(args: string[]): Promise<number> {
   // from inside a run's own worktree -- `<root>/.ap/worktrees/<topic>` -- preflight allocated its
   // panes against one tree while every other verb read the other. (`--art-dir` passes an absolute
   // path and was never affected.) The orphan refusal precedes the chdir, and therefore the mkdir.
-  const origCwd = process.cwd();
-  const gitRoot = repoRoot();
-  const root = mainCheckoutRoot(gitRoot);
-  const wtTopic = worktreeTopic(gitRoot);
-  const stranded = orphanedTopicState(wtTopic, gitRoot, root);
-  if (stranded) { for (const l of orphanRefusal(wtTopic, stranded, root).split("\n")) log.error(l); return 2; }
-  if (root !== origCwd) process.chdir(root);
-  try {
-    return await dispatchVerb(args);
-  } finally {
-    // Tests import run() and share a process, so the cwd is restored rather than left moved; a cwd
-    // that has since been removed must not turn a completed verb into a throw.
-    if (root !== origCwd) { try { process.chdir(origCwd); } catch { /* the caller's cwd is gone */ } }
-  }
+  return withMainCheckout(() => dispatchVerb(args));
 }
 
 async function dispatchVerb(args: string[]): Promise<number> {
