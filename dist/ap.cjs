@@ -18108,6 +18108,28 @@ __export(collect_exports, {
   run: () => run3
 });
 async function run3(args) {
+  const origCwd = process.cwd();
+  const gitRoot = repoRoot();
+  const root = mainCheckoutRoot(gitRoot);
+  const wtTopic = worktreeTopic(gitRoot);
+  const stranded = orphanedTopicState(wtTopic, gitRoot, root);
+  if (stranded) {
+    for (const l of orphanRefusal(wtTopic, stranded, root).split("\n")) log.error(l);
+    return 2;
+  }
+  if (root !== origCwd) process.chdir(root);
+  try {
+    return await dispatchVerb3(args);
+  } finally {
+    if (root !== origCwd) {
+      try {
+        process.chdir(origCwd);
+      } catch {
+      }
+    }
+  }
+}
+async function dispatchVerb3(args) {
   if (args.length < 2) {
     log.error("usage: collect <agent> <topic> [--timeout n]");
     return 2;
@@ -18155,6 +18177,8 @@ var init_collect = __esm({
     "use strict";
     init_args();
     init_log();
+    init_paths();
+    init_job();
     init_ipc2();
     init_slug();
   }
@@ -18267,6 +18291,28 @@ function rowState(live, meta, outbox, thresholdS) {
   return classifyStale(deriveState(lastOutboxEvent(outbox)), outbox, thresholdS);
 }
 async function run4(args) {
+  const origCwd = process.cwd();
+  const gitRoot = repoRoot();
+  const root = mainCheckoutRoot(gitRoot);
+  const wtTopic = worktreeTopic(gitRoot);
+  const stranded = orphanedTopicState(wtTopic, gitRoot, root);
+  if (stranded) {
+    for (const l of orphanRefusal(wtTopic, stranded, root).split("\n")) log.error(l);
+    return 2;
+  }
+  if (root !== origCwd) process.chdir(root);
+  try {
+    return await dispatchVerb4(args);
+  } finally {
+    if (root !== origCwd) {
+      try {
+        process.chdir(origCwd);
+      } catch {
+      }
+    }
+  }
+}
+async function dispatchVerb4(args) {
   const filter = args.find((a2) => !a2.startsWith("--"));
   const repo = repoStateDir();
   if (!(0, import_node_fs22.existsSync)(repo)) {
@@ -18330,6 +18376,7 @@ var init_list = __esm({
     import_node_path18 = require("node:path");
     init_paths();
     init_job();
+    init_log();
     init_fsread();
     init_ipc2();
     init_tmux();
@@ -18443,6 +18490,28 @@ function jobInFlight(topic) {
   return (0, import_node_fs23.existsSync)(jobPath(topic));
 }
 async function run5(args) {
+  const origCwd = process.cwd();
+  const gitRoot = repoRoot();
+  const root = mainCheckoutRoot(gitRoot);
+  const wtTopic = worktreeTopic(gitRoot);
+  const stranded = orphanedTopicState(wtTopic, gitRoot, root);
+  if (stranded) {
+    for (const l of orphanRefusal(wtTopic, stranded, root).split("\n")) log.error(l);
+    return 2;
+  }
+  if (root !== origCwd) process.chdir(root);
+  try {
+    return await dispatchVerb5(args);
+  } finally {
+    if (root !== origCwd) {
+      try {
+        process.chdir(origCwd);
+      } catch {
+      }
+    }
+  }
+}
+async function dispatchVerb5(args) {
   const d = liveDeps();
   const a0 = args[0] ?? "";
   if (a0 === "" || a0 === "-h" || a0 === "--help") {
@@ -18791,6 +18860,28 @@ __export(preflight_exports, {
   run: () => run7
 });
 async function run7(args) {
+  const origCwd = process.cwd();
+  const gitRoot = repoRoot();
+  const root = mainCheckoutRoot(gitRoot);
+  const wtTopic = worktreeTopic(gitRoot);
+  const stranded = orphanedTopicState(wtTopic, gitRoot, root);
+  if (stranded) {
+    for (const l of orphanRefusal(wtTopic, stranded, root).split("\n")) log.error(l);
+    return 2;
+  }
+  if (root !== origCwd) process.chdir(root);
+  try {
+    return await dispatchVerb6(args);
+  } finally {
+    if (root !== origCwd) {
+      try {
+        process.chdir(origCwd);
+      } catch {
+      }
+    }
+  }
+}
+async function dispatchVerb6(args) {
   if (args.length < 2) {
     log.error("usage: preflight <topic> <N> [--list i1:m1,i2:m2,...] [--art-dir abs]");
     return 2;
@@ -18846,6 +18937,7 @@ var init_preflight = __esm({
     init_args();
     init_log();
     init_paths();
+    init_job();
     init_slug();
     init_atomic();
     init_tmux();
@@ -19937,7 +20029,7 @@ async function run9(args) {
   }
   if (root !== origCwd) process.chdir(root);
   try {
-    return await dispatchVerb3(args);
+    return await dispatchVerb7(args);
   } finally {
     if (root !== origCwd) {
       try {
@@ -19947,7 +20039,7 @@ async function run9(args) {
     }
   }
 }
-async function dispatchVerb3(args) {
+async function dispatchVerb7(args) {
   const verb = args[0];
   const rest = args.slice(1);
   switch (verb) {
@@ -21512,7 +21604,7 @@ async function run10(args) {
   }
   if (root !== origCwd) process.chdir(root);
   try {
-    return await dispatchVerb4(args);
+    return await dispatchVerb8(args);
   } finally {
     if (root !== origCwd) {
       try {
@@ -21522,7 +21614,7 @@ async function run10(args) {
     }
   }
 }
-async function dispatchVerb4(args) {
+async function dispatchVerb8(args) {
   const verb = args[0];
   const rest = args.slice(1);
   switch (verb) {
@@ -22475,7 +22567,7 @@ async function run11(args) {
   }
   if (root !== origCwd) process.chdir(root);
   try {
-    return await dispatchVerb5(args);
+    return await dispatchVerb9(args);
   } finally {
     if (root !== origCwd) {
       try {
@@ -22485,7 +22577,7 @@ async function run11(args) {
     }
   }
 }
-async function dispatchVerb5(args) {
+async function dispatchVerb9(args) {
   const verb = args[0];
   const rest = args.slice(1);
   switch (verb) {
@@ -27573,7 +27665,7 @@ async function run13(args) {
   }
   if (root !== origCwd) process.chdir(root);
   try {
-    return await dispatchVerb6(args);
+    return await dispatchVerb10(args);
   } finally {
     if (root !== origCwd) {
       try {
@@ -27583,7 +27675,7 @@ async function run13(args) {
     }
   }
 }
-async function dispatchVerb6(args) {
+async function dispatchVerb10(args) {
   const [verb, ...rest] = args;
   switch (verb) {
     case "init":
@@ -28824,7 +28916,7 @@ async function run14(args) {
   }
   if (root !== origCwd) process.chdir(root);
   try {
-    return await dispatchVerb7(args);
+    return await dispatchVerb11(args);
   } finally {
     if (root !== origCwd) {
       try {
@@ -28834,7 +28926,7 @@ async function run14(args) {
     }
   }
 }
-async function dispatchVerb7(args) {
+async function dispatchVerb11(args) {
   const verb = args[0];
   const rest = args.slice(1);
   switch (verb) {
@@ -29836,7 +29928,7 @@ async function run15(args) {
   }
   if (root !== origCwd) process.chdir(root);
   try {
-    return await dispatchVerb8(args);
+    return await dispatchVerb12(args);
   } finally {
     if (root !== origCwd) {
       try {
@@ -29846,7 +29938,7 @@ async function run15(args) {
     }
   }
 }
-async function dispatchVerb8(args) {
+async function dispatchVerb12(args) {
   const verb = args[0];
   const rest = args.slice(1);
   switch (verb) {

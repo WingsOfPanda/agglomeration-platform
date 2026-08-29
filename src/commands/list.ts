@@ -1,7 +1,8 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { repoStateDir, isArtifactDir } from "../core/paths.js";
-import { parseJob, jobPath, classifyJobLiveness } from "../core/job.js";
+import { repoStateDir, isArtifactDir, repoRoot } from "../core/paths.js";
+import { parseJob, jobPath, classifyJobLiveness, mainCheckoutRoot, orphanRefusal, orphanedTopicState, worktreeTopic } from "../core/job.js";
+import { log } from "../core/log.js";
 import { readIfExists } from "../core/fsread.js";
 import { paneMetaReadForDir, outboxPath, parseEvent, type PaneMeta } from "../core/ipc.js";
 import { livePaneNonces, ownsPane } from "../core/tmux.js";
@@ -44,6 +45,28 @@ export function rowState(live: Map<string, string>, meta: PaneMeta, outbox: stri
 }
 
 export async function run(args: string[]): Promise<number> {
+  // ONE state tree per run, whatever directory the operator is standing in (stop.ts carries the full
+  // rationale). `repoStateDir()` below derives from process.cwd(), so from inside a run's own
+  // worktree -- `<root>/.ap/worktrees/<topic>` -- this table listed the WORKTREE tree: no workers, or
+  // orphans, for a run whose workers were alive under the ROOT hash. The orphan refusal precedes the
+  // chdir so a genuinely split pre-0.5.51 run is named rather than reported as an empty repo.
+  const origCwd = process.cwd();
+  const gitRoot = repoRoot();
+  const root = mainCheckoutRoot(gitRoot);
+  const wtTopic = worktreeTopic(gitRoot);
+  const stranded = orphanedTopicState(wtTopic, gitRoot, root);
+  if (stranded) { for (const l of orphanRefusal(wtTopic, stranded, root).split("\n")) log.error(l); return 2; }
+  if (root !== origCwd) process.chdir(root);
+  try {
+    return await dispatchVerb(args);
+  } finally {
+    // Tests import run() and share a process, so the cwd is restored rather than left moved; a cwd
+    // that has since been removed must not turn a completed verb into a throw.
+    if (root !== origCwd) { try { process.chdir(origCwd); } catch { /* the caller's cwd is gone */ } }
+  }
+}
+
+async function dispatchVerb(args: string[]): Promise<number> {
   const filter = args.find((a) => !a.startsWith("--"));
   const repo = repoStateDir();
   if (!existsSync(repo)) { process.stdout.write(`no workers deployed (state dir absent: ${repo})\n`); return 0; }
