@@ -173,8 +173,7 @@ export function boundWait(d: { wait?: WaitFn; clock?: Clock }): WaitFn {
 
 /** The LAST terminal event in file order, or null when the region holds none. */
 function latestTerminal(events: OutboxEvent[]): OutboxEvent | null {
-  for (let k = events.length - 1; k >= 0; k--) if (TERMINAL_EVENTS.includes(events[k].event)) return events[k];
-  return null;
+  return events.filter((e) => TERMINAL_EVENTS.includes(e.event)).at(-1) ?? null;
 }
 
 /** The round-based turn/round waits' terminal event, CONFIRMED against continued outbox activity.

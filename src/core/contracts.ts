@@ -66,7 +66,6 @@ export function agentTimeoutMultiplier(name: string): string {
   return "1.0";
 }
 export function agentConsultValidated(name: string): boolean {
-  if (!name) throw new TypeError("agentConsultValidated: missing provider arg");
   return inst(name)?.consult_validated === true;
 }
 

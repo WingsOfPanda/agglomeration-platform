@@ -17,7 +17,7 @@ import { agentBinary, agentDefaultMode, agentModeArgs, agentReadyTimeout, agentB
 import { wrapLaunch, splitRight, splitDown, respawn, paneOwned, paneNonceSet, paneStateSet, paneLabelSet, paneSend, killNow, capturePane, ensurePaneBorders, ensureWindowBorderStatus, sessionExists, newSession, newWindow, validSessionName } from "../core/tmux.js";
 import { labelFor } from "../core/colors.js";
 import { taskNudge } from "./send.js";
-import { captureFailure, captureSpawnFailure, bootstrapFailureArgs, type FailureReason } from "../core/forensics.js";
+import { captureFailure, captureSpawnFailure, NO_EVENT_SENTINEL, type FailureReason } from "../core/forensics.js";
 
 export { validateSlug };
 export function resolveMode(explicit: string | undefined, dflt: string | undefined): string { return explicit || dflt || "full"; }
@@ -346,9 +346,11 @@ async function dispatchVerb(args: string[]): Promise<number> {
         { agent, model, topic, paneId: pane, reason, eventLine: ev ? JSON.stringify(ev) : undefined, readyTimeout },
         { workerDir, capturePane: (p, n) => capturePane(p, n), atomicWriteSync: (d, c) => writeFileSync(d, c), isWritableDir: (d) => existsSync(d), now: () => isoUtc() },
       );
-      // reason last: bootstrapFailureArgs only knows event-vs-no-event, and a synthetic pane-death
-      // error is neither the worker's own error nor a timeout.
-      captureSpawnFailure({ agent, model, topic, ...bootstrapFailureArgs(ev ?? null, fr.ok ? fr.path : undefined), reason });
+      captureSpawnFailure({
+        agent, model, topic, reason,
+        detail: ev ? JSON.stringify(ev) : NO_EVENT_SENTINEL,
+        failureReportPath: fr.ok ? fr.path : undefined,
+      });
       await killNow(pane);   // no ownership re-check: this id was created by THIS call, it cannot be stale
       // stamp the truth over the seed: a FAILED archive must not claim a dispatchable state for a worker that never reported (`error` is terminal, so no gate changes)
       writeWorkerStatus(agent, model, topic, "error", "bootstrap-failed");

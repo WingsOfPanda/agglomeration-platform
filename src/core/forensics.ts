@@ -209,17 +209,6 @@ export function runForensics(command: string, artDirFor: (topic: string) => stri
   return 0;
 }
 
-/** Pure mapping of a bootstrap-wait outcome to captureSpawnFailure's reason/detail. ev=null means the
- *  ready-timeout elapsed with no error event; a truthy ev is the error event that arrived instead. */
-export function bootstrapFailureArgs(
-  ev: { event: string; [k: string]: unknown } | null,
-  failureReportPath?: string,
-): { reason: string; detail: string; failureReportPath?: string } {
-  return ev
-    ? { reason: "error_event", detail: JSON.stringify(ev), failureReportPath }
-    : { reason: "timeout", detail: NO_EVENT_SENTINEL, failureReportPath };
-}
-
 /** Approach A: write a spawn/bootstrap-failure finding straight to the review feed
  *  (globalRoot()/forensics/<date>/<time>-spawn-<topic>.md, command:spawn), reusing renderArtForensics
  *  so /ap:review consumes it unchanged. Teardown-independent — works before the worker dir exists

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { writeFileSync, readdirSync, readFileSync, existsSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
-import { captureSpawnFailure, bootstrapFailureArgs, NO_EVENT_SENTINEL } from "../src/core/forensics.js";
+import { captureSpawnFailure, NO_EVENT_SENTINEL } from "../src/core/forensics.js";
 import { parseForensicsFrontmatter, parseMechanicalFindings } from "../src/core/review.js";
 import { globalRoot } from "../src/core/paths.js";
 
@@ -22,18 +22,6 @@ function forensicsMd(): string[] {
   if (existsSync(root)) walk(root);
   return out;
 }
-
-describe("bootstrapFailureArgs", () => {
-  it("maps no event to a timeout with the no-event sentinel", () => {
-    expect(bootstrapFailureArgs(null, "/p/failure-reason.txt"))
-      .toEqual({ reason: "timeout", detail: NO_EVENT_SENTINEL, failureReportPath: "/p/failure-reason.txt" });
-  });
-  it("maps an error event to error_event with the serialized event line", () => {
-    const ev = { event: "error", message: "boom" };
-    expect(bootstrapFailureArgs(ev, undefined))
-      .toEqual({ reason: "error_event", detail: JSON.stringify(ev), failureReportPath: undefined });
-  });
-});
 
 describe("captureSpawnFailure", () => {
   it("writes a command:spawn forensics file review can parse", () => {

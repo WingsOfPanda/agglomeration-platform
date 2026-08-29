@@ -32,8 +32,3 @@ export function planList(input: { detectedValidated: string[]; prior: string[] }
 export function formatProviderFile(providers: string[], isoStamp: string, subtitle: string): string {
   return `# generated ${isoStamp} by /ap:check\n# ${subtitle}\n${providers.join("\n")}${providers.length ? "\n" : ""}`;
 }
-
-/** The providers-active.txt body. */
-export function formatActiveFile(providers: string[], isoStamp: string): string {
-  return formatProviderFile(providers, isoStamp, "active providers selected by user");
-}
