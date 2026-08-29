@@ -79,8 +79,6 @@ export interface MetricThresholds {
   c1Budget?: number;
   /** optional metric.md `**select_k:**` worker-selection breadth; caller supplies default. */
   selectK?: number;
-  /** optional metric.md `**select_signal:**` selection signal (e.g. "held-out"); caller supplies default. */
-  selectSignal?: string;
   /** optional metric.md `**memory_half_life_days:**` memory decay half-life; caller supplies default. */
   memoryHalfLifeDays?: number;
   /** optional metric.md `**memory_max_age_days:**` hard memory age cutoff; caller supplies default. */
@@ -89,8 +87,6 @@ export interface MetricThresholds {
   memoryMinCorroboration?: number;
   /** optional metric.md `**memory_write_rate_max:**` max memory writes per window; caller supplies default. */
   memoryWriteRateMax?: number;
-  /** optional metric.md `**marginal_gain_threshold:**` min marginal gain to keep dispatching; caller supplies default. */
-  marginalGainThreshold?: number;
   minOp?: string; minVal?: string;
   tgtOp?: string; tgtVal?: string;
   kRequired: number; plateauWindow: number; plateauThreshold: number;
@@ -136,12 +132,10 @@ export function parseMetricMd(text: string): MetricThresholds {
     c1Epsilon: num("c1_epsilon"),
     c1Budget: int("c1_budget"),
     selectK: int("select_k"),
-    selectSignal: kv["select_signal"],
     memoryHalfLifeDays: num("memory_half_life_days"),
     memoryMaxAgeDays: num("memory_max_age_days"),
     memoryMinCorroboration: int("memory_min_corroboration"),
     memoryWriteRateMax: num("memory_write_rate_max"),
-    marginalGainThreshold: num("marginal_gain_threshold"),
   };
 }
 

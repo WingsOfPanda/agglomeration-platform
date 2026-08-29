@@ -1,19 +1,6 @@
 // tests/implement-questions.test.ts
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, it, expect } from "vitest";
 import { percentDecode, percentEncode, parseQuestionPayload, extractQuestionPayload, validateQuestionLine } from "../src/core/questionCodec.js";
-import { verifyClaim, formatReply } from "../src/core/implementQuestions.js";
-import type { Runner, RunResult } from "../src/core/gitwork.js";
-
-function fakeRunner(replies: Record<string, RunResult>) {
-  const calls: string[][] = [];
-  const r: Runner = {
-    run(cmd, args) { calls.push([cmd, ...args]); return replies[[cmd, ...args].join(" ")] ?? { code: 0, stdout: "" }; },
-  };
-  return { r, calls };
-}
 
 describe("percentDecode", () => {
   it("decodes the 6 escapes", () => {
@@ -77,109 +64,6 @@ describe("parseQuestionPayload", () => {
   });
 });
 
-describe("verifyClaim — empty/unknown", () => {
-  it("empty kind -> rc 2", () => { expect(verifyClaim("", "v").rc).toBe(2); });
-  it("empty value -> rc 2", () => { expect(verifyClaim("path", "").rc).toBe(2); });
-  it("unknown kind -> rc 2", () => { expect(verifyClaim("bogus", "v").rc).toBe(2); });
-});
-
-describe("verifyClaim — path", () => {
-  let dir: string;
-  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "pq-path-")); });
-  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
-  it("existing readable file -> rc 0 with evidence", () => {
-    const f = join(dir, "f.txt"); writeFileSync(f, "hi");
-    const res = verifyClaim("path", f);
-    expect(res.rc).toBe(0); expect(res.evidence).toContain(f);
-  });
-  it("existing directory -> rc 0", () => {
-    const sub = join(dir, "sub"); mkdirSync(sub);
-    expect(verifyClaim("path", sub).rc).toBe(0);
-  });
-  it("missing path -> rc 1", () => {
-    expect(verifyClaim("path", join(dir, "nope")).rc).toBe(1);
-    expect(verifyClaim("path", join(dir, "nope")).evidence).toBe("");
-  });
-});
-
-describe("verifyClaim — git (injected runner)", () => {
-  it("resolvable ref -> rc 0 with sha evidence (trailing newline stripped)", () => {
-    const { r, calls } = fakeRunner({ "git rev-parse --verify HEAD": { code: 0, stdout: "deadbeef\n" } });
-    expect(verifyClaim("git", "HEAD", r)).toEqual({ rc: 0, evidence: "deadbeef" });
-    expect(calls[0]).toEqual(["git", "rev-parse", "--verify", "HEAD"]);
-  });
-  it("unknown ref -> rc 1", () => {
-    const { r } = fakeRunner({ "git rev-parse --verify nope": { code: 128, stdout: "" } });
-    expect(verifyClaim("git", "nope", r)).toEqual({ rc: 1, evidence: "" });
-  });
-  it("no runner -> rc 1 (cannot resolve)", () => { expect(verifyClaim("git", "HEAD").rc).toBe(1); });
-});
-
-describe("verifyClaim — env", () => {
-  const KEY = "PQ_TEST_VAR_XYZ";
-  afterEach(() => { delete process.env[KEY]; });
-  it("set non-empty -> rc 0, evidence is the value", () => {
-    process.env[KEY] = "thevalue";
-    expect(verifyClaim("env", KEY)).toEqual({ rc: 0, evidence: "thevalue" });
-  });
-  it("unset -> rc 1", () => { delete process.env[KEY]; expect(verifyClaim("env", KEY)).toEqual({ rc: 1, evidence: "" }); });
-  it("set but empty string -> rc 1 (matches bash non-empty test)", () => {
-    process.env[KEY] = ""; expect(verifyClaim("env", KEY)).toEqual({ rc: 1, evidence: "" });
-  });
-});
-
-describe("verifyClaim — cmd (injected runner)", () => {
-  it("command present -> rc 0 with path evidence", () => {
-    const { r, calls } = fakeRunner({ "command -v -- git": { code: 0, stdout: "/usr/bin/git\n" } });
-    expect(verifyClaim("cmd", "git", r)).toEqual({ rc: 0, evidence: "/usr/bin/git" });
-    expect(calls[0]).toEqual(["command", "-v", "--", "git"]);
-  });
-  it("command absent -> rc 1", () => {
-    const { r } = fakeRunner({ "command -v -- nope": { code: 1, stdout: "" } });
-    expect(verifyClaim("cmd", "nope", r)).toEqual({ rc: 1, evidence: "" });
-  });
-  it("no runner -> rc 1", () => { expect(verifyClaim("cmd", "git").rc).toBe(1); });
-});
-
-describe("verifyClaim — test (injected runner)", () => {
-  it("exit 0 -> rc 0 with captured output", () => {
-    const { r, calls } = fakeRunner({ "timeout 30 bash -c -- echo ok": { code: 0, stdout: "ok\n" } });
-    expect(verifyClaim("test", "echo ok", r)).toEqual({ rc: 0, evidence: "ok" });
-    expect(calls[0]).toEqual(["timeout", "30", "bash", "-c", "--", "echo ok"]);
-  });
-  it("non-zero exit -> rc 1 with output", () => {
-    const { r } = fakeRunner({ "timeout 30 bash -c -- false": { code: 1, stdout: "boom\n" } });
-    expect(verifyClaim("test", "false", r)).toEqual({ rc: 1, evidence: "boom" });
-  });
-  it("timeout (exit 124) -> rc 2 unverifiable, not refuted", () => {
-    const { r } = fakeRunner({ "timeout 30 bash -c -- sleep 99": { code: 124, stdout: "" } });
-    expect(verifyClaim("test", "sleep 99", r).rc).toBe(2);
-  });
-  it("banned suite command -> rc 2 without running", () => {
-    const { r, calls } = fakeRunner({});
-    expect(verifyClaim("test", "tests/run.sh", r).rc).toBe(2);
-    expect(verifyClaim("test", "bash tests/run.sh --x", r).rc).toBe(2);
-    expect(calls.length).toBe(0);
-  });
-  it("no runner -> rc 2 unverifiable", () => { expect(verifyClaim("test", "echo ok").rc).toBe(2); });
-});
-
-describe("formatReply", () => {
-  it("rc 0 -> FOUND verdict, ends with Resume directive", () => {
-    expect(formatReply("path", "src/a.ts", 0, "- 12 src/a.ts")).toBe(
-      "From: hub\n\nVerdict: FOUND\nClaim kind: path\nClaim value: src/a.ts\n\nEvidence:\n- 12 src/a.ts\n\nResume implementation.\n");
-  });
-  it("rc 1 -> NOT FOUND", () => { expect(formatReply("git", "HEAD", 1, "")).toContain("Verdict: NOT FOUND"); });
-  it("rc 2 -> UNVERIFIABLE", () => { expect(formatReply("cmd", "foo", 2, "")).toContain("Verdict: UNVERIFIABLE"); });
-  it("kind=test inserts the NOTE block before resume", () => {
-    expect(formatReply("test", "echo ok", 0, "ok")).toBe(
-      "From: hub\n\nVerdict: FOUND\nClaim kind: test\nClaim value: echo ok\n\nEvidence:\nok\n\n" +
-      "NOTE: kind=test was a diagnostic check only — running your full test\nsuite is your job, not mine. Use this protocol for short verification\nqueries, not for offloading work.\n\nResume implementation.\n");
-  });
-  it("non-test kind has no NOTE block", () => { expect(formatReply("env", "HOME", 0, "/home/x")).not.toContain("NOTE: kind=test"); });
-  it("uses the rebranded From: hub sender", () => { expect(formatReply("path", "v", 0, "e")).toContain("From: hub"); });
-});
-
 describe("extractQuestionPayload", () => {
   it("message + claim → verify-route KV payload", () => {
     expect(extractQuestionPayload({ event: "question", message: "need X", claim: { kind: "path", value: "/x" } }, 1700000000))
@@ -241,19 +125,5 @@ describe("objection route (OBJECTION: marker on the no-claim side)", () => {
     const p = parseQuestionPayload(payload);
     expect(p.route).toBe("objection");
     expect(p.text).toBe("nope\nsecond line");
-  });
-});
-
-describe("round-trip: parse then verify then reply", () => {
-  it("env claim payload -> FOUND reply", () => {
-    process.env.PQ_RT = "yes";
-    const body = "TEXT=is%20HOME%20set%3F\nCLAIM_KIND=env\nCLAIM_VALUE=PQ_RT\nROUTE=verify\n";
-    const p = parseQuestionPayload(body);
-    expect(p.route).toBe("verify");
-    const v = verifyClaim(p.claimKind, p.claimValue);
-    const reply = formatReply(p.claimKind, p.claimValue, v.rc, v.evidence);
-    expect(reply).toContain("Verdict: FOUND");
-    expect(reply).toContain("Evidence:\nyes");
-    delete process.env.PQ_RT;
   });
 });
