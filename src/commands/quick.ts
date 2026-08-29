@@ -271,8 +271,6 @@ export async function branchWith(topic: string, target: string, r: Runner, stash
   log.ok(`quick branch: ${branch} (snapshot=${snap.state}, base=${snap.baseSha.slice(0, 8)})`);
   return 0;
 }
-export type TurnSendDeps = RoundSendDeps;
-export type TurnWaitDeps = RoundWaitDeps;
 
 const QUICK_TURN_TIMEOUT = envNum("AP_QUICK_TURN_TIMEOUT", DEFAULT_TURN_BUDGET_S);
 
@@ -306,7 +304,7 @@ async function turnSendRun(rest: string[]): Promise<number> {
   });
 }
 
-export async function turnSendWith(topic: string, round: number, d: TurnSendDeps): Promise<number> {
+export async function turnSendWith(topic: string, round: number, d: RoundSendDeps): Promise<number> {
   return sendRound(QUICK_ROUND, topic, round, d);
 }
 
@@ -317,7 +315,7 @@ async function turnWaitRun(rest: string[]): Promise<number> {
   return turnWaitWith(topic, round, {});
 }
 
-export async function turnWaitWith(topic: string, round: number, d: TurnWaitDeps): Promise<number> {
+export async function turnWaitWith(topic: string, round: number, d: RoundWaitDeps): Promise<number> {
   return waitRound(QUICK_ROUND, topic, round, d);
 }
 async function detectTestRun(rest: string[]): Promise<number> {

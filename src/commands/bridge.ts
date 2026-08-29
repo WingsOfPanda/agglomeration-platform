@@ -168,8 +168,6 @@ export async function branchWith(topic: string, target: string, r: Runner): Prom
   return 0;
 }
 
-export type TurnSendDeps = RoundSendDeps;
-export type TurnWaitDeps = RoundWaitDeps;
 
 const DUET_TURN_TIMEOUT = envNum("AP_DUET_TURN_TIMEOUT", DEFAULT_TURN_BUDGET_S);
 
@@ -204,7 +202,7 @@ async function roundSendRun(rest: string[]): Promise<number> {
   });
 }
 
-export async function roundSendWith(topic: string, round: number, d: TurnSendDeps): Promise<number> {
+export async function roundSendWith(topic: string, round: number, d: RoundSendDeps): Promise<number> {
   return sendRound(BRIDGE_ROUND, topic, round, d);
 }
 
@@ -215,7 +213,7 @@ async function roundWaitRun(rest: string[]): Promise<number> {
   return roundWaitWith(topic, round, {});
 }
 
-export async function roundWaitWith(topic: string, round: number, d: TurnWaitDeps): Promise<number> {
+export async function roundWaitWith(topic: string, round: number, d: RoundWaitDeps): Promise<number> {
   return waitRound(BRIDGE_ROUND, topic, round, d);
 }
 
