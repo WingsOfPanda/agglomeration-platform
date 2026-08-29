@@ -28,10 +28,8 @@ describe("design classifyTopic", () => {
 
 describe("design skillHintAppend", () => {
   const saved = process.env.CLAUDE_PLUGIN_ROOT;
-  const savedOv = process.env.AP_DESIGN_SKILL_OVERRIDE;
   afterEach(() => {
     if (saved === undefined) delete process.env.CLAUDE_PLUGIN_ROOT; else process.env.CLAUDE_PLUGIN_ROOT = saved;
-    if (savedOv === undefined) delete process.env.AP_DESIGN_SKILL_OVERRIDE; else process.env.AP_DESIGN_SKILL_OVERRIDE = savedOv;
   });
   function root(): string {
     const r = mkdtempSync(join(tmpdir(), "sk-"));
@@ -40,20 +38,17 @@ describe("design skillHintAppend", () => {
     return r;
   }
   it("appends the hint file when skill.txt names a real skill", () => {
-    const r = root(); process.env.CLAUDE_PLUGIN_ROOT = r; delete process.env.AP_DESIGN_SKILL_OVERRIDE;
+    const r = root(); process.env.CLAUDE_PLUGIN_ROOT = r;
     const st = join(r, "skill.txt"); writeFileSync(st, "brainstorming\n");
     expect(skillHintAppend(st, "BASE")).toBe("BASE\n\n---\n\nHINT-BRAIN\n");
     rmSync(r, { recursive: true, force: true });
   });
-  it("returns base unchanged when skill is none, file missing, or override=none", () => {
+  it("returns base unchanged when skill is none or the hint file is missing", () => {
     const r = root(); process.env.CLAUDE_PLUGIN_ROOT = r;
     const none = join(r, "n.txt"); writeFileSync(none, "none\n");
     expect(skillHintAppend(none, "BASE")).toBe("BASE");
     const dbg = join(r, "d.txt"); writeFileSync(dbg, "systematic-debugging\n");
     expect(skillHintAppend(dbg, "BASE")).toBe("BASE");
-    const brain = join(r, "b.txt"); writeFileSync(brain, "brainstorming\n");
-    process.env.AP_DESIGN_SKILL_OVERRIDE = "none";
-    expect(skillHintAppend(brain, "BASE")).toBe("BASE");
     rmSync(r, { recursive: true, force: true });
   });
 });

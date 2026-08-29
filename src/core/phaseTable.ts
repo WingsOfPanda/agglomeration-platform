@@ -209,13 +209,6 @@ export interface GuardLive {
   paneOwned?(pane: string, nonce: string): Promise<boolean>;
 }
 
-/** The GuardLive a send verb hands `guardSkipped`: the phase's two ids plus its OWN probes, so the
- *  guard's evidence and dispatchPrompt's busy-gate read through one seam. Spelled here once — every
- *  send site built the same literal by hand. */
-export function guardLive(topic: string, provider: string, d: SendDeps): GuardLive {
-  return { topic, provider, busyState: d.busyState, paneOwned: d.paneOwned };
-}
-
 /** The evidence quadruple, in the order it is probed. All four must hold to override a skip; the
  *  first that fails becomes the reason the warning names. Every leg answers a question the chain
  *  tag CANNOT: the tag only says a wait expired. */
@@ -392,7 +385,7 @@ export async function phaseSend(
   };
   const untriggered = hooks.preGuard?.(io);
   if (untriggered) return skipDispatch(row, agent, stateFile, untriggered.skip);
-  if (await guardSkipped(row, art, agent, stateFile, guardLive(topic, provider, d))) return 0;
+  if (await guardSkipped(row, art, agent, stateFile, { topic, provider, busyState: d.busyState, paneOwned: d.paneOwned })) return 0;
   const prep = hooks.prepare(io);
   if ("fail" in prep) return prep.fail;
   if ("skip" in prep) return skipDispatch(row, agent, stateFile, prep.skip);

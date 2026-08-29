@@ -33,8 +33,6 @@ export function parseVerdicts(verify: string): Verdict[] {
 
 export interface AdjPart {
   agent: string;
-  /** provider retained for caller-shape parity (Phase D); unused in adjudication. */
-  provider: string;
 }
 export interface AdjudicateInput {
   workers: AdjPart[];
