@@ -2,9 +2,11 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { labelFor, colorFor, labelFmt } from "./colors.js";
+import { log } from "./log.js";
+import { parsePanesFile } from "./roster.js";
 
 // ---------- pure arg builders (unit-tested) ----------
 export function splitRightArgs(launch: string, target?: string, cwd?: string): string[] {
@@ -303,6 +305,30 @@ export async function paneStateRead(pane: string): Promise<string> {
 export async function paneOwned(pane: string, nonce: string): Promise<boolean> {
   if (!NONCE_RE.test(nonce)) return false;   // unverifiable: no tmux call can settle it
   return ownsPane(await livePaneNonces(), pane, nonce);
+}
+
+export interface PreflightOrphanDeps {
+  killPane(pane: string): Promise<void>;
+  /** ONE server-wide pane+nonce snapshot for the whole sweep. */
+  livePaneNonces(): Promise<Map<string, string>>;
+}
+
+/** Teardown's preflight-orphan sweep, shared by explore and autoresearch: kill every pane
+ *  `<art>/preflight-panes.txt` names that STILL carries the nonce preflight recorded for it. A stale
+ *  art dir names ids a restarted tmux has handed to other programs, so a live-but-not-ours pane is
+ *  warned about and left alone. No-op when the file is absent (tests/dogfood). Best-effort
+ *  throughout; the only per-command difference is the `label` woven into the mismatch warning. */
+export async function killPreflightOrphans(art: string, deps: PreflightOrphanDeps, label: string): Promise<void> {
+  const pf = join(art, "preflight-panes.txt");
+  if (!existsSync(pf)) return;
+  const live = await deps.livePaneNonces().catch(() => new Map<string, string>());
+  for (const pin of parsePanesFile(readFileSync(pf, "utf8")).values()) {
+    if (!ownsPane(live, pin.pane, pin.nonce)) {
+      if (live.has(pin.pane)) log.warn(`${label} pane ${pin.pane} is live but is not ours (nonce mismatch) — not killing it`);
+      continue;
+    }
+    try { await deps.killPane(pin.pane); } catch { /* best-effort */ }
+  }
 }
 
 /** Stamp the pane's ownership nonce; false on any tmux error (never throws). The boolean is

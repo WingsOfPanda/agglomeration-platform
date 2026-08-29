@@ -50,7 +50,7 @@ import { buildCorpusDigest, leaderMetricOf, type CorpusEntry } from "../core/aut
 import { agentBinary, consultTimeout } from "../core/contracts.js";
 import { inboxWrite, inboxPath, outboxPath, outboxOffset, paneMetaRead, resolveModel, parseEvent } from "../core/ipc.js";
 import { ledgerPath, controllerGenPath, appendEvent, replayLedger, readGen, renderGen, isStaleGenError, type LedgerEventKind } from "../core/autoresearchLedger.js";
-import { paneSend, killNow, paneOwned, livePaneNonces, ownsPane } from "../core/tmux.js";
+import { paneSend, killNow, paneOwned, livePaneNonces, ownsPane, killPreflightOrphans } from "../core/tmux.js";
 import { haveCmd } from "../core/deps.js";
 import { spawnListArg, parsePanesFile, spawnResultsTsv, spawnTally, type SpawnResult } from "../core/roster.js";
 import { pickAgents } from "../core/agents.js";
@@ -1444,18 +1444,8 @@ export async function teardownWith(args: string[], deps: AutoresearchTeardownDep
 
   // 1. Preflight orphan kill (best-effort). Normally already dead from `stop
   //    --pairs`; no-op when preflight-panes.txt is absent (tests/dogfood).
-  const pf = join(art, "preflight-panes.txt");
-  if (existsSync(pf)) {
-    const live = await deps.livePaneNonces().catch(() => new Map<string, string>());
-    for (const pin of parsePanesFile(readFileSync(pf, "utf8")).values()) {
-      if (!ownsPane(live, pin.pane, pin.nonce)) {
-        if (live.has(pin.pane)) log.warn(`[teardown] pane ${pin.pane} is live but is not ours (nonce mismatch) — not killing it`);
-        continue;
-      }
-      try { await deps.killPane(pin.pane); } catch { /* best-effort */ }
-    }
-    try { rmSync(pf, { force: true }); } catch { /* best-effort */ }
-  }
+  await killPreflightOrphans(art, deps, "[teardown]");
+  try { rmSync(join(art, "preflight-panes.txt"), { force: true }); } catch { /* best-effort */ }
 
   if (panesOnly) {
     // spawn-all self-clears spawn-results.tsv + rewrites workers.txt/preflight-panes.txt on retry,

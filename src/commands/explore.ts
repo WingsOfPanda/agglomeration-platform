@@ -9,9 +9,9 @@ import { isoUtc, archiveTopic } from "../core/archive.js";
 import { exploreArtDir, deriveSlug, finalLandscapePath, missingListArtifacts } from "../core/explore.js";
 import { extractHandoffData } from "../core/exploreHandoff.js";
 import { runForensics, runFlag } from "../core/forensics.js";
-import { killNow, livePaneNonces, ownsPane } from "../core/tmux.js";
+import { killNow, killPreflightOrphans, livePaneNonces } from "../core/tmux.js";
 import {
-  type ListRow, type SpawnAllBatchDeps, formatListFile, parseListFile, parsePanesFile, spawnAllBatch, lastTag, verifyScopeFiles,
+  type ListRow, type SpawnAllBatchDeps, formatListFile, parseListFile, spawnAllBatch, lastTag, verifyScopeFiles,
 } from "../core/roster.js";
 import { readProviderList } from "../core/providers.js";
 import { activeProvidersPath, repoRoot } from "../core/paths.js";
@@ -658,19 +658,7 @@ export async function teardownWith(args: string[], deps: ExploreTeardownDeps): P
   const art = exploreArtDir(topic);
   if (!existsSync(art) || !statSync(art).isDirectory()) { log.error(`${art} not found`); return 1; }
 
-  const pf = join(art, "preflight-panes.txt");
-  if (existsSync(pf)) {
-    const live = await deps.livePaneNonces().catch(() => new Map<string, string>());
-    for (const pin of parsePanesFile(readFileSync(pf, "utf8")).values()) {
-      // A stale art dir names ids a restarted tmux has handed to other programs; kill only the
-      // panes still carrying our recorded nonce.
-      if (!ownsPane(live, pin.pane, pin.nonce)) {
-        if (live.has(pin.pane)) log.warn(`explore teardown: pane ${pin.pane} is live but is not ours (nonce mismatch) — not killing it`);
-        continue;
-      }
-      try { await deps.killPane(pin.pane); } catch { /* best-effort */ }
-    }
-  }
+  await killPreflightOrphans(art, deps, "explore teardown:");
 
   if (panesOnly) {
     for (const f of ["preflight-panes.txt", "spawn-results.tsv"]) {
