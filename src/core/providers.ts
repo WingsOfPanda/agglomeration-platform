@@ -1,15 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { splitNonCommentLines } from "./text.js";
 
-/** Parse a providers-*.txt body: one provider per line; skip blank and #-comment lines; trim. */
-export function parseProviderList(text: string): string[] {
-  return splitNonCommentLines(text);
-}
-
-/** Read + parse a provider-list file. Missing or unreadable → []. */
+/** Read + parse a provider-list file (one provider per line; blank and #-comment lines skipped;
+ *  trimmed). Missing or unreadable → []. */
 export function readProviderList(path: string): string[] {
   if (!existsSync(path)) return [];
-  try { return parseProviderList(readFileSync(path, "utf8")); } catch { return []; }
+  try { return splitNonCommentLines(readFileSync(path, "utf8")); } catch { return []; }
 }
 
 export type ListDecision = "skip" | "auto" | "prompt";

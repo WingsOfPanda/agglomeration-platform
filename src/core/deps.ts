@@ -10,8 +10,7 @@ export function haveCmd(name: string): boolean {
   }
 }
 
-export function tmuxVersionString(run?: () => string | null): string | null {
-  if (run) return run();
+export function tmuxVersionString(): string | null {
   if (!haveCmd("tmux")) return null;
   try {
     return execFileSync("tmux", ["-V"], { encoding: "utf8" }).trim();

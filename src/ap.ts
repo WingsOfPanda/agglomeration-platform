@@ -4,12 +4,12 @@ import { runArgsFile } from "./core/paths.js";
 import { renderBannerHead, ansiFromColor } from "./core/colors.js";
 import { dispatch, type Handler } from "./core/dispatch.js";
 
-// One dynamic-import thunk per verb: only the dispatched subcommand's module is loaded. Eagerly
-// importing all 15 initialized 14 unused ones on every invocation (~21 ms on the always-on `ap hook`).
+// One dynamic-import thunk per verb: only the dispatched subcommand's module is loaded, rather than
+// initializing all 15 on every invocation.
 const LOADERS: Record<string, () => Promise<{ run: Handler }>> = {
   spawn: () => import("./commands/spawn.js"), send: () => import("./commands/send.js"), collect: () => import("./commands/collect.js"),
   list: () => import("./commands/list.js"), stop: () => import("./commands/stop.js"), check: () => import("./commands/check.js"),
-  preflight: () => import("./commands/preflight.js"), hook: () => import("./commands/hook.js"), quick: () => import("./commands/quick.js"),
+  preflight: () => import("./commands/preflight.js"), quick: () => import("./commands/quick.js"),
   design: () => import("./commands/design.js"), implement: () => import("./commands/implement.js"), review: () => import("./commands/review.js"),
   autoresearch: () => import("./commands/autoresearch.js"), explore: () => import("./commands/explore.js"), bridge: () => import("./commands/bridge.js"),
   job: () => import("./commands/job.js"),

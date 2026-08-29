@@ -6,10 +6,5 @@
   "homepage": "https://github.com/WingsOfPanda/agglomeration-platform",
   "repository": "https://github.com/WingsOfPanda/agglomeration-platform",
   "license": "MIT",
-  "keywords": ["claude-code", "plugin", "multi-agent", "orchestration", "tmux", "codex"],
-  "hooks": {
-    "UserPromptSubmit": [
-      { "matcher": "*", "hooks": [ { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs hook user-prompt-submit" } ] }
-    ]
-  }
+  "keywords": ["claude-code", "plugin", "multi-agent", "orchestration", "tmux", "codex"]
 }
