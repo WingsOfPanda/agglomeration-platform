@@ -56,6 +56,7 @@ describe("check list-set", () => {
     expect(rc).toBe(0);
     const body = readFileSync(join(globalRoot(), "providers-active.txt"), "utf8");
     expect(body).toContain("by /ap:check");
+    expect(body).toContain("# active providers selected by user");
     expect(body.trim().split("\n").slice(-2)).toEqual(["codex", "claude"]);
     expect(cap.text()).toContain("active set: codex, claude");
   });

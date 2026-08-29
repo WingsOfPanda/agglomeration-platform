@@ -115,6 +115,7 @@ export function readyWait(
 /** Why the ready-wait ended without a `ready`: no event at all is the deadline; the wait's synthetic
  *  pane-death error is a dead pane (the worker never wrote it); anything else is the worker's own
  *  `error` event. Pure, so the three-way split is testable without a wait. */
+export const bootstrapFailureDetail = (ev: OutboxEvent | null): string => ev ? JSON.stringify(ev) : NO_EVENT_SENTINEL;
 export function bootstrapFailureReason(ev: OutboxEvent | null): FailureReason {
   if (!ev) return "timeout";
   return ev.note === PANE_DIED_NOTE ? "pane_dead" : "error_event";
@@ -348,7 +349,7 @@ async function dispatchVerb(args: string[]): Promise<number> {
       );
       captureSpawnFailure({
         agent, model, topic, reason,
-        detail: ev ? JSON.stringify(ev) : NO_EVENT_SENTINEL,
+        detail: bootstrapFailureDetail(ev),
         failureReportPath: fr.ok ? fr.path : undefined,
       });
       await killNow(pane);   // no ownership re-check: this id was created by THIS call, it cannot be stale

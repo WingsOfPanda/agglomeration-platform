@@ -684,7 +684,7 @@ export async function experimentSendWith(args: string[], deps: ExperimentSendDep
     prompt = renderExperimentPrompt(template, {
       metricBlock, hardwareBlock, outboxPath: outbox, topicText, expId,
       approachLabel, approachBrief, branchDir, metricName, timeBudgetS,
-      taskContext: "", sotaBlock, peersBlock, artDir: art,
+      sotaBlock, peersBlock, artDir: art,
     });
   } catch (e) { return fail((e as Error).message, 1); }
   if (prompt.trim() === "") return fail(`prompt rendered empty (template substitution failed)`, 1);

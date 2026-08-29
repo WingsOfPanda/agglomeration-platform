@@ -129,7 +129,7 @@ async function dispatchVerb(args: string[]): Promise<number> {
     case "forensics":    return forensicsRun(rest);
     case "flag":         return runFlag("implement", rest[0], rest.slice(1).join(" "));
     case "archive":      return archiveRun(rest);
-    case "find-latest-doc": return findLatestDocRun();
+    case "find-latest-doc": if (rest.length) { log.error("implement find-latest-doc: takes no arguments"); return 2; } return findLatestDocRun();
     default:          return usage();
   }
 }

@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { virtualClock } from "./helpers/clock.js";
 import {
-  spawnKilled, withSigtermGuard, readyWait, bootstrapFailureReason, realSpawnKilledDeps,
+  spawnKilled, withSigtermGuard, readyWait, bootstrapFailureReason, bootstrapFailureDetail, realSpawnKilledDeps,
   READY_EVENTS, SPAWN_KILLED_EXIT, type SpawnKilledDeps,
 } from "../src/commands/spawn.js";
 import { captureFailure, captureSpawnFailure, FAILURE_FILENAME } from "../src/core/forensics.js";
@@ -281,6 +281,10 @@ describe("failure reports carry the two new reasons", () => {
 
 describe("bootstrapFailureReason (pure)", () => {
   it("no event -> timeout", () => { expect(bootstrapFailureReason(null)).toBe("timeout"); });
+  it("detail: no event -> sentinel; error event -> serialized line", () => {
+    expect(bootstrapFailureDetail(null)).toBe("no error event before timeout");
+    expect(bootstrapFailureDetail({ event: "error", message: "boom" } as never)).toBe('{"event":"error","message":"boom"}');
+  });
   it("the synthetic pane-death error -> pane_dead, never the worker's own error_event", () => {
     expect(bootstrapFailureReason({ event: "error", note: PANE_DIED_NOTE })).toBe("pane_dead");
   });

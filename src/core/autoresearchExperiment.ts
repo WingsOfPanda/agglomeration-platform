@@ -15,7 +15,7 @@ export const AGENT_RE = /^[a-z][a-z0-9-]*$/;
 export interface PromptFields {
   metricBlock: string; hardwareBlock: string; outboxPath: string; topicText: string;
   expId: string; approachLabel: string; approachBrief: string; branchDir: string;
-  metricName: string; timeBudgetS: string; taskContext: string; sotaBlock: string;
+  metricName: string; timeBudgetS: string; sotaBlock: string;
   peersBlock: string; artDir: string;
 }
 
@@ -24,7 +24,7 @@ const TOKENS: Array<[string, keyof PromptFields]> = [
   ["{{OUTBOX_PATH}}", "outboxPath"], ["{{TOPIC}}", "topicText"], ["{{EXP_ID}}", "expId"],
   ["{{APPROACH_LABEL}}", "approachLabel"], ["{{APPROACH_BRIEF}}", "approachBrief"],
   ["{{BRANCH_DIR}}", "branchDir"], ["{{METRIC_NAME}}", "metricName"],
-  ["{{TIME_BUDGET_S}}", "timeBudgetS"], ["{{TASK_CONTEXT}}", "taskContext"],
+  ["{{TIME_BUDGET_S}}", "timeBudgetS"],
   ["{{SOTA_BLOCK}}", "sotaBlock"], ["{{PEERS_BLOCK}}", "peersBlock"], ["{{ART_DIR}}", "artDir"],
 ];
 
