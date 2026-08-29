@@ -2,7 +2,7 @@ import { kvParse } from "../args.js";
 import { log } from "../core/log.js";
 import { repoRoot } from "../core/paths.js";
 import { mainCheckoutRoot, orphanRefusal, orphanedTopicState, worktreeTopic } from "../core/job.js";
-import { resolveModel, outboxWait, outboxDump } from "../core/ipc.js";
+import { resolveModel, outboxWaitSince, outboxDump } from "../core/ipc.js";
 import { validateSlug } from "../core/slug.js";
 
 export async function run(args: string[]): Promise<number> {
@@ -40,7 +40,7 @@ async function dispatchVerb(args: string[]): Promise<number> {
   const model = resolveModel(agent, topic);
   if (!model) { log.error(`no worker '${agent}' on topic '${topic}'`); return 1; }
   log.info(`tailing outbox for ${agent}-${model} (timeout ${timeout}s)`);
-  const ev = await outboxWait(agent, model, topic, ["done", "error"], timeout);
+  const ev = await outboxWaitSince(agent, model, topic, 0, ["done", "error"], timeout);
   if (ev?.event === "done") { log.ok("{done} received"); process.stdout.write(JSON.stringify(ev) + "\n"); return 0; }
   if (ev?.event === "error") { log.error(`{error} received from ${agent}`); process.stdout.write(JSON.stringify(ev) + "\n"); return 1; }
   log.error(`timeout after ${timeout}s; outbox tail:`);

@@ -9,6 +9,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { IDENTITY_BLOCKS } from "../src/core/ipc.js";
 
 const read = (...p: string[]) => readFileSync(join(process.cwd(), ...p), "utf8");
 
@@ -83,7 +84,9 @@ describe("in-run turn waits are armed as a persistent Monitor (issue #161)", () 
 });
 
 describe("the job hub's backgrounding grant matches the directives (issue #161)", () => {
-  const hub = read("config", "prompt-templates", "job-hub.md");
+  // The job-hub identity's role block (was config/prompt-templates/job-hub.md, now the only
+  // role-varying text of the one identity template).
+  const hub = IDENTITY_BLOCKS["job-hub"].role_block;
 
   it("still grants backgrounding for the other wait verbs", () => {
     expect(hub).toContain("Backgrounding is expected of you");
@@ -91,7 +94,7 @@ describe("the job hub's backgrounding grant matches the directives (issue #161)"
   });
 
   it("carves the TURN waits out and sends the hub to the directive's Monitor block", () => {
-    expect(hub, "job-hub.md still tells the hub to background every *-wait verb")
+    expect(hub, "the job-hub block still tells the hub to background every *-wait verb")
       .not.toContain("Dispatch the directive's `*-wait` verbs with `run_in_background: true`");
     expect(hub).toContain("persistent **Monitor**");
     expect(hub).toContain("run the directive's Monitor block as written");

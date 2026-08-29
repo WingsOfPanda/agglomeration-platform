@@ -116,20 +116,20 @@ describe("ipc outbox", () => {
     expect(IPC.outboxOffset(join(d, "outbox.jsonl"))).toBe(11);
     expect(IPC.outboxOffset(join(d, "nope.jsonl"))).toBe(0);
   });
-  it("outboxWait returns LAST matching event (tail-n1), done resolves fast", async () => {
+  it("outboxWaitSince returns LAST matching event (tail-n1), done resolves fast", async () => {
     home(); const d = seedPart("bravo", "codex", "demo");
     writeFileSync(join(d, "outbox.jsonl"),
       `{"event":"ack","task_summary":"x"}\n` +
       `{"event":"progress","note":"\\"event\\":\\"done\\" inside"}\n` +
       `{"event":"done","summary":"first"}\n` +
       `{"event":"done","summary":"actually finished"}\n`);
-    const ev = await IPC.outboxWait("bravo", "codex", "demo", ["done", "error"], 5);
+    const ev = await IPC.outboxWaitSince("bravo", "codex", "demo", 0, ["done", "error"], 5);
     expect(ev?.event).toBe("done");
     expect(ev?.summary).toBe("actually finished");
   });
-  it("outboxWait times out → null", async () => {
+  it("outboxWaitSince times out → null", async () => {
     home(); seedPart("bravo", "codex", "demo");
-    const ev = await IPC.outboxWait("bravo", "codex", "demo", ["done"], 1);
+    const ev = await IPC.outboxWaitSince("bravo", "codex", "demo", 0, ["done"], 1);
     expect(ev).toBeNull();
   });
   it("outboxWaitSince only matches after offset", async () => {
@@ -155,19 +155,19 @@ describe("ipc outbox", () => {
   it("event precedence: ready (listed first) beats a later error", async () => {
     home(); const d = seedPart("bravo", "codex", "demo");
     writeFileSync(join(d, "outbox.jsonl"), `{"event":"ready","ts":"t"}\n{"event":"error","message":"late","fatal":false}\n`);
-    const ev = await IPC.outboxWait("bravo", "codex", "demo", ["ready", "error"], 3);
+    const ev = await IPC.outboxWaitSince("bravo", "codex", "demo", 0, ["ready", "error"], 3);
     expect(ev?.event).toBe("ready");
   });
   it("event precedence: done (listed first) beats error regardless of file order", async () => {
     home(); const d = seedPart("bravo", "codex", "demo");
     writeFileSync(join(d, "outbox.jsonl"), `{"event":"error","message":"x"}\n{"event":"done","summary":"ok"}\n`);
-    const ev = await IPC.outboxWait("bravo", "codex", "demo", ["done", "error"], 3);
+    const ev = await IPC.outboxWaitSince("bravo", "codex", "demo", 0, ["done", "error"], 3);
     expect(ev?.event).toBe("done");
   });
   it("event precedence: first-listed absent falls through to next", async () => {
     home(); const d = seedPart("bravo", "codex", "demo");
     writeFileSync(join(d, "outbox.jsonl"), `{"event":"error","message":"boom","fatal":true}\n`);
-    const ev = await IPC.outboxWait("bravo", "codex", "demo", ["ready", "error"], 3);
+    const ev = await IPC.outboxWaitSince("bravo", "codex", "demo", 0, ["ready", "error"], 3);
     expect(ev?.event).toBe("error");
   });
 });
