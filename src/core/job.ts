@@ -7,8 +7,9 @@
 // record says what was LAUNCHED and nothing else; liveness comes from the pane nonce, progress from
 // the outbox, and the hub's own state from its status.json. Four independent reads, no inference.
 
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, join, sep } from "node:path";
+import { readIfExists } from "./fsread.js";
 import { jobDir, topicDir } from "./paths.js";
 import { validateSlug } from "./slug.js";
 import { ownsPane, verifiableNonce } from "./tmux.js";
@@ -93,6 +94,29 @@ export function worktreeTopic(root: string): string {
   if (mainCheckoutRoot(root) === root) return "";
   const topic = basename(root);
   return validateSlug(topic) ? topic : "";
+}
+/** Must `finish` LEAVE this target checked out on the run's branch instead of restoring the start
+ *  branch? True only when the target IS the run's own dedicated worktree. The start-branch restore
+ *  exists to hand the OPERATOR's checkout back; a dedicated worktree has no operator checkout to
+ *  return, while a long job launched from `feat/<cmd>-<topic>` may still be EXECUTING out of that
+ *  tree — so the swap is pure hazard there, and its dangerous form is silent: a lazy import, a
+ *  root-relative re-read or a restart then runs the wrong tree while the evidence record still
+ *  carries the run's `code_sha` (issue #165, two field occurrences).
+ *
+ *  Deliberately NOT "a job record exists". `job start --no-worktree` also leaves a live record, but
+ *  records `worktree: ""` and the run works in the OPERATOR's own checkout — skipping the restore
+ *  there strands them on the feature branch and (with `--stash-wip`) leaves their WIP parked behind
+ *  the wrong-HEAD protection. Records written before 0.5.36 carry no worktree field at all and read
+ *  the same way. So all four must hold: a record that PARSES, a non-empty worktree, ap provenance on
+ *  that path (`<root>/.ap/worktrees/<topic>` by construction — `mainCheckoutRoot` re-rooting a path
+ *  IS that shape, the same check `job stop` refuses to remove a foreign path with), and canonical
+ *  equality with the target this finish actually ran in. Anything else — no record, a torn one, a
+ *  mismatch, a realpath that throws — is false, and every caller behaves exactly as before. */
+export function keepOnBranch(topic: string, targetCwd: string): boolean {
+  if (!targetCwd) return false;
+  const wt = parseJob(readIfExists(jobPath(topic)))?.worktree ?? "";
+  if (!wt || mainCheckoutRoot(wt) === wt) return false;
+  try { return realpathSync(wt) === realpathSync(targetCwd); } catch { return false; }
 }
 /** Orphaned state from a run that STARTED before uniform rooting: its verbs hashed the worktree
  *  checkout, so its topic dir sits under the worktree tree while the re-rooted verb now reads the

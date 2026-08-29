@@ -1,7 +1,8 @@
 // tests/implement-cmd.test.ts — B2b: implement pre-snapshot / branch / scope-check / summary / finish /
 // forensics / archive verbs. Fake Runner injection; AP_HOME temp; byte-exact state-file asserts.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { implementArtDir, implementTopicDir } from "../src/core/implement.js";
@@ -388,7 +389,7 @@ describe("implement finish — a detached job in flight allows only 'keep'", () 
   beforeEach(() => { h = freshHome(); });
   afterEach(() => { h.cleanup(); });
 
-  function seedJobRecord(finish = "keep"): void {
+  function seedJobRecord(finish = "keep", worktree?: string): void {
     const p = jobPath(TOPIC);
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, formatJob({
@@ -396,6 +397,7 @@ describe("implement finish — a detached job in flight allows only 'keep'", () 
       hub: { agent: "alpha", model: "claude" },
       provider: "codex", finish, budget_hours: 6, max_rounds: 5,
       args_file: "/tmp/args", started: "2026-08-18T00:00:00Z",
+      worktree,
     }));
   }
   function seedFinish(art: string): void {
@@ -424,6 +426,43 @@ describe("implement finish — a detached job in flight allows only 'keep'", () 
       expect(hubFlags()).toContain(`finish ${action}: REFUSED`);
     });
   }
+
+  // issue #165: a detached implement is forced to `keep` and routes through finishBranchAction →
+  // finishWork, whose keep arm checked the base out UNCONDITIONALLY — under a job still running from
+  // the run's own worktree, that swaps the tree the job is executing from.
+  it("keep in the record's own provenanced worktree → kept-on-branch, no base checkout", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ap-wt-"));
+    const wt = join(root, ".ap", "worktrees", TOPIC);
+    mkdirSync(wt, { recursive: true });
+    try {
+      const art = seedArt();
+      seedTargetCwd(art, wt);
+      writeFileSync(join(art, "implement-branches.tsv"), "main\tfeat/implement-foo\n");
+      mkdirSync(join(art, "baselines"), { recursive: true });
+      writeFileSync(join(art, "baselines", "main.tsv"), `slug=main\ncwd=${wt}\nbranch=main\n`);
+      seedJobRecord("keep", wt);
+      const calls: string[][] = [];
+      // Every probe answers rc 0 — the branch ref exists, so the keep arm is reached.
+      const r: Runner = { run(cmd, args) { calls.push([cmd, ...args]); return { code: 0, stdout: "" }; } };
+      const { rc } = await capture(() => finishWith2(TOPIC, "keep", () => r, true));
+      expect(rc).toBe(0);
+      expect(readFileSync(join(art, "finish-results.tsv"), "utf8")).toBe("main\tkeep\tkept-on-branch\n");
+      expect(calls.some((c) => c[1] === "checkout")).toBe(false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  // Same shape, --no-worktree: the target is the OPERATOR's checkout, which still gets its branch back.
+  it("keep with a --no-worktree record → plain kept, base restored", async () => {
+    const art = seedArt();
+    seedFinish(art);
+    seedJobRecord("keep", "");
+    const calls: string[][] = [];
+    const r: Runner = { run(cmd, args) { calls.push([cmd, ...args]); return { code: 0, stdout: "" }; } };
+    const { rc } = await capture(() => finishWith2(TOPIC, "keep", () => r, true));
+    expect(rc).toBe(0);
+    expect(readFileSync(join(art, "finish-results.tsv"), "utf8")).toBe("main\tkeep\tkept\n");
+    expect(calls).toContainEqual(["git", "checkout", "-q", "main"]);
+  });
 
   it("keep passes the gate and finishes normally", async () => {
     const art = seedArt();

@@ -61,6 +61,28 @@ describe("finishWork arms", () => {
     expect(finishWork(r, opts({ action: "keep" }))).toEqual({ action: "keep", outcome: "kept" });
     expect(calls.some((c) => c[1] === "branch")).toBe(false);
   });
+  // issue #165: the restore hands the OPERATOR's checkout back, and a dedicated run worktree has
+  // none to hand back — while a job may still be executing out of it from the feature branch.
+  it("keep + keepOnBranch → kept-on-branch, and NO checkout at all", () => {
+    const { r, calls } = fakeRunner({ ...EXISTS });
+    expect(finishWork(r, opts({ action: "keep", keepOnBranch: true }))).toEqual({ action: "keep", outcome: "kept-on-branch" });
+    expect(calls.some((c) => c[1] === "checkout")).toBe(false);
+  });
+  it("auto resolving to keep + keepOnBranch → kept-on-branch (the no-remote detached shape)", () => {
+    const { r, calls } = fakeRunner({ ...EXISTS, "git remote": { code: 0, stdout: "" } });
+    expect(finishWork(r, opts({ action: "auto", keepOnBranch: true }))).toEqual({ action: "keep", outcome: "kept-on-branch" });
+    expect(calls.some((c) => c[1] === "checkout")).toBe(false);
+  });
+  it("keepOnBranch is read by the keep arm ALONE — merge/discard/pr still restore the base", () => {
+    for (const action of ["merge", "discard"] as const) {
+      const { r, calls } = fakeRunner({ ...EXISTS });
+      expect(finishWork(r, opts({ action, keepOnBranch: true })).outcome).toBe(action === "merge" ? "merged" : "discarded");
+      expect(calls).toContainEqual(["git", "checkout", "-q", "main"]);
+    }
+    const { r, calls } = fakeRunner({ ...EXISTS, "git remote get-url origin": { code: 0, stdout: "u\n" } });
+    expect(finishWork(r, opts({ action: "pr", hasGh: true, keepOnBranch: true })).outcome).toBe("pr-opened");
+    expect(calls).toContainEqual(["git", "checkout", "-q", "main"]);
+  });
   it("discard → discarded + branch -D", () => {
     const { r, calls } = fakeRunner({ ...EXISTS });
     expect(finishWork(r, opts({ action: "discard" }))).toEqual({ action: "discard", outcome: "discarded" });

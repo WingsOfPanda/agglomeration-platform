@@ -6,7 +6,7 @@ import { applyArgsFile } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
 import { isoUtc } from "../core/archive.js";
 import { repoRoot } from "../core/paths.js";
-import { jobPath, mainCheckoutRoot, orphanRefusal, orphanedTopicState, worktreeTopic } from "../core/job.js";
+import { jobPath, keepOnBranch, mainCheckoutRoot, orphanRefusal, orphanedTopicState, worktreeTopic } from "../core/job.js";
 import { quickArtDir, quickExecDir, deriveSlug, parseQuickArgs, parseBranchArgs, detectTestCommand, renderSummary, renderResume, type SummaryFacts } from "../core/quick.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { agentBinary } from "../core/contracts.js";
@@ -399,10 +399,27 @@ export async function finishWith(topic: string, r: Runner, hasGh: boolean): Prom
   const doFinish = readField(join(exec, "finish.txt")) === "yes" && !detachedJob;
 
   if (!doFinish) {
-    r.run("git", ["checkout", "-q", startBranch]);
+    // The start-branch checkout is for the OPERATOR's own tree. When the target IS the run's
+    // dedicated worktree, a job launched from `feat/quick-<topic>` may still be executing out of it
+    // and the swap re-points every later read at the wrong tree while the run's evidence still names
+    // its own code_sha — twice in the field, silently (issue #165). Proven, never assumed: a record
+    // alone is not enough (a `--no-worktree` job runs in the operator's checkout, which DOES need
+    // restoring), so `keepOnBranch` demands provenance + canonical-path equality with this target.
+    const target = readField(join(exec, "target_cwd.txt"));
+    const onBranch = keepOnBranch(topic, target);
+    if (onBranch) {
+      log.warn(`quick finish: kept-on-branch — a live detached job runs from this worktree (${target}); NOT restoring '${startBranch}'`);
+    } else {
+      r.run("git", ["checkout", "-q", startBranch]);
+    }
+    // Still through restoreStashWip either way: its wrong-HEAD protection is exactly what a skipped
+    // restore needs — the park stays stashed, the marker stays, and the kept flag reaches /ap:review.
     const kept = restoreStashWip(topic, exec, r, startBranch);
-    atomicWrite(join(exec, "finish-result.txt"), `none\tbranch-only (kept ${branch})\n` + kept);
-    log.ok(`quick finish: branch-only — kept ${branch}, restored ${startBranch}`);
+    const outcome = onBranch ? `kept-on-branch (kept ${branch})` : `branch-only (kept ${branch})`;
+    atomicWrite(join(exec, "finish-result.txt"), `none\t${outcome}\n` + kept);
+    log.ok(onBranch
+      ? `quick finish: kept-on-branch — kept ${branch}, left the run's worktree on it`
+      : `quick finish: branch-only — kept ${branch}, restored ${startBranch}`);
     return 0;
   }
   // branch.txt records the branch the run actually ended on, so a failed checkout arrives here as
