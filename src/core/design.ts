@@ -26,14 +26,7 @@ export interface DesignArgs { topicText: string; ensemble: boolean; }
 
 /** Pull the `--ensemble` boolean flag (token-exact) out of the glued $ARGUMENTS. */
 export function parseDesignArgs(tokens: string[]): DesignArgs {
-  let ensemble = false;
-  const rest: string[] = [];
-  for (let i = 0; i < tokens.length; i++) {
-    const t = tokens[i];
-    if (t === "--ensemble") { ensemble = true; continue; }
-    rest.push(t);
-  }
-  return { topicText: rest.join(" "), ensemble };
+  return { topicText: tokens.filter((t) => t !== "--ensemble").join(" "), ensemble: tokens.includes("--ensemble") };
 }
 
 /** Canonical design-doc path: `_design/design-doc/<YYYY-MM-DD>-<topic>-design.md`. */

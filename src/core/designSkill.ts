@@ -21,11 +21,10 @@ export function classifyTopic(topic: string): "brainstorming" | "systematic-debu
   return "none";
 }
 
-/** Append config/skill-hints/<skill>.md to basePrompt. Base unchanged when none/missing/override. */
+/** Append config/skill-hints/<skill>.md to basePrompt. Base unchanged when none/missing. */
 export function skillHintAppend(skillTxtPath: string, basePrompt: string): string {
   let skill = "none";
   if (existsSync(skillTxtPath)) skill = readFileSync(skillTxtPath, "utf8").replace(/\s/g, "");
-  if (process.env.AP_DESIGN_SKILL_OVERRIDE === "none") skill = "none";
   if (skill !== "brainstorming" && skill !== "systematic-debugging") return basePrompt;
   const hintFile = join(pluginRoot(), "config", "skill-hints", `${skill}.md`);
   if (!existsSync(hintFile)) return basePrompt;

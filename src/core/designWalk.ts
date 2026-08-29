@@ -33,9 +33,7 @@ export interface SectionStatus { name: string; status: WalkVerdict; }
 /** The sections the walk has SETTLED, by their recorded markers (sorted). A drafted-but-unmarked
  *  section is pending and simply absent — the draft file is the walk's input, never its verdict
  *  (a seeded `.draft/` used to read as six approvals before the walk had run). Missing dir → []. */
-export function walkSectionState(dir: string): string[];
-export function walkSectionState(dir: string, opts: { withStatus: true }): SectionStatus[];
-export function walkSectionState(dir: string, opts?: { withStatus?: boolean }): string[] | SectionStatus[] {
+export function walkSectionState(dir: string): SectionStatus[] {
   let files: string[];
   try { files = readdirSync(dir).filter((f) => f.endsWith(".state")); }
   catch { return []; }
@@ -44,5 +42,5 @@ export function walkSectionState(dir: string, opts?: { withStatus?: boolean }): 
     const status = parseWalkVerdict(readFileSync(join(dir, f), "utf8"));
     if (status) settled.push({ name: f.replace(/\.state$/, ""), status });
   }
-  return opts?.withStatus ? settled : settled.map((s) => s.name);
+  return settled;
 }
