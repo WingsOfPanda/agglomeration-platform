@@ -24,14 +24,13 @@ import { agentConsultValidated, consultTimeout } from "../core/contracts.js";
 import { composeResearchPrompt, composeVerifyPrompt, composeDrilldownPrompt, drilldownState } from "../core/designTurn.js";
 import { boundWait, scaledTimeout, parseLatestOffset } from "../core/wait.js";
 import {
-  DESIGN_PHASES, phaseSend, phaseWait, phaseStems, rowFor, waitGateVerb, surveyPhaseArtifact, triad,
+  DESIGN_PHASES, phaseSend, phaseWait, phaseStems, rowFor, waitGateVerb, surveyPhaseArtifact, diffVerb, triad,
   liveSendDeps, liveWaitDeps, type SendDeps, type WaitDeps,
 } from "../core/phaseTable.js";
 import { statusPath, workerBusyState } from "../core/ipc.js";
 import { envNum } from "../core/env.js";
 import { runForensics, runFlag } from "../core/forensics.js";
 import { clearAgentStrikes } from "../core/artifact.js";
-import { diffFindings, type DiffPart } from "../core/designDiff.js";
 import { adjudicate, type AdjudicateInput } from "../core/designAdjudicate.js";
 import { classifyTopic, skillHintAppend } from "../core/designSkill.js";
 import { readIfExists as readIf, readIfExistsOrNull } from "../core/fsread.js";
@@ -193,9 +192,8 @@ export async function spawnAllWith(topic: string, d: SpawnAllDeps): Promise<numb
 }
 
 // design's two worker phases, in pipeline order. The send/wait skeletons live in core/phaseTable.ts
-// (shared with explore's seven); `SendDeps`/`WaitDeps` keep their names here for callers + tests.
+// (shared with explore's seven).
 const [RESEARCH, VERIFY] = DESIGN_PHASES;
-export type { SendDeps, WaitDeps };
 
 export async function researchSendWith(topic: string, agent: string, provider: string, d: SendDeps): Promise<number> {
   return phaseSend(RESEARCH, { topic, agent, provider }, d, {
@@ -210,38 +208,7 @@ export async function researchSendWith(topic: string, agent: string, provider: s
 export async function diffRun(rest: string[]): Promise<number> {
   const topic = rest[0];
   if (!topic) { log.error("usage: design diff <topic>"); return 2; }
-  const art = designArtDir(topic);
-  if (!existsSync(art)) { log.error(`design diff: ${art} not found`); return 1; }
-  if (existsSync(join(art, "diff.md"))) { log.error("design diff: diff.md exists; rm to retry"); return 1; }
-
-  const listPath = join(art, "list.txt");
-  if (!existsSync(listPath)) { log.error("design diff: list.txt missing — run design init first"); return 1; }
-  const rows = parseListFile(readFileSync(listPath, "utf8"));
-  if (rows.length < 2) { log.error(`design diff: need >=2 workers in list.txt, got ${rows.length}`); return 1; }
-
-  const workers: DiffPart[] = [];
-  for (const r of rows) {
-    const f = RESEARCH.artifactFor(art, r.agent, r.provider, topic);
-    if (!existsSync(f)) { log.error(`design diff: ${r.agent} findings.md missing: ${f}`); return 1; }
-    // Sentinel backstop: a still-writing findings file refuses the whole diff (the hub runs
-    // research-wait and retries); one the wait never accepted diffs as EMPTY.
-    const { text, verdict } = surveyPhaseArtifact(RESEARCH, r, {
-      topic, label: "design diff", emptyIsComplete: false,
-    });
-    if (verdict === "still-writing") return 1;
-    workers.push({ name: r.agent, findings: verdict === "drop" ? "" : text });
-  }
-
-  const result = diffFindings(workers);
-  for (const file of result.files) atomicWrite(join(art, file.filename), file.content);
-  atomicWrite(join(art, "diff.md"), result.diffMd);
-
-  const summary = result.files
-    .filter((f) => f.filename.endsWith("_only_items.txt") || f.filename === "consensus.txt")
-    .map((f) => `${f.filename.replace(/\.txt$/, "")}=${f.content.split("\n").filter(Boolean).length}`)
-    .join(" ");
-  log.ok(`design diff: wrote ${join(art, "diff.md")} (${rows.length} workers) ${summary}`);
-  return 0;
+  return diffVerb(RESEARCH, topic, { artifactNoun: "findings.md" });
 }
 
 // ---- Phase D: cross-verify -> adjudicate -> synthesize ----
@@ -307,7 +274,7 @@ export async function adjudicateRun(rest: string[]): Promise<number> {
     for (let i = 0; i < agents.length; i++) for (let j = i + 1; j < agents.length; j++) addBucket(`${agents[i]}+${agents[j]}_only.txt`);
   }
 
-  const input: AdjudicateInput = { workers: rows.map((r) => ({ agent: r.agent })), verify, vs, buckets };
+  const input: AdjudicateInput = { agents, verify, vs, buckets };
   atomicWrite(join(art, "adjudicated-draft.md"), adjudicate(input));
   log.ok(`design adjudicate: wrote ${join(art, "adjudicated-draft.md")}`);
   log.info("  cp adjudicated-draft.md -> adjudicated.md, then resolve every '- PENDING:' line");

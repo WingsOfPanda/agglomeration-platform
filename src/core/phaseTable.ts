@@ -42,6 +42,7 @@ import { log } from "./log.js";
 import { atomicWrite } from "./atomic.js";
 import { readIfExists as readIf, readIfExistsOrNull } from "./fsread.js";
 import { designArtDir } from "./design.js";
+import { diffFindings, type DiffPart } from "./designDiff.js";
 import { parseListFile, lastTag } from "./roster.js";
 import { exploreArtDir } from "./explore.js";
 import { workerDir } from "./paths.js";
@@ -532,6 +533,44 @@ export function surveyPhaseArtifact(
       label, command: row.cmd, topic, art, agent: w.agent, artifact, text, stateText, key: row.key,
     }),
   };
+}
+
+/** The `diff` verb, shared by explore and design: bucket every worker's research artifact, write
+ *  diff.md + the bucket files, print the counts. Both commands ran the same statements in the same
+ *  order; the only variation is the three slots below (and `row.cmd`, which prefixes every line).
+ *  Sentinel backstop: a still-writing findings file refuses the whole diff (the hub runs
+ *  research-wait and retries); one the wait never accepted buckets as EMPTY. */
+export function diffVerb(
+  row: PhaseRow,
+  topic: string,
+  o: { headings?: string[]; notFoundHint?: string; artifactNoun: string },
+): number {
+  const label = `${row.cmd} diff`;
+  const art = row.artDir(topic);
+  if (!existsSync(art)) { log.error(`${label}: ${art} not found${o.notFoundHint ?? ""}`); return 1; }
+  if (existsSync(join(art, "diff.md"))) { log.error(`${label}: diff.md exists; rm to retry`); return 1; }
+  const listPath = join(art, "list.txt");
+  if (!existsSync(listPath)) { log.error(`${label}: list.txt missing — run ${row.cmd} init first`); return 1; }
+  const rows = parseListFile(readFileSync(listPath, "utf8"));
+  if (rows.length < 2) { log.error(`${label}: need >=2 workers in list.txt, got ${rows.length}`); return 1; }
+
+  const workers: DiffPart[] = [];
+  for (const r of rows) {
+    const f = row.artifactFor(art, r.agent, r.provider, topic);
+    if (!existsSync(f)) { log.error(`${label}: ${r.agent} ${o.artifactNoun} missing: ${f}`); return 1; }
+    const { text, verdict } = surveyPhaseArtifact(row, r, { topic, label, emptyIsComplete: false });
+    if (verdict === "still-writing") return 1;
+    workers.push({ name: r.agent, findings: verdict === "drop" ? "" : text });
+  }
+  const result = diffFindings(workers, o.headings);
+  for (const file of result.files) atomicWrite(join(art, file.filename), file.content);
+  atomicWrite(join(art, "diff.md"), result.diffMd);
+  const summary = result.files
+    .filter((f) => f.filename.endsWith("_only_items.txt") || f.filename === "consensus.txt")
+    .map((f) => `${f.filename.replace(/\.txt$/, "")}=${f.content.split("\n").filter(Boolean).length}`)
+    .join(" ");
+  log.ok(`${label}: wrote ${join(art, "diff.md")} (${rows.length} workers) ${summary}`);
+  return 0;
 }
 
 /** The row a command's verb stem names — the phase map stated once, for the verbs that take a phase
