@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync as rf } from "node:fs";
 import { tmpdir } from "node:os";
 import { freshHome } from "./helpers/tmpHome.js";
-import { designArtDir, designDraftDir, parseDesignArgs, designDocPath, resolveDrilldownPath, designExportDocPath, exportDocTo } from "../src/core/design.js";
+import { designArtDir, designDraftDir, parseDesignArgs, designDocPath, resolveDrilldownPath, exportDocTo } from "../src/core/design.js";
 import { formatListFile, parseListFile, verifyScopeFiles, lastTag } from "../src/core/roster.js";
 
 describe("design paths", () => {
@@ -85,12 +85,6 @@ describe("drilldown paths", () => {
 describe("design export-doc", () => {
   const cleanups: Array<() => void> = [];
   afterEach(() => { while (cleanups.length) cleanups.pop()!(); });
-
-  it("designExportDocPath composes <root>/docs/ap/specs/<basename>", () => {
-    expect(designExportDocPath("/repo", "2026-06-01-x-design.md")).toBe(
-      join("/repo", "docs", "ap", "specs", "2026-06-01-x-design.md"),
-    );
-  });
 
   it("exportDocTo copies the assembled doc into the specs dir and returns the dest", () => {
     const { cleanup } = freshHome();

@@ -23,7 +23,7 @@ import { computeSignals, renderSkipRecord, skipRecordSaysUserSkip, sectionText, 
 import { buildAnnotations, soloTokensFromAnnotations } from "../core/exploreAnnotate.js";
 import { composeVerifyPrompt } from "../core/designTurn.js";
 import {
-  PHASES, phaseSend, phaseWait, phaseStems, rowFor, waitGateVerb, surveyPhaseArtifact, triad,
+  PHASES, phaseSend, phaseWait, phaseStems, rowFor, waitGateVerb, surveyPhaseArtifact, diffVerb, triad,
   liveSendDeps, liveWaitDeps, type SendDeps, type WaitDeps, type PhaseRow,
 } from "../core/phaseTable.js";
 import { composeExploreResearchPrompt, composeAdversaryPrompt, composeGapPrompt, composeSignoffPrompt, litGuidance, ADVERSARY_LENSES, researchLens } from "../core/exploreTurn.js";
@@ -32,7 +32,7 @@ import { run as preflightRun } from "./preflight.js";
 import { readIfExists as readIf, readIfExistsOrNull } from "../core/fsread.js";
 import { parseOpenQuestions, assignOpenQuestions, formatOpenqClaims, parseOpenqClaims, composeOpenqPrompt } from "../core/exploreOpenq.js";
 import { parseAdversaryVerdict, tallyVerdicts } from "../core/exploreVerdict.js";
-import { diffFindings, type DiffPart, type Claim } from "../core/designDiff.js";
+import { type Claim } from "../core/designDiff.js";
 import { parseBucketLines, selectRebuttalTargets, composeRebuttalPrompt, type CritiqueInput } from "../core/exploreRebuttal.js";
 import { parseSelfAssessment } from "../core/exploreSelfAssess.js";
 import { buildContribution, renderContributionTsv, type ContributionArtifacts } from "../core/exploreContribution.js";
@@ -231,36 +231,10 @@ export async function openqSendWith(topic: string, agent: string, provider: stri
 export async function diffExploreRun(rest: string[]): Promise<number> {
   const topic = rest[0];
   if (!topic) { log.error("usage: explore diff <topic>"); return 2; }
-  const art = exploreArtDir(topic);
-  if (!existsSync(art)) { log.error(`explore diff: ${art} not found — run explore init`); return 1; }
-  if (existsSync(join(art, "diff.md"))) { log.error("explore diff: diff.md exists; rm to retry"); return 1; }
-  const listPath = join(art, "list.txt");
-  if (!existsSync(listPath)) { log.error("explore diff: list.txt missing — run explore init first"); return 1; }
-  const rows = parseListFile(readFileSync(listPath, "utf8"));
-  if (rows.length < 2) { log.error(`explore diff: need >=2 workers in list.txt, got ${rows.length}`); return 1; }
-
-  const workers: DiffPart[] = [];
-  for (const r of rows) {
-    const f = RESEARCH.artifactFor(art, r.agent, r.provider, topic);
-    if (!existsSync(f)) { log.error(`explore diff: ${r.agent} findings missing: ${f}`); return 1; }
-    // Sentinel backstop, design diff's shape: a still-writing findings file refuses the whole diff
-    // (the hub runs research-wait and retries); one the wait never accepted buckets as EMPTY —
-    // bucketing half a worker's Approaches would mis-scope every later phase.
-    const { text, verdict } = surveyPhaseArtifact(RESEARCH, r, {
-      topic, label: "explore diff", emptyIsComplete: false,
-    });
-    if (verdict === "still-writing") return 1;
-    workers.push({ name: r.agent, findings: verdict === "drop" ? "" : text });
-  }
-  const result = diffFindings(workers, ["Approaches"]);
-  for (const file of result.files) atomicWrite(join(art, file.filename), file.content);
-  atomicWrite(join(art, "diff.md"), result.diffMd);
-  const summary = result.files
-    .filter((f) => f.filename.endsWith("_only_items.txt") || f.filename === "consensus.txt")
-    .map((f) => `${f.filename.replace(/\.txt$/, "")}=${f.content.split("\n").filter(Boolean).length}`)
-    .join(" ");
-  log.ok(`explore diff: wrote ${join(art, "diff.md")} (${rows.length} workers) ${summary}`);
-  return 0;
+  // Approaches, not Claims: bucketing half a worker's Approaches would mis-scope every later phase.
+  return diffVerb(RESEARCH, topic, {
+    headings: ["Approaches"], notFoundHint: " — run explore init", artifactNoun: "findings",
+  });
 }
 
 // ---- crossverify-send / crossverify-wait (Phase 4c peer cross-verification) ----

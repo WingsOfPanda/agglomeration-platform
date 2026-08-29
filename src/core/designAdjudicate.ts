@@ -31,11 +31,8 @@ export function parseVerdicts(verify: string): Verdict[] {
   return out;
 }
 
-export interface AdjPart {
-  agent: string;
-}
 export interface AdjudicateInput {
-  workers: AdjPart[];
+  agents: string[];
   verify: Record<string, string>;  // keyed by agent -> verify.md content
   vs: Record<string, string>;      // keyed by agent -> VS state (default "skipped")
   buckets: Record<string, string>; // bucket filename -> content (from diffFindings)
@@ -50,7 +47,7 @@ function emitSections(secs: { header: string; acc: string[]; comment?: string }[
 
 /** Port of _consult_write_adjudicated_{n2,nge3} (lib/consult.sh:517,569). Returns adjudicated-draft.md text. */
 export function adjudicate(input: AdjudicateInput): string {
-  return input.workers.length === 2 ? adjudicateN2(input) : adjudicateNge3(input);
+  return input.agents.length === 2 ? adjudicateN2(input) : adjudicateNge3(input);
 }
 
 // n2 ## Adjudicated comment (byte-faithful to consult.sh:547, rebranded).
@@ -61,25 +58,23 @@ const N2_CONTESTED_NOTE = "<!-- Hub: move CONTESTED items here from Adjudicated.
 const NGE3_PENDING_NOTE = "<!-- Hub: read each cited source for every \"PENDING\" line below; rewrite the prefix or move to ## Contested. synthesize refuses to finalize while any PENDING remains. -->";
 
 function adjudicateN2(input: AdjudicateInput): string {
-  const [p0, p1] = input.workers;
-  const c0 = p0.agent, c1 = p1.agent;
-  const uc = (s: string): string => s.toUpperCase();
+  const [c0, c1] = input.agents;
   const vs0 = input.vs[c0] ?? "skipped";
   const vs1 = input.vs[c1] ?? "skipped";
   const v0 = parseVerdicts(input.verify[c0] ?? "");
   const v1 = parseVerdicts(input.verify[c1] ?? "");
 
   const cross: string[] = [];
-  for (const v of v1) if (v.tag === "AGREE") cross.push(`- [${v.cite}] ${v.text} — ${uc(c1)} confirmed: ${v.evidence || v.text}`);
-  for (const v of v0) if (v.tag === "AGREE") cross.push(`- [${v.cite}] ${v.text} — ${uc(c0)} confirmed: ${v.evidence || v.text}`);
+  for (const v of v1) if (v.tag === "AGREE") cross.push(`- [${v.cite}] ${v.text} — ${c1.toUpperCase()} confirmed: ${v.evidence || v.text}`);
+  for (const v of v0) if (v.tag === "AGREE") cross.push(`- [${v.cite}] ${v.text} — ${c0.toUpperCase()} confirmed: ${v.evidence || v.text}`);
 
   const adjudicated: string[] = [];
-  for (const v of v1) if (v.tag !== "AGREE") adjudicated.push(`- PENDING: [${v.cite}] ${v.text} — ${uc(c1)} ${v.tag}: ${v.evidence || v.text}`);
-  for (const v of v0) if (v.tag !== "AGREE") adjudicated.push(`- PENDING: [${v.cite}] ${v.text} — ${uc(c0)} ${v.tag}: ${v.evidence || v.text}`);
+  for (const v of v1) if (v.tag !== "AGREE") adjudicated.push(`- PENDING: [${v.cite}] ${v.text} — ${c1.toUpperCase()} ${v.tag}: ${v.evidence || v.text}`);
+  for (const v of v0) if (v.tag !== "AGREE") adjudicated.push(`- PENDING: [${v.cite}] ${v.text} — ${c0.toUpperCase()} ${v.tag}: ${v.evidence || v.text}`);
 
   const notVerified: string[] = [];
-  if (vs0 !== "ok" && vs0 !== "skipped") for (const l of nonEmptyLines(input.buckets[`${c1}_only_items.txt`])) notVerified.push(`- ${l} — ${uc(c0)} verify dispatch ${vs0}`);
-  if (vs1 !== "ok" && vs1 !== "skipped") for (const l of nonEmptyLines(input.buckets[`${c0}_only_items.txt`])) notVerified.push(`- ${l} — ${uc(c1)} verify dispatch ${vs1}`);
+  if (vs0 !== "ok" && vs0 !== "skipped") for (const l of nonEmptyLines(input.buckets[`${c1}_only_items.txt`])) notVerified.push(`- ${l} — ${c0.toUpperCase()} verify dispatch ${vs0}`);
+  if (vs1 !== "ok" && vs1 !== "skipped") for (const l of nonEmptyLines(input.buckets[`${c0}_only_items.txt`])) notVerified.push(`- ${l} — ${c1.toUpperCase()} verify dispatch ${vs1}`);
 
   return emitSections([
     { header: "## Cross-verified", acc: cross },
@@ -98,10 +93,10 @@ function classify(na: number, nd: number, nu: number, k: number, owners: number)
 }
 
 function adjudicateNge3(input: AdjudicateInput): string {
-  const agents = input.workers.map((p) => p.agent);
+  const agents = input.agents;
   const n = agents.length;
   const verdictMap = new Map<string, string>();
-  for (const p of input.workers) for (const v of parseVerdicts(input.verify[p.agent] ?? "")) verdictMap.set(`${p.agent}__${v.cite}`, v.tag);
+  for (const a of agents) for (const v of parseVerdicts(input.verify[a] ?? "")) verdictMap.set(`${a}__${v.cite}`, v.tag);
 
   const cross: string[] = [], contested: string[] = [], refuted: string[] = [], pending: string[] = [];
   const allCsv = agents.join("+");

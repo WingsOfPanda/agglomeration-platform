@@ -30,7 +30,7 @@ describe("parseVerdicts", () => {
 describe("adjudicate N=2", () => {
   it("AGREE→Cross-verified (cody first), non-AGREE→PENDING, Not-verified on failed VS", () => {
     const input: AdjudicateInput = {
-      workers: [{ agent: "rex" }, { agent: "cody" }],
+      agents: ["rex", "cody"],
       verify: {
         rex: verdictsMd("1. AGREE [a.ts:1] shared claim", "   rex confirms"),
         cody: verdictsMd("1. DISPUTE [c.ts:1] cody-only thing", "   cody disputes"),
@@ -51,7 +51,7 @@ describe("adjudicate N=2", () => {
   });
   it("Not-verified lists the other worker's _only items when a VS dispatch failed", () => {
     const input: AdjudicateInput = {
-      workers: [{ agent: "rex" }, { agent: "cody" }],
+      agents: ["rex", "cody"],
       verify: {}, vs: { rex: "timeout", cody: "ok" },
       buckets: { "rex_only_items.txt": "[r.ts:1] rex item\n", "cody_only_items.txt": "[c.ts:1] cody item\n" },
     };
@@ -63,10 +63,10 @@ describe("adjudicate N=2", () => {
 
 describe("adjudicate N=3 (_classify)", () => {
   function n3(ownerBucket: string, verifierVerdicts: Record<string, string>): string {
-    const workers = [{ agent: "rex" }, { agent: "cody" }, { agent: "bly" }];
+    const agents = ["rex", "cody", "bly"];
     const verify: Record<string, string> = {};
     for (const [inst, tag] of Object.entries(verifierVerdicts)) verify[inst] = verdictsMd(`1. ${tag} [x.ts:1] the claim`);
-    return adjudicate({ workers, verify, vs: {}, buckets: { [ownerBucket]: "[x.ts:1] the claim\n" } });
+    return adjudicate({ agents, verify, vs: {}, buckets: { [ownerBucket]: "[x.ts:1] the claim\n" } });
   }
   it("single-owner, all verifiers AGREE → Cross-verified", () => {
     expect(n3("rex_only_items.txt", { cody: "AGREE", bly: "AGREE" })).toContain("## Cross-verified\n- [x.ts:1] the claim");
@@ -85,8 +85,8 @@ describe("adjudicate N=3 (_classify)", () => {
     expect(out).not.toContain("to CONFIRMED, REFUTED");
   });
   it("consensus.txt lines → Consensus section with [all] srcset", () => {
-    const workers = [{ agent: "rex" }, { agent: "cody" }, { agent: "bly" }];
-    const out = adjudicate({ workers, verify: {}, vs: {}, buckets: { "consensus.txt": "[a.ts:1] everyone agrees\n" } });
+    const agents = ["rex", "cody", "bly"];
+    const out = adjudicate({ agents, verify: {}, vs: {}, buckets: { "consensus.txt": "[a.ts:1] everyone agrees\n" } });
     expect(out).toContain("## Consensus findings (all workers)\n- [a.ts:1] everyone agrees [rex+cody+bly]\n");
   });
 });

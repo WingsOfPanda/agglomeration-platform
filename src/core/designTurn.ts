@@ -5,6 +5,7 @@
 import { type OutboxEvent } from "./ipc.js";
 import { parseClaims } from "./designDiff.js";
 import { artifactContract } from "./artifact.js";
+import { lastTag } from "./roster.js";
 import type { PhaseKey } from "./phaseTable.js";
 
 /** Research findings.md health, ported from consult_findings_status (lib/consult.sh).
@@ -33,14 +34,6 @@ export function researchState(ev: OutboxEvent | null, findingsText: string | nul
   if (ev.event === "question") return "question";
   if (ev.event === "done") return findingsStatus(findingsText);
   return "failed";
-}
-
-/** The LAST `<key>=<value>` line in a state file's contents, trimmed (latest-line-wins); null if
- *  absent. Unlike wait.ts's lastKeyedNumber this accepts any value text — the gate readers key off
- *  words (`ok`/`question`/`timeout`/`failed`), not integers. */
-export function lastKeyedValue(text: string, key: string): string | null {
-  const matches = text.split("\n").filter((l) => l.startsWith(`${key}=`));
-  return matches.length ? matches[matches.length - 1].slice(key.length + 1).trim() : null;
 }
 
 const RESEARCH_BLOCKERS =
@@ -120,7 +113,7 @@ export function gateState(
   key: PhaseKey,
 ): Array<{ agent: string; status: GateStatus }> {
   return workers.map((p) => {
-    const last = lastKeyedValue(p.stateText ?? "", key);
+    const last = lastTag(p.stateText ?? "", key);
     const status: GateStatus =
       last === "question" ? "question"
         : p.doneExists && last !== null ? "terminal"
@@ -142,7 +135,7 @@ export function gateAnomalies(
   const out: Array<{ agent: string; value: string }> = [];
   for (const p of workers) {
     if (!p.doneExists) continue;
-    const last = lastKeyedValue(p.stateText ?? "", key);
+    const last = lastTag(p.stateText ?? "", key);
     if (last === "timeout" || last === "failed" || last === "missing") out.push({ agent: p.agent, value: last });
   }
   return out;
