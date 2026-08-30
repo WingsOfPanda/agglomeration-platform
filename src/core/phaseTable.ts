@@ -64,8 +64,9 @@ import { run as sendRun } from "../commands/send.js";
 
 /** The frozen state-file status keys, declared ONCE (designTurn's gate signatures import it):
  *  FS research, QS explore's open-questions relay, VS explore's cross-verify + design's verify,
- *  AS explore's adversary, RS explore's rebuttal, GS explore's gap round, SS explore's sign-off. */
-export type PhaseKey = "FS" | "QS" | "VS" | "AS" | "RS" | "GS" | "SS";
+ *  AS explore's adversary, RS explore's rebuttal, GS explore's gap round, SS explore's sign-off,
+ *  DS explore's grill drill turn. */
+export type PhaseKey = "FS" | "QS" | "VS" | "AS" | "RS" | "GS" | "SS" | "DS";
 
 /** Dispatch-safety guard: never send to a worker whose previous phase ended timeout/failed — it may
  *  still be busy, and a send would clobber the inbox task it is working on. */
@@ -110,7 +111,7 @@ export interface PhaseRow {
  *  documented recovery is to remove it. */
 const RETRY_NOTE = "exists; rm to retry";
 
-/** explore's seven worker phases in pipeline order. */
+/** explore's eight worker phases in pipeline order. */
 export const PHASES: PhaseRow[] = [
   {
     phase: "research", key: "FS", cmd: "explore", artDir: exploreArtDir, timeoutKind: "research",
@@ -147,6 +148,12 @@ export const PHASES: PhaseRow[] = [
     artifactFor: (art, agent) => join(art, `signoff-${agent}.md`), stateFn: verifyState, skippable: true,
     retryNote: "exists — one sign-off turn per worker (the one-turn cap)",
     guard: { kind: "latest", noun: "latest phase", chain: ["GS", "RS", "AS", "VS", "QS", "FS"] },
+  },
+  {
+    phase: "drill", key: "DS", cmd: "explore", artDir: exploreArtDir, timeoutKind: "drill",
+    artifactFor: (art, agent) => join(art, `drill-${agent}.md`), stateFn: verifyState, skippable: true,
+    retryNote: "exists — one drill turn per worker (the one-turn cap)",
+    guard: { kind: "latest", noun: "latest phase", chain: ["SS", "GS", "RS", "AS", "VS", "QS", "FS"] },
   },
 ];
 

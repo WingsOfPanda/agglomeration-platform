@@ -37,6 +37,11 @@ export interface HandoffInput {
   /** Omitted for a degraded (single-worker) run and for a run with no roster to judge — see
    *  `crossVerificationCoverage`. Omitted means the two coverage lines are not emitted at all. */
   coverage?: CoverageStamp;
+  /** Phase 0.5's frame record and Phase 8c's grill record, present only on runs that ran them. */
+  frameDoc?: string;
+  grillDoc?: string;
+  /** Phase 8c's per-worker drill answers (`drill-<agent>.md`), sorted; [] when nothing drilled. */
+  drillPaths: string[];
   generatedTs: string;
 }
 
@@ -58,6 +63,11 @@ export function buildHandoffKv(i: HandoffInput): string {
     L.push(`cross_verification=${i.coverage.value}`);
     L.push(`cross_verification_detail=crossverify=${i.coverage.crossverify},adversary=${i.coverage.adversary}`);
   }
+  // Same additive slot, 2026-08-30 (the grill spec): the frame + grill records and the drill
+  // answers, each omitted when the run did not produce it. The frozen tail below is untouched.
+  if (i.frameDoc) L.push(`frame_doc=${i.frameDoc}`);
+  if (i.grillDoc) L.push(`grill_doc=${i.grillDoc}`);
+  if (i.drillPaths.length) L.push(`drill_paths=${i.drillPaths.join(",")}`);
   L.push("session_path=.");
   L.push("topic_txt_path=topic.txt");
   L.push(`generated_ts=${i.generatedTs}`);
@@ -133,6 +143,7 @@ export function extractHandoffData(artDir: string, now?: Date): string | null {
 
   const findingsPaths = names.filter((n) => /^findings-.*\.md$/.test(n)).sort();
   const adversaryFindingsPaths = names.filter((n) => /^adversary-.*\.md$/.test(n)).sort();
+  const drillPaths = names.filter((n) => /^drill-.*\.md$/.test(n)).sort();
 
   let top = "", tradeoff = false;
   if (landscapeDoc) {
@@ -160,7 +171,10 @@ export function extractHandoffData(artDir: string, now?: Date): string | null {
   const body = buildHandoffKv({
     topic, landscapeDoc, topApproach: top, findingsPaths, confidenceSignals,
     adversaryFindingsPaths, tradeoffMatrixPresent: tradeoff,
-    coverage: cov.kind === "stamp" ? cov.stamp : undefined, generatedTs: isoUtc(now),
+    coverage: cov.kind === "stamp" ? cov.stamp : undefined,
+    frameDoc: names.includes("frame.md") ? "frame.md" : undefined,
+    grillDoc: names.includes("grill.md") ? "grill.md" : undefined,
+    drillPaths, generatedTs: isoUtc(now),
   });
   const dest = join(artDir, "handoff-data.kv");
   atomicWrite(dest, body);

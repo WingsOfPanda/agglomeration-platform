@@ -43,6 +43,7 @@ describe("PHASES/DESIGN_PHASES shape", () => {
       "explore/rebuttal": "rebuttal",
       "explore/gap": "gap",
       "explore/signoff": "signoff",
+      "explore/drill": "drill",
       "design/research": "research",
       "design/verify": "verify",
     });
@@ -79,7 +80,7 @@ describe("PHASES/DESIGN_PHASES shape", () => {
 
   it("guards: the six post-research explore rows only — design dispatches behind its own gate", () => {
     expect(PHASES.filter((r) => r.guard).map((r) => r.phase))
-      .toEqual(["openq", "crossverify", "adversary", "rebuttal", "gap", "signoff"]);
+      .toEqual(["openq", "crossverify", "adversary", "rebuttal", "gap", "signoff", "drill"]);
     expect(DESIGN_PHASES.some((r) => r.guard)).toBe(false);
     expect(Object.fromEntries(PHASES.filter((r) => r.guard).map((r) => [r.phase, [r.guard!.kind, r.guard!.noun]])))
       .toEqual({
@@ -89,6 +90,7 @@ describe("PHASES/DESIGN_PHASES shape", () => {
         rebuttal: ["latest", "latest phase"],
         gap: ["latest", "latest phase"],
         signoff: ["latest", "latest phase"],
+        drill: ["latest", "latest phase"],
       });
   });
 });
@@ -124,6 +126,7 @@ describe("guard chains", () => {
     expect(chain("rebuttal")).toEqual(["AS", "VS", "QS", "FS"]);
     expect(chain("gap")).toEqual(["RS", "AS", "VS", "QS", "FS"]);
     expect(chain("signoff")).toEqual(["GS", "RS", "AS", "VS", "QS", "FS"]);
+    expect(chain("drill")).toEqual(["SS", "GS", "RS", "AS", "VS", "QS", "FS"]);
   });
 });
 

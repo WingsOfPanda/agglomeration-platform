@@ -69,8 +69,8 @@ export function agentConsultValidated(name: string): boolean {
   return inst(name)?.consult_validated === true;
 }
 
-export type ConsultKind = "research" | "verify" | "adversary" | "experiment" | "openq" | "rebuttal" | "gap" | "signoff";
-const CONSULT_DEFAULTS: Record<ConsultKind, number> = { research: 600, verify: 300, adversary: 600, experiment: 1800, openq: 300, rebuttal: 300, gap: 600, signoff: 300 };
+export type ConsultKind = "research" | "verify" | "adversary" | "experiment" | "openq" | "rebuttal" | "gap" | "signoff" | "drill";
+const CONSULT_DEFAULTS: Record<ConsultKind, number> = { research: 600, verify: 300, adversary: 600, experiment: 1800, openq: 300, rebuttal: 300, gap: 600, signoff: 300, drill: 600 };
 const POSITIVE_INT = /^[1-9][0-9]*$/;
 /** Seconds a consult phase may run. Precedence: env `AP_CONSULT_TIMEOUT_<KIND>` (kind uppercased —
  *  AP_CONSULT_TIMEOUT_RESEARCH, AP_CONSULT_TIMEOUT_VERIFY, ...) -> contracts.yaml
@@ -84,7 +84,7 @@ const POSITIVE_INT = /^[1-9][0-9]*$/;
  *  of its own — it reuses design's `verify` budget (see PHASES' timeoutKind slot). So the knob that
  *  lengthens `crossverify` is AP_CONSULT_TIMEOUT_VERIFY, and there is no AP_CONSULT_TIMEOUT_CROSSVERIFY. */
 export function consultTimeout(kind: ConsultKind): number {
-  if (!(kind in CONSULT_DEFAULTS)) throw new Error(`consultTimeout: kind must be 'research', 'verify', 'adversary', 'experiment', 'openq', 'rebuttal', 'gap', or 'signoff'; got '${kind}'`);
+  if (!(kind in CONSULT_DEFAULTS)) throw new Error(`consultTimeout: kind must be 'research', 'verify', 'adversary', 'experiment', 'openq', 'rebuttal', 'gap', 'signoff', or 'drill'; got '${kind}'`);
   const env = process.env[`AP_CONSULT_TIMEOUT_${kind.toUpperCase()}`];
   if (POSITIVE_INT.test(String(env))) return Number(env);
   const v = (load().consult ?? {})[`${kind}_timeout_s`];

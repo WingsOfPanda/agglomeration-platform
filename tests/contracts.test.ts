@@ -94,6 +94,12 @@ describe("contracts", () => {
     expect(K.consultTimeout("rebuttal")).toBe(120);
     expect(K.consultTimeout("gap")).toBe(90);
   });
+  it("consultTimeout drill: default 600, consult override respected", () => {
+    withContracts(SAMPLE);                       // no drill_timeout_s -> TS default
+    expect(K.consultTimeout("drill")).toBe(600);
+    withContracts(SAMPLE + "  drill_timeout_s: 90\n");
+    expect(K.consultTimeout("drill")).toBe(90);
+  });
   it("consultTimeout signoff: default 300, consult override respected", () => {
     withContracts(SAMPLE);                       // no signoff_timeout_s → TS default
     expect(K.consultTimeout("signoff")).toBe(300);
@@ -103,7 +109,7 @@ describe("contracts", () => {
   // AP_CONSULT_TIMEOUT_<KIND> is the per-box tier (2026-08-08): contracts.yaml ships with the
   // plugin and the resolver prefers the shipped copy, so a hand-edited budget dies on every update.
   describe("AP_CONSULT_TIMEOUT_<KIND> env override", () => {
-    const KINDS = ["research", "verify", "adversary", "experiment", "openq", "rebuttal", "gap", "signoff"] as const;
+    const KINDS = ["research", "verify", "adversary", "experiment", "openq", "rebuttal", "gap", "signoff", "drill"] as const;
     const envKeys = KINDS.map((k) => `AP_CONSULT_TIMEOUT_${k.toUpperCase()}`);
     afterEach(() => { for (const k of envKeys) delete process.env[k]; });
 
