@@ -119,6 +119,17 @@ describe("explore wait-gate (verb)", () => {
     expect(await exploreWaitGateRun(["t", "signoff"])).toBe(1); // question is not terminal
   });
 
+  it("drill phase (DS): rc 0 when all terminal (ok / skipped), rc 1 on a question", async () => {
+    const art = seedList("t");
+    writeFileSync(join(art, "drill-alpha.txt"), "OFFSET=1\nDS=ok\n");
+    writeFileSync(join(art, "drill-alpha.done"), "");
+    writeFileSync(join(art, "drill-charlie.txt"), "DS=skipped\n"); // the mop-up's self-skip
+    writeFileSync(join(art, "drill-charlie.done"), "");
+    expect(await exploreWaitGateRun(["t", "drill"])).toBe(0);
+    writeFileSync(join(art, "drill-charlie.txt"), "OFFSET=2\nDS=question\n");
+    expect(await exploreWaitGateRun(["t", "drill"])).toBe(1); // question is not terminal
+  });
+
   it("bad/absent phase and missing list → rc 2", async () => {
     expect(await exploreWaitGateRun(["t"])).toBe(2);
     expect(await exploreWaitGateRun(["t", "verify"])).toBe(2);

@@ -69,9 +69,9 @@ for (const { cmd, rows, run } of COMMANDS) {
 describe("the phase-argument verbs name every phase, in pipeline order", () => {
   const cases: Array<[string, string[], string]> = [
     ["explore wait-gate: usage", ["wait-gate"],
-      "[FAIL]  usage: explore wait-gate <topic> <research|openq|crossverify|adversary|rebuttal|gap|signoff>\n"],
+      "[FAIL]  usage: explore wait-gate <topic> <research|openq|crossverify|adversary|rebuttal|gap|signoff|drill>\n"],
     ["explore wait-gate: unknown phase", ["wait-gate", "t", "nope"],
-      "[FAIL]  explore wait-gate: phase must be research|openq|crossverify|adversary|rebuttal|gap|signoff (got nope)\n"],
+      "[FAIL]  explore wait-gate: phase must be research|openq|crossverify|adversary|rebuttal|gap|signoff|drill (got nope)\n"],
   ];
   for (const [name, argv, expected] of cases) {
     it(name, async () => {
@@ -93,7 +93,7 @@ describe("the phase-argument verbs name every phase, in pipeline order", () => {
       try { rc = await exploreRun(["wait-gate", "t", inherited]); } finally { err.restore(); }
       expect(rc).toBe(2);
       expect(err.text()).toBe(
-        `[FAIL]  explore wait-gate: phase must be research|openq|crossverify|adversary|rebuttal|gap|signoff (got ${inherited})\n`,
+        `[FAIL]  explore wait-gate: phase must be research|openq|crossverify|adversary|rebuttal|gap|signoff|drill (got ${inherited})\n`,
       );
     });
   }

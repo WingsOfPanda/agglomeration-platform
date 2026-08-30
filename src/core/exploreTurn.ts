@@ -5,6 +5,7 @@
 // as design's composeResearchPrompt/composeVerifyPrompt). Embedding a second here produced a
 // duplicate END_OF_INSTRUCTION in the inbox, which desynced codex workers' terminal `done` event.
 import { artifactContract } from "./artifact.js";
+import { frameBlock } from "./exploreGrill.js";
 
 /** The {{LIT_GUIDANCE}} block for the research prompt, keyed on the lit-track classification. */
 export function litGuidance(track: "ON" | "OFF"): string {
@@ -43,9 +44,12 @@ export function researchLens(provider: string): string {
   return RESEARCH_LENSES[provider] ?? NEUTRAL_LENS;
 }
 
-/** Research-phase prompt (port of meditate/research.md). Expose the landscape; do NOT recommend. */
-export function composeExploreResearchPrompt(topic: string, writeTo: string, lit: string, lens: string, selfassessTo: string): string {
+/** Research-phase prompt (port of meditate/research.md). Expose the landscape; do NOT recommend.
+ *  `frame` is Phase 0.5's `frame.md` body when the user answered the framing round; empty (the
+ *  default, and any run without the file) leaves the prompt byte-identical to 0.5.60's. */
+export function composeExploreResearchPrompt(topic: string, writeTo: string, lit: string, lens: string, selfassessTo: string, frame = ""): string {
   const t = topic.trim();
+  const framing = frameBlock(frame);
   return [
     "Investigate the following topic from multiple angles. Your job is not to",
     "recommend; your job is to expose the landscape — approaches, tradeoffs,",
@@ -54,6 +58,7 @@ export function composeExploreResearchPrompt(topic: string, writeTo: string, lit
     `Topic: ${t}`,
     "",
     `Research lens: ${lens}`,
+    ...(framing ? ["", framing] : []),
     "",
     `Output requirements — write to ${writeTo} with this EXACT structure:`,
     "",
