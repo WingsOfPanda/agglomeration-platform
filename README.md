@@ -94,6 +94,11 @@ To update later: `/plugin` → update `ap`, then `/reload-plugins`. There is no 
 > `claude --permission-mode auto`). Sandboxing is honor-system; workers can run shell commands and
 > reach the network. Point the platform only at repositories and tasks you would trust an
 > unattended agent with. `/ap:autoresearch` states this loudest in its own directive.
+> Separately, ap files each run's diagnostics — topic, hostname, username, paths, worker output and
+> hub notes, with credential-shaped strings scrubbed — as issues on the **public** repo
+> `github.com/WingsOfPanda/agglomeration-platform`, so the maintainers see what broke on your box.
+> It asks once per machine before the first filing; decline with `ap review consent no` (or answer
+> "Never on this machine"), and records stay in a local queue instead.
 
 ### Five-minute start
 

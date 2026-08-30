@@ -114,3 +114,72 @@ export function reviewedTarget(forensicsRoot: string, path: string): string | nu
   if (rel.startsWith(".reviewed/")) return path;
   return `${root}/.reviewed/${rel}`;
 }
+
+// ---------------------------------------------------------------------------
+// Triage over GitHub issues (spec 2026-08-30 §E). Shape = the `gh issue list --json
+// number,title,createdAt,labels,comments,url` payload; these are pure predicates over it.
+
+/** First line of the fallback triage marker comment (`<!-- ap-triaged at=<ISO> -->`). */
+export const AP_TRIAGED_MARKER = "<!-- ap-triaged";
+/** Marker line every ap-filed comment carries (`<!-- ap-forensics run=… kind=… -->`). */
+const AP_FORENSICS_MARKER = "<!-- ap-forensics";
+const TRIAGED_LABEL = "triaged";
+
+export interface GhComment { body: string; createdAt: string; }
+export interface GhIssue {
+  number: number;
+  title: string;
+  createdAt: string;
+  labels?: { name: string }[];
+  comments?: GhComment[];
+  url?: string;
+}
+
+const firstLine = (body: string): string => body.split("\n", 1)[0].trim();
+const ms = (iso: string): number => { const t = Date.parse(iso); return Number.isFinite(t) ? t : 0; };
+
+/** Triaged iff (the `triaged` label OR an `<!-- ap-triaged …` marker comment) AND no ap-forensics
+ *  comment is newer than the newest marker comment — a recurrence re-opens triage. A label with no
+ *  marker comment carries no timestamp to compare against, so it stays triaged (spec §E). */
+export function isTriaged(issue: GhIssue): boolean {
+  const comments = issue.comments ?? [];
+  const markers = comments.filter((c) => firstLine(c.body).startsWith(AP_TRIAGED_MARKER));
+  const labelled = (issue.labels ?? []).some((l) => l.name === TRIAGED_LABEL);
+  if (!labelled && markers.length === 0) return false;
+  if (markers.length === 0) return true;
+  const newestMarker = Math.max(...markers.map((c) => ms(c.createdAt)));
+  return !comments.some((c) => firstLine(c.body).startsWith(AP_FORENSICS_MARKER) && ms(c.createdAt) > newestMarker);
+}
+
+/** Newest ap-forensics comment time, else the issue's own createdAt (spec §E `--since`). */
+export function lastEventAt(issue: GhIssue): string {
+  let best = "";
+  for (const c of issue.comments ?? []) {
+    if (firstLine(c.body).startsWith(AP_FORENSICS_MARKER) && ms(c.createdAt) > ms(best)) best = c.createdAt;
+  }
+  return best || issue.createdAt;
+}
+
+export interface TitleCluster { title: string; open: number; seenAgain: number; first: string; last: string; }
+
+/** Group issues by normalized title; keep only clusters worth a TRENDS row (>=2 open issues, or at
+ *  least one "seen again" recurrence comment). Sorted by open desc, then title asc. */
+export function clusterByTitle(issues: GhIssue[]): TitleCluster[] {
+  const by = new Map<string, TitleCluster>();
+  for (const i of issues) {
+    const title = normalizeVolatile(i.title);
+    const seenAgain = (i.comments ?? []).filter((c) => c.body.includes("seen again")).length;
+    const last = lastEventAt(i);
+    const c = by.get(title);
+    if (!c) by.set(title, { title, open: 1, seenAgain, first: i.createdAt, last });
+    else {
+      c.open += 1;
+      c.seenAgain += seenAgain;
+      if (ms(i.createdAt) < ms(c.first)) c.first = i.createdAt;
+      if (ms(last) > ms(c.last)) c.last = last;
+    }
+  }
+  return [...by.values()]
+    .filter((c) => c.open >= 2 || c.seenAgain >= 1)
+    .sort((a, b) => b.open - a.open || a.title.localeCompare(b.title));
+}
