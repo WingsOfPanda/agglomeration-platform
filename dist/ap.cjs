@@ -8343,85 +8343,6 @@ var init_contracts = __esm({
   }
 });
 
-// src/core/implement.ts
-function implementArtDir(topic, opts) {
-  return (0, import_node_path5.join)(topicDir(topic, opts), "_implement");
-}
-function deriveTopicFromPath(p) {
-  if (!p) return "";
-  let base = (0, import_node_path5.basename)(p);
-  base = base.replace(/^\d{4}-\d{2}-\d{2}-/, "");
-  if (base.endsWith("-design.md")) base = base.slice(0, -"-design.md".length);
-  else if (base.endsWith(".md")) base = base.slice(0, -".md".length);
-  return base;
-}
-function assertImplementTopic(topic) {
-  return /^[a-z0-9][a-z0-9-]{0,31}$/.test(topic);
-}
-function parseImplementArgs(tokens) {
-  let branchMode = "branch";
-  let branchName;
-  let topic;
-  let target;
-  let force = false;
-  const rest = [];
-  for (let i = 0; i < tokens.length; i++) {
-    const t = tokens[i];
-    if (t === "--max-rounds" || t.startsWith("--max-rounds=")) {
-      throw new ImplementArgError("--max-rounds must be stripped by the directive before init");
-    }
-    if (t === "--force") {
-      force = true;
-      continue;
-    }
-    if (t === "--no-branch") {
-      branchMode = "no-branch";
-      continue;
-    }
-    if (t === "--branch" || t.startsWith("--branch=")) {
-      const { value, shift } = kvParse(t, tokens[i + 1]);
-      branchName = value;
-      if (shift === 2) i++;
-      continue;
-    }
-    if (t === "--topic" || t.startsWith("--topic=")) {
-      const { value, shift } = kvParse(t, tokens[i + 1]);
-      topic = value;
-      if (shift === 2) i++;
-      continue;
-    }
-    if (t === "--target" || t.startsWith("--target=")) {
-      const { value, shift } = kvParse(t, tokens[i + 1]);
-      target = value;
-      if (shift === 2) i++;
-      continue;
-    }
-    if (t.startsWith("-")) throw new ImplementArgError(`implement init: unknown flag '${t}'`);
-    rest.push(t);
-  }
-  return { rest: rest.join(" "), branchMode, branchName, topic, target, force };
-}
-function detectProvider(repoRoot2) {
-  return (0, import_node_fs8.existsSync)((0, import_node_path5.join)(repoRoot2, ".claude-plugin", "plugin.json")) ? "claude" : "codex";
-}
-function targetCwd(topic, opts) {
-  const f = (0, import_node_path5.join)(implementArtDir(topic, opts), "target_cwd.txt");
-  return (0, import_node_fs8.existsSync)(f) ? (0, import_node_fs8.readFileSync)(f, "utf8").replace(/\n$/, "") : "";
-}
-var import_node_path5, import_node_fs8, ImplementArgError;
-var init_implement = __esm({
-  "src/core/implement.ts"() {
-    "use strict";
-    import_node_path5 = require("node:path");
-    import_node_fs8 = require("node:fs");
-    init_paths();
-    init_args();
-    ImplementArgError = class extends Error {
-      code = 2;
-    };
-  }
-});
-
 // src/core/archive.ts
 function archiveTs(now = /* @__PURE__ */ new Date()) {
   return isoUtc(now).replace(/[-:]/g, "");
@@ -8431,43 +8352,43 @@ function isoUtc(now = /* @__PURE__ */ new Date()) {
 }
 function stateInit(agent, model, topic) {
   const dir = workerDir(agent, model, topic);
-  (0, import_node_fs9.mkdirSync)(dir, { recursive: true });
-  for (const f of STALE) (0, import_node_fs9.rmSync)((0, import_node_path6.join)(dir, f), { force: true });
-  (0, import_node_fs9.closeSync)((0, import_node_fs9.openSync)((0, import_node_path6.join)(dir, "outbox.jsonl"), "w"));
-  atomicWrite((0, import_node_path6.join)(dir, ".session_id"), `${process.env.CLAUDE_CODE_SESSION_ID ?? "unknown"}
+  (0, import_node_fs8.mkdirSync)(dir, { recursive: true });
+  for (const f of STALE) (0, import_node_fs8.rmSync)((0, import_node_path5.join)(dir, f), { force: true });
+  (0, import_node_fs8.closeSync)((0, import_node_fs8.openSync)((0, import_node_path5.join)(dir, "outbox.jsonl"), "w"));
+  atomicWrite((0, import_node_path5.join)(dir, ".session_id"), `${process.env.CLAUDE_CODE_SESSION_ID ?? "unknown"}
 `);
 }
 function uniqueDest(base) {
-  if (!(0, import_node_fs9.existsSync)(base)) return base;
+  if (!(0, import_node_fs8.existsSync)(base)) return base;
   for (let n = 2; n <= 999; n++) {
     const c = `${base}-${n}`;
-    if (!(0, import_node_fs9.existsSync)(c)) return c;
+    if (!(0, import_node_fs8.existsSync)(c)) return c;
   }
   throw new Error("too many same-second archive collisions; aborting");
 }
 function moveToArchive(src, base) {
   const dest = uniqueDest(base);
-  (0, import_node_fs9.mkdirSync)((0, import_node_path6.dirname)(dest), { recursive: true });
-  (0, import_node_fs9.renameSync)(src, dest);
+  (0, import_node_fs8.mkdirSync)((0, import_node_path5.dirname)(dest), { recursive: true });
+  (0, import_node_fs8.renameSync)(src, dest);
   return dest;
 }
 function stateArchive(agent, model, topic, suffix, opts) {
   const src = workerDir(agent, model, topic);
-  if (!(0, import_node_fs9.existsSync)(src)) return null;
+  if (!(0, import_node_fs8.existsSync)(src)) return null;
   const ts = archiveTs(opts?.now);
-  let base = (0, import_node_path6.join)(globalRoot(), "archive", repoHash(), topic, `${agent}-${model}-${ts}`);
+  let base = (0, import_node_path5.join)(globalRoot(), "archive", repoHash(), topic, `${agent}-${model}-${ts}`);
   if (suffix) base += `-${suffix}`;
   return moveToArchive(src, base);
 }
 function finalizeArchived(td, opts) {
-  if (!(0, import_node_fs9.existsSync)(td)) return;
+  if (!(0, import_node_fs8.existsSync)(td)) return;
   const now = isoUtc(opts?.now);
-  for (const name of (0, import_node_fs9.readdirSync)(td)) {
-    const sj = (0, import_node_path6.join)(td, name, "status.json");
-    if (!(0, import_node_fs9.existsSync)(sj)) continue;
+  for (const name of (0, import_node_fs8.readdirSync)(td)) {
+    const sj = (0, import_node_path5.join)(td, name, "status.json");
+    if (!(0, import_node_fs8.existsSync)(sj)) continue;
     let obj;
     try {
-      obj = JSON.parse((0, import_node_fs9.readFileSync)(sj, "utf8"));
+      obj = JSON.parse((0, import_node_fs8.readFileSync)(sj, "utf8"));
     } catch {
       continue;
     }
@@ -8479,24 +8400,24 @@ function finalizeArchived(td, opts) {
 function archiveTopic(topic, suite, opts) {
   const td = topicDir(topic);
   finalizeArchived(td, opts);
-  const art = (0, import_node_path6.join)(td, `_${suite}`);
+  const art = (0, import_node_path5.join)(td, `_${suite}`);
   let dest = null;
-  if ((0, import_node_fs9.existsSync)(art)) {
-    const base = (0, import_node_path6.join)(globalRoot(), "archive", repoHash(), topic, `_${suite}-${archiveTs(opts?.now)}`);
+  if ((0, import_node_fs8.existsSync)(art)) {
+    const base = (0, import_node_path5.join)(globalRoot(), "archive", repoHash(), topic, `_${suite}-${archiveTs(opts?.now)}`);
     dest = moveToArchive(art, base);
   }
   try {
-    (0, import_node_fs9.rmSync)(td, { recursive: false, force: false });
+    (0, import_node_fs8.rmSync)(td, { recursive: false, force: false });
   } catch {
   }
   return dest;
 }
-var import_node_fs9, import_node_path6, STALE;
+var import_node_fs8, import_node_path5, STALE;
 var init_archive = __esm({
   "src/core/archive.ts"() {
     "use strict";
-    import_node_fs9 = require("node:fs");
-    import_node_path6 = require("node:path");
+    import_node_fs8 = require("node:fs");
+    import_node_path5 = require("node:path");
     init_paths();
     init_atomic();
     STALE = ["identity.md", "inbox.md", "outbox.jsonl", "status.json", "pane.json", ".session_id"];
@@ -8505,26 +8426,26 @@ var init_archive = __esm({
 
 // src/core/ipc.ts
 function inboxPath(i, m, t) {
-  return (0, import_node_path7.join)(workerDir(i, m, t), "inbox.md");
+  return (0, import_node_path6.join)(workerDir(i, m, t), "inbox.md");
 }
 function outboxPath(i, m, t) {
-  return (0, import_node_path7.join)(workerDir(i, m, t), "outbox.jsonl");
+  return (0, import_node_path6.join)(workerDir(i, m, t), "outbox.jsonl");
 }
 function identityPath(i, m, t) {
-  return (0, import_node_path7.join)(workerDir(i, m, t), "identity.md");
+  return (0, import_node_path6.join)(workerDir(i, m, t), "identity.md");
 }
 function statusPath(i, m, t) {
-  return (0, import_node_path7.join)(workerDir(i, m, t), "status.json");
+  return (0, import_node_path6.join)(workerDir(i, m, t), "status.json");
 }
 function paneMetaPath(i, m, t) {
-  return (0, import_node_path7.join)(workerDir(i, m, t), "pane.json");
+  return (0, import_node_path6.join)(workerDir(i, m, t), "pane.json");
 }
 function workerBusyState(i, m, t) {
   const sp = statusPath(i, m, t);
-  if (!(0, import_node_fs10.existsSync)(sp)) return null;
+  if (!(0, import_node_fs9.existsSync)(sp)) return null;
   let text;
   try {
-    text = (0, import_node_fs10.readFileSync)(sp, "utf8");
+    text = (0, import_node_fs9.readFileSync)(sp, "utf8");
   } catch {
     return STATUS_UNREADABLE;
   }
@@ -8540,7 +8461,7 @@ function workerStatusReport(i, m, t) {
 }
 function workerSendGate(i, m, t, label, unit) {
   const outbox = outboxPath(i, m, t);
-  if (!(0, import_node_fs10.existsSync)(outbox)) {
+  if (!(0, import_node_fs9.existsSync)(outbox)) {
     log.error(`${label}: outbox not found at ${outbox} \u2014 was ${i} spawned?`);
     return false;
   }
@@ -8570,8 +8491,8 @@ ${doneInstruction}END_OF_INSTRUCTION
 }
 function identityWrite(i, m, t, opts) {
   const root = pluginRoot();
-  const tplPath = (0, import_node_path7.join)(root, "config", "prompt-templates", "identity.md");
-  if (!(0, import_node_fs10.existsSync)(tplPath)) {
+  const tplPath = (0, import_node_path6.join)(root, "config", "prompt-templates", "identity.md");
+  if (!(0, import_node_fs9.existsSync)(tplPath)) {
     throw new Error(
       `identityWrite: identity template not found at ${tplPath} (resolved pluginRoot=${root}). Set CLAUDE_PLUGIN_ROOT to the ap plugin directory, or run ap from it.`
     );
@@ -8579,7 +8500,7 @@ function identityWrite(i, m, t, opts) {
   const stateDir = workerDir(i, m, t);
   const outbox = outboxPath(i, m, t);
   const blocks = IDENTITY_BLOCKS[opts?.role ?? "worker"];
-  let body = (0, import_node_fs10.readFileSync)(tplPath, "utf8").replaceAll("{{intro}}", blocks.intro).replaceAll("{{role_block}}", blocks.role_block).replaceAll("{{signoff}}", blocks.signoff).replaceAll("{{agent}}", i).replaceAll("{{model}}", m).replaceAll("{{topic}}", t).replaceAll("{{state_dir}}", stateDir);
+  let body = (0, import_node_fs9.readFileSync)(tplPath, "utf8").replaceAll("{{intro}}", blocks.intro).replaceAll("{{role_block}}", blocks.role_block).replaceAll("{{signoff}}", blocks.signoff).replaceAll("{{agent}}", i).replaceAll("{{model}}", m).replaceAll("{{topic}}", t).replaceAll("{{state_dir}}", stateDir);
   body += `
 
 ---
@@ -8613,7 +8534,7 @@ function parseEvent(line) {
 }
 function outboxOffset(path) {
   try {
-    return (0, import_node_fs10.statSync)(path).size;
+    return (0, import_node_fs9.statSync)(path).size;
   } catch {
     return 0;
   }
@@ -8623,13 +8544,13 @@ function readFrom(path, offset) {
     const size = outboxOffset(path);
     const start = size < offset ? 0 : offset;
     if (size <= start) return "";
-    const fd = (0, import_node_fs10.openSync)(path, "r");
+    const fd = (0, import_node_fs9.openSync)(path, "r");
     try {
       const buf = Buffer.alloc(size - start);
-      (0, import_node_fs10.readSync)(fd, buf, 0, buf.length, start);
+      (0, import_node_fs9.readSync)(fd, buf, 0, buf.length, start);
       return buf.toString("utf8");
     } finally {
-      (0, import_node_fs10.closeSync)(fd);
+      (0, import_node_fs9.closeSync)(fd);
     }
   } catch {
     return "";
@@ -8702,7 +8623,7 @@ function paneMetaWrite(i, m, t, paneId, nonce) {
 }
 function readPaneJson(dir) {
   try {
-    return JSON.parse((0, import_node_fs10.readFileSync)((0, import_node_path7.join)(dir, "pane.json"), "utf8"));
+    return JSON.parse((0, import_node_fs9.readFileSync)((0, import_node_path6.join)(dir, "pane.json"), "utf8"));
   } catch {
     return null;
   }
@@ -8727,18 +8648,18 @@ function parseLastPane(text) {
 }
 function resolveModel(agent, topic) {
   const td = topicDir(topic);
-  if (!(0, import_node_fs10.existsSync)(td)) return null;
-  const d = (0, import_node_fs10.readdirSync)(td, { withFileTypes: true }).find((e) => e.isDirectory() && e.name.startsWith(`${agent}-`));
+  if (!(0, import_node_fs9.existsSync)(td)) return null;
+  const d = (0, import_node_fs9.readdirSync)(td, { withFileTypes: true }).find((e) => e.isDirectory() && e.name.startsWith(`${agent}-`));
   if (!d) return null;
   const model = d.name.slice(agent.length + 1);
   return readPaneJson(workerDir(agent, model, topic))?.model ?? model;
 }
-var import_node_fs10, import_node_path7, TERMINAL_WORKER_STATES, STATUS_UNREADABLE, SENDER_RE, IDENTITY_BLOCKS, TERMINAL_EVENTS, realClock, PANE_DIED_NOTE;
+var import_node_fs9, import_node_path6, TERMINAL_WORKER_STATES, STATUS_UNREADABLE, SENDER_RE, IDENTITY_BLOCKS, TERMINAL_EVENTS, realClock, PANE_DIED_NOTE;
 var init_ipc = __esm({
   "src/core/ipc.ts"() {
     "use strict";
-    import_node_fs10 = require("node:fs");
-    import_node_path7 = require("node:path");
+    import_node_fs9 = require("node:fs");
+    import_node_path6 = require("node:path");
     init_paths();
     init_atomic();
     init_archive();
@@ -8808,26 +8729,884 @@ event, never retried, and never worth delaying, blocking, or failing the run ove
   }
 });
 
+// src/core/review.ts
+function parseSince(spec, now) {
+  const m = spec.match(/^(\d+)([dh])$/);
+  if (!m) throw new Error(`--since must be <N>d or <N>h (got '${spec}')`);
+  const n = Number(m[1]);
+  return now - (m[2] === "d" ? n * 864e5 : n * 36e5);
+}
+function normalizeVolatile(s) {
+  return s.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?/g, "<ts>").replace(/\b[0-9a-f]{7,40}\b/g, "<sha>").replace(/\/[^\s"']+/g, "<path>").replace(/\b\d+\b/g, "<n>").trim();
+}
+function isTriaged(issue) {
+  const comments = issue.comments ?? [];
+  const markers = comments.filter((c) => firstLine(c.body).startsWith(AP_TRIAGED_MARKER));
+  const labelled = (issue.labels ?? []).some((l) => l.name === TRIAGED_LABEL);
+  if (!labelled && markers.length === 0) return false;
+  if (markers.length === 0) return true;
+  const newestMarker = Math.max(...markers.map((c) => ms(c.createdAt)));
+  return !comments.some((c) => firstLine(c.body).startsWith(AP_FORENSICS_MARKER) && ms(c.createdAt) > newestMarker);
+}
+function lastEventAt(issue) {
+  let best = "";
+  for (const c of issue.comments ?? []) {
+    if (firstLine(c.body).startsWith(AP_FORENSICS_MARKER) && ms(c.createdAt) > ms(best)) best = c.createdAt;
+  }
+  return best || issue.createdAt;
+}
+function clusterByTitle(issues) {
+  const by = /* @__PURE__ */ new Map();
+  for (const i of issues) {
+    const title = normalizeVolatile(i.title);
+    const seenAgain = (i.comments ?? []).filter((c2) => c2.body.includes("seen again")).length;
+    const last = lastEventAt(i);
+    const c = by.get(title);
+    if (!c) by.set(title, { title, open: 1, seenAgain, first: i.createdAt, last });
+    else {
+      c.open += 1;
+      c.seenAgain += seenAgain;
+      if (ms(i.createdAt) < ms(c.first)) c.first = i.createdAt;
+      if (ms(last) > ms(c.last)) c.last = last;
+    }
+  }
+  return [...by.values()].filter((c) => c.open >= 2 || c.seenAgain >= 1).sort((a, b) => b.open - a.open || a.title.localeCompare(b.title));
+}
+var AP_TRIAGED_MARKER, AP_FORENSICS_MARKER, TRIAGED_LABEL, firstLine, ms;
+var init_review = __esm({
+  "src/core/review.ts"() {
+    "use strict";
+    AP_TRIAGED_MARKER = "<!-- ap-triaged";
+    AP_FORENSICS_MARKER = "<!-- ap-forensics";
+    TRIAGED_LABEL = "triaged";
+    firstLine = (body) => body.split("\n", 1)[0].trim();
+    ms = (iso) => {
+      const t = Date.parse(iso);
+      return Number.isFinite(t) ? t : 0;
+    };
+  }
+});
+
+// src/core/forensics.ts
+function renderFailureReport(f) {
+  const meta = `timestamp:     ${f.timestamp}
+agent:    ${f.agent}
+model:         ${f.model}
+topic:         ${f.topic}
+pane_id:       ${f.paneId}
+fail_reason:   ${f.reason}
+ready_timeout: ${f.readyTimeout}
+`;
+  const evt = f.eventLine ? f.eventLine : NO_EVENT_SENTINEL;
+  return `# Spawn bootstrap failure
+${meta}
+## Pane scrollback (last 50 lines, captured BEFORE pane kill)
+${f.scrollback}
+
+## Event context
+${evt}
+`;
+}
+async function captureFailure(input, deps) {
+  if (!input.agent || !input.model || !input.topic) return { ok: false, code: 1 };
+  if (!FAILURE_REASONS.has(input.reason)) return { ok: false, code: 2 };
+  const dir = deps.workerDir(input.agent, input.model, input.topic);
+  if (!deps.isWritableDir(dir)) return { ok: false, code: 1 };
+  const scrollback = await deps.capturePane(input.paneId, SCROLLBACK_LINES).catch(() => "");
+  const dest = `${dir}/${FAILURE_FILENAME}`;
+  const doc = renderFailureReport({
+    timestamp: (deps.now ?? (() => isoUtc()))(),
+    agent: input.agent,
+    model: input.model,
+    topic: input.topic,
+    paneId: input.paneId,
+    reason: input.reason,
+    readyTimeout: input.readyTimeout == null ? "unknown" : String(input.readyTimeout),
+    scrollback,
+    eventLine: input.eventLine
+  });
+  deps.atomicWriteSync(dest, doc);
+  return { ok: true, path: dest };
+}
+function scrapeOutbox(text, worker) {
+  const out2 = [];
+  for (const l of text.split("\n")) {
+    if (!l.trim()) continue;
+    const o = parseEvent(l);
+    if (!o) continue;
+    if (o.event === "error" || o.event === "question") out2.push({ source: "outbox", key: l.trim(), context: `worker=${worker}` });
+    else if (typeof o.note === "string" && /^\s*FLAG:/i.test(o.note)) out2.push({ source: "part_note", key: o.note.replace(/^\s*FLAG:\s*/i, "").trim(), context: `worker=${worker}` });
+  }
+  return out2;
+}
+function scrapeArtDir(artDir) {
+  const out2 = [];
+  const read = (p) => {
+    try {
+      return (0, import_node_fs10.readFileSync)(p, "utf8");
+    } catch {
+      return null;
+    }
+  };
+  try {
+    for (const d of (0, import_node_fs10.readdirSync)((0, import_node_path7.dirname)(artDir), { withFileTypes: true })) {
+      if (!d.isDirectory() || d.name.startsWith("_") || d.name.startsWith(".")) continue;
+      const ob = read((0, import_node_path7.join)((0, import_node_path7.dirname)(artDir), d.name, "outbox.jsonl"));
+      if (ob !== null) out2.push(...scrapeOutbox(ob, d.name));
+    }
+  } catch {
+  }
+  const seen = /* @__PURE__ */ new Set();
+  return out2.filter((f) => {
+    const k = `${f.source}|${f.key}|${f.context}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+function renderFindingBullets(findings) {
+  return findings.map((f) => `- **${f.source}** ${f.key} _(source: ${f.context})_`).join("\n") + "\n";
+}
+function forensicsRunner() {
+  return {
+    run(cmd, args) {
+      if (cmd === "gh" && process.env.AP_FORENSICS_BACKEND === "queue") {
+        return { code: 1, stdout: "", stderr: "AP_FORENSICS_BACKEND=queue: refusing to spawn gh" };
+      }
+      try {
+        const stdout = (0, import_node_child_process4.execFileSync)(cmd, args, { encoding: "utf8", timeout: CALL_TIMEOUT_MS, killSignal: "SIGKILL", stdio: ["ignore", "pipe", "pipe"] });
+        return { code: 0, stdout, stderr: "" };
+      } catch (e) {
+        const err = e;
+        return {
+          code: typeof err.status === "number" ? err.status : 1,
+          stdout: err.stdout != null ? String(err.stdout) : "",
+          stderr: err.stderr != null ? String(err.stderr) : ""
+        };
+      }
+    }
+  };
+}
+function readConsent() {
+  try {
+    const v = (0, import_node_fs10.readFileSync)(issuesConsentPath(), "utf8").trim();
+    return v === "yes" || v === "no" ? v : null;
+  } catch {
+    return null;
+  }
+}
+function writeConsent(v) {
+  (0, import_node_fs10.mkdirSync)(globalRoot(), { recursive: true });
+  atomicWrite(issuesConsentPath(), v + "\n");
+}
+function gate() {
+  if (process.env.AP_FORENSICS_BACKEND === "queue") return "queue";
+  const c = readConsent();
+  return c === "yes" ? "file" : c === "no" ? "queue" : "consent";
+}
+function scrubSecrets(s) {
+  let out2 = s;
+  for (const [re, to] of SCRUBS) out2 = out2.replace(re, to);
+  return out2;
+}
+function issueTitle(command, first) {
+  const body = normalizeVolatile(scrubSecrets(first)).replace(/\s+/g, " ").trim();
+  return `[ap:${command}] ${body.slice(0, 80)}`.trim();
+}
+function apVersion() {
+  const bases = [typeof __dirname === "string" ? (0, import_node_path7.join)(__dirname, "..") : "", pluginRoot()];
+  for (const base of bases) {
+    if (!base) continue;
+    try {
+      const v = JSON.parse((0, import_node_fs10.readFileSync)((0, import_node_path7.join)(base, "package.json"), "utf8")).version;
+      if (typeof v === "string" && v) return v;
+    } catch {
+    }
+  }
+  return "unknown";
+}
+function runIdentity(run17, r = forensicsRunner()) {
+  let providers = "";
+  try {
+    providers = (0, import_node_fs10.readdirSync)((0, import_node_path7.dirname)(run17.artDir), { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith("_") && !d.name.startsWith(".")).map((d) => d.name.replace("-", ":")).sort().join(", ");
+  } catch {
+  }
+  let repo = "";
+  const origin = r.run("git", ["remote", "get-url", "origin"]);
+  if (origin.code === 0 && origin.stdout.trim()) repo = scrubSecrets(origin.stdout.trim());
+  if (!repo) {
+    try {
+      repo = repoHash();
+    } catch {
+      repo = "unknown";
+    }
+  }
+  return {
+    version: apVersion(),
+    host: (0, import_node_os3.hostname)(),
+    user: safeUser(),
+    platform: process.platform,
+    node: process.version,
+    providers,
+    repo
+  };
+}
+function safeUser() {
+  try {
+    return (0, import_node_os3.userInfo)().username;
+  } catch {
+    return "unknown";
+  }
+}
+function renderIssueBody(o) {
+  const rows = [
+    ["ap version", o.identity.version],
+    ["command", o.command],
+    ["topic", o.topicText],
+    ["run id", o.runId],
+    ["host / user", `${o.identity.host} / ${o.identity.user}`],
+    ["platform", `${o.identity.platform} \xB7 node ${o.identity.node}`],
+    ["providers", o.identity.providers],
+    ["repo", o.identity.repo],
+    ["art dir", o.artDir],
+    ["filed at", o.filedAt]
+  ];
+  const cell = (v) => scrubSecrets(v).replace(/\s+/g, " ").trim();
+  return `<!-- ap-forensics run=${o.runId} cmd=${o.command} v=${o.identity.version} kind=${o.kind} -->
+### Run
+| | |
+|---|---|
+` + rows.map(([k, v]) => `| ${k} | ${cell(v)} |`).join("\n") + `
+
+### ${o.section}
+${o.body}`;
+}
+function renderComment(runId, kind, body) {
+  return `<!-- ap-forensics run=${runId} kind=${kind} -->
+${body}`;
+}
+function issueTxtPath(artDir) {
+  return (0, import_node_path7.join)(artDir, "issue.txt");
+}
+function readIssueTxt(artDir) {
+  let text;
+  try {
+    text = (0, import_node_fs10.readFileSync)(issueTxtPath(artDir), "utf8");
+  } catch {
+    return null;
+  }
+  const f = (k) => text.match(new RegExp(`^${k}=(.*)$`, "m"))?.[1]?.trim();
+  const run_id = f("run_id");
+  if (!run_id) return null;
+  return { run_id, number: f("number"), url: f("url"), reflected: f("reflected") === "1" };
+}
+function writeIssueTxt(artDir, rec) {
+  (0, import_node_fs10.mkdirSync)(artDir, { recursive: true });
+  atomicWrite(issueTxtPath(artDir), `run_id=${rec.run_id}
+` + (rec.number ? `number=${rec.number}
+` : "") + (rec.url ? `url=${rec.url}
+` : "") + (rec.reflected ? "reflected=1\n" : ""));
+}
+function issueUrl(n) {
+  return `https://github.com/${AP_ISSUES_REPO}/issues/${n}`;
+}
+function stamp(iso) {
+  return iso.replace(/[-:]/g, "");
+}
+function queueRecord(rec) {
+  const dir = forensicsQueueDir();
+  (0, import_node_fs10.mkdirSync)(dir, { recursive: true });
+  const name = `${stamp(rec.now)}-${rec.runId}-${rec.kind}-${process.pid}${(0, import_node_crypto4.randomBytes)(2).toString("hex")}.md`;
+  const fm = [
+    "---",
+    `command: ${rec.command}`,
+    `topic: ${rec.topic}`,
+    `topic_slug: ${rec.topic}`,
+    `repo_hash: ${safeRepoHash()}`,
+    `art_dir: ${rec.artDir}`,
+    `invoked_at: ${rec.now}`,
+    `n_findings_mechanical: ${rec.nFindings}`,
+    "queued: true",
+    `kind: ${rec.kind}`,
+    `run_id: ${rec.runId}`,
+    `attempts: ${rec.attempts ?? 0}`,
+    ...rec.title ? [`title: ${rec.title}`] : [],
+    `version: ${rec.identity.version}`,
+    `host: ${rec.identity.host}`,
+    `user: ${rec.identity.user}`,
+    `platform: ${rec.identity.platform}`,
+    `node: ${rec.identity.node}`,
+    `providers: ${rec.identity.providers}`,
+    `repo: ${rec.identity.repo}`,
+    "---",
+    ""
+  ].join("\n");
+  const path = (0, import_node_path7.join)(dir, name);
+  atomicWrite(path, fm + rec.body);
+  return path;
+}
+function safeRepoHash() {
+  try {
+    return repoHash();
+  } catch {
+    return "unknown";
+  }
+}
+function mapPath() {
+  return (0, import_node_path7.join)(forensicsQueueDir(), "map.txt");
+}
+function mapLookup(runId) {
+  try {
+    for (const line of (0, import_node_fs10.readFileSync)(mapPath(), "utf8").split("\n")) {
+      const [id, n] = line.split("	");
+      if (id === runId && n) return n.trim();
+    }
+  } catch {
+  }
+  return void 0;
+}
+function mapRecord(runId, number) {
+  try {
+    (0, import_node_fs10.mkdirSync)(forensicsQueueDir(), { recursive: true });
+    (0, import_node_fs10.appendFileSync)(mapPath(), `${runId}	${number}
+`);
+  } catch {
+  }
+}
+function findOpenIssue(r, command, title) {
+  const res = r.run("gh", [
+    "issue",
+    "list",
+    "--repo",
+    AP_ISSUES_REPO,
+    "--state",
+    "open",
+    "--search",
+    `in:title "[ap:${command}]"`,
+    "--json",
+    "number,title",
+    "--limit",
+    "100"
+  ]);
+  if (res.code !== 0) return "";
+  try {
+    const rows = JSON.parse(res.stdout);
+    const hit = rows.find((x) => x.title === title);
+    return hit?.number != null ? String(hit.number) : "";
+  } catch {
+    return "";
+  }
+}
+function ghCreate(r, title, body) {
+  const res = r.run("gh", ["issue", "create", "--repo", AP_ISSUES_REPO, "--title", title, "--body", body]);
+  if (res.code !== 0) return null;
+  const url = res.stdout.trim().split("\n").filter(Boolean).pop() ?? "";
+  const number = url.match(/\/(\d+)\s*$/)?.[1] ?? "";
+  return number ? { number, url } : null;
+}
+function ghComment(r, number, body) {
+  return r.run("gh", ["issue", "comment", number, "--repo", AP_ISSUES_REPO, "--body", body]).code === 0;
+}
+function topicText(run17) {
+  for (const f of ["topic-text.txt", "topic.txt"]) {
+    try {
+      const t = (0, import_node_fs10.readFileSync)((0, import_node_path7.join)(run17.artDir, f), "utf8").trim();
+      if (t) return t;
+    } catch {
+    }
+  }
+  return run17.topic;
+}
+function traceLine(artDir, kind, now) {
+  try {
+    (0, import_node_fs10.mkdirSync)(artDir, { recursive: true });
+    (0, import_node_fs10.appendFileSync)((0, import_node_path7.join)(artDir, "findings.log"), `${now} ${kind}
+`);
+  } catch {
+  }
+}
+function fileFinding(kind, run17, title, body, r = forensicsRunner()) {
+  try {
+    const now = isoUtc();
+    traceLine(run17.artDir, kind, now);
+    const existing = readIssueTxt(run17.artDir);
+    const runId = existing?.run_id ?? `${safeRepoHash().slice(0, 8)}-${run17.topic}-${stamp(now).replace(/\.\d+Z$/, "Z")}`;
+    if (!existing) writeIssueTxt(run17.artDir, { run_id: runId });
+    const g = gate();
+    const identity = runIdentity(run17, g === "file" ? r : NO_RUN);
+    const scrubbedTitle = scrubSecrets(title);
+    const scrubbedBody = scrubSecrets(body);
+    const isCreate = !existing;
+    const nFindings = (scrubbedBody.match(/^- \*\*/gm) ?? []).length;
+    const doc = isCreate ? renderIssueBody({
+      runId,
+      command: run17.command,
+      kind,
+      topicText: topicText(run17),
+      artDir: run17.artDir,
+      filedAt: now,
+      identity,
+      section: SECTION[kind],
+      body: scrubbedBody
+    }) : renderComment(runId, kind, scrubbedBody);
+    const qpath = queueRecord({
+      kind,
+      runId,
+      command: run17.command,
+      topic: run17.topic,
+      artDir: run17.artDir,
+      nFindings,
+      title: isCreate ? scrubbedTitle : void 0,
+      body: doc,
+      identity,
+      now
+    });
+    if (g !== "file") return { status: g === "queue" ? "queued" : "consent", line: g === "queue" ? `QUEUED=${qpath}` : "CONSENT=needed", path: qpath };
+    if (existing && !existing.number) return { status: "queued", line: `QUEUED=${qpath}`, path: qpath };
+    if (existing?.number) {
+      if (!ghComment(r, existing.number, doc)) return queuedWarn(qpath);
+      (0, import_node_fs10.rmSync)(qpath, { force: true });
+      return finish({ status: "filed", line: `ISSUE=${existing.url ?? issueUrl(existing.number)}`, url: existing.url ?? issueUrl(existing.number), number: existing.number }, r);
+    }
+    let lock;
+    try {
+      lock = (0, import_node_fs10.openSync)((0, import_node_path7.join)(run17.artDir, "issue.lock"), "wx");
+    } catch {
+      const now2 = readIssueTxt(run17.artDir);
+      if (!now2?.number) return { status: "queued", line: `QUEUED=${qpath}`, path: qpath };
+      if (!ghComment(r, now2.number, renderComment(now2.run_id, kind, scrubbedBody))) return queuedWarn(qpath);
+      (0, import_node_fs10.rmSync)(qpath, { force: true });
+      return finish({ status: "filed", line: `ISSUE=${now2.url ?? issueUrl(now2.number)}`, url: now2.url ?? issueUrl(now2.number), number: now2.number }, r);
+    }
+    try {
+      const dup = findOpenIssue(r, run17.command, scrubbedTitle);
+      if (dup) {
+        const again = renderComment(runId, kind, `seen again \u2014 run ${runId} on ${identity.host}
+
+${scrubbedBody}`);
+        if (!ghComment(r, dup, again)) return queuedWarn(qpath);
+        writeIssueTxt(run17.artDir, { run_id: runId, number: dup, url: issueUrl(dup) });
+        mapRecord(runId, dup);
+        (0, import_node_fs10.rmSync)(qpath, { force: true });
+        return finish({ status: "filed", line: `ISSUE=${issueUrl(dup)}`, url: issueUrl(dup), number: dup }, r);
+      }
+      const made = ghCreate(r, scrubbedTitle, doc);
+      if (!made) return queuedWarn(qpath);
+      writeIssueTxt(run17.artDir, { run_id: runId, number: made.number, url: made.url });
+      mapRecord(runId, made.number);
+      (0, import_node_fs10.rmSync)(qpath, { force: true });
+      return finish({ status: "filed", line: `ISSUE=${made.url}`, url: made.url, number: made.number }, r);
+    } finally {
+      (0, import_node_fs10.closeSync)(lock);
+      (0, import_node_fs10.rmSync)((0, import_node_path7.join)(run17.artDir, "issue.lock"), { force: true });
+    }
+  } catch {
+    return { status: "skipped", line: "" };
+  }
+}
+function queuedWarn(qpath) {
+  log.warn(`forensics: gh call failed; record left queued at ${qpath}`);
+  return { status: "queued", line: `QUEUED=${qpath}`, path: qpath };
+}
+function finish(res, r) {
+  if (!flushing) {
+    flushing = true;
+    try {
+      flushQueue(r, { maxMs: 3e4 });
+    } catch {
+    } finally {
+      flushing = false;
+    }
+  }
+  return res;
+}
+function parseQueued(dir, name) {
+  let text;
+  try {
+    text = (0, import_node_fs10.readFileSync)((0, import_node_path7.join)(dir, name), "utf8");
+  } catch {
+    return null;
+  }
+  const end = text.indexOf("\n---\n", 3);
+  if (!text.startsWith("---\n") || end < 0) return null;
+  const fm = text.slice(4, end);
+  const body = text.slice(end + 5).replace(/^\n/, "");
+  const f = (k) => fm.match(new RegExp(`^${k}: (.*)$`, "m"))?.[1]?.trim() ?? "";
+  const runId = f("run_id");
+  if (!runId) return null;
+  return {
+    name,
+    path: (0, import_node_path7.join)(dir, name),
+    runId,
+    kind: f("kind") || "findings",
+    command: f("command"),
+    artDir: f("art_dir"),
+    title: f("title") || void 0,
+    attempts: Number(f("attempts")) || 0,
+    body
+  };
+}
+function bumpAttempts(rec) {
+  const next = rec.attempts + 1;
+  try {
+    const text = (0, import_node_fs10.readFileSync)(rec.path, "utf8").replace(/^attempts: \d+$/m, `attempts: ${next}`);
+    if (next >= 3) {
+      atomicWrite(rec.path, text);
+      (0, import_node_fs10.renameSync)(rec.path, rec.path + ".failed");
+      log.warn(`forensics: dead-lettered ${rec.path}.failed after ${next} failed attempts`);
+      return true;
+    }
+    atomicWrite(rec.path, text);
+  } catch {
+  }
+  return false;
+}
+function flushQueue(r = forensicsRunner(), opts = {}) {
+  const dir = forensicsQueueDir();
+  let names = [];
+  try {
+    names = (0, import_node_fs10.readdirSync)(dir).filter((n) => n.endsWith(".md")).sort();
+  } catch {
+    return { filed: 0, remaining: 0, failed: 0 };
+  }
+  const recs = names.map((n) => parseQueued(dir, n)).filter((x) => x !== null);
+  if (gate() !== "file") return { filed: 0, remaining: recs.length, failed: 0 };
+  const byRun = /* @__PURE__ */ new Map();
+  for (const rec of recs) {
+    const key = `${rec.runId}	${rec.artDir}`;
+    const list = byRun.get(key);
+    if (list) list.push(rec);
+    else byRun.set(key, [rec]);
+  }
+  const deadline = Date.now() + (opts.maxMs ?? 3e4);
+  const outOfTime = () => Date.now() + CALL_TIMEOUT_MS > deadline;
+  let filed = 0, failed = 0;
+  for (const list of byRun.values()) {
+    const runId = list[0].runId;
+    list.sort((a, b) => (a.title ? 0 : 1) - (b.title ? 0 : 1) || (a.name < b.name ? -1 : 1));
+    const art = list[0].artDir;
+    let number = readIssueTxt(art)?.number ?? ((0, import_node_fs10.existsSync)(art) ? void 0 : mapLookup(runId));
+    for (const rec of list) {
+      if (outOfTime()) return tally(dir, filed, failed);
+      if (!number && !rec.title) {
+        if (bumpAttempts(rec)) failed++;
+        break;
+      }
+      let ok;
+      if (number) ok = ghComment(r, number, rec.body);
+      else {
+        const dup = findOpenIssue(r, rec.command, rec.title);
+        if (outOfTime()) return tally(dir, filed, failed);
+        if (dup) {
+          ok = ghComment(r, dup, rec.body);
+          if (ok) number = dup;
+        } else {
+          const made = ghCreate(r, rec.title, rec.body);
+          ok = made !== null;
+          if (made) number = made.number;
+        }
+        if (ok && number) {
+          mapRecord(runId, number);
+          if ((0, import_node_fs10.existsSync)(rec.artDir)) writeIssueTxt(rec.artDir, { ...readIssueTxt(rec.artDir), run_id: runId, number, url: issueUrl(number) });
+        }
+      }
+      if (!ok) {
+        if (bumpAttempts(rec)) failed++;
+        break;
+      }
+      (0, import_node_fs10.rmSync)(rec.path, { force: true });
+      filed++;
+    }
+  }
+  return tally(dir, filed, failed);
+}
+function tally(dir, filed, failed) {
+  let remaining = 0;
+  try {
+    remaining = (0, import_node_fs10.readdirSync)(dir).filter((n) => n.endsWith(".md")).length;
+  } catch {
+  }
+  return { filed, remaining, failed };
+}
+function commandArtDir(command, topic) {
+  return (0, import_node_path7.join)(topicDir(topic), `_${command}`);
+}
+function captureArtDir(opts) {
+  try {
+    const findings = scrapeArtDir(opts.artDir);
+    if (findings.length === 0) return "";
+    const topicSlug = (0, import_node_path7.basename)((0, import_node_path7.dirname)(opts.artDir));
+    return fileFinding(
+      "findings",
+      { command: opts.command, topic: topicSlug, artDir: opts.artDir },
+      issueTitle(opts.command, findings[0].key),
+      renderFindingBullets(findings)
+    ).line;
+  } catch {
+    return "";
+  }
+}
+function runForensics(command, artDirFor, topic) {
+  if (!topic) {
+    log.error(`usage: ${command} forensics <topic>`);
+    return 2;
+  }
+  const line = captureArtDir({ artDir: artDirFor(topic), command });
+  if (line) {
+    log.ok(`${command} forensics: ${line}`);
+    process.stdout.write(line + "\n");
+  } else log.info(`${command} forensics: no mechanical findings (nothing filed)`);
+  return 0;
+}
+function captureSpawnFailure(opts) {
+  process.stdout.write(`SPAWN_FAILED reason=${opts.reason}
+`);
+  try {
+    const ctx = `worker=${opts.agent}-${opts.model}`;
+    const findings = [
+      { source: "spawn_failure", key: `reason=${opts.reason} ${opts.detail}`.replace(/\s+/g, " ").trim(), context: ctx }
+    ];
+    if (opts.failureReportPath) findings.push({ source: "spawn_failure", key: `failure_report=${opts.failureReportPath}`, context: ctx });
+    const art = workerDir(opts.agent, opts.model, opts.topic);
+    return fileFinding(
+      "spawn_failure",
+      { command: "spawn", topic: opts.topic, artDir: art },
+      `[ap:spawn] ${opts.reason}`,
+      renderFindingBullets(findings)
+    ).line;
+  } catch {
+    return "";
+  }
+}
+function recordHubFlag(opts) {
+  try {
+    const note = opts.note.trim();
+    if (!note) return "";
+    const finding = { source: "hub_flag", key: note, context: `from=hub command=${opts.command}` };
+    return fileFinding(
+      "flag",
+      { command: opts.command, topic: opts.topic, artDir: commandArtDir(opts.command, opts.topic) },
+      issueTitle(opts.command, note),
+      renderFindingBullets([finding])
+    ).line;
+  } catch {
+    return "";
+  }
+}
+function runFlag(command, topic, note) {
+  if (!topic || !note.trim()) {
+    log.error(`usage: ${command} flag <topic> <observation>`);
+    return 2;
+  }
+  assertSlug("topic", topic);
+  const line = recordHubFlag({ command, topic, note });
+  if (line) {
+    log.ok(`${command} flag: ${line}`);
+    process.stdout.write(line + "\n");
+  } else log.info(`${command} flag: nothing recorded`);
+  return 0;
+}
+function recordHubReflection(command, topic, text, r = forensicsRunner()) {
+  const art = commandArtDir(command, topic);
+  const rec = readIssueTxt(art);
+  if (!rec) return null;
+  if (rec.reflected) return "done";
+  const res = fileFinding("reflection", { command, topic, artDir: art }, issueTitle(command, "hub reflection"), text, r);
+  if (res.status !== "skipped") writeIssueTxt(art, { ...rec, reflected: true });
+  return res;
+}
+function runReflect(command, topic, fileArg) {
+  if (!topic || !fileArg) {
+    log.error(`usage: ${command} reflect <topic> @<file>`);
+    return 2;
+  }
+  assertSlug("topic", topic);
+  const path = fileArg.startsWith("@") ? fileArg.slice(1) : fileArg;
+  let text;
+  try {
+    text = (0, import_node_fs10.readFileSync)(path, "utf8").trim();
+  } catch {
+    log.error(`${command} reflect: unreadable file: ${path}`);
+    return 2;
+  }
+  if (!text) {
+    log.error(`${command} reflect: empty reflection file: ${path}`);
+    return 2;
+  }
+  const res = recordHubReflection(command, topic, text);
+  if (res === null) {
+    process.stdout.write("NO_RUN_ISSUE\n");
+    return 0;
+  }
+  if (res === "done") {
+    log.error(`${command} reflect: this run's reflection was already posted`);
+    return 1;
+  }
+  if (res.line) process.stdout.write(res.line + "\n");
+  return 0;
+}
+var import_node_fs10, import_node_child_process4, import_node_os3, import_node_crypto4, import_node_path7, FAILURE_REASONS, SCROLLBACK_LINES, NO_EVENT_SENTINEL, FAILURE_FILENAME, AP_ISSUES_REPO, CALL_TIMEOUT_MS, NO_RUN, SCRUBS, SECTION, flushing;
+var init_forensics = __esm({
+  "src/core/forensics.ts"() {
+    "use strict";
+    import_node_fs10 = require("node:fs");
+    import_node_child_process4 = require("node:child_process");
+    import_node_os3 = require("node:os");
+    import_node_crypto4 = require("node:crypto");
+    import_node_path7 = require("node:path");
+    init_paths();
+    init_slug();
+    init_atomic();
+    init_archive();
+    init_log();
+    init_ipc();
+    init_review();
+    FAILURE_REASONS = /* @__PURE__ */ new Set(["timeout", "error_event", "killed", "pane_dead"]);
+    SCROLLBACK_LINES = 50;
+    NO_EVENT_SENTINEL = "no error event before timeout";
+    FAILURE_FILENAME = "failure-reason.txt";
+    AP_ISSUES_REPO = "WingsOfPanda/agglomeration-platform";
+    CALL_TIMEOUT_MS = 15e3;
+    NO_RUN = { run: () => ({ code: 1, stdout: "", stderr: "" }) };
+    SCRUBS = [
+      [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "<redacted>"],
+      [/gh[posur]_[A-Za-z0-9]{20,}/g, "<redacted>"],
+      [/github_pat_[A-Za-z0-9_]{20,}/g, "<redacted>"],
+      [/sk-[A-Za-z0-9_-]{16,}/g, "<redacted>"],
+      [/AKIA[0-9A-Z]{16}/g, "<redacted>"],
+      [/(bearer\s+)\S+/gi, "$1<redacted>"],
+      [/\b(token|password|passwd|secret|api[_-]?key)(\s*[=:]\s*)\S+/gi, "$1$2<redacted>"],
+      [/:\/\/[^/\s:@]+:[^/\s@]+@/g, "://<redacted>@"]
+    ];
+    SECTION = {
+      findings: "Mechanical findings",
+      spawn_failure: "Spawn failure",
+      flag: "Flag",
+      reflection: "Hub reflection"
+    };
+    flushing = false;
+  }
+});
+
+// src/core/implement.ts
+function implementArtDir(topic, opts) {
+  return (0, import_node_path8.join)(topicDir(topic, opts), "_implement");
+}
+function deriveTopicFromPath(p) {
+  if (!p) return "";
+  let base = (0, import_node_path8.basename)(p);
+  base = base.replace(/^\d{4}-\d{2}-\d{2}-/, "");
+  if (base.endsWith("-design.md")) base = base.slice(0, -"-design.md".length);
+  else if (base.endsWith(".md")) base = base.slice(0, -".md".length);
+  return base;
+}
+function assertImplementTopic(topic) {
+  return /^[a-z0-9][a-z0-9-]{0,31}$/.test(topic);
+}
+function parseImplementArgs(tokens) {
+  let branchMode = "branch";
+  let branchName;
+  let topic;
+  let target;
+  let force = false;
+  const rest = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === "--max-rounds" || t.startsWith("--max-rounds=")) {
+      throw new ImplementArgError("--max-rounds must be stripped by the directive before init");
+    }
+    if (t === "--force") {
+      force = true;
+      continue;
+    }
+    if (t === "--no-branch") {
+      branchMode = "no-branch";
+      continue;
+    }
+    if (t === "--branch" || t.startsWith("--branch=")) {
+      const { value, shift } = kvParse(t, tokens[i + 1]);
+      branchName = value;
+      if (shift === 2) i++;
+      continue;
+    }
+    if (t === "--topic" || t.startsWith("--topic=")) {
+      const { value, shift } = kvParse(t, tokens[i + 1]);
+      topic = value;
+      if (shift === 2) i++;
+      continue;
+    }
+    if (t === "--target" || t.startsWith("--target=")) {
+      const { value, shift } = kvParse(t, tokens[i + 1]);
+      target = value;
+      if (shift === 2) i++;
+      continue;
+    }
+    if (t.startsWith("-")) throw new ImplementArgError(`implement init: unknown flag '${t}'`);
+    rest.push(t);
+  }
+  return { rest: rest.join(" "), branchMode, branchName, topic, target, force };
+}
+function detectProvider(repoRoot2) {
+  return (0, import_node_fs11.existsSync)((0, import_node_path8.join)(repoRoot2, ".claude-plugin", "plugin.json")) ? "claude" : "codex";
+}
+function targetCwd(topic, opts) {
+  const f = (0, import_node_path8.join)(implementArtDir(topic, opts), "target_cwd.txt");
+  return (0, import_node_fs11.existsSync)(f) ? (0, import_node_fs11.readFileSync)(f, "utf8").replace(/\n$/, "") : "";
+}
+function recordProviderFallback(command, art, topic, from, to, reason) {
+  atomicWrite((0, import_node_path8.join)(art, "provider-fallback.txt"), `PROVIDER_FALLBACK=${from}->${to} reason=${reason}
+`);
+  recordHubFlag({ command, topic, note: `PROVIDER_FALLBACK ${from}->${to} reason=${reason}: codex worker failed at spawn twice; continuing with claude` });
+}
+function readProviderFallback(art) {
+  const raw = readIfExists((0, import_node_path8.join)(art, "provider-fallback.txt")).trim();
+  const m = /^PROVIDER_FALLBACK=(\S+)->(\S+) reason=(\S+)$/.exec(raw);
+  return m ? { raw, from: m[1], to: m[2], reason: m[3] } : null;
+}
+function parseSetProviderArgs(rest) {
+  const i = rest.indexOf("--reason");
+  if (i < 0) return { pos: rest, badReason: false };
+  const reason = rest[i + 1];
+  return { pos: [...rest.slice(0, i), ...rest.slice(i + 2)], reason: reason ?? "", badReason: reason === void 0 };
+}
+var import_node_path8, import_node_fs11, ImplementArgError, FALLBACK_REASONS;
+var init_implement = __esm({
+  "src/core/implement.ts"() {
+    "use strict";
+    import_node_path8 = require("node:path");
+    import_node_fs11 = require("node:fs");
+    init_paths();
+    init_args();
+    init_atomic();
+    init_fsread();
+    init_forensics();
+    ImplementArgError = class extends Error {
+      code = 2;
+    };
+    FALLBACK_REASONS = /* @__PURE__ */ new Set(["pane_dead", "timeout"]);
+  }
+});
+
 // src/core/job.ts
 function isJobCommand(s) {
   return JOB_COMMANDS.includes(s);
 }
 function jobPath(topic) {
-  return (0, import_node_path8.join)(jobDir(topic), "job.json");
+  return (0, import_node_path9.join)(jobDir(topic), "job.json");
 }
 function worktreePathFor(root, topic) {
-  return (0, import_node_path8.join)(root, ".ap", "worktrees", topic);
+  return (0, import_node_path9.join)(root, ".ap", "worktrees", topic);
 }
 function worktreeProvenanced(path, root) {
-  return path.startsWith((0, import_node_path8.join)(root, ".ap", "worktrees") + import_node_path8.sep) && path.length > (0, import_node_path8.join)(root, ".ap", "worktrees").length + import_node_path8.sep.length;
+  return path.startsWith((0, import_node_path9.join)(root, ".ap", "worktrees") + import_node_path9.sep) && path.length > (0, import_node_path9.join)(root, ".ap", "worktrees").length + import_node_path9.sep.length;
 }
 function mainCheckoutRoot(root) {
-  const recovered = (0, import_node_path8.dirname)((0, import_node_path8.dirname)((0, import_node_path8.dirname)(root)));
+  const recovered = (0, import_node_path9.dirname)((0, import_node_path9.dirname)((0, import_node_path9.dirname)(root)));
   return worktreeProvenanced(root, recovered) ? recovered : root;
 }
 function worktreeTopic(root) {
   if (mainCheckoutRoot(root) === root) return "";
-  const topic = (0, import_node_path8.basename)(root);
+  const topic = (0, import_node_path9.basename)(root);
   return validateSlug(topic) ? topic : "";
 }
 function keepOnBranch(topic, targetCwd2) {
@@ -8835,16 +9614,16 @@ function keepOnBranch(topic, targetCwd2) {
   const wt = parseJob(readIfExists(jobPath(topic)))?.worktree ?? "";
   if (!wt || mainCheckoutRoot(wt) === wt) return false;
   try {
-    return (0, import_node_fs11.realpathSync)(wt) === (0, import_node_fs11.realpathSync)(targetCwd2);
+    return (0, import_node_fs12.realpathSync)(wt) === (0, import_node_fs12.realpathSync)(targetCwd2);
   } catch {
     return false;
   }
 }
 function orphanedTopicState(topic, root, recovered) {
   if (!topic || recovered === root || !validateSlug(topic)) return null;
-  if ((0, import_node_fs11.existsSync)(topicDir(topic, { cwd: recovered }))) return null;
+  if ((0, import_node_fs12.existsSync)(topicDir(topic, { cwd: recovered }))) return null;
   const stranded = topicDir(topic, { cwd: root });
-  return (0, import_node_fs11.existsSync)(stranded) ? stranded : null;
+  return (0, import_node_fs12.existsSync)(stranded) ? stranded : null;
 }
 function orphanRefusal(topic, stranded, recovered) {
   return [
@@ -8878,10 +9657,10 @@ async function withMainCheckout(fn) {
   }
 }
 function jobCursorPath(topic) {
-  return (0, import_node_path8.join)(jobDir(topic), "cursor.txt");
+  return (0, import_node_path9.join)(jobDir(topic), "cursor.txt");
 }
 function panesEvidencePath(topic) {
-  return (0, import_node_path8.join)(jobDir(topic), "panes.json");
+  return (0, import_node_path9.join)(jobDir(topic), "panes.json");
 }
 function formatJob(j) {
   return JSON.stringify(j) + "\n";
@@ -8951,7 +9730,7 @@ function seedExpired(rec, now) {
   return now - t > bootstrapDeadlineS(rec.model) * 1e3;
 }
 function workerLivenessPath(topic) {
-  return (0, import_node_path8.join)(jobDir(topic), "worker-liveness.json");
+  return (0, import_node_path9.join)(jobDir(topic), "worker-liveness.json");
 }
 function parseWorkerMisses(text) {
   let o;
@@ -9077,6 +9856,8 @@ function jobBrief(j) {
     ``,
     `Run parameters. These are settled and are NOT yours to change:`,
     `    provider    ${j.provider || "(directive default)"}`,
+    `                one exception, and it is mechanical: the directive's provider-fallback step`,
+    `                switches a codex worker that fails to spawn TWICE over to claude, without asking`,
     `    finish      keep \u2014 never merge, never push, never open a PR`,
     `    max rounds  ${j.max_rounds}`,
     `    budget      ${j.budget_hours}h \u2014 check at EVERY round boundary with:`,
@@ -9094,12 +9875,12 @@ function jobBrief(j) {
     `gate's answer, or discarding finished work because a gate went unanswered, are both failures.`
   ].join("\n");
 }
-var import_node_fs11, import_node_path8, JOB_COMMANDS, WORKER_DEAD_EVENT, WORKER_MISS_LIMIT, BOOTSTRAP_GRACE_S, LIVENESS_OVER_STATES;
+var import_node_fs12, import_node_path9, JOB_COMMANDS, WORKER_DEAD_EVENT, WORKER_MISS_LIMIT, BOOTSTRAP_GRACE_S, LIVENESS_OVER_STATES;
 var init_job = __esm({
   "src/core/job.ts"() {
     "use strict";
-    import_node_fs11 = require("node:fs");
-    import_node_path8 = require("node:path");
+    import_node_fs12 = require("node:fs");
+    import_node_path9 = require("node:path");
     init_fsread();
     init_log();
     init_paths();
@@ -9118,13 +9899,13 @@ var init_job = __esm({
 
 // src/core/agents.ts
 function agentsPath() {
-  return (0, import_node_path9.join)(pluginRoot(), "config", "agents.yaml");
+  return (0, import_node_path10.join)(pluginRoot(), "config", "agents.yaml");
 }
 function loadAgentPool() {
   const p = agentsPath();
-  if (!(0, import_node_fs12.existsSync)(p)) return [];
+  if (!(0, import_node_fs13.existsSync)(p)) return [];
   try {
-    const doc = (0, import_yaml2.parse)((0, import_node_fs12.readFileSync)(p, "utf8"));
+    const doc = (0, import_yaml2.parse)((0, import_node_fs13.readFileSync)(p, "utf8"));
     const list = Array.isArray(doc) ? doc : doc?.agents;
     return Array.isArray(list) ? list.map((x) => String(x).trim()).filter(Boolean) : [];
   } catch {
@@ -9132,11 +9913,11 @@ function loadAgentPool() {
   }
 }
 function agentsInDir(dir) {
-  if (!(0, import_node_fs12.existsSync)(dir)) return [];
+  if (!(0, import_node_fs13.existsSync)(dir)) return [];
   const out2 = [];
-  for (const name of (0, import_node_fs12.readdirSync)(dir, { withFileTypes: true })) {
+  for (const name of (0, import_node_fs13.readdirSync)(dir, { withFileTypes: true })) {
     if (!name.isDirectory() || isArtifactDir(name.name)) continue;
-    const meta = paneMetaReadForDir((0, import_node_path9.join)(dir, name.name));
+    const meta = paneMetaReadForDir((0, import_node_path10.join)(dir, name.name));
     if (meta.agent) out2.push(meta.agent);
   }
   return out2;
@@ -9149,10 +9930,10 @@ function agentInUse(agent, topic) {
 }
 function agentsInUseGlobally() {
   const repo = repoStateDir();
-  if (!(0, import_node_fs12.existsSync)(repo)) return [];
+  if (!(0, import_node_fs13.existsSync)(repo)) return [];
   const all = [];
-  for (const t of (0, import_node_fs12.readdirSync)(repo, { withFileTypes: true })) {
-    if (t.isDirectory()) all.push(...agentsInDir((0, import_node_path9.join)(repo, t.name)));
+  for (const t of (0, import_node_fs13.readdirSync)(repo, { withFileTypes: true })) {
+    if (t.isDirectory()) all.push(...agentsInDir((0, import_node_path10.join)(repo, t.name)));
   }
   return [...new Set(all)].sort();
 }
@@ -9174,20 +9955,20 @@ function pickAgents(topic, n, rng = Math.random) {
 }
 function formatCollisionError(agent, model, topic, sessionId) {
   const lines = [`${agent} is already deployed on ${topic}; pick another agent`];
-  const sidFile = (0, import_node_path9.join)(workerDir(agent, model, topic), ".session_id");
+  const sidFile = (0, import_node_path10.join)(workerDir(agent, model, topic), ".session_id");
   let owner = "";
-  if ((0, import_node_fs12.existsSync)(sidFile)) owner = (0, import_node_fs12.readFileSync)(sidFile, "utf8").split("\n")[0] ?? "";
+  if ((0, import_node_fs13.existsSync)(sidFile)) owner = (0, import_node_fs13.readFileSync)(sidFile, "utf8").split("\n")[0] ?? "";
   const me = sessionId ?? process.env.CLAUDE_CODE_SESSION_ID ?? "unknown";
   if (owner && owner !== me) lines.push(`  owned by another Claude Code session (id=${owner.slice(0, 8)}\u2026, mine=${me.slice(0, 8)}\u2026)`);
   lines.push(`  or run: /ap:stop ${agent} ${topic}`);
   return lines.join("\n");
 }
-var import_node_fs12, import_node_path9, import_yaml2;
+var import_node_fs13, import_node_path10, import_yaml2;
 var init_agents = __esm({
   "src/core/agents.ts"() {
     "use strict";
-    import_node_fs12 = require("node:fs");
-    import_node_path9 = require("node:path");
+    import_node_fs13 = require("node:fs");
+    import_node_path10 = require("node:path");
     import_yaml2 = __toESM(require_dist(), 1);
     init_paths();
     init_ipc();
@@ -9255,11 +10036,11 @@ async function dispatchVerb(args, deps) {
   }
   if (msg.startsWith("@")) {
     const f = msg.slice(1);
-    if (!(0, import_node_fs13.existsSync)(f)) {
+    if (!(0, import_node_fs14.existsSync)(f)) {
       log.error(`file not found: ${f}`);
       return 1;
     }
-    msg = (0, import_node_fs13.readFileSync)(f, "utf8");
+    msg = (0, import_node_fs14.readFileSync)(f, "utf8");
   }
   inboxWrite(agent, model, topic, msg, from ? { from } : void 0);
   const inbox = inboxPath(agent, model, topic);
@@ -9273,11 +10054,11 @@ async function dispatchVerb(args, deps) {
 `);
   return 0;
 }
-var import_node_fs13, liveSendCmdDeps;
+var import_node_fs14, liveSendCmdDeps;
 var init_send = __esm({
   "src/commands/send.ts"() {
     "use strict";
-    import_node_fs13 = require("node:fs");
+    import_node_fs14 = require("node:fs");
     init_log();
     init_paths();
     init_job();
@@ -9285,765 +10066,6 @@ var init_send = __esm({
     init_tmux();
     init_slug();
     liveSendCmdDeps = { paneOwned, paneSend, paneState: paneStateRead };
-  }
-});
-
-// src/core/review.ts
-function parseSince(spec, now) {
-  const m = spec.match(/^(\d+)([dh])$/);
-  if (!m) throw new Error(`--since must be <N>d or <N>h (got '${spec}')`);
-  const n = Number(m[1]);
-  return now - (m[2] === "d" ? n * 864e5 : n * 36e5);
-}
-function normalizeVolatile(s) {
-  return s.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?/g, "<ts>").replace(/\b[0-9a-f]{7,40}\b/g, "<sha>").replace(/\/[^\s"']+/g, "<path>").replace(/\b\d+\b/g, "<n>").trim();
-}
-function isTriaged(issue) {
-  const comments = issue.comments ?? [];
-  const markers = comments.filter((c) => firstLine(c.body).startsWith(AP_TRIAGED_MARKER));
-  const labelled = (issue.labels ?? []).some((l) => l.name === TRIAGED_LABEL);
-  if (!labelled && markers.length === 0) return false;
-  if (markers.length === 0) return true;
-  const newestMarker = Math.max(...markers.map((c) => ms(c.createdAt)));
-  return !comments.some((c) => firstLine(c.body).startsWith(AP_FORENSICS_MARKER) && ms(c.createdAt) > newestMarker);
-}
-function lastEventAt(issue) {
-  let best = "";
-  for (const c of issue.comments ?? []) {
-    if (firstLine(c.body).startsWith(AP_FORENSICS_MARKER) && ms(c.createdAt) > ms(best)) best = c.createdAt;
-  }
-  return best || issue.createdAt;
-}
-function clusterByTitle(issues) {
-  const by = /* @__PURE__ */ new Map();
-  for (const i of issues) {
-    const title = normalizeVolatile(i.title);
-    const seenAgain = (i.comments ?? []).filter((c2) => c2.body.includes("seen again")).length;
-    const last = lastEventAt(i);
-    const c = by.get(title);
-    if (!c) by.set(title, { title, open: 1, seenAgain, first: i.createdAt, last });
-    else {
-      c.open += 1;
-      c.seenAgain += seenAgain;
-      if (ms(i.createdAt) < ms(c.first)) c.first = i.createdAt;
-      if (ms(last) > ms(c.last)) c.last = last;
-    }
-  }
-  return [...by.values()].filter((c) => c.open >= 2 || c.seenAgain >= 1).sort((a, b) => b.open - a.open || a.title.localeCompare(b.title));
-}
-var AP_TRIAGED_MARKER, AP_FORENSICS_MARKER, TRIAGED_LABEL, firstLine, ms;
-var init_review = __esm({
-  "src/core/review.ts"() {
-    "use strict";
-    AP_TRIAGED_MARKER = "<!-- ap-triaged";
-    AP_FORENSICS_MARKER = "<!-- ap-forensics";
-    TRIAGED_LABEL = "triaged";
-    firstLine = (body) => body.split("\n", 1)[0].trim();
-    ms = (iso) => {
-      const t = Date.parse(iso);
-      return Number.isFinite(t) ? t : 0;
-    };
-  }
-});
-
-// src/core/forensics.ts
-function renderFailureReport(f) {
-  const meta = `timestamp:     ${f.timestamp}
-agent:    ${f.agent}
-model:         ${f.model}
-topic:         ${f.topic}
-pane_id:       ${f.paneId}
-fail_reason:   ${f.reason}
-ready_timeout: ${f.readyTimeout}
-`;
-  const evt = f.eventLine ? f.eventLine : NO_EVENT_SENTINEL;
-  return `# Spawn bootstrap failure
-${meta}
-## Pane scrollback (last 50 lines, captured BEFORE pane kill)
-${f.scrollback}
-
-## Event context
-${evt}
-`;
-}
-async function captureFailure(input, deps) {
-  if (!input.agent || !input.model || !input.topic) return { ok: false, code: 1 };
-  if (!FAILURE_REASONS.has(input.reason)) return { ok: false, code: 2 };
-  const dir = deps.workerDir(input.agent, input.model, input.topic);
-  if (!deps.isWritableDir(dir)) return { ok: false, code: 1 };
-  const scrollback = await deps.capturePane(input.paneId, SCROLLBACK_LINES).catch(() => "");
-  const dest = `${dir}/${FAILURE_FILENAME}`;
-  const doc = renderFailureReport({
-    timestamp: (deps.now ?? (() => isoUtc()))(),
-    agent: input.agent,
-    model: input.model,
-    topic: input.topic,
-    paneId: input.paneId,
-    reason: input.reason,
-    readyTimeout: input.readyTimeout == null ? "unknown" : String(input.readyTimeout),
-    scrollback,
-    eventLine: input.eventLine
-  });
-  deps.atomicWriteSync(dest, doc);
-  return { ok: true, path: dest };
-}
-function scrapeOutbox(text, worker) {
-  const out2 = [];
-  for (const l of text.split("\n")) {
-    if (!l.trim()) continue;
-    const o = parseEvent(l);
-    if (!o) continue;
-    if (o.event === "error" || o.event === "question") out2.push({ source: "outbox", key: l.trim(), context: `worker=${worker}` });
-    else if (typeof o.note === "string" && /^\s*FLAG:/i.test(o.note)) out2.push({ source: "part_note", key: o.note.replace(/^\s*FLAG:\s*/i, "").trim(), context: `worker=${worker}` });
-  }
-  return out2;
-}
-function scrapeArtDir(artDir) {
-  const out2 = [];
-  const read = (p) => {
-    try {
-      return (0, import_node_fs14.readFileSync)(p, "utf8");
-    } catch {
-      return null;
-    }
-  };
-  try {
-    for (const d of (0, import_node_fs14.readdirSync)((0, import_node_path10.dirname)(artDir), { withFileTypes: true })) {
-      if (!d.isDirectory() || d.name.startsWith("_") || d.name.startsWith(".")) continue;
-      const ob = read((0, import_node_path10.join)((0, import_node_path10.dirname)(artDir), d.name, "outbox.jsonl"));
-      if (ob !== null) out2.push(...scrapeOutbox(ob, d.name));
-    }
-  } catch {
-  }
-  const seen = /* @__PURE__ */ new Set();
-  return out2.filter((f) => {
-    const k = `${f.source}|${f.key}|${f.context}`;
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
-}
-function renderFindingBullets(findings) {
-  return findings.map((f) => `- **${f.source}** ${f.key} _(source: ${f.context})_`).join("\n") + "\n";
-}
-function forensicsRunner() {
-  return {
-    run(cmd, args) {
-      if (cmd === "gh" && process.env.AP_FORENSICS_BACKEND === "queue") {
-        return { code: 1, stdout: "", stderr: "AP_FORENSICS_BACKEND=queue: refusing to spawn gh" };
-      }
-      try {
-        const stdout = (0, import_node_child_process4.execFileSync)(cmd, args, { encoding: "utf8", timeout: CALL_TIMEOUT_MS, killSignal: "SIGKILL", stdio: ["ignore", "pipe", "pipe"] });
-        return { code: 0, stdout, stderr: "" };
-      } catch (e) {
-        const err = e;
-        return {
-          code: typeof err.status === "number" ? err.status : 1,
-          stdout: err.stdout != null ? String(err.stdout) : "",
-          stderr: err.stderr != null ? String(err.stderr) : ""
-        };
-      }
-    }
-  };
-}
-function readConsent() {
-  try {
-    const v = (0, import_node_fs14.readFileSync)(issuesConsentPath(), "utf8").trim();
-    return v === "yes" || v === "no" ? v : null;
-  } catch {
-    return null;
-  }
-}
-function writeConsent(v) {
-  (0, import_node_fs14.mkdirSync)(globalRoot(), { recursive: true });
-  atomicWrite(issuesConsentPath(), v + "\n");
-}
-function gate() {
-  if (process.env.AP_FORENSICS_BACKEND === "queue") return "queue";
-  const c = readConsent();
-  return c === "yes" ? "file" : c === "no" ? "queue" : "consent";
-}
-function scrubSecrets(s) {
-  let out2 = s;
-  for (const [re, to] of SCRUBS) out2 = out2.replace(re, to);
-  return out2;
-}
-function issueTitle(command, first) {
-  const body = normalizeVolatile(scrubSecrets(first)).replace(/\s+/g, " ").trim();
-  return `[ap:${command}] ${body.slice(0, 80)}`.trim();
-}
-function apVersion() {
-  const bases = [typeof __dirname === "string" ? (0, import_node_path10.join)(__dirname, "..") : "", pluginRoot()];
-  for (const base of bases) {
-    if (!base) continue;
-    try {
-      const v = JSON.parse((0, import_node_fs14.readFileSync)((0, import_node_path10.join)(base, "package.json"), "utf8")).version;
-      if (typeof v === "string" && v) return v;
-    } catch {
-    }
-  }
-  return "unknown";
-}
-function runIdentity(run17, r = forensicsRunner()) {
-  let providers = "";
-  try {
-    providers = (0, import_node_fs14.readdirSync)((0, import_node_path10.dirname)(run17.artDir), { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith("_") && !d.name.startsWith(".")).map((d) => d.name.replace("-", ":")).sort().join(", ");
-  } catch {
-  }
-  let repo = "";
-  const origin = r.run("git", ["remote", "get-url", "origin"]);
-  if (origin.code === 0 && origin.stdout.trim()) repo = scrubSecrets(origin.stdout.trim());
-  if (!repo) {
-    try {
-      repo = repoHash();
-    } catch {
-      repo = "unknown";
-    }
-  }
-  return {
-    version: apVersion(),
-    host: (0, import_node_os3.hostname)(),
-    user: safeUser(),
-    platform: process.platform,
-    node: process.version,
-    providers,
-    repo
-  };
-}
-function safeUser() {
-  try {
-    return (0, import_node_os3.userInfo)().username;
-  } catch {
-    return "unknown";
-  }
-}
-function renderIssueBody(o) {
-  const rows = [
-    ["ap version", o.identity.version],
-    ["command", o.command],
-    ["topic", o.topicText],
-    ["run id", o.runId],
-    ["host / user", `${o.identity.host} / ${o.identity.user}`],
-    ["platform", `${o.identity.platform} \xB7 node ${o.identity.node}`],
-    ["providers", o.identity.providers],
-    ["repo", o.identity.repo],
-    ["art dir", o.artDir],
-    ["filed at", o.filedAt]
-  ];
-  const cell = (v) => scrubSecrets(v).replace(/\s+/g, " ").trim();
-  return `<!-- ap-forensics run=${o.runId} cmd=${o.command} v=${o.identity.version} kind=${o.kind} -->
-### Run
-| | |
-|---|---|
-` + rows.map(([k, v]) => `| ${k} | ${cell(v)} |`).join("\n") + `
-
-### ${o.section}
-${o.body}`;
-}
-function renderComment(runId, kind, body) {
-  return `<!-- ap-forensics run=${runId} kind=${kind} -->
-${body}`;
-}
-function issueTxtPath(artDir) {
-  return (0, import_node_path10.join)(artDir, "issue.txt");
-}
-function readIssueTxt(artDir) {
-  let text;
-  try {
-    text = (0, import_node_fs14.readFileSync)(issueTxtPath(artDir), "utf8");
-  } catch {
-    return null;
-  }
-  const f = (k) => text.match(new RegExp(`^${k}=(.*)$`, "m"))?.[1]?.trim();
-  const run_id = f("run_id");
-  if (!run_id) return null;
-  return { run_id, number: f("number"), url: f("url"), reflected: f("reflected") === "1" };
-}
-function writeIssueTxt(artDir, rec) {
-  (0, import_node_fs14.mkdirSync)(artDir, { recursive: true });
-  atomicWrite(issueTxtPath(artDir), `run_id=${rec.run_id}
-` + (rec.number ? `number=${rec.number}
-` : "") + (rec.url ? `url=${rec.url}
-` : "") + (rec.reflected ? "reflected=1\n" : ""));
-}
-function issueUrl(n) {
-  return `https://github.com/${AP_ISSUES_REPO}/issues/${n}`;
-}
-function stamp(iso) {
-  return iso.replace(/[-:]/g, "");
-}
-function queueRecord(rec) {
-  const dir = forensicsQueueDir();
-  (0, import_node_fs14.mkdirSync)(dir, { recursive: true });
-  const name = `${stamp(rec.now)}-${rec.runId}-${rec.kind}-${process.pid}${(0, import_node_crypto4.randomBytes)(2).toString("hex")}.md`;
-  const fm = [
-    "---",
-    `command: ${rec.command}`,
-    `topic: ${rec.topic}`,
-    `topic_slug: ${rec.topic}`,
-    `repo_hash: ${safeRepoHash()}`,
-    `art_dir: ${rec.artDir}`,
-    `invoked_at: ${rec.now}`,
-    `n_findings_mechanical: ${rec.nFindings}`,
-    "queued: true",
-    `kind: ${rec.kind}`,
-    `run_id: ${rec.runId}`,
-    `attempts: ${rec.attempts ?? 0}`,
-    ...rec.title ? [`title: ${rec.title}`] : [],
-    `version: ${rec.identity.version}`,
-    `host: ${rec.identity.host}`,
-    `user: ${rec.identity.user}`,
-    `platform: ${rec.identity.platform}`,
-    `node: ${rec.identity.node}`,
-    `providers: ${rec.identity.providers}`,
-    `repo: ${rec.identity.repo}`,
-    "---",
-    ""
-  ].join("\n");
-  const path = (0, import_node_path10.join)(dir, name);
-  atomicWrite(path, fm + rec.body);
-  return path;
-}
-function safeRepoHash() {
-  try {
-    return repoHash();
-  } catch {
-    return "unknown";
-  }
-}
-function mapPath() {
-  return (0, import_node_path10.join)(forensicsQueueDir(), "map.txt");
-}
-function mapLookup(runId) {
-  try {
-    for (const line of (0, import_node_fs14.readFileSync)(mapPath(), "utf8").split("\n")) {
-      const [id, n] = line.split("	");
-      if (id === runId && n) return n.trim();
-    }
-  } catch {
-  }
-  return void 0;
-}
-function mapRecord(runId, number) {
-  try {
-    (0, import_node_fs14.mkdirSync)(forensicsQueueDir(), { recursive: true });
-    (0, import_node_fs14.appendFileSync)(mapPath(), `${runId}	${number}
-`);
-  } catch {
-  }
-}
-function findOpenIssue(r, command, title) {
-  const res = r.run("gh", [
-    "issue",
-    "list",
-    "--repo",
-    AP_ISSUES_REPO,
-    "--state",
-    "open",
-    "--search",
-    `in:title "[ap:${command}]"`,
-    "--json",
-    "number,title",
-    "--limit",
-    "100"
-  ]);
-  if (res.code !== 0) return "";
-  try {
-    const rows = JSON.parse(res.stdout);
-    const hit = rows.find((x) => x.title === title);
-    return hit?.number != null ? String(hit.number) : "";
-  } catch {
-    return "";
-  }
-}
-function ghCreate(r, title, body) {
-  const res = r.run("gh", ["issue", "create", "--repo", AP_ISSUES_REPO, "--title", title, "--body", body]);
-  if (res.code !== 0) return null;
-  const url = res.stdout.trim().split("\n").filter(Boolean).pop() ?? "";
-  const number = url.match(/\/(\d+)\s*$/)?.[1] ?? "";
-  return number ? { number, url } : null;
-}
-function ghComment(r, number, body) {
-  return r.run("gh", ["issue", "comment", number, "--repo", AP_ISSUES_REPO, "--body", body]).code === 0;
-}
-function topicText(run17) {
-  for (const f of ["topic-text.txt", "topic.txt"]) {
-    try {
-      const t = (0, import_node_fs14.readFileSync)((0, import_node_path10.join)(run17.artDir, f), "utf8").trim();
-      if (t) return t;
-    } catch {
-    }
-  }
-  return run17.topic;
-}
-function traceLine(artDir, kind, now) {
-  try {
-    (0, import_node_fs14.mkdirSync)(artDir, { recursive: true });
-    (0, import_node_fs14.appendFileSync)((0, import_node_path10.join)(artDir, "findings.log"), `${now} ${kind}
-`);
-  } catch {
-  }
-}
-function fileFinding(kind, run17, title, body, r = forensicsRunner()) {
-  try {
-    const now = isoUtc();
-    traceLine(run17.artDir, kind, now);
-    const existing = readIssueTxt(run17.artDir);
-    const runId = existing?.run_id ?? `${safeRepoHash().slice(0, 8)}-${run17.topic}-${stamp(now).replace(/\.\d+Z$/, "Z")}`;
-    if (!existing) writeIssueTxt(run17.artDir, { run_id: runId });
-    const g = gate();
-    const identity = runIdentity(run17, g === "file" ? r : NO_RUN);
-    const scrubbedTitle = scrubSecrets(title);
-    const scrubbedBody = scrubSecrets(body);
-    const isCreate = !existing;
-    const nFindings = (scrubbedBody.match(/^- \*\*/gm) ?? []).length;
-    const doc = isCreate ? renderIssueBody({
-      runId,
-      command: run17.command,
-      kind,
-      topicText: topicText(run17),
-      artDir: run17.artDir,
-      filedAt: now,
-      identity,
-      section: SECTION[kind],
-      body: scrubbedBody
-    }) : renderComment(runId, kind, scrubbedBody);
-    const qpath = queueRecord({
-      kind,
-      runId,
-      command: run17.command,
-      topic: run17.topic,
-      artDir: run17.artDir,
-      nFindings,
-      title: isCreate ? scrubbedTitle : void 0,
-      body: doc,
-      identity,
-      now
-    });
-    if (g !== "file") return { status: g === "queue" ? "queued" : "consent", line: g === "queue" ? `QUEUED=${qpath}` : "CONSENT=needed", path: qpath };
-    if (existing && !existing.number) return { status: "queued", line: `QUEUED=${qpath}`, path: qpath };
-    if (existing?.number) {
-      if (!ghComment(r, existing.number, doc)) return queuedWarn(qpath);
-      (0, import_node_fs14.rmSync)(qpath, { force: true });
-      return finish({ status: "filed", line: `ISSUE=${existing.url ?? issueUrl(existing.number)}`, url: existing.url ?? issueUrl(existing.number), number: existing.number }, r);
-    }
-    let lock;
-    try {
-      lock = (0, import_node_fs14.openSync)((0, import_node_path10.join)(run17.artDir, "issue.lock"), "wx");
-    } catch {
-      const now2 = readIssueTxt(run17.artDir);
-      if (!now2?.number) return { status: "queued", line: `QUEUED=${qpath}`, path: qpath };
-      if (!ghComment(r, now2.number, renderComment(now2.run_id, kind, scrubbedBody))) return queuedWarn(qpath);
-      (0, import_node_fs14.rmSync)(qpath, { force: true });
-      return finish({ status: "filed", line: `ISSUE=${now2.url ?? issueUrl(now2.number)}`, url: now2.url ?? issueUrl(now2.number), number: now2.number }, r);
-    }
-    try {
-      const dup = findOpenIssue(r, run17.command, scrubbedTitle);
-      if (dup) {
-        const again = renderComment(runId, kind, `seen again \u2014 run ${runId} on ${identity.host}
-
-${scrubbedBody}`);
-        if (!ghComment(r, dup, again)) return queuedWarn(qpath);
-        writeIssueTxt(run17.artDir, { run_id: runId, number: dup, url: issueUrl(dup) });
-        mapRecord(runId, dup);
-        (0, import_node_fs14.rmSync)(qpath, { force: true });
-        return finish({ status: "filed", line: `ISSUE=${issueUrl(dup)}`, url: issueUrl(dup), number: dup }, r);
-      }
-      const made = ghCreate(r, scrubbedTitle, doc);
-      if (!made) return queuedWarn(qpath);
-      writeIssueTxt(run17.artDir, { run_id: runId, number: made.number, url: made.url });
-      mapRecord(runId, made.number);
-      (0, import_node_fs14.rmSync)(qpath, { force: true });
-      return finish({ status: "filed", line: `ISSUE=${made.url}`, url: made.url, number: made.number }, r);
-    } finally {
-      (0, import_node_fs14.closeSync)(lock);
-      (0, import_node_fs14.rmSync)((0, import_node_path10.join)(run17.artDir, "issue.lock"), { force: true });
-    }
-  } catch {
-    return { status: "skipped", line: "" };
-  }
-}
-function queuedWarn(qpath) {
-  log.warn(`forensics: gh call failed; record left queued at ${qpath}`);
-  return { status: "queued", line: `QUEUED=${qpath}`, path: qpath };
-}
-function finish(res, r) {
-  if (!flushing) {
-    flushing = true;
-    try {
-      flushQueue(r, { maxMs: 3e4 });
-    } catch {
-    } finally {
-      flushing = false;
-    }
-  }
-  return res;
-}
-function parseQueued(dir, name) {
-  let text;
-  try {
-    text = (0, import_node_fs14.readFileSync)((0, import_node_path10.join)(dir, name), "utf8");
-  } catch {
-    return null;
-  }
-  const end = text.indexOf("\n---\n", 3);
-  if (!text.startsWith("---\n") || end < 0) return null;
-  const fm = text.slice(4, end);
-  const body = text.slice(end + 5).replace(/^\n/, "");
-  const f = (k) => fm.match(new RegExp(`^${k}: (.*)$`, "m"))?.[1]?.trim() ?? "";
-  const runId = f("run_id");
-  if (!runId) return null;
-  return {
-    name,
-    path: (0, import_node_path10.join)(dir, name),
-    runId,
-    kind: f("kind") || "findings",
-    command: f("command"),
-    artDir: f("art_dir"),
-    title: f("title") || void 0,
-    attempts: Number(f("attempts")) || 0,
-    body
-  };
-}
-function bumpAttempts(rec) {
-  const next = rec.attempts + 1;
-  try {
-    const text = (0, import_node_fs14.readFileSync)(rec.path, "utf8").replace(/^attempts: \d+$/m, `attempts: ${next}`);
-    if (next >= 3) {
-      atomicWrite(rec.path, text);
-      (0, import_node_fs14.renameSync)(rec.path, rec.path + ".failed");
-      log.warn(`forensics: dead-lettered ${rec.path}.failed after ${next} failed attempts`);
-      return true;
-    }
-    atomicWrite(rec.path, text);
-  } catch {
-  }
-  return false;
-}
-function flushQueue(r = forensicsRunner(), opts = {}) {
-  const dir = forensicsQueueDir();
-  let names = [];
-  try {
-    names = (0, import_node_fs14.readdirSync)(dir).filter((n) => n.endsWith(".md")).sort();
-  } catch {
-    return { filed: 0, remaining: 0, failed: 0 };
-  }
-  const recs = names.map((n) => parseQueued(dir, n)).filter((x) => x !== null);
-  if (gate() !== "file") return { filed: 0, remaining: recs.length, failed: 0 };
-  const byRun = /* @__PURE__ */ new Map();
-  for (const rec of recs) {
-    const key = `${rec.runId}	${rec.artDir}`;
-    const list = byRun.get(key);
-    if (list) list.push(rec);
-    else byRun.set(key, [rec]);
-  }
-  const deadline = Date.now() + (opts.maxMs ?? 3e4);
-  const outOfTime = () => Date.now() + CALL_TIMEOUT_MS > deadline;
-  let filed = 0, failed = 0;
-  for (const list of byRun.values()) {
-    const runId = list[0].runId;
-    list.sort((a, b) => (a.title ? 0 : 1) - (b.title ? 0 : 1) || (a.name < b.name ? -1 : 1));
-    const art = list[0].artDir;
-    let number = readIssueTxt(art)?.number ?? ((0, import_node_fs14.existsSync)(art) ? void 0 : mapLookup(runId));
-    for (const rec of list) {
-      if (outOfTime()) return tally(dir, filed, failed);
-      if (!number && !rec.title) {
-        if (bumpAttempts(rec)) failed++;
-        break;
-      }
-      let ok;
-      if (number) ok = ghComment(r, number, rec.body);
-      else {
-        const dup = findOpenIssue(r, rec.command, rec.title);
-        if (outOfTime()) return tally(dir, filed, failed);
-        if (dup) {
-          ok = ghComment(r, dup, rec.body);
-          if (ok) number = dup;
-        } else {
-          const made = ghCreate(r, rec.title, rec.body);
-          ok = made !== null;
-          if (made) number = made.number;
-        }
-        if (ok && number) {
-          mapRecord(runId, number);
-          if ((0, import_node_fs14.existsSync)(rec.artDir)) writeIssueTxt(rec.artDir, { ...readIssueTxt(rec.artDir), run_id: runId, number, url: issueUrl(number) });
-        }
-      }
-      if (!ok) {
-        if (bumpAttempts(rec)) failed++;
-        break;
-      }
-      (0, import_node_fs14.rmSync)(rec.path, { force: true });
-      filed++;
-    }
-  }
-  return tally(dir, filed, failed);
-}
-function tally(dir, filed, failed) {
-  let remaining = 0;
-  try {
-    remaining = (0, import_node_fs14.readdirSync)(dir).filter((n) => n.endsWith(".md")).length;
-  } catch {
-  }
-  return { filed, remaining, failed };
-}
-function commandArtDir(command, topic) {
-  return (0, import_node_path10.join)(topicDir(topic), `_${command}`);
-}
-function captureArtDir(opts) {
-  try {
-    const findings = scrapeArtDir(opts.artDir);
-    if (findings.length === 0) return "";
-    const topicSlug = (0, import_node_path10.basename)((0, import_node_path10.dirname)(opts.artDir));
-    return fileFinding(
-      "findings",
-      { command: opts.command, topic: topicSlug, artDir: opts.artDir },
-      issueTitle(opts.command, findings[0].key),
-      renderFindingBullets(findings)
-    ).line;
-  } catch {
-    return "";
-  }
-}
-function runForensics(command, artDirFor, topic) {
-  if (!topic) {
-    log.error(`usage: ${command} forensics <topic>`);
-    return 2;
-  }
-  const line = captureArtDir({ artDir: artDirFor(topic), command });
-  if (line) {
-    log.ok(`${command} forensics: ${line}`);
-    process.stdout.write(line + "\n");
-  } else log.info(`${command} forensics: no mechanical findings (nothing filed)`);
-  return 0;
-}
-function captureSpawnFailure(opts) {
-  process.stdout.write(`SPAWN_FAILED reason=${opts.reason}
-`);
-  try {
-    const ctx = `worker=${opts.agent}-${opts.model}`;
-    const findings = [
-      { source: "spawn_failure", key: `reason=${opts.reason} ${opts.detail}`.replace(/\s+/g, " ").trim(), context: ctx }
-    ];
-    if (opts.failureReportPath) findings.push({ source: "spawn_failure", key: `failure_report=${opts.failureReportPath}`, context: ctx });
-    const art = workerDir(opts.agent, opts.model, opts.topic);
-    return fileFinding(
-      "spawn_failure",
-      { command: "spawn", topic: opts.topic, artDir: art },
-      `[ap:spawn] ${opts.reason}`,
-      renderFindingBullets(findings)
-    ).line;
-  } catch {
-    return "";
-  }
-}
-function recordHubFlag(opts) {
-  try {
-    const note = opts.note.trim();
-    if (!note) return "";
-    const finding = { source: "hub_flag", key: note, context: `from=hub command=${opts.command}` };
-    return fileFinding(
-      "flag",
-      { command: opts.command, topic: opts.topic, artDir: commandArtDir(opts.command, opts.topic) },
-      issueTitle(opts.command, note),
-      renderFindingBullets([finding])
-    ).line;
-  } catch {
-    return "";
-  }
-}
-function runFlag(command, topic, note) {
-  if (!topic || !note.trim()) {
-    log.error(`usage: ${command} flag <topic> <observation>`);
-    return 2;
-  }
-  assertSlug("topic", topic);
-  const line = recordHubFlag({ command, topic, note });
-  if (line) {
-    log.ok(`${command} flag: ${line}`);
-    process.stdout.write(line + "\n");
-  } else log.info(`${command} flag: nothing recorded`);
-  return 0;
-}
-function recordHubReflection(command, topic, text, r = forensicsRunner()) {
-  const art = commandArtDir(command, topic);
-  const rec = readIssueTxt(art);
-  if (!rec) return null;
-  if (rec.reflected) return "done";
-  const res = fileFinding("reflection", { command, topic, artDir: art }, issueTitle(command, "hub reflection"), text, r);
-  if (res.status !== "skipped") writeIssueTxt(art, { ...rec, reflected: true });
-  return res;
-}
-function runReflect(command, topic, fileArg) {
-  if (!topic || !fileArg) {
-    log.error(`usage: ${command} reflect <topic> @<file>`);
-    return 2;
-  }
-  assertSlug("topic", topic);
-  const path = fileArg.startsWith("@") ? fileArg.slice(1) : fileArg;
-  let text;
-  try {
-    text = (0, import_node_fs14.readFileSync)(path, "utf8").trim();
-  } catch {
-    log.error(`${command} reflect: unreadable file: ${path}`);
-    return 2;
-  }
-  if (!text) {
-    log.error(`${command} reflect: empty reflection file: ${path}`);
-    return 2;
-  }
-  const res = recordHubReflection(command, topic, text);
-  if (res === null) {
-    process.stdout.write("NO_RUN_ISSUE\n");
-    return 0;
-  }
-  if (res === "done") {
-    log.error(`${command} reflect: this run's reflection was already posted`);
-    return 1;
-  }
-  if (res.line) process.stdout.write(res.line + "\n");
-  return 0;
-}
-var import_node_fs14, import_node_child_process4, import_node_os3, import_node_crypto4, import_node_path10, FAILURE_REASONS, SCROLLBACK_LINES, NO_EVENT_SENTINEL, FAILURE_FILENAME, AP_ISSUES_REPO, CALL_TIMEOUT_MS, NO_RUN, SCRUBS, SECTION, flushing;
-var init_forensics = __esm({
-  "src/core/forensics.ts"() {
-    "use strict";
-    import_node_fs14 = require("node:fs");
-    import_node_child_process4 = require("node:child_process");
-    import_node_os3 = require("node:os");
-    import_node_crypto4 = require("node:crypto");
-    import_node_path10 = require("node:path");
-    init_paths();
-    init_slug();
-    init_atomic();
-    init_archive();
-    init_log();
-    init_ipc();
-    init_review();
-    FAILURE_REASONS = /* @__PURE__ */ new Set(["timeout", "error_event", "killed", "pane_dead"]);
-    SCROLLBACK_LINES = 50;
-    NO_EVENT_SENTINEL = "no error event before timeout";
-    FAILURE_FILENAME = "failure-reason.txt";
-    AP_ISSUES_REPO = "WingsOfPanda/agglomeration-platform";
-    CALL_TIMEOUT_MS = 15e3;
-    NO_RUN = { run: () => ({ code: 1, stdout: "", stderr: "" }) };
-    SCRUBS = [
-      [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "<redacted>"],
-      [/gh[posur]_[A-Za-z0-9]{20,}/g, "<redacted>"],
-      [/github_pat_[A-Za-z0-9_]{20,}/g, "<redacted>"],
-      [/sk-[A-Za-z0-9_-]{16,}/g, "<redacted>"],
-      [/AKIA[0-9A-Z]{16}/g, "<redacted>"],
-      [/(bearer\s+)\S+/gi, "$1<redacted>"],
-      [/\b(token|password|passwd|secret|api[_-]?key)(\s*[=:]\s*)\S+/gi, "$1$2<redacted>"],
-      [/:\/\/[^/\s:@]+:[^/\s@]+@/g, "://<redacted>@"]
-    ];
-    SECTION = {
-      findings: "Mechanical findings",
-      spawn_failure: "Spawn failure",
-      flag: "Flag",
-      reflection: "Hub reflection"
-    };
-    flushing = false;
   }
 });
 
@@ -11295,6 +11317,11 @@ function renderSummary(f) {
     ...head,
     "## Why aborted",
     `- ${f.abortedReason ?? "unknown"}`,
+    // A fallback whose claude spawn ALSO fails aborts with the same `spawn-failed` reason as a
+    // plain double-codex failure, so without this the two are indistinguishable. Gated on the
+    // marker `quick summary` composes into the provider fact, never printed unconditionally: an
+    // early abort has no selected-provider.txt yet and would render `- Provider: unknown`.
+    ...f.provider.includes("(fallback from ") ? [`- Provider: ${f.provider}`] : [],
     "",
     "## RESUME instructions",
     `- Read RESUME.md for the state pointer; re-run /ap:quick to retry.`,
@@ -12173,7 +12200,7 @@ __export(quick_exports, {
   turnWaitWith: () => turnWaitWith
 });
 function usage() {
-  log.error("usage: quick <init|branch|turn-send|turn-wait|detect-test|finish|forensics|summary> ...");
+  log.error("usage: quick <init|branch|set-provider|turn-send|turn-wait|detect-test|finish|forensics|summary> ...");
   return 2;
 }
 async function run9(args) {
@@ -12187,6 +12214,8 @@ async function dispatchVerb7(args) {
       return initRun(applyArgsFile(rest, { valueFlags: /* @__PURE__ */ new Set(["--provider"]) }));
     case "branch":
       return branchRun(rest);
+    case "set-provider":
+      return setProviderRun(rest);
     case "turn-send":
       return turnSendRun(rest);
     case "turn-wait":
@@ -12272,6 +12301,40 @@ FINISH=${finish2 ? "yes" : "no"}
 TARGET=${target}
 STASH_WIP=${stashWip ? "yes" : "no"}
 `);
+  return 0;
+}
+async function setProviderRun(rest) {
+  const { pos, reason, badReason } = parseSetProviderArgs(rest);
+  const [topic, provider] = pos;
+  if (!topic || !provider || pos.length !== 2 || badReason) {
+    log.error("usage: quick set-provider <topic> <provider> [--reason <pane_dead|timeout>]");
+    return 2;
+  }
+  if (!validateSlug(topic)) {
+    log.error(`quick set-provider: invalid topic slug '${topic}' (must match [a-z0-9-]+, <= 32 chars)`);
+    return 2;
+  }
+  const art = quickArtDir(topic);
+  if (!(0, import_node_fs29.existsSync)(art)) {
+    log.error(`quick set-provider: ${art} not found \u2014 run quick init first`);
+    return 1;
+  }
+  if (!agentBinary(provider)) {
+    log.error(`quick set-provider: unknown provider '${provider}'`);
+    return 2;
+  }
+  if (reason !== void 0 && !FALLBACK_REASONS.has(reason)) {
+    log.error(`quick set-provider: unknown --reason '${reason}' \u2014 accepted: pane_dead, timeout`);
+    return 2;
+  }
+  const from = readField((0, import_node_path23.join)(art, "selected-provider.txt")) || "unknown";
+  atomicWrite((0, import_node_path23.join)(art, "selected-provider.txt"), provider + "\n");
+  if (reason !== void 0) {
+    recordProviderFallback("quick", art, topic, from, provider, reason);
+    process.stdout.write(`PROVIDER=${provider}
+`);
+  }
+  log.ok(`quick set-provider: topic=${topic} provider=${provider}`);
   return 0;
 }
 async function branchRun(rest) {
@@ -12550,7 +12613,14 @@ duration=${duration}
     started,
     ended,
     duration,
-    provider: readField((0, import_node_path23.join)(art, "selected-provider.txt")) || "unknown",
+    // The fallback is folded into the EXISTING provider string rather than a new SummaryFacts
+    // field: renderSummary prints it verbatim, so a run that switched providers says so in the one
+    // place a reader already looks for the provider.
+    provider: (() => {
+      const p = readField((0, import_node_path23.join)(art, "selected-provider.txt")) || "unknown";
+      const fb = readProviderFallback(art);
+      return fb ? `${p} (fallback from ${fb.from}, reason=${fb.reason})` : p;
+    })(),
     agent: readField((0, import_node_path23.join)(art, "agent.txt")) || "unknown",
     branch: rec.branch || "unknown",
     verify: readField((0, import_node_path23.join)(exec, "verify-result.txt")) || "unknown",
@@ -12593,6 +12663,8 @@ var init_quick2 = __esm({
     init_paths();
     init_job();
     init_quick();
+    init_implement();
+    init_slug();
     init_forensics();
     init_contracts();
     init_deps();
@@ -14662,7 +14734,7 @@ async function dispatchVerb9(args) {
     case "audit":
       return auditRun(rest);
     case "set-provider":
-      return setProviderRun(rest);
+      return setProviderRun2(rest);
     case "turn-send":
       return turnSendRun2(rest);
     case "turn-wait":
@@ -14785,10 +14857,11 @@ INVISIBLE_IN_TARGET=${invisible.length}
   }
   return 0;
 }
-async function setProviderRun(rest) {
-  const [topic, provider] = rest;
-  if (!topic || !provider || rest.length !== 2) {
-    log.error("usage: implement set-provider <topic> <provider>");
+async function setProviderRun2(rest) {
+  const { pos, reason, badReason } = parseSetProviderArgs(rest);
+  const [topic, provider] = pos;
+  if (!topic || !provider || pos.length !== 2 || badReason) {
+    log.error("usage: implement set-provider <topic> <provider> [--reason <pane_dead|timeout>]");
     return 2;
   }
   if (!assertImplementTopic(topic)) {
@@ -14804,7 +14877,17 @@ async function setProviderRun(rest) {
     log.error(`implement set-provider: unknown provider '${provider}' \u2014 contracts.yaml defines: ${listAgents().join(", ")}`);
     return 2;
   }
+  if (reason !== void 0 && !FALLBACK_REASONS.has(reason)) {
+    log.error(`implement set-provider: unknown --reason '${reason}' \u2014 accepted: pane_dead, timeout`);
+    return 2;
+  }
+  const from = readField((0, import_node_path31.join)(art, "provider.txt")) || "unknown";
   atomicWrite((0, import_node_path31.join)(art, "provider.txt"), provider + "\n");
+  if (reason !== void 0) {
+    recordProviderFallback("implement", art, topic, from, provider, reason);
+    process.stdout.write(`PROVIDER=${provider}
+`);
+  }
   log.ok(`implement set-provider: topic=${topic} provider=${provider}`);
   return 0;
 }
@@ -22395,6 +22478,10 @@ function workerDeathProbe(rec, deps) {
     return dead ? { event: WORKER_DEAD_EVENT, worker: dead.worker, verdict: dead.verdict, ts: isoUtc() } : null;
   };
 }
+function providerFallbackLine(rec) {
+  const fb = readProviderFallback(commandArtDir(rec.command, rec.topic));
+  return fb ? fb.raw + "\n" : null;
+}
 async function statusRun(rest) {
   const rec = requireJob(rest[0], "status");
   if (!rec) return 1;
@@ -22415,7 +22502,10 @@ ELAPSED_H=${el === null ? "?" : el.toFixed(2)}
 BUDGET_H=${rec.budget_hours}
 BUDGET=${budgetExceeded(rec.started, rec.budget_hours, now) ? "exceeded" : "within"}
 FINISH=${rec.finish}
-EVENTS=${events.length}
+` + // The run's provider is settled in job.json, but the directive's provider-fallback step can
+    // switch a twice-dead codex worker to claude mid-run. job.json is write-once, so the artifact
+    // the verb wrote is the record — echoed verbatim, one KV line, right where FINISH= sits.
+    (providerFallbackLine(rec) ?? "") + `EVENTS=${events.length}
 LAST_EVENT=${last ? last.event : "none"}
 PARKED=${stillParked ? "yes" : "no"}
 `
@@ -22643,6 +22733,8 @@ var init_job2 = __esm({
     init_waitLive();
     init_workerLiveness();
     init_questionCodec();
+    init_implement();
+    init_forensics();
     init_gitwork();
     init_branchRecord();
     init_job();

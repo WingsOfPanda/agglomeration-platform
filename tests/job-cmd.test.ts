@@ -8,6 +8,7 @@ import { virtualClock } from "./helpers/clock.js";
 import { run, waitRun } from "../src/commands/job.js";
 import { formatJob, jobPath, type JobRecord } from "../src/core/job.js";
 import { outboxPath } from "../src/core/ipc.js";
+import { commandArtDir } from "../src/core/forensics.js";
 
 const REC: JobRecord = {
   command: "implement", topic: "demo", session: "ap-demo",
@@ -358,6 +359,24 @@ describe("job relay — the parked check is the only gate on the hub's inbox", (
     home();
     seedJob();
     expect(await run(["relay", "demo", "  "])).toBe(2);
+  });
+});
+
+// 0.5.64: job.json is write-once, so the run's provider record goes stale when the directive's
+// provider-fallback step switches a twice-dead codex worker to claude. The artifact the verb wrote
+// is the record, and status echoes it verbatim where the settled FINISH= facts sit.
+describe("job status — the provider fallback", () => {
+  it("echoes the artifact line right after FINISH=, and nothing when there was no fallback", async () => {
+    home();
+    seedJob();
+    const plain = (await capture(() => run(["status", "demo"]))).out;
+    expect(plain).not.toContain("PROVIDER_FALLBACK");
+
+    const art = commandArtDir(REC.command, REC.topic);
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "provider-fallback.txt"), "PROVIDER_FALLBACK=codex->claude reason=pane_dead\n");
+    const out = (await capture(() => run(["status", "demo"]))).out;
+    expect(out).toContain("\nFINISH=keep\nPROVIDER_FALLBACK=codex->claude reason=pane_dead\nEVENTS=");
   });
 });
 

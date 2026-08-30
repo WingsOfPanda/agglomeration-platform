@@ -272,8 +272,46 @@ transient and recurring — so on the **FIRST** of those re-run the SAME `$CS sp
 **once**, with the same `timeout: 300000`. Nothing to clean up first: the failed spawn already
 FAILED-archived its worker dir, which frees `lead` for the retry. Every other reason
 (`binary_not_found`, `config_error`, `killed`, ...) is deterministic — a retry would fail
-identically — and so is a **second** failure, whatever its reason. Terminal → `$CS implement archive
-<TOPIC>` and stop (nothing to tear down — the worker never came up).
+identically. A **second** failure with provider `codex` and reason `pane_dead` or `timeout` is NOT
+terminal — take the **provider fallback** step below. Every other second failure is terminal →
+`$CS implement archive <TOPIC>` and stop (nothing to tear down — the worker never came up).
+
+**provider fallback** — a claude worker is installed on every box that runs ap and carries the same
+brief, so a codex cold start that died twice ends the WORKER, not the run. The step applies when
+BOTH hold: the run's provider is `codex`, and the second spawn's `SPAWN_FAILED reason=` line says
+`pane_dead` or `timeout`. Any other reason (`binary_not_found`, `config_error`, `killed`,
+`pane_failed`, `spawn_error`), or a provider other than codex, is terminal as above. `<reason>`
+below is the **second** spawn's value — the retry's own Bash result — never the first's. Then, in
+order:
+
+1. Re-route, record, and flag in ONE call: `$CS implement set-provider <TOPIC> claude --reason
+   <reason>`. It rewrites `$ART/provider.txt` (the file the turn verbs route by), writes
+   `$ART/provider-fallback.txt` = `PROVIDER_FALLBACK=codex->claude reason=<reason>`, files that
+   switch as a flag on the run's issue, and prints `PROVIDER=claude`. rc 0 → continue; rc 1 or
+   rc 2 → terminal, surfacing the message.
+2. Rebind **`PROVIDER=claude`** for the rest of this run. The verb fixed the FILE; `$PROVIDER` in
+   your shell still holds what `init` printed. Every later interpolation — the `$CS spawn lead
+   "$PROVIDER" "$TOPIC"` line above, and the `<state>/lead-<PROVIDER>/status.json` probe in Stage
+   1's `TS=unreachable` branch — must now spell `claude`: the failed spawn moved `lead-codex` out
+   of the state tree into the archive, so a probe still spelling `codex` reads a path that no
+   longer exists. This widens the claude-confirm gate's "for this spawn" rebind, which is
+   per-spawn only. Teardown needs no rebind — `$CS stop lead <TOPIC>` resolves the model itself.
+3. Warn the operator, attached **or** detached, printing this line verbatim to the session:
+   `WARNING: codex worker failed at spawn twice (reason=<reason>) — continuing with a claude worker for <TOPIC>. It will use claude tokens.`
+   This is not a decision, so a detached run neither asks nor parks for it; the line still reaches
+   the hub pane transcript, and `job status` carries it to the operator.
+4. The **Claude-confirm gate is NOT re-applied** here. It gates a run that auto-detected `claude`
+   at init; this run detected `codex` and is being switched mechanically after two deaths. The
+   WARNING line and the issue flag are the disclosure — do not AskUserQuestion, do not park.
+5. Spawn once more, the same command with the provider replaced:
+   `$CS spawn lead claude "$TOPIC" --cwd "$(cat "$ART/target_cwd.txt")"`, same `timeout: 300000`.
+   Nothing to clean up — the failed spawn FAILED-archived `lead-codex`, so `lead` is free and
+   `lead-claude` is minted fresh, and `provider.txt` now says claude so the turn verbs' lead check
+   passes. If THIS spawn fails the run is terminal exactly as above: **no third retry, no further
+   fallback**.
+
+Your Stage 4 final report names the switch whenever `$ART/provider-fallback.txt` exists — read the
+file and quote its line.
 
 ## Stage 1 — run the worker turn (round-aware, auto-retry-once)
 

@@ -197,9 +197,43 @@ consent, never block, and cost nothing, so prefer over-recording. Review later w
    `$CS spawn ...` command **once**, with the same `timeout: 300000`. Nothing to clean up first:
    the failed spawn already FAILED-archived its worker dir, which frees the agent name for the
    retry. Every other reason (`binary_not_found`, `config_error`, `killed`, ...) is deterministic —
-   a retry would fail identically — and so is a **second** failure, whatever its reason. Terminal →
-   abort: `$CS quick summary <SLUG> --aborted build spawn-failed "worker failed bootstrap"`, print
-   the SUMMARY, and stop. Do **not** run `stop` — `spawn` already FAILED-archived the worker.
+   a retry would fail identically. A **second** failure with provider `codex` and reason
+   `pane_dead` or `timeout` is NOT terminal — take the **provider fallback** step below. Every
+   other second failure is terminal → abort: `$CS quick summary <SLUG> --aborted build spawn-failed
+   "worker failed bootstrap"`, print the SUMMARY, and stop. Do **not** run `stop` — `spawn` already
+   FAILED-archived the worker.
+
+   **provider fallback** — a claude worker is installed on every box that runs ap and carries the
+   same brief, so a codex cold start that died twice ends the WORKER, not the run. The step applies
+   when BOTH hold: the run's provider is `codex`, and the second spawn's `SPAWN_FAILED reason=`
+   line says `pane_dead` or `timeout`. Any other reason (`binary_not_found`, `config_error`,
+   `killed`, `pane_failed`, `spawn_error`), or a provider other than codex, is terminal as above.
+   `<reason>` below is the **second** spawn's value — the retry's own Bash result — never the
+   first's. Then, in order:
+   1. Re-route, record, and flag in ONE call:
+      `$CS quick set-provider <SLUG> claude --reason <reason>`. It rewrites
+      `selected-provider.txt` (the file the turn verbs route by), writes
+      `<art>/provider-fallback.txt` = `PROVIDER_FALLBACK=codex->claude reason=<reason>`, files that
+      switch as a flag on the run's issue, and prints `PROVIDER=claude`. rc 0 → continue;
+      rc 1 or rc 2 → terminal, surfacing the message.
+   2. Rebind **`PROVIDER=claude`** for the rest of this run. The verb fixed the FILE; you still
+      hold the `PROVIDER=` value `init` printed. Every later `<PROVIDER>` you interpolate — the
+      spawn below, and the `<SLUG state>/<AGENT>-<PROVIDER>/status.json` probe in the
+      `TS=unreachable` branch — must now spell `claude`: the failed spawn moved `<AGENT>-codex` out
+      of the state tree into the archive, so a probe still spelling `codex` reads a path that no
+      longer exists. Teardown needs no rebind — `$CS stop <AGENT> <SLUG>` resolves the model itself.
+   3. Warn the operator, attached **or** detached, printing this line verbatim to the session:
+      `WARNING: codex worker failed at spawn twice (reason=<reason>) — continuing with a claude worker for <SLUG>. It will use claude tokens.`
+      This is not a decision, so a detached run neither asks nor parks for it; the line still
+      reaches the hub pane transcript, and `job status` plus SUMMARY.md carry it to the operator.
+   4. Spawn once more, the same command with the provider replaced:
+      `$CS spawn <AGENT> claude <SLUG> --cwd <TARGET>`, same `timeout: 300000`. Nothing to clean up
+      — the failed spawn FAILED-archived `<AGENT>-codex`, so the agent name is free and
+      `<AGENT>-claude` is minted fresh. If THIS spawn fails the run is terminal exactly as above:
+      **no third retry, no further fallback**.
+
+   Your closing report names the switch whenever `<art>/provider-fallback.txt` exists — `quick
+   summary` already puts it in SUMMARY.md's `- Provider:` line.
 3. Dispatch round 1: `$CS quick turn-send <SLUG> 1`.
 4. Await it under a persistent **Monitor**, never a plain background shell. The Monitor runs the
    SAME bounded `turn-wait` verb and then derives the turn's outcome from the file that verb wrote,

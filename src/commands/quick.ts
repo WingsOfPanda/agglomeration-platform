@@ -8,6 +8,8 @@ import { isoUtc } from "../core/archive.js";
 import { repoRoot } from "../core/paths.js";
 import { jobPath, keepOnBranch, withMainCheckout } from "../core/job.js";
 import { quickArtDir, quickExecDir, deriveSlug, parseQuickArgs, parseBranchArgs, detectTestCommand, renderSummary, renderResume, type SummaryFacts } from "../core/quick.js";
+import { parseSetProviderArgs, FALLBACK_REASONS, recordProviderFallback, readProviderFallback } from "../core/implement.js";
+import { validateSlug } from "../core/slug.js";
 import { runForensics, runFlag, runReflect } from "../core/forensics.js";
 import { agentBinary } from "../core/contracts.js";
 import { haveCmd } from "../core/deps.js";
@@ -24,7 +26,7 @@ import { branchNameFor, readBranchRecord } from "../core/branchRecord.js";
 import { invisibleInTarget, pathTokensFrom } from "../core/implementScope.js";
 
 function usage(): number {
-  log.error("usage: quick <init|branch|turn-send|turn-wait|detect-test|finish|forensics|summary> ...");
+  log.error("usage: quick <init|branch|set-provider|turn-send|turn-wait|detect-test|finish|forensics|summary> ...");
   return 2;
 }
 
@@ -55,6 +57,7 @@ async function dispatchVerb(args: string[]): Promise<number> {
   switch (verb) {
     case "init": return initRun(applyArgsFile(rest, { valueFlags: new Set(["--provider"]) }));
     case "branch": return branchRun(rest);
+    case "set-provider": return setProviderRun(rest);
     case "turn-send": return turnSendRun(rest);
     case "turn-wait": return turnWaitRun(rest);
     case "detect-test": return detectTestRun(rest);
@@ -118,6 +121,30 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
   const target = targetArg || repoRoot();
   log.ok(`quick init: topic=${slug} agent=${agent} provider=${provider} finish=${finish ? "yes" : "no"} stash-wip=${stashWip ? "yes" : "no"}`);
   process.stdout.write(`SLUG=${slug}\nAGENT=${agent}\nPROVIDER=${provider}\nFINISH=${finish ? "yes" : "no"}\nTARGET=${target}\nSTASH_WIP=${stashWip ? "yes" : "no"}\n`);
+  return 0;
+}
+// ---- set-provider — quick's mirror of `implement set-provider`: the ONE mechanical way an
+// override reaches `selected-provider.txt`, the file `roundProtocol` routes the turn verbs by. A
+// spawn that diverges from it addresses a worker dir that does not exist and the turn fails.
+// `--reason <r>` marks the override as the directive's PROVIDER FALLBACK (a codex worker that died
+// at spawn twice), which also records the switch on the run's issue. `execute/provider.txt` is NOT
+// rewritten: nothing reads it — it is init's record of what was REQUESTED.
+async function setProviderRun(rest: string[]): Promise<number> {
+  const { pos, reason, badReason } = parseSetProviderArgs(rest);
+  const [topic, provider] = pos;
+  if (!topic || !provider || pos.length !== 2 || badReason) { log.error("usage: quick set-provider <topic> <provider> [--reason <pane_dead|timeout>]"); return 2; }
+  if (!validateSlug(topic)) { log.error(`quick set-provider: invalid topic slug '${topic}' (must match [a-z0-9-]+, <= 32 chars)`); return 2; }
+  const art = quickArtDir(topic);
+  if (!existsSync(art)) { log.error(`quick set-provider: ${art} not found — run quick init first`); return 1; }
+  if (!agentBinary(provider)) { log.error(`quick set-provider: unknown provider '${provider}'`); return 2; }
+  if (reason !== undefined && !FALLBACK_REASONS.has(reason)) { log.error(`quick set-provider: unknown --reason '${reason}' — accepted: pane_dead, timeout`); return 2; }
+  const from = readField(join(art, "selected-provider.txt")) || "unknown";
+  atomicWrite(join(art, "selected-provider.txt"), provider + "\n");
+  if (reason !== undefined) {
+    recordProviderFallback("quick", art, topic, from, provider, reason);
+    process.stdout.write(`PROVIDER=${provider}\n`);
+  }
+  log.ok(`quick set-provider: topic=${topic} provider=${provider}`);
   return 0;
 }
 async function branchRun(rest: string[]): Promise<number> {
@@ -468,7 +495,14 @@ async function summaryRun(rest: string[]): Promise<number> {
     topic,
     status: aborted ? "aborted" : "ok",
     started, ended, duration,
-    provider: readField(join(art, "selected-provider.txt")) || "unknown",
+    // The fallback is folded into the EXISTING provider string rather than a new SummaryFacts
+    // field: renderSummary prints it verbatim, so a run that switched providers says so in the one
+    // place a reader already looks for the provider.
+    provider: (() => {
+      const p = readField(join(art, "selected-provider.txt")) || "unknown";
+      const fb = readProviderFallback(art);
+      return fb ? `${p} (fallback from ${fb.from}, reason=${fb.reason})` : p;
+    })(),
     agent: readField(join(art, "agent.txt")) || "unknown",
     branch: rec.branch || "unknown",
     verify: readField(join(exec, "verify-result.txt")) || "unknown",

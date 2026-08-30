@@ -161,6 +161,11 @@ export function renderSummary(f: SummaryFacts): string {
     ...head,
     "## Why aborted",
     `- ${f.abortedReason ?? "unknown"}`,
+    // A fallback whose claude spawn ALSO fails aborts with the same `spawn-failed` reason as a
+    // plain double-codex failure, so without this the two are indistinguishable. Gated on the
+    // marker `quick summary` composes into the provider fact, never printed unconditionally: an
+    // early abort has no selected-provider.txt yet and would render `- Provider: unknown`.
+    ...(f.provider.includes("(fallback from ") ? [`- Provider: ${f.provider}`] : []),
     "",
     "## RESUME instructions",
     `- Read RESUME.md for the state pointer; re-run /ap:quick to retry.`,
