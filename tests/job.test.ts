@@ -278,6 +278,13 @@ describe("jobBrief", () => {
     expect(b).toContain("ap job mode demo");
     expect(b).toContain("ap job budget-check demo");
   });
+  // The brief is job.json.provider's ONLY consumer, and it says the run parameters are settled.
+  // The fallback contradicts that unless the brief names it — a detached hub told "NOT yours to
+  // change" would otherwise park or refuse the switch its own directive just told it to make.
+  it("carves the provider fallback out of the settled parameters", () => {
+    expect(b).toContain("provider-fallback step");
+    expect(b).toContain("without asking");
+  });
   it("states the three things the hub may not change", () => {
     expect(b).toContain("never merge, never push, never open a PR");
     expect(b).toContain("6h");

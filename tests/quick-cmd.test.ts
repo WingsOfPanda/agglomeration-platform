@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { freshHome } from "./helpers/tmpHome.js";
 import { captureStdout } from "./helpers/captureStdout.js";
 import { quickArtDir, quickExecDir } from "../src/core/quick.js";
-import { forensicsQueueDir } from "../src/core/paths.js";
+import { forensicsQueueDir, workerDir } from "../src/core/paths.js";
 import { outboxPath } from "../src/core/ipc.js";
 import { formatJob, jobPath } from "../src/core/job.js";
 
@@ -915,6 +915,109 @@ describe("quick finish: --stash-wip restore", () => {
   });
 });
 
+// 0.5.64 provider fallback: quick's mirror of `implement set-provider`. The routing file is
+// selected-provider.txt (what roundProtocol dispatches by); execute/provider.txt is init's record of
+// what was REQUESTED and has no reader, so this verb deliberately leaves it alone.
+describe("quick set-provider", () => {
+  let h: { home: string; cleanup: () => void };
+  beforeEach(() => { h = freshHome(); });
+  afterEach(() => { h.cleanup(); });
+
+  function seed(topic = "auth"): string {
+    mkdirSync(quickExecDir(topic), { recursive: true });
+    writeFileSync(join(quickArtDir(topic), "selected-provider.txt"), "codex\n");
+    writeFileSync(join(quickExecDir(topic), "provider.txt"), "codex\n");
+    return quickArtDir(topic);
+  }
+  function queueRecords(): string[] {
+    const dir = forensicsQueueDir();
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => readFileSync(join(dir, f), "utf8"));
+  }
+
+  it("rewrites selected-provider.txt and leaves execute/provider.txt alone", async () => {
+    const art = seed();
+    const { rc, out } = await captureRun(["set-provider", "auth", "claude"]);
+    expect(rc).toBe(0);
+    expect(readFileSync(join(art, "selected-provider.txt"), "utf8")).toBe("claude\n");
+    expect(readFileSync(join(quickExecDir("auth"), "provider.txt"), "utf8")).toBe("codex\n");
+    expect(out).toBe("");
+    expect(existsSync(join(art, "provider-fallback.txt"))).toBe(false);
+    expect(queueRecords()).toHaveLength(0);
+  });
+
+  it("unknown provider → rc 2, routing file untouched", async () => {
+    const art = seed();
+    const { rc, err } = await captureRun(["set-provider", "auth", "gpt-9"]);
+    expect(rc).toBe(2);
+    expect(err).toContain("unknown provider 'gpt-9'");
+    expect(readFileSync(join(art, "selected-provider.txt"), "utf8")).toBe("codex\n");
+  });
+
+  it("no art dir → rc 1 naming init; bad slug and bad arity → rc 2", async () => {
+    expect((await captureRun(["set-provider", "auth", "claude"])).rc).toBe(1);
+    expect((await captureRun(["set-provider", "auth", "claude"])).err).toContain("run quick init first");
+    expect((await captureRun(["set-provider", "../etc", "claude"])).rc).toBe(2);
+    expect((await captureRun(["set-provider", "auth"])).rc).toBe(2);
+  });
+
+  it("--reason records the switch: artifact line, run-issue flag, PROVIDER= stdout", async () => {
+    const art = seed();
+    const { rc, out } = await captureRun(["set-provider", "auth", "claude", "--reason", "timeout"]);
+    expect(rc).toBe(0);
+    expect(readFileSync(join(art, "selected-provider.txt"), "utf8")).toBe("claude\n");
+    expect(readFileSync(join(art, "provider-fallback.txt"), "utf8"))
+      .toBe("PROVIDER_FALLBACK=codex->claude reason=timeout\n");
+    expect(out).toContain("PROVIDER=claude");
+    // command + art_dir are what route the record to the RUN's issue rather than a spawn-only one.
+    const [rec] = queueRecords();
+    expect(rec).toContain("kind: flag");
+    expect(rec).toContain("command: quick");
+    expect(rec).toContain(`art_dir: ${quickArtDir("auth")}`);
+    expect(rec).toContain("PROVIDER_FALLBACK codex->claude reason=timeout");
+  });
+
+  // job status prints the line into a KEY=value stream and SUMMARY.md into a markdown bullet, so
+  // free text is refused at the write point rather than escaped at each of the three readers.
+  it.each(["error_event", "killed", "timeout\nPARKED=yes"])(
+    "refuses --reason %j with rc 2, writing nothing", async (reason) => {
+      const art = seed();
+      const { rc, err } = await captureRun(["set-provider", "auth", "claude", "--reason", reason]);
+      expect(rc).toBe(2);
+      expect(err).toContain("accepted: pane_dead, timeout");
+      expect(readFileSync(join(art, "selected-provider.txt"), "utf8")).toBe("codex\n");
+      expect(existsSync(join(art, "provider-fallback.txt"))).toBe(false);
+      expect(queueRecords()).toHaveLength(0);
+    });
+
+  // The point of the verb: the turn verbs resolve the worker dir through selected-provider.txt, so
+  // after the fallback they must find `<agent>-claude` — the dir the re-spawn minted.
+  it("turn-send after the fallback resolves the claude worker dir", async () => {
+    seed();
+    writeFileSync(join(quickArtDir("auth"), "agent.txt"), "bravo\n");
+    writeFileSync(join(quickArtDir("auth"), "task-brief.md"), "## Goal\nDo X");
+    writeFileSync(join(quickExecDir("auth"), "branch.txt"), "feat/quick-auth\n");
+    const pd = workerDir("bravo", "claude", "auth");   // ONLY the claude worker exists
+    mkdirSync(pd, { recursive: true });
+    writeFileSync(join(pd, "outbox.jsonl"), "");
+
+    expect(await turnSendWith("auth", 1, { offsetFor: () => 0, send: async () => 0 })).toBe(1); // codex dir gone
+    expect((await captureRun(["set-provider", "auth", "claude", "--reason", "pane_dead"])).rc).toBe(0);
+    expect(await turnSendWith("auth", 1, { offsetFor: () => 0, send: async () => 0 })).toBe(0);
+  });
+
+  /** run() with stdout+stderr captured — the verb prints PROVIDER= and its refusals. */
+  async function captureRun(args: string[]): Promise<{ rc: number; out: string; err: string }> {
+    const out: string[] = []; const err: string[] = [];
+    const so = process.stdout.write.bind(process.stdout);
+    const se = process.stderr.write.bind(process.stderr);
+    process.stdout.write = ((x: string | Uint8Array) => { out.push(String(x)); return true; }) as typeof process.stdout.write;
+    process.stderr.write = ((x: string | Uint8Array) => { err.push(String(x)); return true; }) as typeof process.stderr.write;
+    try { const rc = await quickRun(args); return { rc, out: out.join(""), err: err.join("") }; }
+    finally { process.stdout.write = so; process.stderr.write = se; }
+  }
+});
+
 describe("quick summary", () => {
   let h: { home: string; cleanup: () => void };
   beforeEach(() => { h = freshHome(); });
@@ -980,6 +1083,38 @@ describe("quick summary", () => {
     expect(readFileSync(join(quickArtDir("auth"), "SUMMARY.md"), "utf8")).toContain("turn failed twice");
     expect(existsSync(join(quickArtDir("auth"), "RESUME.md"))).toBe(true);
     expect(readFileSync(join(quickArtDir("auth"), "RESUME.md"), "utf8")).not.toContain("Parked WIP");
+  });
+
+  // 0.5.64: the fallback is folded into the EXISTING provider string, not a new SummaryFacts field.
+  it("after a provider fallback the Provider line names the switch", async () => {
+    await scaffold("auth");
+    writeFileSync(join(quickArtDir("auth"), "selected-provider.txt"), "claude\n");
+    writeFileSync(join(quickArtDir("auth"), "provider-fallback.txt"), "PROVIDER_FALLBACK=codex->claude reason=pane_dead\n");
+    expect(await quickRun(["summary", "auth"])).toBe(0);
+    const md = readFileSync(join(quickArtDir("auth"), "SUMMARY.md"), "utf8");
+    expect(md).toContain("- Provider: claude (fallback from codex, reason=pane_dead)");
+  });
+
+  it("without the fallback file the Provider line is the plain provider", async () => {
+    await scaffold("auth");
+    expect(await quickRun(["summary", "auth"])).toBe(0);
+    expect(readFileSync(join(quickArtDir("auth"), "SUMMARY.md"), "utf8")).toContain("- Provider: codex\n");
+  });
+
+  // A fallback whose claude spawn ALSO fails aborts with the same spawn-failed reason as a plain
+  // double-codex failure; without this bullet the two SUMMARYs are indistinguishable.
+  it("an ABORTED run that fell back still names the switch; one that did not is unchanged", async () => {
+    await scaffold("auth");
+    writeFileSync(join(quickArtDir("auth"), "selected-provider.txt"), "claude\n");
+    writeFileSync(join(quickArtDir("auth"), "provider-fallback.txt"), "PROVIDER_FALLBACK=codex->claude reason=timeout\n");
+    expect(await quickRun(["summary", "auth", "--aborted", "build", "spawn-failed", "worker", "failed", "bootstrap"])).toBe(0);
+    const md = readFileSync(join(quickArtDir("auth"), "SUMMARY.md"), "utf8");
+    expect(md).toContain("## Why aborted");
+    expect(md).toContain("- Provider: claude (fallback from codex, reason=timeout)");
+
+    await scaffold("plain");
+    expect(await quickRun(["summary", "plain", "--aborted", "build", "spawn-failed", "worker", "failed", "bootstrap"])).toBe(0);
+    expect(readFileSync(join(quickArtDir("plain"), "SUMMARY.md"), "utf8")).not.toContain("- Provider:");
   });
 
   it("aborted with a --stash-wip park → RESUME.md points at the stash, checkout FIRST", async () => {

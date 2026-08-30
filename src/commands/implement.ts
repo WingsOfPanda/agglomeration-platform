@@ -12,6 +12,7 @@ import { auditDoc } from "../core/audit.js";
 import {
   parseImplementArgs, deriveTopicFromPath, detectProvider,
   implementArtDir, targetCwd, assertImplementTopic, ImplementArgError,
+  parseSetProviderArgs, FALLBACK_REASONS, recordProviderFallback,
 } from "../core/implement.js";
 import { isoUtc, archiveTopic } from "../core/archive.js";
 import { extractComponentsPaths, extractTestingPaths, lintComponentsPaths, matchDiffAgainstComponents, pathsInvisibleInTarget, testingBulletsWithoutPaths, unresolvedDeclaredPaths } from "../core/implementScope.js";
@@ -209,13 +210,23 @@ export async function initWith(tokens: string[], d: ImplementInitDeps): Promise<
 // dogfood repaired it by hand-editing the file). auto_provider.txt is deliberately NOT touched: it
 // records what detection SAID, this records what was CHOSEN, and one fact belongs in one file.
 async function setProviderRun(rest: string[]): Promise<number> {
-  const [topic, provider] = rest;
-  if (!topic || !provider || rest.length !== 2) { log.error("usage: implement set-provider <topic> <provider>"); return 2; }
+  // `--reason <r>` marks the override as the directive's PROVIDER FALLBACK (0.5.64): the same
+  // rewrite, plus the artifact + the flag on the run's issue + a `PROVIDER=` line the hub rebinds
+  // from. Without the flag every byte of this verb's behaviour is what it was before.
+  const { pos, reason, badReason } = parseSetProviderArgs(rest);
+  const [topic, provider] = pos;
+  if (!topic || !provider || pos.length !== 2 || badReason) { log.error("usage: implement set-provider <topic> <provider> [--reason <pane_dead|timeout>]"); return 2; }
   if (!assertImplementTopic(topic)) { log.error(`implement set-provider: invalid topic slug '${topic}' (must match ^[a-z0-9][a-z0-9-]{0,31}$, <= 32 chars)`); return 2; }
   const art = implementArtDir(topic);
   if (!existsSync(art)) { log.error(`implement set-provider: ${art} not found — run implement init first`); return 1; }
   if (!agentBinary(provider)) { log.error(`implement set-provider: unknown provider '${provider}' — contracts.yaml defines: ${listAgents().join(", ")}`); return 2; }
+  if (reason !== undefined && !FALLBACK_REASONS.has(reason)) { log.error(`implement set-provider: unknown --reason '${reason}' — accepted: pane_dead, timeout`); return 2; }
+  const from = readField(join(art, "provider.txt")) || "unknown";
   atomicWrite(join(art, "provider.txt"), provider + "\n");
+  if (reason !== undefined) {
+    recordProviderFallback("implement", art, topic, from, provider, reason);
+    process.stdout.write(`PROVIDER=${provider}\n`);
+  }
   log.ok(`implement set-provider: topic=${topic} provider=${provider}`);
   return 0;
 }

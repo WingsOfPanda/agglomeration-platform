@@ -23,6 +23,8 @@ import { paneMetaRead, paneMetaReadForDir, outboxPath, statusPath, type Clock, t
 import { liveOutboxWait } from "../core/waitLive.js";
 import { scanTopicWorkers } from "../core/workerLiveness.js";
 import { percentEncode } from "../core/questionCodec.js";
+import { readProviderFallback } from "../core/implement.js";
+import { commandArtDir } from "../core/forensics.js";
 import { runnerAt, classifyDirty, currentBranch, type Runner } from "../core/gitwork.js";
 import { branchNameFor } from "../core/branchRecord.js";
 import * as J from "../core/job.js";
@@ -497,6 +499,12 @@ function workerDeathProbe(rec: J.JobRecord, deps: WaitDeps): () => Promise<Outbo
 
 // ---------- status ----------
 
+/** `PROVIDER_FALLBACK=<old>-><new> reason=<r>\n` when the run switched providers, else null. */
+function providerFallbackLine(rec: J.JobRecord): string | null {
+  const fb = readProviderFallback(commandArtDir(rec.command, rec.topic));
+  return fb ? fb.raw + "\n" : null;
+}
+
 async function statusRun(rest: string[]): Promise<number> {
   const rec = requireJob(rest[0], "status");
   if (!rec) return 1;
@@ -511,7 +519,12 @@ async function statusRun(rest: string[]): Promise<number> {
     `HUB=${rec.hub.agent}-${rec.hub.model}\nLIVENESS=${liveness}\nHUB_STATE=${hubState(rec)}\n` +
     `STARTED=${rec.started}\nELAPSED_H=${el === null ? "?" : el.toFixed(2)}\nBUDGET_H=${rec.budget_hours}\n` +
     `BUDGET=${J.budgetExceeded(rec.started, rec.budget_hours, now) ? "exceeded" : "within"}\n` +
-    `FINISH=${rec.finish}\nEVENTS=${events.length}\nLAST_EVENT=${last ? last.event : "none"}\n` +
+    `FINISH=${rec.finish}\n` +
+    // The run's provider is settled in job.json, but the directive's provider-fallback step can
+    // switch a twice-dead codex worker to claude mid-run. job.json is write-once, so the artifact
+    // the verb wrote is the record — echoed verbatim, one KV line, right where FINISH= sits.
+    (providerFallbackLine(rec) ?? "") +
+    `EVENTS=${events.length}\nLAST_EVENT=${last ? last.event : "none"}\n` +
     `PARKED=${stillParked ? "yes" : "no"}\n`);
   // The worktree facts, DURING the run rather than at teardown. `finishHint` has carried DRIFT since
   // 0.5.38, but only from `job stop` — after the operator's merge decision was already made. One

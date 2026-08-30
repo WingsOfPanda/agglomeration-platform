@@ -542,6 +542,8 @@ export function jobBrief(j: JobRecord): string {
     ``,
     `Run parameters. These are settled and are NOT yours to change:`,
     `    provider    ${j.provider || "(directive default)"}`,
+    `                one exception, and it is mechanical: the directive's provider-fallback step`,
+    `                switches a codex worker that fails to spawn TWICE over to claude, without asking`,
     `    finish      keep — never merge, never push, never open a PR`,
     `    max rounds  ${j.max_rounds}`,
     `    budget      ${j.budget_hours}h — check at EVERY round boundary with:`,

@@ -606,6 +606,61 @@ describe("implement set-provider — the one mechanical way an override reaches 
   it("wrong arity is usage (rc 2)", async () => {
     expect((await capture(() => run(["set-provider", TOPIC]))).rc).toBe(2);
   });
+
+  // 0.5.64 provider fallback. Without --reason NOTHING about this verb moved: same rc, no stdout,
+  // no artifact, no flag — the fallback is opt-in per call, not a new side effect on every override.
+  it("without --reason: no artifact, no flag, no stdout", async () => {
+    const art = seedArt();
+    writeFileSync(join(art, "provider.txt"), "codex\n");
+    const { rc, out } = await capture(() => run(["set-provider", TOPIC, "claude"]));
+    expect(rc).toBe(0);
+    expect(out).toBe("");
+    expect(existsSync(join(art, "provider-fallback.txt"))).toBe(false);
+    expect(queueRecords()).toHaveLength(0);
+  });
+
+  it("--reason records the switch: artifact line, run-issue flag, PROVIDER= stdout", async () => {
+    const art = seedArt();
+    writeFileSync(join(art, "provider.txt"), "codex\n");
+    const { rc, out } = await capture(() => run(["set-provider", TOPIC, "claude", "--reason", "pane_dead"]));
+    expect(rc).toBe(0);
+    expect(readFileSync(join(art, "provider.txt"), "utf8")).toBe("claude\n");
+    expect(readFileSync(join(art, "provider-fallback.txt"), "utf8"))
+      .toBe("PROVIDER_FALLBACK=codex->claude reason=pane_dead\n");
+    expect(out).toContain("PROVIDER=claude");
+    // The flag must land on the RUN's issue, not a spawn-only one: command + art_dir are what
+    // route a queue record to an issue, so assert those and not just "a record exists".
+    const [rec] = queueRecords();
+    expect(rec).toContain("kind: flag");
+    expect(rec).toContain("command: implement");
+    expect(rec).toContain(`art_dir: ${implementArtDir(TOPIC)}`);
+    expect(rec).toContain("PROVIDER_FALLBACK codex->claude reason=pane_dead");
+  });
+
+  // The reason reaches job status's KEY=value stream and the issue note verbatim, so it is a closed
+  // token set, refused at the write point — the one choke point all three sinks cross.
+  it.each(["error_event", "killed", "timeout\nPARKED=yes", ""])(
+    "refuses --reason %j with rc 2, writing nothing", async (reason) => {
+      const art = seedArt();
+      writeFileSync(join(art, "provider.txt"), "codex\n");
+      const { rc, err } = await capture(() => run(["set-provider", TOPIC, "claude", "--reason", reason]));
+      expect(rc).toBe(2);
+      expect(err).toContain("accepted: pane_dead, timeout");
+      expect(readFileSync(join(art, "provider.txt"), "utf8")).toBe("codex\n");
+      expect(existsSync(join(art, "provider-fallback.txt"))).toBe(false);
+      expect(queueRecords()).toHaveLength(0);
+    });
+
+  it("--reason with no value is usage (rc 2)", async () => {
+    seedArt();
+    expect((await capture(() => run(["set-provider", TOPIC, "claude", "--reason"]))).rc).toBe(2);
+  });
+
+  function queueRecords(): string[] {
+    const dir = forensicsQueueDir();
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => readFileSync(join(dir, f), "utf8"));
+  }
 });
 
 // The other half of the same dogfood gap: dispatching to a phantom lead-<model> cost a manual
