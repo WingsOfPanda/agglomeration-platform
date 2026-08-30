@@ -8,7 +8,7 @@ import { isoUtc } from "../core/archive.js";
 import { repoRoot } from "../core/paths.js";
 import { jobPath, keepOnBranch, withMainCheckout } from "../core/job.js";
 import { quickArtDir, quickExecDir, deriveSlug, parseQuickArgs, parseBranchArgs, detectTestCommand, renderSummary, renderResume, type SummaryFacts } from "../core/quick.js";
-import { runForensics, runFlag } from "../core/forensics.js";
+import { runForensics, runFlag, runReflect } from "../core/forensics.js";
 import { agentBinary } from "../core/contracts.js";
 import { haveCmd } from "../core/deps.js";
 import { pickRandomAgent } from "../core/agents.js";
@@ -61,6 +61,7 @@ async function dispatchVerb(args: string[]): Promise<number> {
     case "finish": return finishRun(rest);
     case "forensics": return forensicsRun(rest);
     case "flag": return runFlag("quick", rest[0], rest.slice(1).join(" "));
+    case "reflect": return runReflect("quick", rest[0], rest[1]);
     case "summary": return summaryRun(rest);
     default: return usage();
   }
@@ -98,6 +99,7 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
 
   const exec = quickExecDir(slug);
   mkdirSync(exec, { recursive: true });
+  rmSync(join(art, "issue.txt"), { force: true }); // a repeated slug must not inherit the prior run's issue
   atomicWrite(join(art, "topic.txt"), slug + "\n");
   atomicWrite(join(art, "topic-text.txt"), topicText);
   atomicWrite(join(art, "selected-provider.txt"), provider + "\n");

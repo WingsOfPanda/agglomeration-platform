@@ -280,7 +280,7 @@ describe("forensics", () => {
     } finally { stdout.restore(); }
     const lines = stdout.text().trim().split("\n");
     expect(lines.length).toBe(1);
-    expect(lines[0].trim()).toMatch(/forensics\/.*-autoresearch-buggy\.md$/);
+    expect(lines[0].trim()).toMatch(/^QUEUED=.*forensics\/queue\/.*-findings-.*\.md$/);
   });
 });
 

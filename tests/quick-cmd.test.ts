@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { freshHome } from "./helpers/tmpHome.js";
 import { captureStdout } from "./helpers/captureStdout.js";
 import { quickArtDir, quickExecDir } from "../src/core/quick.js";
+import { forensicsQueueDir } from "../src/core/paths.js";
 import { outboxPath } from "../src/core/ipc.js";
 import { formatJob, jobPath } from "../src/core/job.js";
 
@@ -1056,9 +1057,8 @@ describe("quick branch: brief lint", () => {
     // there, so flagging it would train /ap:review to ignore the channel.
     const f = flags();
     expect(f).toHaveLength(1);
-    expect(f[0]).toMatch(/-quick-flag-auth\.md$/);
-    expect(readFileSync(join(h.home, "forensics", readdirSync(join(h.home, "forensics"))[0], f[0]), "utf8"))
-      .toContain("brief-state-relative");
+    expect(f[0]).toMatch(/-auth-.*-flag-.*\.md$/);
+    expect(readFileSync(join(forensicsQueueDir(), f[0]), "utf8")).toContain("brief-state-relative");
   });
 
   it("a clean brief: no warns, no flag, but the verdict is still recorded", async () => {

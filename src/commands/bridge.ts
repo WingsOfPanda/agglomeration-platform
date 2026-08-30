@@ -1,5 +1,5 @@
 // src/commands/bridge.ts — /ap:bridge collaborative cross-repo session.
-import { existsSync, mkdirSync, appendFileSync } from "node:fs";
+import { existsSync, mkdirSync, appendFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile } from "../args.js";
@@ -12,7 +12,7 @@ import { runnerAt, preSnapshot, createOrResumeBranch, currentBranch, finishWork,
 import type { Runner } from "../core/gitwork.js";
 import { readIfExists, readField, kvField } from "../core/fsread.js";
 import { branchNameFor, readBranchRecord } from "../core/branchRecord.js";
-import { runForensics, runFlag } from "../core/forensics.js";
+import { runForensics, runFlag, runReflect } from "../core/forensics.js";
 import { detectTestCommand } from "../core/quick.js";
 import { repoRoot } from "../core/paths.js";
 import { withMainCheckout } from "../core/job.js";
@@ -50,6 +50,7 @@ async function dispatchVerb(args: string[]): Promise<number> {
     case "summary": return summaryRun(rest);
     case "forensics": return runForensics("bridge", bridgeArtDir, rest[0]);
     case "flag": return runFlag("bridge", rest[0], rest.slice(1).join(" "));
+    case "reflect": return runReflect("bridge", rest[0], rest[1]);
     default: return usage();
   }
 }
@@ -94,6 +95,7 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
   const mode = inPlace ? "in-place" : "branch";
   const exec = bridgeExecDir(slug);
   mkdirSync(exec, { recursive: true });
+  rmSync(join(art, "issue.txt"), { force: true }); // a repeated slug must not inherit the prior run's issue
   atomicWrite(join(art, "topic.txt"), slug + "\n");
   atomicWrite(join(art, "topic-text.txt"), taskText);
   atomicWrite(join(art, "selected-provider.txt"), provider + "\n");

@@ -36,7 +36,7 @@ import {
   renderExperimentPrompt, buildSotaBlock, assembleHardwareBlock, hardwareDiffAlert,
   formatPeersBlock, buildDispatchState, EXP_ID_RE, AGENT_RE, DISPATCH_OPERATORS, type PeerRow,
 } from "../core/autoresearchExperiment.js";
-import { runForensics, runFlag } from "../core/forensics.js";
+import { runForensics, runFlag, runReflect } from "../core/forensics.js";
 import { parseScoreboard, buildHandoffKv, type HandoffInput } from "../core/autoresearchHandoff.js";
 import { buildConsensus } from "../core/autoresearchConsensus.js";
 import { frameMetric } from "../core/autoresearchArbiter.js";
@@ -179,6 +179,7 @@ export async function initWith(args: string[], deps: AutoresearchInitDeps): Prom
   if (p.seedFrom && !existsSync(p.seedFrom)) { log.error(`autoresearch init: --seed-from not found: ${p.seedFrom}`); return 1; }
 
   mkdirSync(art, { recursive: true });
+  rmSync(join(art, "issue.txt"), { force: true }); // a repeated slug must not inherit the prior run's issue
   seedLib(art, deps.configRoot());
   atomicWrite(join(art, "topic.txt"), p.topic);
   atomicWrite(join(art, "metric.txt"), extractMetric(p.topic) + "\n");
@@ -1924,7 +1925,12 @@ export interface CorpusDigestDeps {
   stdout?: (line: string) => void;
   opts?: PathOpts;
   archiveRoot?: string;                             // default globalRoot()/archive/<repoHash()>
-  forensicsRoot?: string;                           // default globalRoot()/forensics
+}
+
+/** Non-empty line count of a file, 0 when it is missing — the archived campaign's own
+ *  `findings.log`, one line per finding filed during that run. */
+function countLines(path: string): number {
+  return readIfExists(path).split("\n").filter((l) => l.trim()).length;
 }
 
 /** readdir dir names / file names, [] on any error (nullglob semantics). */
@@ -1949,19 +1955,6 @@ export async function corpusDigestWith(args: string[], deps: CorpusDigestDeps): 
   const family = metricFamilyOf(parseMetricMd(readFileSync(metricPath, "utf8")).primaryMetric);
   if (family === null) return 0;
 
-  // Forensics flag counts per topic slug (frontmatter command: autoresearch). READ-ONLY.
-  const forensicsRoot = deps.forensicsRoot ?? join(globalRoot(), "forensics");
-  const flags = new Map<string, number>();
-  for (const date of listNames(forensicsRoot, "dir")) {
-    for (const name of listNames(join(forensicsRoot, date), "file")) {
-      if (!name.endsWith(".md")) continue;
-      const body = readIfExists(join(forensicsRoot, date, name));
-      if (!/^command: autoresearch$/m.test(body)) continue;
-      const slug = /^topic_slug: (.*)$/m.exec(body)?.[1]?.trim() ?? "";
-      if (slug) flags.set(slug, (flags.get(slug) ?? 0) + 1);
-    }
-  }
-
   // Archived campaigns: <archiveRoot>/<slug>/_autoresearch-<ts>[-N]/. READ-ONLY.
   const archiveRoot = deps.archiveRoot ?? join(globalRoot(), "archive", repoHash());
   const dated: { ts: string; e: CorpusEntry }[] = [];
@@ -1981,7 +1974,7 @@ export async function corpusDigestWith(args: string[], deps: CorpusDigestDeps): 
       dated.push({ ts: artName.slice("_autoresearch-".length), e: {
         topicSlug: slug, metricFamily: fam,
         leaderMetric: leaderMetricOf(readIfExistsOrNull(join(dir, "scoreboard.md"))),
-        verifiedLessons: verified, haltReason, forensicsFlags: flags.get(slug) ?? 0,
+        verifiedLessons: verified, haltReason, forensicsFlags: countLines(join(dir, "findings.log")),
       }});
     }
   }
@@ -2048,6 +2041,7 @@ async function dispatchVerb(args: string[]): Promise<number> {
     case "resume": return resumeWith(rest, liveResumeDeps);
     case "forensics": return forensicsRun(rest);
     case "flag": return runFlag("autoresearch", rest[0], rest.slice(1).join(" "));
+    case "reflect": return runReflect("autoresearch", rest[0], rest[1]);
     case "abort": return abortWith(applyArgsFile(rest), liveAbortDeps);
     case "consensus": return consensusWith(rest, liveConsensusDeps);
     case "memory-retrieve": return memoryRetrieveWith(rest, liveMemoryRetrieveDeps);

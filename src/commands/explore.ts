@@ -8,7 +8,7 @@ import { atomicWrite } from "../core/atomic.js";
 import { isoUtc, archiveTopic } from "../core/archive.js";
 import { exploreArtDir, deriveSlug, finalLandscapePath, missingListArtifacts } from "../core/explore.js";
 import { extractHandoffData } from "../core/exploreHandoff.js";
-import { runForensics, runFlag } from "../core/forensics.js";
+import { runForensics, runFlag, runReflect } from "../core/forensics.js";
 import { killNow, killPreflightOrphans, livePaneNonces } from "../core/tmux.js";
 import {
   type ListRow, type SpawnAllBatchDeps, formatListFile, parseListFile, spawnAllBatch, lastTag, verifyScopeFiles,
@@ -76,6 +76,7 @@ async function dispatchVerb(args: string[]): Promise<number> {
     case "verdict-tally": return verdictTallyRun(rest);
     case "forensics": return forensicsRun(rest);
     case "flag": return runFlag("explore", rest[0], rest.slice(1).join(" "));
+    case "reflect": return runReflect("explore", rest[0], rest[1]);
     case "teardown": return teardownRun(rest);
     case "handoff-extract": return handoffExtractRun(rest);
     default: {
@@ -124,6 +125,7 @@ export async function initWith(tokens: string[], d: ExploreInitDeps): Promise<nu
   const rows: ListRow[] = list.map((provider, i) => ({ provider, agent: agents[i] }));
 
   mkdirSync(art, { recursive: true });
+  rmSync(join(art, "issue.txt"), { force: true }); // a repeated slug must not inherit the prior run's issue
   atomicWrite(join(art, "topic.txt"), topicText);
   atomicWrite(join(art, "list.txt"), formatListFile(rows, isoUtc()));
 

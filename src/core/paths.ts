@@ -104,6 +104,17 @@ export function runArgsFile(command: string, prefix?: string): string {
   return f;
 }
 
+/** The flat offline-forensics queue: `~/.ap/forensics/queue/`. One record per unfiled finding,
+ *  written BEFORE its `gh` call and deleted after it succeeds. */
+export function forensicsQueueDir(gRoot: string = globalRoot()): string {
+  return join(gRoot, "forensics", "queue");
+}
+
+/** `~/.ap/issues-consent` — one line, `yes` or `no`; absent means "not asked on this box yet". */
+export function issuesConsentPath(gRoot: string = globalRoot()): string {
+  return join(gRoot, "issues-consent");
+}
+
 export function activeProvidersPath(gRoot: string = globalRoot()): string {
   const active = join(gRoot, "providers-active.txt");
   return existsSync(active) ? active : join(gRoot, "providers-available.txt");

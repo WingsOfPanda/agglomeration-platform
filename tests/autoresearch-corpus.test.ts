@@ -71,21 +71,18 @@ describe("corpus-digest verb", () => {
     writeFileSync(join(prior, "verification.tsv"),
       "exp_id\tagent\tverdict\nexp-003\tb\tverified\nexp-004\tb\tmismatch\n");
     writeFileSync(join(prior, "halt.flag"), "halted_by=user\nreason=plateau\n");
-    // fake forensics: <forensicsRoot>/<date>/<file>.md
-    const forensicsRoot = join(h.home, "fake-forensics");
-    mkdirSync(join(forensicsRoot, "2026-07-01"), { recursive: true });
-    writeFileSync(join(forensicsRoot, "2026-07-01", "x-autoresearch-prior-run.md"),
-      "---\ncommand: autoresearch\ntopic: prior-run\ntopic_slug: prior-run\n---\n\n## Mechanical findings\n\n- x\n");
-    return { o, art, archiveRoot, forensicsRoot };
+    // the campaign's own local trace: one line per finding filed during that run
+    writeFileSync(join(prior, "findings.log"), "2026-07-01T00:00:00Z flag\n");
+    return { o, art, archiveRoot };
   }
 
   it("builds the block from archive+forensics, writes ONLY $ART/corpus-digest.md, prints it", async () => {
     const h = home();
-    const { o, art, archiveRoot, forensicsRoot } = seed(h);
+    const { o, art, archiveRoot } = seed(h);
     const writes: string[] = [];
     const out: string[] = [];
     const rc = await corpusDigestWith([TOPIC], {
-      opts: o, archiveRoot, forensicsRoot,
+      opts: o, archiveRoot,
       writeAtomic: (p, b) => { writes.push(p); writeFileSync(p, b); },
       stdout: (l) => out.push(l),
     });
@@ -100,16 +97,16 @@ describe("corpus-digest verb", () => {
     expect(out.join("\n")).toContain("prior-run");
     // corpus roots untouched (still exactly the seeded files)
     expect(readdirSync(join(archiveRoot, "prior-run", "_autoresearch-20260701T000000Z")).sort())
-      .toEqual(["halt.flag", "metric.md", "scoreboard.md", "verification.tsv"]);
+      .toEqual(["findings.log", "halt.flag", "metric.md", "scoreboard.md", "verification.tsv"]);
   });
 
   it("different metric family excluded; unknown family in CURRENT topic -> rc 0, nothing printed", async () => {
     const h = home();
-    const { o, archiveRoot, forensicsRoot, art } = seed(h);
+    const { o, archiveRoot, art } = seed(h);
     writeFileSync(join(archiveRoot, "prior-run", "_autoresearch-20260701T000000Z", "metric.md"),
       "# Research goal\n\n**Primary metric:** latency\n**Direction:** minimize\n");
     const out: string[] = [];
-    const rc = await corpusDigestWith([TOPIC], { opts: o, archiveRoot, forensicsRoot, stdout: (l) => out.push(l) });
+    const rc = await corpusDigestWith([TOPIC], { opts: o, archiveRoot, stdout: (l) => out.push(l) });
     expect(rc).toBe(0);
     expect(out.join("")).not.toContain("prior-run");
     expect(readFileSync(join(art, "corpus-digest.md"), "utf8")).toContain("no prior same-family campaigns");

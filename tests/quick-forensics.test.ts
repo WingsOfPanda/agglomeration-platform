@@ -1,31 +1,22 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdirSync, writeFileSync, readdirSync, readFileSync, existsSync, type Dirent } from "node:fs";
+import { mkdirSync, writeFileSync, readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { quickArtDir } from "../src/core/quick.js";
-import { workerDir, globalRoot } from "../src/core/paths.js";
+import { workerDir, forensicsQueueDir } from "../src/core/paths.js";
 import { forensicsRun } from "../src/commands/quick.js";
 
 let env: { home: string; cleanup: () => void };
 beforeEach(() => { env = freshHome(); });
 afterEach(() => { env.cleanup(); });
 
-function walkForensicsMd(): string[] {
-  const root = join(globalRoot(), "forensics");
-  const out: string[] = [];
-  const walk = (d: string): void => {
-    for (const e of readdirSync(d, { withFileTypes: true }) as Dirent[]) {
-      const p = join(d, e.name);
-      if (e.isDirectory()) walk(p);
-      else if (e.name.endsWith(".md")) out.push(p);
-    }
-  };
-  if (existsSync(root)) walk(root);
-  return out;
+function queuedRecords(): string[] {
+  const dir = forensicsQueueDir();
+  return existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => join(dir, f)) : [];
 }
 
 describe("quick forensics", () => {
-  it("captures a worker's outbox errors into a command:quick forensics file under globalRoot/forensics", async () => {
+  it("captures a worker's outbox errors into a command:quick queue record", async () => {
     mkdirSync(quickArtDir("fix-bug"), { recursive: true });
     const pd = workerDir("cody", "codex", "fix-bug");
     mkdirSync(pd, { recursive: true });
@@ -34,7 +25,7 @@ describe("quick forensics", () => {
     const rc = await forensicsRun(["fix-bug"]);
     expect(rc).toBe(0);
 
-    const files = walkForensicsMd();
+    const files = queuedRecords();
     expect(files.length).toBe(1);
     const md = readFileSync(files[0], "utf8");
     expect(md).toContain("command: quick");
@@ -42,11 +33,11 @@ describe("quick forensics", () => {
     expect(md).toContain("boom");
   });
 
-  it("writes nothing when there are no mechanical findings (best-effort, rc 0)", async () => {
+  it("files nothing when there are no mechanical findings (best-effort, rc 0)", async () => {
     mkdirSync(quickArtDir("clean"), { recursive: true });
     const rc = await forensicsRun(["clean"]);
     expect(rc).toBe(0);
-    expect(walkForensicsMd().length).toBe(0);
+    expect(queuedRecords().length).toBe(0);
   });
 
   it("rc 2 on missing topic", async () => {
