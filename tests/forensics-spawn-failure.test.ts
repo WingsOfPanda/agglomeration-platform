@@ -1,57 +1,51 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { writeFileSync, readdirSync, readFileSync, existsSync, type Dirent } from "node:fs";
+import { writeFileSync, mkdirSync, readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { captureSpawnFailure, NO_EVENT_SENTINEL } from "../src/core/forensics.js";
-import { parseForensicsFrontmatter, parseMechanicalFindings } from "../src/core/review.js";
-import { globalRoot } from "../src/core/paths.js";
+import { parseMechanicalFindings } from "../src/core/review.js";
+import { globalRoot, forensicsQueueDir, workerDir } from "../src/core/paths.js";
 
 let env: { home: string; cleanup: () => void };
 beforeEach(() => { env = freshHome(); });
 afterEach(() => { env.cleanup(); });
 
-function forensicsMd(): string[] {
-  const root = join(globalRoot(), "forensics");
-  const out: string[] = [];
-  const walk = (d: string): void => {
-    for (const e of readdirSync(d, { withFileTypes: true }) as Dirent[]) {
-      const p = join(d, e.name);
-      if (e.isDirectory()) walk(p); else if (e.name.endsWith(".md")) out.push(p);
-    }
-  };
-  if (existsSync(root)) walk(root);
-  return out;
+function queuedRecords(): string[] {
+  const dir = forensicsQueueDir();
+  return existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => join(dir, f)) : [];
 }
 
 describe("captureSpawnFailure", () => {
-  it("writes a command:spawn forensics file review can parse", () => {
-    const path = captureSpawnFailure({
+  it("queues a command:spawn record review can parse, with its run under the WORKER dir", () => {
+    const line = captureSpawnFailure({
       agent: "lima", model: "codex", topic: "plan-x",
       reason: "config_error", detail: "identity template not found",
       failureReportPath: "/p/failure-reason.txt",
     });
-    expect(path).not.toBe("");
-    const files = forensicsMd();
-    expect(files).toEqual([path]);
-    const md = readFileSync(path, "utf8");
-    const meta = parseForensicsFrontmatter(md);
-    expect(meta.command).toBe("spawn");
-    expect(meta.topic).toBe("plan-x");
-    expect(meta.nFindings).toBe(2);
+    const files = queuedRecords();
+    expect(files).toHaveLength(1);
+    expect(line).toBe(`QUEUED=${files[0]}`);
+    const md = readFileSync(files[0], "utf8");
+    expect(md).toContain("command: spawn");
+    expect(md).toContain("topic: plan-x");
+    expect(md).toContain("n_findings_mechanical: 2");
+    expect(md).toContain("title: [ap:spawn] config_error");
+    expect(md).toContain(`art_dir: ${workerDir("lima", "codex", "plan-x")}`);
     const findings = parseMechanicalFindings(md);
     expect(findings.some((f) => f.source === "spawn_failure" && /reason=config_error/.test(f.key))).toBe(true);
     expect(findings.some((f) => /failure_report=\/p\/failure-reason\.txt/.test(f.key))).toBe(true);
     expect(md).toContain("worker=lima-codex");
+    // the spawn failure IS its own run: the trace lands beside the worker's state
+    expect(existsSync(join(workerDir("lima", "codex", "plan-x"), "findings.log"))).toBe(true);
   });
 
   it("emits a single finding when no failure report is given", () => {
-    const path = captureSpawnFailure({
-      agent: "zulu", model: "claude", topic: "t", reason: "timeout", detail: NO_EVENT_SENTINEL,
-    });
-    expect(parseForensicsFrontmatter(readFileSync(path, "utf8")).nFindings).toBe(1);
+    captureSpawnFailure({ agent: "zulu", model: "claude", topic: "t", reason: "timeout", detail: NO_EVENT_SENTINEL });
+    expect(readFileSync(queuedRecords()[0], "utf8")).toContain("n_findings_mechanical: 1");
   });
 
-  it("is best-effort: returns '' and writes nothing when the forensics dir can't be created", () => {
+  it("is best-effort: returns '' and queues nothing when the queue dir can't be created", () => {
+    mkdirSync(globalRoot(), { recursive: true });
     writeFileSync(join(globalRoot(), "forensics"), "x"); // a FILE where the dir would go -> mkdirSync throws
     expect(captureSpawnFailure({ agent: "a", model: "b", topic: "t", reason: "spawn_error", detail: "x" })).toBe("");
   });

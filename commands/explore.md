@@ -39,9 +39,11 @@ dispatch — each `$CS explore *-send` verb and any `$CS send --from hub …` re
 ## Flagging suspicions
 
 At any point in the run, if something looks weird, surprising, or suspicious — even a likely false
-alarm — record it: `$CS explore flag <TOPIC> "<what looked off>"`. It writes straight to the review
-feed (survives teardown and aborts) and costs nothing, so prefer over-recording. Review later with
-`/ap:review`.
+alarm — record it: `$CS explore flag <TOPIC> "<what looked off>"`. It becomes a comment on this run's
+GitHub issue on the ap tracker (opening that issue if it is the run's first record), or a local queue
+record when `gh` is unavailable, offline, or before this machine has answered the consent question —
+queued records are flushed by the next successful filing or by `/ap:review`. Flags never ask for
+consent, never block, and cost nothing, so prefer over-recording. Review later with `/ap:review`.
 
 ## Task list (TaskCreate × 19 before Phase 0)
 
@@ -876,12 +878,33 @@ Set task `8c` → `completed`.
 
 ## Phase 8a — forensics (Hub runs; no task row)
 
-`$CS explore forensics <TOPIC>` (best-effort; never blocks — prints a path only if mechanical
-signals were found, else empty). If it printed a path, use the **Write/Edit tool** to APPEND a
-`## Hub reflection` section to that file — 3-5 short bullets interpreting the mechanical findings
-— **BEFORE** the Phase 9 teardown moves the art dir. Idempotent: skip the append if the file already
-contains the exact header `## Hub reflection`. The forensics file lives outside the topic state
-tree, so it survives teardown + archive.
+`$CS explore forensics <TOPIC>` (best-effort; scrapes the run for mechanical signals and files them
+as a GitHub issue on the ap tracker — never blocks, never fails the run). Run it **BEFORE** the
+Phase 9 teardown moves the art dir.
+
+Read the single line `forensics` prints:
+
+- `ISSUE=<url>` — filed on the ap tracker. Tell the user "forensics filed: <url>".
+- `QUEUED=<path>` — kept in the local queue (no `gh`, offline, or consent declined); it is flushed by
+  the next successful filing or by `/ap:review`. Tell the user forensics were queued.
+- `CONSENT=needed` — this machine has never answered the consent question. See below.
+- empty — no mechanical signals; nothing was filed.
+
+**Consent — asked once per machine (attached runs only).** On `CONSENT=needed`, call
+**AskUserQuestion**. Header `Issues`; question: "ap files run diagnostics as issues on the public
+repo github.com/WingsOfPanda/agglomeration-platform — one issue per run with the topic, hostname,
+username, paths, worker output and hub notes, for every repo you run ap in from this machine.
+Allow?"; options `Allow (recommended for the team)` / `Never on this machine` / `Not now`.
+Allow → `$CS review consent yes`, then `$CS review flush`. Never → `$CS review consent no`.
+Not now → nothing (the record stays queued; you are asked again next run). Mid-run flags never
+ask, and a detached run never asks — it queues.
+
+Then **reflect**, whenever this run has a record — after `ISSUE=`, after `QUEUED=`, and after the
+Allow → `$CS review flush` branch (that flush files the run and writes its record): Write 3-5 interpretive
+bullets to a temp file and run `$CS explore reflect <TOPIC> @<file>`. Write for a teammate who will
+debug this from the issue alone: what the findings mean, what the hub did, what you would try first.
+It posts them as the run issue's reflection comment. Once per run — a second `reflect` is refused
+(rc 1); with no run record it prints `NO_RUN_ISSUE` and does nothing.
 
 Then run the contribution scoreboard: `$CS explore contribution <TOPIC>` — plain per-provider
 counts (claims total/solo/consensus, peer verdicts, adversary verdict, rebuttal defend/concede,

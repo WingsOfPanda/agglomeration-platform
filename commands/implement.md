@@ -119,7 +119,7 @@ status to `idle`, and wait for your inbox. Resume from exactly where you parked.
 | 1 — `turn-send` "not idle" | AskUserQuestion wait/force/abort | wait 60s and retry once, then `reset-status` and retry once, then PARK. Never a third silent force. |
 | 1 — `ROUTE=escalate` | AskUserQuestion | PARK, carrying the worker's decoded text verbatim as your `message`. |
 | 4 — scope check `OOS_COUNT > 0` | AskUserQuestion amend/send-back/force-keep | PARK. Never auto-force-keep, never auto-amend. (`SCOPE_DECLARED=0` is still the documented no-op — say so in the parked message.) |
-| 4 — finish menu | AskUserQuestion merge/pr/keep/discard | `$CS implement finish <TOPIC> keep`. Never merge, never push, never open a PR — the operator finishes the branch. The gate is **mechanical**: the finish verb refuses `merge`/`pr`/`discard` (rc 2, recorded to the review feed) while a `_job` record exists for the topic. |
+| 4 — finish menu | AskUserQuestion merge/pr/keep/discard | `$CS implement finish <TOPIC> keep`. Never merge, never push, never open a PR — the operator finishes the branch. The gate is **mechanical**: the finish verb refuses `merge`/`pr`/`discard` (rc 2, filed as a flag on the run's issue) while a `_job` record exists for the topic. |
 | 5 — teardown | `$CS stop <TOPIC>` | `$CS stop lead <TOPIC>` — the per-agent form ONLY. The topic form REFUSES (rc 1) while the job record exists, deliberately: you are a worker under this topic, so it would tear YOU down mid-run. `job stop` sweeps you and the session later. |
 
 `ROUTE=verify` and `ROUTE=objection` are **not** parked: verify claims against ground truth and
@@ -152,9 +152,11 @@ leave it, and use **one rolling todo** for the dynamic fix-rounds rather than on
 ## Flagging suspicions
 
 At any point in the run, if something looks weird, surprising, or suspicious — even a likely false
-alarm — record it: `$CS implement flag <TOPIC> "<what looked off>"`. It writes straight to the review
-feed (survives teardown and aborts) and costs nothing, so prefer over-recording. Review later with
-`/ap:review`.
+alarm — record it: `$CS implement flag <TOPIC> "<what looked off>"`. It becomes a comment on this run's
+GitHub issue on the ap tracker (opening that issue if it is the run's first record), or a local queue
+record when `gh` is unavailable, offline, or before this machine has answered the consent question —
+queued records are flushed by the next successful filing or by `/ap:review`. Flags never ask for
+consent, never block, and cost nothing, so prefer over-recording. Review later with `/ap:review`.
 
 > **Scope:** single-repo. One worker implements the design doc on its own `feat/implement-<TOPIC>`
 > branch; the Hub cross-verifies and runs a bounded fix-loop, then a finish menu + teardown/archive.
@@ -530,9 +532,32 @@ Then `ROUND=$((ROUND+1))`, `RETRY=0`, and loop back to Stage 1.
    ref gone), so the finisher stopped before merging or deleting anything and the work is intact on
    `feat/implement-<TOPIC>`. Recovery: clear whatever the error names (clean or commit the tree, free
    the baseline branch) and re-run `implement finish`.
-4. **Forensics + reflection.** `$CS implement forensics <TOPIC>`. If it printed a path, use the
-   **Edit/Write tool** to APPEND an idempotent `## Hub reflection` section to that file — 3-5
-   short bullets interpreting the mechanical findings.
+4. **Forensics + reflection.** `$CS implement forensics <TOPIC>` — scrapes the run for mechanical
+   signals and files them as a GitHub issue on the ap tracker (never blocks, never fails the run).
+
+   Read the single line `forensics` prints:
+
+   - `ISSUE=<url>` — filed on the ap tracker. Tell the user "forensics filed: <url>".
+   - `QUEUED=<path>` — kept in the local queue (no `gh`, offline, or consent declined); it is flushed by
+     the next successful filing or by `/ap:review`. Tell the user forensics were queued.
+   - `CONSENT=needed` — this machine has never answered the consent question. See below.
+   - empty — no mechanical signals; nothing was filed.
+
+   **Consent — asked once per machine (attached runs only).** On `CONSENT=needed`, call
+   **AskUserQuestion**. Header `Issues`; question: "ap files run diagnostics as issues on the public
+   repo github.com/WingsOfPanda/agglomeration-platform — one issue per run with the topic, hostname,
+   username, paths, worker output and hub notes, for every repo you run ap in from this machine.
+   Allow?"; options `Allow (recommended for the team)` / `Never on this machine` / `Not now`.
+   Allow → `$CS review consent yes`, then `$CS review flush`. Never → `$CS review consent no`.
+   Not now → nothing (the record stays queued; you are asked again next run). Mid-run flags never
+   ask, and a detached run never asks — it queues.
+
+   Then **reflect**, whenever this run has a record — after `ISSUE=`, after `QUEUED=`, and after the
+   Allow → `$CS review flush` branch (that flush files the run and writes its record): Write 3-5 interpretive
+   bullets to a temp file and run `$CS implement reflect <TOPIC> @<file>`. Write for a teammate who will
+   debug this from the issue alone: what the findings mean, what the hub did, what you would try first.
+   It posts them as the run issue's reflection comment. Once per run — a second `reflect` is refused
+   (rc 1); with no run record it prints `NO_RUN_ISSUE` and does nothing.
 5. **Teardown + archive.** `$CS stop <TOPIC>` (closes the worker's pane; prints the **DONE** banner),
    then `$CS implement archive <TOPIC>`. **Detached:** `$CS stop lead <TOPIC>` instead — the topic
    form refuses (rc 1) while the job record exists because it would tear down the job hub, i.e. you.

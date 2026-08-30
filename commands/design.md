@@ -30,9 +30,11 @@ high-level stages, marking each `in_progress` on entry and `completed` on exit:
 ## Flagging suspicions
 
 At any point in the run, if something looks weird, surprising, or suspicious — even a likely false
-alarm — record it: `$CS design flag <TOPIC> "<what looked off>"`. It writes straight to the review
-feed (survives teardown and aborts) and costs nothing, so prefer over-recording. Review later with
-`/ap:review`.
+alarm — record it: `$CS design flag <TOPIC> "<what looked off>"`. It becomes a comment on this run's
+GitHub issue on the ap tracker (opening that issue if it is the run's first record), or a local queue
+record when `gh` is unavailable, offline, or before this machine has answered the consent question —
+queued records are flushed by the next successful filing or by `/ap:review`. Flags never ask for
+consent, never block, and cost nothing, so prefer over-recording. Review later with `/ap:review`.
 
 ## Stage 0 — args-file + init
 
@@ -346,15 +348,34 @@ live)" — **Yes, drill** / **No, proceed to teardown**. While Yes, per round:
 The drill files stay in `_design/drilldowns/_scratch/` (out of `design-doc/`) and ride along into the
 archive (Stage 14). Re-drilling the same section auto-suffixes `-2`, `-3`, ….
 
-## Stage 13a — forensics capture + Hub reflection
+## Stage 13a — forensics filing + Hub reflection
 
-`FORENSICS=$($CS design forensics <TOPIC>)` (best-effort; prints a path only if mechanical signals were
-found, else empty — never blocks). If `FORENSICS` is non-empty: tell the user "forensics captured:
-$FORENSICS", then **Read** it and **append** a `## Hub reflection` section (3–5 interpretive bullets:
-what's surprising, repeat-vs-first-time patterns, the suggested next action — a memory worth saving, a
-spec topic, a patch, or a one-off) via the Write/Edit tool. **Idempotent:** skip the append if the file
-already contains the exact header `## Hub reflection`. The forensics file lives under
-`~/.ap/forensics/<date>/` — OUTSIDE the topic state — so it survives teardown + archive.
+`$CS design forensics <TOPIC>` (best-effort; scrapes the run for mechanical signals and files them as
+a GitHub issue on the ap tracker — never blocks, never fails the run).
+
+Read the single line `forensics` prints:
+
+- `ISSUE=<url>` — filed on the ap tracker. Tell the user "forensics filed: <url>".
+- `QUEUED=<path>` — kept in the local queue (no `gh`, offline, or consent declined); it is flushed by
+  the next successful filing or by `/ap:review`. Tell the user forensics were queued.
+- `CONSENT=needed` — this machine has never answered the consent question. See below.
+- empty — no mechanical signals; nothing was filed.
+
+**Consent — asked once per machine (attached runs only).** On `CONSENT=needed`, call
+**AskUserQuestion**. Header `Issues`; question: "ap files run diagnostics as issues on the public
+repo github.com/WingsOfPanda/agglomeration-platform — one issue per run with the topic, hostname,
+username, paths, worker output and hub notes, for every repo you run ap in from this machine.
+Allow?"; options `Allow (recommended for the team)` / `Never on this machine` / `Not now`.
+Allow → `$CS review consent yes`, then `$CS review flush`. Never → `$CS review consent no`.
+Not now → nothing (the record stays queued; you are asked again next run). Mid-run flags never
+ask, and a detached run never asks — it queues.
+
+Then **reflect**, whenever this run has a record — after `ISSUE=`, after `QUEUED=`, and after the
+Allow → `$CS review flush` branch (that flush files the run and writes its record): Write 3-5 interpretive
+bullets to a temp file and run `$CS design reflect <TOPIC> @<file>`. Write for a teammate who will
+debug this from the issue alone: what the findings mean, what the hub did, what you would try first.
+It posts them as the run issue's reflection comment. Once per run — a second `reflect` is refused
+(rc 1); with no run record it prints `NO_RUN_ISSUE` and does nothing.
 
 ## Stage 13b — teardown (DONE banner)
 
@@ -367,8 +388,8 @@ per-worker archive). Per-worker failures are tolerated. (Equivalent fallback: `$
 
 `$CS design archive <TOPIC>` → `archiveTopic(topic,'design')`: stamps every worker `status.json` to
 `state=archived`, moves the whole `_design/` dir (including `drilldowns/`) to
-`~/.ap/archive/<repo-hash>/<TOPIC>/_design-<ts>`, and rmdirs the topic. The forensics file from
-Stage 13a is untouched (it lives outside the state tree). Fast-path: skip (nothing beyond the doc).
+`~/.ap/archive/<repo-hash>/<TOPIC>/_design-<ts>`, and rmdirs the topic. Stage 13a's issue lives on
+GitHub, so archiving cannot lose it. Fast-path: skip (nothing beyond the doc).
 
 ## Stage 15 — present + implement handoff
 

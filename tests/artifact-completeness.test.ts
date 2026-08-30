@@ -17,7 +17,7 @@ const artifactComplete = (p: string): boolean => hasArtifactSentinel(readIfExist
 import { exploreArtDir } from "../src/core/explore.js";
 import { designArtDir } from "../src/core/design.js";
 import { statusPath } from "../src/core/ipc.js";
-import { workerDir } from "../src/core/paths.js";
+import { workerDir, forensicsQueueDir } from "../src/core/paths.js";
 import {
   researchSendWith, survivorsRun, synthPreliminaryRun, diffExploreRun, openqCollateRun,
   rebuttalSendWith, verdictTallyRun, synthFinalRun,
@@ -56,13 +56,11 @@ function seedExplore(rows: Array<{ provider: string; agent: string }>): string {
   return art;
 }
 
-/** Every forensics review-feed file written under this test's AP_HOME, concatenated. */
+/** Every queued forensics record written under this test's AP_HOME, concatenated. */
 function flagFeed(): string {
-  const root = join(h.home, "forensics");
-  if (!existsSync(root)) return "";
-  return readdirSync(root)
-    .flatMap((date) => readdirSync(join(root, date)).map((f) => readFileSync(join(root, date, f), "utf8")))
-    .join("\n");
+  const dir = forensicsQueueDir();
+  if (!existsSync(dir)) return "";
+  return readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => readFileSync(join(dir, f), "utf8")).join("\n");
 }
 
 function captureStderr(): { text: () => string; restore: () => void } {

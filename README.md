@@ -94,6 +94,11 @@ To update later: `/plugin` → update `ap`, then `/reload-plugins`. There is no 
 > `claude --permission-mode auto`). Sandboxing is honor-system; workers can run shell commands and
 > reach the network. Point the platform only at repositories and tasks you would trust an
 > unattended agent with. `/ap:autoresearch` states this loudest in its own directive.
+> Separately, ap files each run's diagnostics — topic, hostname, username, paths, worker output and
+> hub notes, with credential-shaped strings scrubbed — as issues on the **public** repo
+> `github.com/WingsOfPanda/agglomeration-platform`, so the maintainers see what broke on your box.
+> It asks once per machine before the first filing; decline with `ap review consent no` (or answer
+> "Never on this machine"), and records stay in a local queue instead.
 
 ### Five-minute start
 
@@ -352,11 +357,13 @@ for the whole job, or the per-agent form for one worker.
 /ap:review
 ```
 
-Every command records **forensics** at teardown (spawn failures, worker errors and questions,
-`FLAG:` notes, audit issues — plus the hub's own reflection). `review` surveys everything recorded
-since you last looked, clusters recurring patterns with their lifetime trend, suggests one concrete
-action per cluster, then files the reviewed records away so the next run starts clean. Run it
-periodically; it is how the platform's own bugs get found.
+Every command files its **forensics** at teardown (spawn failures, worker errors and questions,
+`FLAG:` notes — plus the hub's own reflection) as an issue on the ap tracker, queued locally while
+you are offline or before this machine has answered the consent question. `review` surveys the open,
+still-**untriaged** `[ap:…]` issues, clusters recurring patterns with their lifetime trend, suggests
+one concrete action per cluster — handed off as `/ap:quick`/`/ap:implement` with `Closes #<n>` —
+then marks what you reviewed `triaged`. Run it periodically; it is how the platform's own bugs get
+found.
 
 ---
 
@@ -448,8 +455,8 @@ There are **two roots**:
 
 ~/.ap/                               # GLOBAL, survives teardown
   archive/<repo-hash>/<topic>/…      # archived workers + run dirs
-  forensics/<date>/…                 # what /ap:review reads
-  forensics/.reviewed/<date>/…       # what it has already filed away
+  forensics/queue/…                  # records waiting to be filed as issues (+ map.txt run -> issue)
+  issues-consent                     # your one-time yes/no for the public tracker
   providers-active.txt               # your /ap:check choice
   autoresearch-memory/               # cross-run lessons
 ```

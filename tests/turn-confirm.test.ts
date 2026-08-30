@@ -82,14 +82,19 @@ function fakeClock(t0 = 1_700_000_000_000) {
   return { t0, now: () => t, advance: (ms: number) => { t += ms; } };
 }
 
-/** Every hub-flag forensics file's text under the temp AP_HOME. */
+/** Every forensics record's text under the temp AP_HOME. The live path is the flat queue dir; this
+ *  reader stays depth-agnostic so the bundle-backed E2E below reads the same way whichever bundle
+ *  it runs (a committed bundle predating the queue still writes the dated layout). */
 function forensicsTexts(): string[] {
-  const root = join(globalRoot(), "forensics");
-  if (!existsSync(root)) return [];
   const out: string[] = [];
-  for (const day of readdirSync(root)) {
-    for (const f of readdirSync(join(root, day))) out.push(readFileSync(join(root, day, f), "utf8"));
-  }
+  const collect = (d: string): void => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const p = join(d, e.name);
+      if (e.isDirectory()) collect(p); else if (e.name.endsWith(".md")) out.push(readFileSync(p, "utf8"));
+    }
+  };
+  const root = join(globalRoot(), "forensics");
+  if (existsSync(root)) collect(root);
   return out;
 }
 

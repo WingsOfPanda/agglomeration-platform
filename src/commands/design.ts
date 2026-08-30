@@ -29,7 +29,7 @@ import {
 } from "../core/phaseTable.js";
 import { statusPath, workerBusyState } from "../core/ipc.js";
 import { envNum } from "../core/env.js";
-import { runForensics, runFlag } from "../core/forensics.js";
+import { runForensics, runFlag, runReflect } from "../core/forensics.js";
 import { clearAgentStrikes } from "../core/artifact.js";
 import { adjudicate, type AdjudicateInput } from "../core/designAdjudicate.js";
 import { classifyTopic, skillHintAppend } from "../core/designSkill.js";
@@ -64,6 +64,7 @@ async function dispatchVerb(args: string[]): Promise<number> {
     case "offset-reset": return offsetResetRun(rest);
     case "forensics": return forensicsRun(rest);
     case "flag": return runFlag("design", rest[0], rest.slice(1).join(" "));
+    case "reflect": return runReflect("design", rest[0], rest[1]);
     case "archive": return archiveRun(rest);
     case "export-doc": return exportDocRun(rest);
     default: {

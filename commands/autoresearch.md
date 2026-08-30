@@ -65,9 +65,11 @@ interactive flow — autonomous mode only adds branches gated on it.
 ## Flagging suspicions
 
 At any point in the run, if something looks weird, surprising, or suspicious — even a likely false
-alarm — record it: `$CS autoresearch flag <TOPIC> "<what looked off>"`. It writes straight to the review
-feed (survives teardown and aborts) and costs nothing, so prefer over-recording. Review later with
-`/ap:review`.
+alarm — record it: `$CS autoresearch flag <TOPIC> "<what looked off>"`. It becomes a comment on this run's
+GitHub issue on the ap tracker (opening that issue if it is the run's first record), or a local queue
+record when `gh` is unavailable, offline, or before this machine has answered the consent question —
+queued records are flushed by the next successful filing or by `/ap:review`. Flags never ask for
+consent, never block, and cost nothing, so prefer over-recording. Review later with `/ap:review`.
 
 ## Task list (TaskCreate × 9 before Phase 0)
 
@@ -536,9 +538,33 @@ Then the sections, IN ORDER:
 
 1. **`TaskStop` every task ID** in `$ART/monitor-tasks.txt` (harness tool, one call per ID; idempotent —
    `finalize` already ran at the loop exit, so the monitors may already be down).
-2. **Forensics + reflection (best-effort).** `$CS autoresearch forensics <TOPIC>`. If it printed a path, use
-   the **Edit tool** to APPEND a `## Hub reflection` section to that file — 3-5 short bullets
-   interpreting the mechanical findings — BEFORE the teardown below moves the art dir.
+2. **Forensics + reflection (best-effort).** `$CS autoresearch forensics <TOPIC>` — scrapes the run
+   for mechanical signals and files them as a GitHub issue on the ap tracker (never blocks, never
+   fails the run). Run it BEFORE the teardown below moves the art dir.
+
+   Read the single line `forensics` prints:
+
+   - `ISSUE=<url>` — filed on the ap tracker. Tell the user "forensics filed: <url>".
+   - `QUEUED=<path>` — kept in the local queue (no `gh`, offline, or consent declined); it is flushed by
+     the next successful filing or by `/ap:review`. Tell the user forensics were queued.
+   - `CONSENT=needed` — this machine has never answered the consent question. See below.
+   - empty — no mechanical signals; nothing was filed.
+
+   **Consent — asked once per machine (attached runs only).** On `CONSENT=needed`, call
+   **AskUserQuestion**. Header `Issues`; question: "ap files run diagnostics as issues on the public
+   repo github.com/WingsOfPanda/agglomeration-platform — one issue per run with the topic, hostname,
+   username, paths, worker output and hub notes, for every repo you run ap in from this machine.
+   Allow?"; options `Allow (recommended for the team)` / `Never on this machine` / `Not now`.
+   Allow → `$CS review consent yes`, then `$CS review flush`. Never → `$CS review consent no`.
+   Not now → nothing (the record stays queued; you are asked again next run). Mid-run flags never
+   ask, and a detached run never asks — it queues.
+
+   Then **reflect**, whenever this run has a record — after `ISSUE=`, after `QUEUED=`, and after the
+   Allow → `$CS review flush` branch (that flush files the run and writes its record): Write 3-5 interpretive
+   bullets to a temp file and run `$CS autoresearch reflect <TOPIC> @<file>`. Write for a teammate who will
+   debug this from the issue alone: what the findings mean, what the hub did, what you would try first.
+   It posts them as the run issue's reflection comment. Once per run — a second `reflect` is refused
+   (rc 1); with no run record it prints `NO_RUN_ISSUE` and does nothing.
 3. **Pane teardown.** `$CS stop --pairs <TOPIC> <agents from $ART/workers.txt>` — one 9s graceful
    **DONE** banner across all panes (not N × 9s).
 4. **Archive.** `$CS autoresearch teardown <TOPIC>` — capture its stdout as `ARCHIVED_ART`; verify it is a

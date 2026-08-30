@@ -12,7 +12,7 @@ import { runnerAt, preSnapshot, createOrResumeBranch, currentBranch, finishWork,
 import type { Runner } from "../core/gitwork.js";
 import { readIfExists, readField, kvField } from "../core/fsread.js";
 import { branchNameFor, readBranchRecord } from "../core/branchRecord.js";
-import { runForensics, runFlag } from "../core/forensics.js";
+import { runForensics, runFlag, runReflect } from "../core/forensics.js";
 import { detectTestCommand } from "../core/quick.js";
 import { repoRoot } from "../core/paths.js";
 import { withMainCheckout } from "../core/job.js";
@@ -50,6 +50,7 @@ async function dispatchVerb(args: string[]): Promise<number> {
     case "summary": return summaryRun(rest);
     case "forensics": return runForensics("bridge", bridgeArtDir, rest[0]);
     case "flag": return runFlag("bridge", rest[0], rest.slice(1).join(" "));
+    case "reflect": return runReflect("bridge", rest[0], rest[1]);
     default: return usage();
   }
 }

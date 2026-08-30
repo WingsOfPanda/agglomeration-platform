@@ -16,7 +16,7 @@ import {
 import { isoUtc, archiveTopic } from "../core/archive.js";
 import { extractComponentsPaths, extractTestingPaths, lintComponentsPaths, matchDiffAgainstComponents, pathsInvisibleInTarget, testingBulletsWithoutPaths, unresolvedDeclaredPaths } from "../core/implementScope.js";
 import { runnerAt, preSnapshot, createOrResumeBranch, currentBranch, shortstat, finishWork, hasDistinctBranch, targetProblem, type Runner } from "../core/gitwork.js";
-import { runForensics, runFlag, recordHubFlag } from "../core/forensics.js";
+import { runForensics, runFlag, recordHubFlag, runReflect } from "../core/forensics.js";
 import { haveCmd } from "../core/deps.js";
 import { implementState, composeRound1Prompt, composeFixPrompt } from "../core/implementTurn.js";
 import { extractQuestionPayload, parseQuestionPayload } from "../core/questionCodec.js";
@@ -128,6 +128,7 @@ async function dispatchVerb(args: string[]): Promise<number> {
     case "finish":       return finishRun(rest);
     case "forensics":    return forensicsRun(rest);
     case "flag":         return runFlag("implement", rest[0], rest.slice(1).join(" "));
+    case "reflect":      return runReflect("implement", rest[0], rest[1]);
     case "archive":      return archiveRun(rest);
     case "find-latest-doc": if (rest.length) { log.error("implement find-latest-doc: takes no arguments"); return 2; } return findLatestDocRun();
     default:          return usage();
@@ -576,8 +577,8 @@ export async function finishWith(topic: string, action: "merge" | "pr" | "keep" 
   if (!existsSync(art)) { log.error(`implement finish: art-dir missing: ${art}`); return 1; }
   // The mechanical half of a detached run's "never merge, never push, never open a PR". The
   // directive says it in prose; this refuses it in code, before the results file is truncated, so a
-  // mis-instructed job hub cannot publish work no operator has seen. Recorded to the review feed as
-  // well as stderr: a hub that got here at all is a defect /ap:review must see.
+  // mis-instructed job hub cannot publish work no operator has seen. Filed as a flag on the run's
+  // issue as well as stderr: a hub that got here at all is a defect /ap:review must see.
   // `keep` is the ONLY ending a detached run has while its record exists — the recorded-action
   // indirection left with the `--finish pr` opt-in (removed 2026-08-18), so the gate is a literal
   // again: the operator finishes the branch themselves.
