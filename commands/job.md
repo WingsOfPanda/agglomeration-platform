@@ -17,6 +17,11 @@ Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
 > sender mid-run overwrites a running worker's inbox task and the worker idles. `job relay` is the
 > only write path into a job, and it targets the job hub.
 
+> **Detached runs never ask for consent.** Filing forensics to the ap tracker is gated by a
+> one-time per-machine consent question, and a job hub has nobody to ask — so a detached run always
+> queues its records (`QUEUED=<path>`) and never fires that AskUserQuestion. The queue is flushed by
+> the next attached run that files, or by `/ap:review`; answer the consent question there.
+
 ## Subcommands
 
 ### `status <topic>` (the default — use this when the user asks "how is it going")

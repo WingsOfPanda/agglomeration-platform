@@ -100,9 +100,11 @@ Two entry paths, decided once before Stage 0 — the same shape `/ap:implement` 
 ## Flagging suspicions
 
 At any point in the run, if something looks weird, surprising, or suspicious — even a likely false
-alarm — record it: `$CS quick flag <TOPIC> "<what looked off>"`. It writes straight to the review
-feed (survives teardown and aborts) and costs nothing, so prefer over-recording. Review later with
-`/ap:review`.
+alarm — record it: `$CS quick flag <TOPIC> "<what looked off>"`. It becomes a comment on this run's
+GitHub issue on the ap tracker (opening that issue if it is the run's first record), or a local queue
+record when `gh` is unavailable, offline, or before this machine has answered the consent question —
+queued records are flushed by the next successful filing or by `/ap:review`. Flags never ask for
+consent, never block, and cost nothing, so prefer over-recording. Review later with `/ap:review`.
 
 ## Stage 0 — Init + Brief
 
@@ -294,15 +296,33 @@ HEAD is probably still on `feat/quick-<SLUG>`, not the start branch. Give the br
 
 ## Stage 3 — Teardown + SUMMARY
 
-1. **Forensics + reflection (best-effort, BEFORE teardown).** `FORENSICS=$($CS quick forensics <SLUG>)`
-   — scrapes the worker's outbox/status/logs for mechanical signals and writes a `command:quick` file under
-   `~/.ap/forensics/<date>/` (prints its path only if signals were found, else empty — never blocks).
-   Run this **before** `stop`, because `stop` archives the worker dir and moves its `outbox.jsonl` /
-   `status.json` out of reach. If `FORENSICS` is non-empty: tell the user "forensics captured: $FORENSICS",
-   then **Read** it and **append** a `## Hub reflection` section (3–5 interpretive bullets: what's
-   surprising, repeat-vs-first-time patterns, the suggested next action) via the Write/Edit tool.
-   **Idempotent:** skip the append if the file already contains the exact header `## Hub reflection`.
-   The file lives OUTSIDE the topic state, so it survives teardown and `/ap:review` later surveys it.
+1. **Forensics + reflection (best-effort, BEFORE teardown).** `$CS quick forensics <SLUG>` — scrapes
+   the worker's outbox/status/logs for mechanical signals and files them as a GitHub issue on the ap
+   tracker. It never blocks and never fails the run. Run it **before** `stop`, because `stop` archives
+   the worker dir and moves its `outbox.jsonl` / `status.json` out of reach.
+
+   Read the single line `forensics` prints:
+
+   - `ISSUE=<url>` — filed on the ap tracker. Tell the user "forensics filed: <url>".
+   - `QUEUED=<path>` — kept in the local queue (no `gh`, offline, or consent declined); it is flushed by
+     the next successful filing or by `/ap:review`. Tell the user forensics were queued.
+   - `CONSENT=needed` — this machine has never answered the consent question. See below.
+   - empty — no mechanical signals; nothing was filed.
+
+   **Consent — asked once per machine (attached runs only).** On `CONSENT=needed`, call
+   **AskUserQuestion**. Header `Issues`; question: "ap files run diagnostics as issues on the public
+   repo github.com/WingsOfPanda/agglomeration-platform — one issue per run with the topic, hostname,
+   username, paths, worker output and hub notes, for every repo you run ap in from this machine.
+   Allow?"; options `Allow (recommended for the team)` / `Never on this machine` / `Not now`.
+   Allow → `$CS review consent yes`, then `$CS review flush`. Never → `$CS review consent no`.
+   Not now → nothing (the record stays queued; you are asked again next run). Mid-run flags never
+   ask, and a detached run never asks — it queues.
+
+   Then **reflect**, whenever a run record exists (`ISSUE=` or `QUEUED=`): Write 3-5 interpretive
+   bullets to a temp file and run `$CS quick reflect <SLUG> @<file>`. Write for a teammate who will
+   debug this from the issue alone: what the findings mean, what the hub did, what you would try first.
+   It posts them as the run issue's reflection comment. Once per run — a second `reflect` is refused
+   (rc 1); with no run record it prints `NO_RUN_ISSUE` and does nothing.
 2. Tear down + archive the worker with `stop` (graceful DONE banner → kill pane → archive the worker
    dir), capturing the archived path it reports into `archived-path.txt` for the summary. Run this
    single command (do not invoke `stop` separately):

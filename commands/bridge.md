@@ -20,8 +20,12 @@ Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
 
 ## Flagging suspicions
 
-At any point, if something looks off, record it: `$CS bridge flag <SLUG> "<what looked off>"`. It writes
-straight to the review feed (survives teardown and aborts) and costs nothing. Review with `/ap:review`.
+At any point in the run, if something looks weird, surprising, or suspicious — even a likely false
+alarm — record it: `$CS bridge flag <SLUG> "<what looked off>"`. It becomes a comment on this run's
+GitHub issue on the ap tracker (opening that issue if it is the run's first record), or a local queue
+record when `gh` is unavailable, offline, or before this machine has answered the consent question —
+queued records are flushed by the next successful filing or by `/ap:review`. Flags never ask for
+consent, never block, and cost nothing, so prefer over-recording. Review later with `/ap:review`.
 
 ## Stage 0 — Init
 
@@ -120,9 +124,32 @@ continue.
 
 ## Stage 4 — Teardown + SUMMARY
 
-1. **Forensics + reflection (BEFORE teardown):** `FORENSICS=$($CS bridge forensics <SLUG>)`. If non-empty,
-   tell the user "forensics captured: $FORENSICS", **Read** it and **append** a `## Hub reflection`
-   section (idempotent: skip if the file already contains the exact header `## Hub reflection`).
+1. **Forensics + reflection (BEFORE teardown):** `$CS bridge forensics <SLUG>` — scrapes the run for
+   mechanical signals and files them as a GitHub issue on the ap tracker (never blocks, never fails
+   the run).
+
+   Read the single line `forensics` prints:
+
+   - `ISSUE=<url>` — filed on the ap tracker. Tell the user "forensics filed: <url>".
+   - `QUEUED=<path>` — kept in the local queue (no `gh`, offline, or consent declined); it is flushed by
+     the next successful filing or by `/ap:review`. Tell the user forensics were queued.
+   - `CONSENT=needed` — this machine has never answered the consent question. See below.
+   - empty — no mechanical signals; nothing was filed.
+
+   **Consent — asked once per machine (attached runs only).** On `CONSENT=needed`, call
+   **AskUserQuestion**. Header `Issues`; question: "ap files run diagnostics as issues on the public
+   repo github.com/WingsOfPanda/agglomeration-platform — one issue per run with the topic, hostname,
+   username, paths, worker output and hub notes, for every repo you run ap in from this machine.
+   Allow?"; options `Allow (recommended for the team)` / `Never on this machine` / `Not now`.
+   Allow → `$CS review consent yes`, then `$CS review flush`. Never → `$CS review consent no`.
+   Not now → nothing (the record stays queued; you are asked again next run). Mid-run flags never
+   ask, and a detached run never asks — it queues.
+
+   Then **reflect**, whenever a run record exists (`ISSUE=` or `QUEUED=`): Write 3-5 interpretive
+   bullets to a temp file and run `$CS bridge reflect <SLUG> @<file>`. Write for a teammate who will
+   debug this from the issue alone: what the findings mean, what the hub did, what you would try first.
+   It posts them as the run issue's reflection comment. Once per run — a second `reflect` is refused
+   (rc 1); with no run record it prints `NO_RUN_ISSUE` and does nothing.
 2. Tear down + archive the worker:
    ```bash
    ARCHIVED=$($CS stop <AGENT> <SLUG> 2>&1 | sed -n 's/.*archived [^:]*: //p' | tail -1)

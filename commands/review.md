@@ -1,53 +1,96 @@
 ---
-description: Review accumulated forensics from quick/design/implement/explore/autoresearch — surface the problems recorded since you last looked, cluster recurring patterns with their lifetime trend, suggest next actions, then archive what was reviewed
-allowed-tools: Bash, Read
+description: Triage the ap forensics issues that quick/design/implement/explore/autoresearch file on the tracker — surface what is still untriaged, cluster recurring patterns with their lifetime trend, hand each fix off, then mark them triaged
+allowed-tools: Bash, Read, AskUserQuestion
 ---
 
 # /ap:review
 
-Survey the forensics that `/ap:quick`, `/ap:design`, `/ap:implement`, `/ap:explore`, and
-`/ap:autoresearch` record at teardown (each writes a `command:<name>` file under
-`~/.ap/forensics/<date>/`; a failed `spawn` also writes a `command:spawn` file at the point of
-failure), surface what is **new since you last ran review**, show how often each pattern has
-recurred over the life of the project, suggest one next action per cluster, then file the surveyed
-files away so the next run only shows new problems. **Zero arguments needed.**
+Every ap command files what went wrong during a run as a GitHub issue on
+`WingsOfPanda/agglomeration-platform` — one issue per run, titled `[ap:<command>] <first finding>`,
+with the run metadata in the body and the hub's flags, the mechanical findings and the hub's
+reflection as comments. A failed `spawn` files its own. Every box that runs ap files into the same
+tracker, so this is the whole fleet's feedback, not this machine's.
+
+This command triages what is still **untriaged**: survey the open issues, read them, cluster the
+recurring ones, suggest one action each, hand the fixes off, then mark what you reviewed.
+**Zero arguments needed.**
 
 Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
 
 ## Steps
 
-1. **Survey.** `$CS review survey` (pass through a user-supplied `--all` / `--command <name>` /
-   `--since <Nd|Nh>` only if they typed one — none are required). It prints, before a `TRENDS` line,
-   one TSV row per **live** (un-reviewed) forensics file: `<path>\t<command>\t<topic>\t<n_findings>`;
-   after `TRENDS`, the top recurring signatures: `<signature>\t<count>\t<first_seen>\t<last_seen>`.
-2. **Healthy short-circuit.** If there are **zero** file rows before `TRENDS`, print
-   `no new forensics since last review; ap has been healthy` and stop (nothing to archive).
-3. **Read the findings.** For each surfaced path, `Read` (or one batched `cat` with `---SEP---`
-   separators) the file's `## Mechanical findings` + `## Hub reflection` sections.
-4. **Cluster.** Group findings whose `source` + meaningful `key`/`context` token match (e.g. all
-   `audit_log ISSUE=unresolved_placeholder`; all `outbox` timeout events; all `spawn_failure
-   reason=<reason>` events). Rank clusters by count, descending.
-5. **Annotate with the trend.** Match each cluster to a `TRENDS` signature and attach its lifetime
-   recurrence — e.g. `3 this run · 11 since 2026-04-18`.
-6. **Suggest one action per cluster:**
-   - **3+ occurrences across distinct topics** → a **feedback memory** (give the slug) or a **spec
-     topic** under `docs/superpowers/specs/`.
-   - **2 occurrences** → "watch list"; a memory only if generalizable.
-   - **1 occurrence** → one-off, no action.
-7. **Surface the summary:**
-   ```
-   ## Forensics review (since last run, <N> files)
+1. **Survey.** `$CS review survey` (pass through a user-supplied `--command <name>` /
+   `--since <Nd|Nh>` only if they typed one — neither is required). It first flushes any locally
+   queued records (bounded), then prints:
+   - one TSV row per **untriaged** open issue: `<number>\t<title>\t<comments>\t<last_event>\t<url>`;
+   - a `TRENDS` line, then one row per recurring title cluster:
+     `<title>\t<open>\t<seen_again>\t<first>\t<last>`;
+   - `QUEUE=<remaining>` when records could not be flushed — surface that number to the user, those
+     problems are not on the tracker yet.
 
-   ### Cluster 1 — <pattern> (<this-run> this run · <lifetime> lifetime, across <topics>)
-   <files>
+   An issue counts as triaged once it carries the `triaged` label or an `<!-- ap-triaged ... -->`
+   marker comment — until a newer forensics comment lands on it, which makes it untriaged again. So
+   a pattern that recurs after you triaged it comes back here on its own.
+
+2. **Consent — asked once per machine.** If a command prints `CONSENT=needed`, this machine has
+   never answered whether ap may file to the public tracker. Call **AskUserQuestion**. Header
+   `Issues`; question: "ap files run diagnostics as issues on the public repo
+   github.com/WingsOfPanda/agglomeration-platform — one issue per run with the topic, hostname,
+   username, paths, worker output and hub notes, for every repo you run ap in from this machine.
+   Allow?"; options `Allow (recommended for the team)` / `Never on this machine` / `Not now`.
+   Allow → `$CS review consent yes`, then `$CS review flush`, then re-run the survey.
+   Never → `$CS review consent no` (records stay local, permanently).
+   Not now → nothing; say the queue is holding and stop.
+
+3. **Healthy short-circuit.** Zero issue rows before `TRENDS` → print
+   `no untriaged ap issues; ap has been healthy` and stop (report `QUEUE=` if it is non-zero).
+   Nothing to read, nothing to archive.
+
+4. **Read the issues.** For each surveyed number:
+   `gh issue view <n> --repo WingsOfPanda/agglomeration-platform --comments`
+   (batch them into one Bash call with `---SEP---` separators). The body carries the run metadata
+   block — ap version, command, topic, host/user, platform, providers, repo, art dir — and the
+   comments carry the flags, the mechanical findings and the hub's reflection.
+
+5. **Cluster.** Group issues whose failure matches — same normalized title, or the same
+   `source` + meaningful `key`/`context` token across their findings (e.g. all
+   `audit_log ISSUE=unresolved_placeholder`; all `outbox` timeout events; all
+   `spawn_failure reason=<reason>`). Rank clusters by count, descending.
+
+6. **Annotate with the trend.** Match each cluster to its `TRENDS` row and state the lifetime
+   recurrence from it — e.g. `3 open · 8 seen-again · first 2026-04-18, last 2026-08-29`. Say when
+   a cluster spans more than one host or user: the same failure on two boxes is a platform bug, not
+   a local one.
+
+7. **Suggest one action per cluster:**
+   - **3+ occurrences across distinct topics** → a fix now, or a spec topic under
+     `docs/superpowers/specs/` when it needs a design first.
+   - **2 occurrences** → watch list; a fix only if it is obvious and small.
+   - **1 occurrence** → one-off, no action.
+
+   Give every actionable cluster its hand-off line, verbatim and runnable:
+   `/ap:quick "<the fix, one sentence>. Closes #<n>"` — or, when it needs a design doc first,
+   `/ap:design "<the problem>"` then `/ap:implement <doc>` with `Closes #<n>` in the PR body.
+   The `Closes #<n>` is what ties the fix back to the evidence.
+
+8. **Surface the summary:**
+   ```
+   ## ap triage (<N> untriaged issues)
+
+   ### Cluster 1 — <pattern> (<open> open · <seen_again> seen again · <first> → <last>)
+   #<n> <title> — <url>
    Suggested action: <one concrete next step>
+   Hand off: /ap:quick "<fix>. Closes #<n>"
 
    ### Cluster 2 — <pattern> (...)
    ...
    ```
-8. **File away.** `$CS review archive <path1> <path2> ...` with the surveyed paths — accrues the
-   trend (once per file) and moves each to `globalRoot()/forensics/.reviewed/<date>/`. Report
-   `<N> files archived`. The next run starts clean.
 
-Archiving runs **after** the summary, so an interrupted run never files away problems you did not
-see — they stay live and re-surface (counted exactly once) next time.
+9. **Mark them triaged.** `$CS review archive <n1> <n2> ...` with the numbers you actually reviewed
+   — it runs `gh issue edit <n> --repo WingsOfPanda/agglomeration-platform --add-label triaged`, and
+   when this account cannot label the repo it posts an `<!-- ap-triaged ... -->` marker comment
+   instead (the survey treats the two identically). Report `<N> issues triaged`.
+
+   Marking runs **after** the summary, so an interrupted run never hides problems you did not see.
+   **Closing** an issue stays the maintainer's call — `gh issue close <n> --repo
+   WingsOfPanda/agglomeration-platform` once the fix has landed, or let the `Closes #<n>` PR do it.
