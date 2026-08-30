@@ -1,78 +1,87 @@
-// src/commands/review.ts — /ap:review verbs. survey = read-only list + trend digest;
-// archive = accrue trend + move surveyed files to .reviewed/. Logic lives in core/review.ts.
-// Port of the prior plugin's review-forensics.sh + forensics-mark-reviewed.sh (review half).
-import { readdirSync, readFileSync, statSync, mkdirSync, renameSync } from "node:fs";
-import { join, dirname, sep } from "node:path";
+// src/commands/review.ts — /ap:review verbs over the issue tracker (spec 2026-08-30 §E/§G).
+// survey = bounded flush + ONE `gh issue list` + the client-side triage predicate; archive = mark
+// triaged (label, marker comment when this account cannot label); flush = the full drain; consent =
+// the ask-once gate. Every gh argv carries `--repo AP_ISSUES_REPO`: gh otherwise infers the repo
+// from the CALLER's checkout. Predicates live in core/review.ts, the gh boundary in core/forensics.ts.
 import { log } from "../core/log.js";
-import { globalRoot } from "../core/paths.js";
-import { atomicWrite } from "../core/atomic.js";
+import { isoUtc } from "../core/archive.js";
 import {
-  parseForensicsFrontmatter, parseMechanicalFindings, parseSince,
-  parseTrendLedger, accrue, renderTrendDigest, reviewedTarget,
+  parseSince, isTriaged, lastEventAt, clusterByTitle, AP_TRIAGED_MARKER,
 } from "../core/review.js";
+import type { GhIssue } from "../core/review.js";
+import {
+  AP_ISSUES_REPO, forensicsRunner, flushQueue, readConsent, writeConsent,
+} from "../core/forensics.js";
+import type { ForensicsRunner } from "../core/forensics.js";
 
-function forensicsRoot(): string { return join(globalRoot(), "forensics"); }
+const out = (s: string): void => { process.stdout.write(s + "\n"); };
+const ms = (iso: string): number => { const t = Date.parse(iso); return Number.isFinite(t) ? t : 0; };
 
-/** Walk forensicsRoot for *.md files; exclude the top-level `.reviewed/` subtree unless included.
- *  An absent/unreadable root reads as empty. */
-function walkForensics(root: string, includeReviewed: boolean): string[] {
-  try {
-    return readdirSync(root, { recursive: true, encoding: "utf8" })
-      .filter((n) => n.endsWith(".md") && (includeReviewed || !n.startsWith(`.reviewed${sep}`)))
-      .map((n) => join(root, n))
-      .sort();
-  } catch { return []; }
-}
+export interface SurveyOpts { command?: string; since?: string; now?: number; runner?: ForensicsRunner }
 
-function readLedgerText(root: string): string | null {
-  try { return readFileSync(join(root, ".trends.json"), "utf8"); } catch { return null; }
-}
-
-export interface SurveyOpts { all?: boolean; command?: string; since?: string; now?: number; }
-
-export async function surveyWith(o: SurveyOpts): Promise<number> {
-  const root = forensicsRoot();
+/** Flush what is queued (bounded — a survey must never hang on `gh`), then list the open ap issues
+ *  once and print the untriaged ones as TSV plus the recurring-title TRENDS block. */
+export async function surveyWith(o: SurveyOpts = {}): Promise<number> {
   let cutoff: number | null = null;
-  if (o.since) { try { cutoff = parseSince(o.since, o.now ?? Date.now()); } catch (e: any) { log.error(`review survey: ${e?.message ?? e}`); return 2; } }
-  const files = walkForensics(root, Boolean(o.all));
+  if (o.since) {
+    try { cutoff = parseSince(o.since, o.now ?? Date.now()); }
+    catch (e: any) { log.error(`review survey: ${e?.message ?? e}`); return 2; }
+  }
+  const r = o.runner ?? forensicsRunner();
+  const flushed = flushQueue(r, { maxMs: 30_000 });
+  const res = r.run("gh", ["issue", "list", "--repo", AP_ISSUES_REPO, "--state", "open",
+    "--search", 'in:title "[ap:"',
+    "--json", "number,title,createdAt,labels,comments,url", "--limit", "200"]);
+  if (res.code !== 0) { log.error(`review survey: gh issue list failed (rc ${res.code}): ${res.stderr.trim()}`); return 1; }
+  let issues: GhIssue[];
+  try { issues = JSON.parse(res.stdout.trim() || "[]") as GhIssue[]; }
+  catch { log.error("review survey: gh issue list returned unparseable JSON"); return 1; }
+  if (o.command) issues = issues.filter((i) => i.title.startsWith(`[ap:${o.command}]`));
+
   let n = 0;
-  for (const f of files) {
-    let text: string; try { text = readFileSync(f, "utf8"); } catch { continue; }
-    const meta = parseForensicsFrontmatter(text);
-    if (o.command && meta.command !== o.command) continue;
-    if (cutoff !== null) { let mt = 0; try { mt = statSync(f).mtimeMs; } catch { /* */ } if (mt < cutoff) continue; }
-    process.stdout.write(`${f}\t${meta.command}\t${meta.topic}\t${meta.nFindings}\n`);
+  for (const i of issues) {
+    if (isTriaged(i)) continue;
+    const last = lastEventAt(i);
+    if (cutoff !== null && ms(last) < cutoff) continue;
+    out(`${i.number}\t${i.title}\t${i.comments?.length ?? 0}\t${last}\t${i.url ?? ""}`);
     n++;
   }
-  process.stdout.write("TRENDS\n");
-  for (const t of renderTrendDigest(parseTrendLedger(readLedgerText(root)), 20)) {
-    process.stdout.write(`${t.signature}\t${t.count}\t${t.firstSeen}\t${t.lastSeen}\n`);
-  }
-  log.info(`review survey: ${n} forensics file(s)`);
+  // Trends are the LIFETIME picture, so they cluster every open issue — a triaged one still counts
+  // towards a recurring pattern. Everything non-row prints after TRENDS: the directive's healthy
+  // short-circuit reads "zero rows before TRENDS".
+  out("TRENDS");
+  for (const c of clusterByTitle(issues)) out(`${c.title}\t${c.open}\t${c.seenAgain}\t${c.first}\t${c.last}`);
+  if (flushed.remaining > 0) out(`QUEUE=${flushed.remaining}`);
+  if (readConsent() === null) out("CONSENT=needed");
+  log.info(`review survey: ${n} untriaged issue(s)`);
   return 0;
 }
 
-export interface ArchiveOpts { now?: Date; }
+export interface ArchiveOpts { now?: Date; runner?: ForensicsRunner }
 
-export async function archiveWith(paths: string[], o: ArchiveOpts = {}): Promise<number> {
-  const root = forensicsRoot();
-  const ledger = parseTrendLedger(readLedgerText(root));
-  const date = (o.now ?? new Date()).toISOString().slice(0, 10);
-  let moved = 0;
-  for (const p of paths) {
-    const target = reviewedTarget(root, p);
-    if (target === null) { log.warn(`review archive: skip (not under forensics root): ${p}`); continue; }
-    if (target === p) { log.info(`review archive: already reviewed: ${p}`); continue; }
-    let text: string;
-    try { text = readFileSync(p, "utf8"); } catch { log.warn(`review archive: skip (unreadable): ${p}`); continue; }
-    const findings = parseMechanicalFindings(text);
-    try { mkdirSync(dirname(target), { recursive: true }); renameSync(p, target); }
-    catch (e: any) { log.warn(`review archive: move failed for ${p}: ${e?.message ?? e}`); continue; }
-    accrue(ledger, findings, date);                       // only after a successful move
-    moved++;
+/** Mark the reviewed issues triaged. The label is the primary marker; a non-collaborator cannot
+ *  label, so a failed edit falls back to the marker comment `isTriaged` reads identically. */
+export async function archiveWith(numbers: string[], o: ArchiveOpts = {}): Promise<number> {
+  const r = o.runner ?? forensicsRunner();
+  r.run("gh", ["label", "create", "triaged", "--repo", AP_ISSUES_REPO, "--description", "triaged by /ap:review"]);
+  let done = 0, failed = 0;
+  for (const n of numbers) {
+    if (r.run("gh", ["issue", "edit", n, "--repo", AP_ISSUES_REPO, "--add-label", "triaged"]).code === 0) { done++; continue; }
+    const body = `${AP_TRIAGED_MARKER} at=${isoUtc(o.now)} -->\ntriaged by /ap:review`;
+    if (r.run("gh", ["issue", "comment", n, "--repo", AP_ISSUES_REPO, "--body", body]).code === 0) done++;
+    else { log.warn(`review archive: could not mark #${n} triaged`); failed++; }
   }
-  atomicWrite(join(root, ".trends.json"), JSON.stringify(ledger, null, 2) + "\n");
-  log.ok(`review archive: ${moved} file(s) moved to .reviewed/, trend updated`);
+  log.ok(`review archive: ${done} issue(s) triaged`);
+  return failed > 0 ? 1 : 0;
+}
+
+/** The one unbounded drain (`fileFinding`'s auto-flush and `survey` are both time-boxed). */
+export async function flushWith(r: ForensicsRunner = forensicsRunner()): Promise<number> {
+  const res = flushQueue(r, { maxMs: Infinity });
+  out(`FILED=${res.filed}`);
+  out(`QUEUE=${res.remaining}`);
+  if (res.failed > 0) out(`FAILED=${res.failed}`);
+  log.ok(`review flush: ${res.filed} filed, ${res.remaining} queued, ${res.failed} dead-lettered`);
   return 0;
 }
 
@@ -81,7 +90,7 @@ export async function run(args: string[]): Promise<number> {
   if (verb === "survey") {
     const o: SurveyOpts = {};
     for (let i = 0; i < rest.length; i++) {
-      if (rest[i] === "--all") o.all = true;
+      if (rest[i] === "--all") { log.error("review survey: --all was removed (issues are open or triaged, not archived files)"); return 2; }
       else if (rest[i] === "--command") o.command = rest[++i];
       else if (rest[i] === "--since") o.since = rest[++i];
       else { log.error(`review survey: unknown flag '${rest[i]}'`); return 2; }
@@ -89,9 +98,20 @@ export async function run(args: string[]): Promise<number> {
     return surveyWith(o);
   }
   if (verb === "archive") {
-    if (rest.length === 0) { log.error("usage: review archive <path...>"); return 2; }
+    if (rest.length === 0) { log.error("usage: review archive <number...>"); return 2; }
+    const bad = rest.find((n) => !/^\d+$/.test(n));
+    if (bad !== undefined) { log.error(`review archive: not an issue number: '${bad}'`); return 2; }
     return archiveWith(rest);
   }
-  log.error("usage: review <survey|archive> ...");
+  if (verb === "flush") return flushWith();
+  if (verb === "consent") {
+    const v = rest[0];
+    if (v !== "yes" && v !== "no") { log.error("usage: review consent <yes|no>"); return 2; }
+    writeConsent(v);
+    out(`CONSENT=${v}`);
+    log.ok(`review consent: ${v}`);
+    return 0;
+  }
+  log.error("usage: review <survey|archive|flush|consent> ...");
   return 2;
 }

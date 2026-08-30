@@ -53,90 +53,12 @@ describe("parseMechanicalFindings", () => {
   });
 });
 
-import { findingSignature, normalizeVolatile } from "../src/core/review.js";
+import { normalizeVolatile } from "../src/core/review.js";
 
 describe("normalizeVolatile", () => {
   it("strips ts / sha / path / bare ints", () => {
     expect(normalizeVolatile("at /home/x/y.ts:42 sha 3827f1c4f6 t 2026-05-30T00:00:00Z n 7"))
       .toBe("at <path> sha <sha> t <ts> n <n>");
-  });
-});
-
-describe("findingSignature (per-source)", () => {
-  it("audit_log -> first ISSUE token (drops trailing fields)", () => {
-    expect(findingSignature({ source: "audit_log", key: "ISSUE=unresolved_placeholder", context: "audit.log" }))
-      .toBe("audit_log||ISSUE=unresolved_placeholder");
-    expect(findingSignature({ source: "audit_log", key: "ISSUE=todo_marker SECTION=ASK", context: "audit.log" }))
-      .toBe("audit_log||ISSUE=todo_marker");
-  });
-  it("status -> state verbatim", () => {
-    expect(findingSignature({ source: "status", key: "state=error", context: "worker=golf" }))
-      .toBe("status||state=error");
-  });
-  it("spawn_results -> rc + reason word (lowercased)", () => {
-    expect(findingSignature({ source: "spawn_results", key: "rc=124 reason=Timeout waiting", context: "worker=golf" }))
-      .toBe("spawn_results||rc=124 reason=timeout");
-  });
-  it("spawn_results with no reason -> bare rc (empty reason column)", () => {
-    expect(findingSignature({ source: "spawn_results", key: "rc=124", context: "worker=golf" }))
-      .toBe("spawn_results||rc=124");
-  });
-  it("outbox -> event + reason from JSON (volatile bits ignored)", () => {
-    expect(findingSignature({ source: "outbox", key: '{"event":"error","reason":"dispatch_timeout","ts":"2026-05-30T00:00:00Z"}', context: "worker=golf" }))
-      .toBe("outbox||event=error reason=dispatch_timeout");
-    expect(findingSignature({ source: "outbox", key: '{"event":"question"}', context: "worker=golf" }))
-      .toBe("outbox||event=question");
-  });
-  it("outbox non-JSON key -> normalized-class fallback", () => {
-    expect(findingSignature({ source: "outbox", key: "not json sha 3827f1c4f6", context: "worker=golf" }))
-      .toBe("outbox||not json sha <sha>");
-  });
-  it("session_log -> volatile-normalized error class", () => {
-    expect(findingSignature({ source: "session_log", key: "[error] failed at /home/x/y.ts:42 sha 3827f1c4f6", context: "dispatch.log" }))
-      .toBe("session_log||[error] failed at <path> sha <sha>");
-  });
-  it("unknown source -> coarse fallback", () => {
-    expect(findingSignature({ source: "weird", key: "x 2026-05-30T00:00:00Z", context: "c" }))
-      .toBe("weird||x <ts>");
-  });
-});
-
-import { parseTrendLedger, accrue, renderTrendDigest, reviewedTarget } from "../src/core/review.js";
-
-describe("trend ledger", () => {
-  it("parse: null / corrupt -> empty; valid -> counts", () => {
-    expect(parseTrendLedger(null)).toEqual({ counts: {} });
-    expect(parseTrendLedger("not json")).toEqual({ counts: {} });
-    expect(parseTrendLedger("[]")).toEqual({ counts: {} });
-    expect(parseTrendLedger('{"x":1}')).toEqual({ counts: {} });
-    const l = parseTrendLedger('{"counts":{"a||x":{"count":2,"firstSeen":"2026-05-01","lastSeen":"2026-05-02"}}}');
-    expect(l.counts["a||x"].count).toBe(2);
-  });
-  it("accrue: first-seen sets both dates; repeat bumps count + lastSeen", () => {
-    const l = { counts: {} as Record<string, { count: number; firstSeen: string; lastSeen: string }> };
-    accrue(l, [{ source: "status", key: "state=error", context: "worker=a" }], "2026-05-01");
-    expect(l.counts["status||state=error"]).toEqual({ count: 1, firstSeen: "2026-05-01", lastSeen: "2026-05-01" });
-    accrue(l, [{ source: "status", key: "state=error", context: "worker=b" }], "2026-05-03");
-    expect(l.counts["status||state=error"]).toEqual({ count: 2, firstSeen: "2026-05-01", lastSeen: "2026-05-03" });
-  });
-  it("renderTrendDigest: count desc then signature asc; topN", () => {
-    const l = { counts: { "a||x": { count: 1, firstSeen: "d", lastSeen: "d" }, "b||y": { count: 5, firstSeen: "d", lastSeen: "d" } } };
-    expect(renderTrendDigest(l).map((r) => r.signature)).toEqual(["b||y", "a||x"]);
-    expect(renderTrendDigest(l, 1).map((r) => r.signature)).toEqual(["b||y"]);
-  });
-});
-
-describe("reviewedTarget", () => {
-  const root = "/home/u/.ap/forensics";
-  it("live file -> .reviewed/<date>/<file>", () => {
-    expect(reviewedTarget(root, `${root}/2026-05-30/11-00-00-implement-x.md`))
-      .toBe(`${root}/.reviewed/2026-05-30/11-00-00-implement-x.md`);
-  });
-  it("already reviewed -> unchanged (idempotent)", () => {
-    expect(reviewedTarget(root, `${root}/.reviewed/2026-05-30/f.md`)).toBe(`${root}/.reviewed/2026-05-30/f.md`);
-  });
-  it("not under root -> null", () => {
-    expect(reviewedTarget(root, "/tmp/x.md")).toBeNull();
   });
 });
 
