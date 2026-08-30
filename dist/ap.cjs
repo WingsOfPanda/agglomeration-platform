@@ -8314,7 +8314,7 @@ function agentConsultValidated(name) {
   return inst(name)?.consult_validated === true;
 }
 function consultTimeout(kind) {
-  if (!(kind in CONSULT_DEFAULTS)) throw new Error(`consultTimeout: kind must be 'research', 'verify', 'adversary', 'experiment', 'openq', 'rebuttal', 'gap', or 'signoff'; got '${kind}'`);
+  if (!(kind in CONSULT_DEFAULTS)) throw new Error(`consultTimeout: kind must be 'research', 'verify', 'adversary', 'experiment', 'openq', 'rebuttal', 'gap', 'signoff', or 'drill'; got '${kind}'`);
   const env = process.env[`AP_CONSULT_TIMEOUT_${kind.toUpperCase()}`];
   if (POSITIVE_INT.test(String(env))) return Number(env);
   const v = (load().consult ?? {})[`${kind}_timeout_s`];
@@ -8332,7 +8332,7 @@ var init_contracts = __esm({
     import_yaml = __toESM(require_dist(), 1);
     init_paths();
     DOCS = /* @__PURE__ */ new Map();
-    CONSULT_DEFAULTS = { research: 600, verify: 300, adversary: 600, experiment: 1800, openq: 300, rebuttal: 300, gap: 600, signoff: 300 };
+    CONSULT_DEFAULTS = { research: 600, verify: 300, adversary: 600, experiment: 1800, openq: 300, rebuttal: 300, gap: 600, signoff: 300, drill: 600 };
     POSITIVE_INT = /^[1-9][0-9]*$/;
   }
 });
@@ -13020,6 +13020,18 @@ var init_phaseTable = __esm({
         skippable: true,
         retryNote: "exists \u2014 one sign-off turn per worker (the one-turn cap)",
         guard: { kind: "latest", noun: "latest phase", chain: ["GS", "RS", "AS", "VS", "QS", "FS"] }
+      },
+      {
+        phase: "drill",
+        key: "DS",
+        cmd: "explore",
+        artDir: exploreArtDir,
+        timeoutKind: "drill",
+        artifactFor: (art, agent) => (0, import_node_path27.join)(art, `drill-${agent}.md`),
+        stateFn: verifyState,
+        skippable: true,
+        retryNote: "exists \u2014 one drill turn per worker (the one-turn cap)",
+        guard: { kind: "latest", noun: "latest phase", chain: ["SS", "GS", "RS", "AS", "VS", "QS", "FS"] }
       }
     ];
     DESIGN_PHASES = [
@@ -19325,6 +19337,9 @@ function buildHandoffKv2(i) {
     L.push(`cross_verification=${i.coverage.value}`);
     L.push(`cross_verification_detail=crossverify=${i.coverage.crossverify},adversary=${i.coverage.adversary}`);
   }
+  if (i.frameDoc) L.push(`frame_doc=${i.frameDoc}`);
+  if (i.grillDoc) L.push(`grill_doc=${i.grillDoc}`);
+  if (i.drillPaths.length) L.push(`drill_paths=${i.drillPaths.join(",")}`);
   L.push("session_path=.");
   L.push("topic_txt_path=topic.txt");
   L.push(`generated_ts=${i.generatedTs}`);
@@ -19361,6 +19376,7 @@ function extractHandoffData(artDir, now) {
   const landscapeDoc = landscapes.find((n) => n !== "landscape-draft.md") ?? (landscapes.includes("landscape-draft.md") ? "landscape-draft.md" : void 0);
   const findingsPaths = names.filter((n) => /^findings-.*\.md$/.test(n)).sort();
   const adversaryFindingsPaths = names.filter((n) => /^adversary-.*\.md$/.test(n)).sort();
+  const drillPaths = names.filter((n) => /^drill-.*\.md$/.test(n)).sort();
   let top = "", tradeoff = false;
   if (landscapeDoc) {
     const doc = (0, import_node_fs44.readFileSync)((0, import_node_path47.join)(artDir, landscapeDoc), "utf8");
@@ -19389,6 +19405,9 @@ function extractHandoffData(artDir, now) {
     adversaryFindingsPaths,
     tradeoffMatrixPresent: tradeoff,
     coverage: cov.kind === "stamp" ? cov.stamp : void 0,
+    frameDoc: names.includes("frame.md") ? "frame.md" : void 0,
+    grillDoc: names.includes("grill.md") ? "grill.md" : void 0,
+    drillPaths,
     generatedTs: isoUtc(now)
   });
   const dest = (0, import_node_path47.join)(artDir, "handoff-data.kv");
@@ -19549,6 +19568,56 @@ var init_exploreAnnotate = __esm({
   }
 });
 
+// src/core/exploreGrill.ts
+function frameBlock(frameText) {
+  const t = frameText.trim();
+  if (!t) return "";
+  return "Framing (user-settled \u2014 treat as constraints, do not re-litigate):\n" + t;
+}
+function parseFacts(text) {
+  const out = [];
+  for (const line of text.split("\n")) {
+    const m = line.match(/^- +(.*\S)/);
+    if (m) out.push(m[1]);
+  }
+  return out;
+}
+function composeDrillPrompt(topic, facts, writeTo) {
+  const items = facts.map((f, i) => `F${i + 1}. ${f}`).join("\n");
+  return [
+    "The run's landscape doc is final and the Hub is now grilling it with the user.",
+    "The questions below are FACTS the decision needs and no artifact of this run",
+    "answers. Resolve each from evidence: use any tool available in your environment",
+    "(files, web search / fetch where present) and cite what you open.",
+    "",
+    `Topic: ${topic.trim()}`,
+    "",
+    "Facts to resolve:",
+    items,
+    "",
+    `Output requirements \u2014 write to ${writeTo} with this EXACT structure:`,
+    "",
+    "  ## F1 <question restated>",
+    "  <answer, with [citation] anchors>",
+    "",
+    "  ## F2 <question restated>",
+    "  ...",
+    "",
+    "One section per fact, numbered as above. If a fact cannot be resolved from the",
+    'evidence available, write exactly "cannot resolve, because <reason>" under its',
+    "heading \u2014 an honest non-answer is more useful than a guess the user will act on.",
+    "This is a fact turn: do not re-argue the landscape doc and do not recommend.",
+    "",
+    artifactContract(writeTo)
+  ].join("\n");
+}
+var init_exploreGrill = __esm({
+  "src/core/exploreGrill.ts"() {
+    "use strict";
+    init_artifact();
+  }
+});
+
 // src/core/exploreTurn.ts
 function litGuidance(track) {
   return track === "ON" ? "The topic is academic / SOTA-shaped. Prioritize peer-reviewed papers (arXiv, conference proceedings) over blog posts or vendor docs. List 3+ recent papers, projects, or benchmarks with citations including authors, year, venue, URL/DOI where available." : "The topic is not academic-shaped. Brief SOTA-evidence section is fine \u2014 list 1-2 anchor sources or write 'Not applicable' with a one-line reason.";
@@ -19556,8 +19625,9 @@ function litGuidance(track) {
 function researchLens(provider) {
   return RESEARCH_LENSES[provider] ?? NEUTRAL_LENS;
 }
-function composeExploreResearchPrompt(topic, writeTo, lit, lens, selfassessTo) {
+function composeExploreResearchPrompt(topic, writeTo, lit, lens, selfassessTo, frame = "") {
   const t = topic.trim();
+  const framing = frameBlock(frame);
   return [
     "Investigate the following topic from multiple angles. Your job is not to",
     "recommend; your job is to expose the landscape \u2014 approaches, tradeoffs,",
@@ -19566,6 +19636,7 @@ function composeExploreResearchPrompt(topic, writeTo, lit, lens, selfassessTo) {
     `Topic: ${t}`,
     "",
     `Research lens: ${lens}`,
+    ...framing ? ["", framing] : [],
     "",
     `Output requirements \u2014 write to ${writeTo} with this EXACT structure:`,
     "",
@@ -19803,6 +19874,7 @@ var init_exploreTurn = __esm({
   "src/core/exploreTurn.ts"() {
     "use strict";
     init_artifact();
+    init_exploreGrill();
     LENS_GUARD = "This is an emphasis, not a boundary \u2014 you must still cover the WHOLE landscape; do not skip an approach because it sits outside your emphasis.";
     RESEARCH_LENSES = {
       codex: "Weight your investigation toward repo-code evidence: read the implementation, run runtime probes/experiments where cheap, judge implementation feasibility first-hand. " + LENS_GUARD,
@@ -20194,6 +20266,7 @@ __export(explore_exports, {
   contributionRun: () => contributionRun,
   crossverifySendWith: () => crossverifySendWith,
   diffExploreRun: () => diffExploreRun,
+  drillSendWith: () => drillSendWith,
   exploreWaitGateRun: () => exploreWaitGateRun,
   forensicsRun: () => forensicsRun5,
   gapSendWith: () => gapSendWith,
@@ -20213,7 +20286,7 @@ __export(explore_exports, {
   verdictTallyRun: () => verdictTallyRun
 });
 function usage5() {
-  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|survivors|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|rebuttal-send|rebuttal-wait|gap-send|gap-wait|signoff-send|signoff-wait|synth-final|verdict-tally|contribution|forensics|teardown|handoff-extract> ...");
+  log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|survivors|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|confidence|annotate|adversary-send|adversary-wait|rebuttal-send|rebuttal-wait|gap-send|gap-wait|signoff-send|signoff-wait|drill-send|drill-wait|synth-final|verdict-tally|contribution|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 async function run14(args) {
@@ -20247,6 +20320,8 @@ async function dispatchVerb11(args) {
       return triad("explore gap-send", gapSendWith, liveSendDeps)(rest);
     case "signoff-send":
       return triad("explore signoff-send", signoffSendWith, liveSendDeps)(rest);
+    case "drill-send":
+      return triad("explore drill-send", drillSendWith, liveSendDeps)(rest);
     case "contribution":
       return contributionRun(rest);
     case "wait-gate":
@@ -20365,7 +20440,8 @@ async function researchSendWith2(topic, agent, provider, d) {
         return { fail: 1 };
       }
       const track = readIfExists((0, import_node_path48.join)(art, "lit-track.txt")).startsWith("ON") ? "ON" : "OFF";
-      return { prompt: composeExploreResearchPrompt(topicText, artifact, litGuidance(track), researchLens(provider), (0, import_node_path48.join)(art, `selfassess-${agent}.md`)) };
+      const frame = readIfExists((0, import_node_path48.join)(art, "frame.md"));
+      return { prompt: composeExploreResearchPrompt(topicText, artifact, litGuidance(track), researchLens(provider), (0, import_node_path48.join)(art, `selfassess-${agent}.md`), frame) };
     }
   });
 }
@@ -20536,6 +20612,16 @@ async function signoffSendWith(topic, agent, provider, d) {
       const soloBucketLines = readIfExists((0, import_node_path48.join)(art, `${agent}_only_items.txt`)).split("\n").filter((l) => l.length > 0);
       const agreedText = sectionText(readIfExists((0, import_node_path48.join)(art, "diff.md")), ["Agreed", "Consensus"]);
       return { prompt: composeSignoffPrompt(conclusion, soloBucketLines, agreedText, artifact) };
+    }
+  });
+}
+async function drillSendWith(topic, agent, provider, d) {
+  return phaseSend(DRILL, { topic, agent, provider }, d, {
+    prepare: ({ art, artifact }) => {
+      const facts = parseFacts(readIfExists((0, import_node_path48.join)(art, `grill-facts-${agent}.txt`)));
+      if (facts.length === 0) return { skip: "no drill facts routed" };
+      const topicText = readIfExists((0, import_node_path48.join)(art, "topic.txt")).trim() || topic;
+      return { prompt: composeDrillPrompt(topicText, facts, artifact) };
     }
   });
 }
@@ -20927,7 +21013,7 @@ async function handoffExtractRun(rest) {
   process.stdout.write(path + "\n");
   return 0;
 }
-var import_node_fs45, import_node_path48, liveExploreInitDeps, liveExploreSpawnAllDeps, RESEARCH2, OPENQ, CROSSVERIFY, ADVERSARY, REBUTTAL, GAP, SIGNOFF, liveExploreTeardownDeps;
+var import_node_fs45, import_node_path48, liveExploreInitDeps, liveExploreSpawnAllDeps, RESEARCH2, OPENQ, CROSSVERIFY, ADVERSARY, REBUTTAL, GAP, SIGNOFF, DRILL, liveExploreTeardownDeps;
 var init_explore2 = __esm({
   "src/commands/explore.ts"() {
     "use strict";
@@ -20957,6 +21043,7 @@ var init_explore2 = __esm({
     init_preflight();
     init_fsread();
     init_exploreOpenq();
+    init_exploreGrill();
     init_exploreVerdict();
     init_exploreRebuttal();
     init_exploreSelfAssess();
@@ -20967,7 +21054,7 @@ var init_explore2 = __esm({
       pickAgents
     };
     liveExploreSpawnAllDeps = { preflight: run8, spawn: run3, repoRoot };
-    [RESEARCH2, OPENQ, CROSSVERIFY, ADVERSARY, REBUTTAL, GAP, SIGNOFF] = PHASES;
+    [RESEARCH2, OPENQ, CROSSVERIFY, ADVERSARY, REBUTTAL, GAP, SIGNOFF, DRILL] = PHASES;
     liveExploreTeardownDeps = {
       killPane: (p) => killNow(p),
       livePaneNonces: () => livePaneNonces(),

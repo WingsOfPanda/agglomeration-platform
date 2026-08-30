@@ -31,6 +31,7 @@ import { run as spawnRun } from "./spawn.js";
 import { run as preflightRun } from "./preflight.js";
 import { readIfExists as readIf, readIfExistsOrNull } from "../core/fsread.js";
 import { parseOpenQuestions, assignOpenQuestions, formatOpenqClaims, parseOpenqClaims, composeOpenqPrompt } from "../core/exploreOpenq.js";
+import { parseFacts, composeDrillPrompt } from "../core/exploreGrill.js";
 import { parseAdversaryVerdict, tallyVerdicts } from "../core/exploreVerdict.js";
 import { type Claim } from "../core/designDiff.js";
 import { parseBucketLines, selectRebuttalTargets, composeRebuttalPrompt, type CritiqueInput } from "../core/exploreRebuttal.js";
@@ -39,7 +40,7 @@ import { buildContribution, renderContributionTsv, type ContributionArtifacts } 
 
 function usage(): number {
   log.error("usage: explore <init|classify|spawn-all|research-send|research-wait|survivors|openq-collate|openq-send|openq-wait|diff|crossverify-send|crossverify-wait|wait-gate|synth-preliminary|" +
-    "confidence|annotate|adversary-send|adversary-wait|rebuttal-send|rebuttal-wait|gap-send|gap-wait|signoff-send|signoff-wait|synth-final|verdict-tally|contribution|forensics|teardown|handoff-extract> ...");
+    "confidence|annotate|adversary-send|adversary-wait|rebuttal-send|rebuttal-wait|gap-send|gap-wait|signoff-send|signoff-wait|drill-send|drill-wait|synth-final|verdict-tally|contribution|forensics|teardown|handoff-extract> ...");
   return 2;
 }
 
@@ -64,6 +65,7 @@ async function dispatchVerb(args: string[]): Promise<number> {
     case "rebuttal-send": return triad("explore rebuttal-send", rebuttalSendWith, liveSendDeps)(rest);
     case "gap-send": return triad("explore gap-send", gapSendWith, liveSendDeps)(rest);
     case "signoff-send": return triad("explore signoff-send", signoffSendWith, liveSendDeps)(rest);
+    case "drill-send": return triad("explore drill-send", drillSendWith, liveSendDeps)(rest);
     case "contribution": return contributionRun(rest);
     case "wait-gate": return exploreWaitGateRun(rest);
     case "synth-preliminary": return synthPreliminaryRun(rest);
@@ -162,7 +164,7 @@ export async function spawnAllWith(topic: string, d: ExploreSpawnAllDeps): Promi
 
 // ---- the phase table: every send/wait skeleton below is a thin wrapper over core/phaseTable.ts ----
 // Destructured in pipeline order — the order is the contract the guard chains are transcribed from.
-const [RESEARCH, OPENQ, CROSSVERIFY, ADVERSARY, REBUTTAL, GAP, SIGNOFF] = PHASES;
+const [RESEARCH, OPENQ, CROSSVERIFY, ADVERSARY, REBUTTAL, GAP, SIGNOFF, DRILL] = PHASES;
 
 // ---- research-send / research-wait ----
 export async function researchSendWith(topic: string, agent: string, provider: string, d: SendDeps): Promise<number> {
@@ -171,7 +173,10 @@ export async function researchSendWith(topic: string, agent: string, provider: s
       const topicText = readIf(join(art, "topic.txt")).trim();
       if (!topicText) { log.error(`explore research-send: topic.txt missing/empty at ${art} (run explore init)`); return { fail: 1 }; }
       const track = readIf(join(art, "lit-track.txt")).startsWith("ON") ? "ON" : "OFF";
-      return { prompt: composeExploreResearchPrompt(topicText, artifact, litGuidance(track), researchLens(provider), join(art, `selfassess-${agent}.md`)) };
+      // Phase 0.5's frame record when the user answered the framing round; absent (the common case
+      // and every pre-0.5.61 run) leaves the prompt byte-identical.
+      const frame = readIf(join(art, "frame.md"));
+      return { prompt: composeExploreResearchPrompt(topicText, artifact, litGuidance(track), researchLens(provider), join(art, `selfassess-${agent}.md`), frame) };
     },
   });
 }
@@ -333,6 +338,21 @@ export async function signoffSendWith(topic: string, agent: string, provider: st
       const soloBucketLines = readIf(join(art, `${agent}_only_items.txt`)).split("\n").filter((l) => l.length > 0);
       const agreedText = sectionText(readIf(join(art, "diff.md")), ["Agreed", "Consensus"]);
       return { prompt: composeSignoffPrompt(conclusion, soloBucketLines, agreedText, artifact) };
+    },
+  });
+}
+
+// ---- drill-send / drill-wait (Phase 8c grill fact turn; one drill per worker, the one-turn cap) ----
+export async function drillSendWith(topic: string, agent: string, provider: string, d: SendDeps): Promise<number> {
+  return phaseSend(DRILL, { topic, agent, provider }, d, {
+    prepare: ({ art, artifact }) => {
+      // The grill routes this round's unresolved facts by writing grill-facts-<agent>.txt. No file
+      // (the mop-up's every-undrilled-worker pass) or no bullets in it = nothing to ask.
+      const facts = parseFacts(readIf(join(art, `grill-facts-${agent}.txt`)));
+      if (facts.length === 0) return { skip: "no drill facts routed" };
+      // The verbatim topic, not the slug the state dir is keyed by (a slug reads as garbage to a worker).
+      const topicText = readIf(join(art, "topic.txt")).trim() || topic;
+      return { prompt: composeDrillPrompt(topicText, facts, artifact) };
     },
   });
 }

@@ -32,6 +32,7 @@ import {
 import { composeExploreResearchPrompt, composeAdversaryPrompt, composeGapPrompt, composeSignoffPrompt, litGuidance, ADVERSARY_LENSES, researchLens } from "../src/core/exploreTurn.js";
 import { composeOpenqPrompt } from "../src/core/exploreOpenq.js";
 import { composeRebuttalPrompt } from "../src/core/exploreRebuttal.js";
+import { composeDrillPrompt } from "../src/core/exploreGrill.js";
 import { composeResearchPrompt, composeVerifyPrompt } from "../src/core/designTurn.js";
 /** Both commands' research waits — the shared skeleton bound to its row (no per-phase wrapper). */
 const researchWaitWith = (topic: string, agent: string, provider: string, d: WaitDeps): Promise<number> =>
@@ -833,6 +834,7 @@ describe("phase composers carry the contract block for THEIR artifact", () => {
     ["explore rebuttal", "/art/rebuttal-alpha.md", composeRebuttalPrompt([{ cite: "a:1", text: "t" }], ["### Finding 1"], "/art/rebuttal-alpha.md")],
     ["explore gap", "/art/gap-alpha.md", composeGapPrompt(["[a:1] item"], "/art/gap-alpha.md")],
     ["explore signoff", "/art/signoff-alpha.md", composeSignoffPrompt("Adopt X.", ["[a:1] solo"], "", "/art/signoff-alpha.md")],
+    ["explore drill", "/art/drill-alpha.md", composeDrillPrompt("attn", ["does X ship Y?"], "/art/drill-alpha.md")],
     ["design research", "/w/alpha-codex/findings.md", composeResearchPrompt("cache policy", "/w/alpha-codex/findings.md")],
     ["design verify", "/w/alpha-codex/verify.md", composeVerifyPrompt("[a:1] c", "/w/alpha-codex/verify.md")],
   ];

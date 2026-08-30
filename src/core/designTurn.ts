@@ -103,7 +103,7 @@ export type GateStatus = "terminal" | "question" | "pending";
 /** Per-worker readiness for the research/verify wait gate. `key` is the status-line prefix
  *  (`FS` research, `VS` explore's cross-verify + design's verify, `AS` explore's adversary,
  *  `QS` explore's open-questions relay, `RS` explore's rebuttal, `GS` explore's gap round,
- *  `SS` explore's sign-off).
+ *  `SS` explore's sign-off, `DS` explore's grill drill turn).
  *  A worker is `terminal` once its `.done` marker exists and
  *  its LAST `<key>=` line is a non-`question` value; `question` while its last `<key>=` line is
  *  `question` (transient — awaiting a relay+re-arm); otherwise `pending` (still running). Pure:

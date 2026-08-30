@@ -10,7 +10,7 @@ describe("buildHandoffKv", () => {
       topic: "attention kernels", landscapeDoc: "landscape-2026-05-30-attention.md",
       topApproach: "FlashAttention", findingsPaths: ["findings-rex.md", "findings-alpha.md"],
       confidenceSignals: "S1=true,S2=true,S3=true,S4=true,S5=true",
-      adversaryFindingsPaths: ["adversary-rex.md"], tradeoffMatrixPresent: true,
+      adversaryFindingsPaths: ["adversary-rex.md"], tradeoffMatrixPresent: true, drillPaths: [],
       coverage: { value: "ok", crossverify: "covered", adversary: "covered" },
       generatedTs: "2026-05-30T00:00:00Z",
     });
@@ -34,7 +34,7 @@ describe("buildHandoffKv", () => {
     const kv = buildHandoffKv({
       topic: "x", landscapeDoc: "landscape-draft.md", topApproach: "",
       findingsPaths: [], confidenceSignals: "", adversaryFindingsPaths: [],
-      tradeoffMatrixPresent: false, generatedTs: "2026-05-30T00:00:00Z",
+      tradeoffMatrixPresent: false, drillPaths: [], generatedTs: "2026-05-30T00:00:00Z",
     });
     expect(kv).toContain("mode=explore-no-convergence\n");
     expect(kv).not.toContain("top_approach=");
@@ -44,10 +44,39 @@ describe("buildHandoffKv", () => {
   it("no coverage stamp → NEITHER coverage line, frozen tail intact (degraded / no-roster runs)", () => {
     const kv = buildHandoffKv({
       topic: "x", topApproach: "A", findingsPaths: [], confidenceSignals: "",
-      adversaryFindingsPaths: [], tradeoffMatrixPresent: false, generatedTs: "t",
+      adversaryFindingsPaths: [], tradeoffMatrixPresent: false, drillPaths: [], generatedTs: "t",
     });
     expect(kv).not.toContain("cross_verification");
     expect(kv).toContain("tradeoff_matrix_present=false\nsession_path=.\ntopic_txt_path=topic.txt\ngenerated_ts=t\n");
+  });
+
+  // 2026-08-30 grill spec: the three grill keys are ADDITIVE — they sit in the same slot the
+  // coverage lines took (after cross_verification_detail, before the frozen tail), and a run that
+  // ran neither interview emits none of them.
+  it("frame/grill/drill keys land after cross_verification_detail and before the frozen tail", () => {
+    const kv = buildHandoffKv({
+      topic: "x", topApproach: "A", findingsPaths: [], confidenceSignals: "",
+      adversaryFindingsPaths: [], tradeoffMatrixPresent: false,
+      coverage: { value: "ok", crossverify: "covered", adversary: "covered" },
+      frameDoc: "frame.md", grillDoc: "grill.md",
+      drillPaths: ["drill-alpha.md", "drill-charlie.md"], generatedTs: "t",
+    });
+    expect(kv).toContain(
+      "cross_verification_detail=crossverify=covered,adversary=covered\n" +
+      "frame_doc=frame.md\n" +
+      "grill_doc=grill.md\n" +
+      "drill_paths=drill-alpha.md,drill-charlie.md\n" +
+      "session_path=.\ntopic_txt_path=topic.txt\ngenerated_ts=t\n",
+    );
+  });
+
+  it("absent frame/grill/drill → all three lines omitted, tail untouched", () => {
+    const kv = buildHandoffKv({
+      topic: "x", topApproach: "A", findingsPaths: [], confidenceSignals: "",
+      adversaryFindingsPaths: [], tradeoffMatrixPresent: false, drillPaths: [], generatedTs: "t",
+    });
+    for (const k of ["frame_doc", "grill_doc", "drill_paths"]) expect(kv).not.toContain(k);
+    expect(kv).toContain("tradeoff_matrix_present=false\nsession_path=.\n");
   });
 });
 
@@ -71,6 +100,19 @@ describe("extractHandoffData (reconciled reads)", () => {
       expect(kv).toContain("confidence_signals=S1=true,S2=false,S3=true,S4=true,S5=true\n");
       expect(kv).toContain("adversary_findings_paths=adversary-rex.md\n");
       expect(kv).toContain("tradeoff_matrix_present=true\n");
+    } finally { rmSync(art, { recursive: true, force: true }); }
+  });
+  it("fills frame_doc / grill_doc / drill_paths from the art dir (sorted), omitting what is absent", () => {
+    const art = mk();
+    try {
+      writeFileSync(join(art, "topic.txt"), "x\n");
+      writeFileSync(join(art, "frame.md"), "# Frame: x\n## Scope\n- in\n");
+      writeFileSync(join(art, "drill-charlie.md"), "## F1\nanswer");
+      writeFileSync(join(art, "drill-alpha.md"), "## F1\nanswer");
+      const kv = readFileSync(extractHandoffData(art)!, "utf8");
+      expect(kv).toContain("frame_doc=frame.md\n");
+      expect(kv).toContain("drill_paths=drill-alpha.md,drill-charlie.md\n");
+      expect(kv).not.toContain("grill_doc="); // no grill.md → line omitted
     } finally { rmSync(art, { recursive: true, force: true }); }
   });
   it("returns null when topic.txt is missing", () => {

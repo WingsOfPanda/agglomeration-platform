@@ -56,6 +56,7 @@ const RETRY_NOTES: Record<string, string> = {
   "explore rebuttal": "exists — one rebuttal round per worker (the one-turn cap)",
   "explore gap": "exists; rm to retry",
   "explore signoff": "exists — one sign-off turn per worker (the one-turn cap)",
+  "explore drill": "exists — one drill turn per worker (the one-turn cap)",
   "design research": "exists; rm to retry",
   "design verify": "exists; rm to retry",
 };
@@ -88,7 +89,7 @@ describe("phaseSend: the guard runs before the phase's own preconditions", () =>
   const GUARDED = PHASES.filter((r) => r.guard);
 
   it("the guarded set is every explore phase from openq on", () => {
-    expect(GUARDED.map((r) => r.phase)).toEqual(["openq", "crossverify", "adversary", "rebuttal", "gap", "signoff"]);
+    expect(GUARDED.map((r) => r.phase)).toEqual(["openq", "crossverify", "adversary", "rebuttal", "gap", "signoff", "drill"]);
   });
 
   for (const row of GUARDED) {

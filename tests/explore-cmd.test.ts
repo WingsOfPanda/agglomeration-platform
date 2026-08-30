@@ -14,7 +14,7 @@ import { outboxPath, paneMetaPath, statusPath } from "../src/core/ipc.js";
 import { freshHome } from "./helpers/tmpHome.js";
 import { captureStdout } from "./helpers/captureStdout.js";
 import { sendDeps, waitDeps } from "./helpers/phaseDeps.js";
-import { initWith, classifyRun, spawnAllWith, researchSendWith, openqCollateRun, openqSendWith, crossverifySendWith, rebuttalSendWith, gapSendWith, signoffSendWith, survivorsRun, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, synthFinalRun, verdictTallyRun, diffExploreRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, contributionRun, type ExploreInitDeps, type ExploreSpawnAllDeps } from "../src/commands/explore.js";
+import { initWith, classifyRun, spawnAllWith, researchSendWith, openqCollateRun, openqSendWith, crossverifySendWith, rebuttalSendWith, gapSendWith, signoffSendWith, drillSendWith, survivorsRun, synthPreliminaryRun, confidenceRun, annotateRun, adversarySendWith, synthFinalRun, verdictTallyRun, diffExploreRun, forensicsRun as exploreForensicsRun, teardownWith as exploreTeardownWith, handoffExtractRun, contributionRun, type ExploreInitDeps, type ExploreSpawnAllDeps } from "../src/commands/explore.js";
 import { exploreArtDir } from "../src/core/explore.js";
 import { PHASES, phaseWait, type PhaseKey, type PhaseRow, type SendDeps } from "../src/core/phaseTable.js";
 import { END_OF_ARTIFACT } from "../src/core/artifact.js";
@@ -239,6 +239,7 @@ const seed: Record<string, Seed> = {
     writeFileSync(join(art, "alpha_only_items.txt"), "");
     writeFileSync(join(art, "charlie_only_items.txt"), "[paper:arxiv:9] CharlieOnly — solo\n");
   },
+  drill: (art, agent) => writeFileSync(join(art, `grill-facts-${agent}.txt`), "- Does the kernel ship a batch path?\n"),
   signoff: (art) => {
     writeFileSync(join(art, "landscape-2026-07-10-x.md"),
       "## Topic\nx\n## Approaches\n1. A\n## Conclusion\nAdopt FlashAttention; caveats apply.\n## Citations\n- c\n");
@@ -285,6 +286,11 @@ const SKELETONS: Skeleton[] = [
     phase: "signoff", send: signoffSendWith, seed: seed.signoff,
     okArtifact: "# Sign-off\nVERDICT: fair\n", emptyState: "missing",
   },
+  {
+    phase: "drill", send: drillSendWith, seed: seed.drill,
+    starve: (art, agent) => rmSync(join(art, `grill-facts-${agent}.txt`), { force: true }),
+    okArtifact: "## F1 Does the kernel ship a batch path?\nyes [src/k.ts:9]\n", emptyState: "missing",
+  },
 ];
 
 describe("explore phase send/wait skeleton (table-driven over PHASES)", () => {
@@ -305,7 +311,7 @@ describe("explore phase send/wait skeleton (table-driven over PHASES)", () => {
   it("the starve (zero-input skip) set is exactly the phases that have one", () => {
     // `starve` is a test-table slot with no other completeness check: without this pin, deleting
     // it from a SKELETONS row would silently delete that phase's zero-input-skip test.
-    expect(SKELETONS.filter((s) => s.starve).map((s) => s.phase)).toEqual(["openq", "crossverify", "rebuttal", "gap"]);
+    expect(SKELETONS.filter((s) => s.starve).map((s) => s.phase)).toEqual(["openq", "crossverify", "rebuttal", "gap", "drill"]);
   });
 
   for (const s of SKELETONS) {
