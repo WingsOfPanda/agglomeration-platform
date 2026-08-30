@@ -29,7 +29,7 @@ import {
 } from "../core/phaseTable.js";
 import { statusPath, workerBusyState } from "../core/ipc.js";
 import { envNum } from "../core/env.js";
-import { runForensics, runFlag } from "../core/forensics.js";
+import { runForensics, runFlag, runReflect } from "../core/forensics.js";
 import { clearAgentStrikes } from "../core/artifact.js";
 import { adjudicate, type AdjudicateInput } from "../core/designAdjudicate.js";
 import { classifyTopic, skillHintAppend } from "../core/designSkill.js";
@@ -64,6 +64,7 @@ async function dispatchVerb(args: string[]): Promise<number> {
     case "offset-reset": return offsetResetRun(rest);
     case "forensics": return forensicsRun(rest);
     case "flag": return runFlag("design", rest[0], rest.slice(1).join(" "));
+    case "reflect": return runReflect("design", rest[0], rest[1]);
     case "archive": return archiveRun(rest);
     case "export-doc": return exportDocRun(rest);
     default: {
@@ -111,6 +112,7 @@ export async function initWith(tokens: string[], d: DesignInitDeps): Promise<num
   const rows: ListRow[] = list.map((provider, i) => ({ provider, agent: agents[i] }));
 
   mkdirSync(designDraftDir(topic), { recursive: true }); // creates _design/design-doc/.draft
+  rmSync(join(art, "issue.txt"), { force: true }); // a repeated slug must not inherit the prior run's issue
   atomicWrite(join(art, "topic.txt"), topicText);
   atomicWrite(join(art, "skill.txt"), classifyTopic(topicText));
   // Full list written even on a fast-path run; the ensemble path (Phase C) reads list.txt back.

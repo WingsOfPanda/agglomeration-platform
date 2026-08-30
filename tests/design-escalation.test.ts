@@ -440,12 +440,13 @@ describe("design drilldown", () => {
 describe("design forensics + archive", () => {
   it("forensics prints a path when there are findings, else empty (rc 0)", async () => {
     const art = designArtDir("t"); mkdirSync(join(art, "design-doc"), { recursive: true });
-    writeFileSync(join(art, "design-doc", "audit.log"), "ISSUE=no_goal_section\n");
+    const w = join(art, "..", "alpha-codex"); mkdirSync(w, { recursive: true });
+    writeFileSync(join(w, "outbox.jsonl"), '{"event":"error","reason":"boom"}\n');
     let out = ""; const orig = process.stdout.write.bind(process.stdout);
     (process.stdout as any).write = (s: string) => { out += s; return true; };
     let rc = 0; try { rc = await forensicsRun(["t"]); } finally { (process.stdout as any).write = orig; }
     expect(rc).toBe(0);
-    expect(out).toMatch(/forensics[/\\]2\d{3}-\d\d-\d\d[/\\].*-design-t\.md/);
+    expect(out).toMatch(/QUEUED=.*forensics[/\\]queue[/\\].*-findings-.*\.md/);
   });
   it("archive moves _design and rmdirs the topic (rc 0)", async () => {
     const art = designArtDir("t"); mkdirSync(join(art, "design-doc"), { recursive: true });

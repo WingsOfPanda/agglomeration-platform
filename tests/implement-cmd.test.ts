@@ -9,7 +9,7 @@ import { implementArtDir } from "../src/core/implement.js";
 import { formatJob, jobPath } from "../src/core/job.js";
 import type { Runner, RunResult } from "../src/core/gitwork.js";
 import { paneMetaWrite } from "../src/core/ipc.js";
-import { topicDir, workerDir } from "../src/core/paths.js";
+import { topicDir, workerDir, forensicsQueueDir } from "../src/core/paths.js";
 import {
   preSnapshotWith, branchWith, scopeCheckWith, summaryWith, finishWith, archiveRun, run,
   turnSendWith, turnWaitWith,
@@ -327,7 +327,7 @@ describe("implement finish", () => {
     expect(readFileSync(join(art, "finish-results.tsv"), "utf8")).toBe("main\tpr\tsame-branch\n");
     expect(err).toContain("NOTHING was merged, pushed, or discarded");
     expect(err).toContain("recover:");
-    expect(out).toMatch(/forensics\/.*-implement-flag-add-oauth\.md/); // reaches /ap:review
+    expect(out).toMatch(/QUEUED=.*forensics\/queue\/.*-flag-.*\.md/); // reaches /ap:review
   });
 
   it("detached baseline → same-branch, never a merge into whatever HEAD was", async () => {
@@ -366,7 +366,7 @@ describe("implement finish", () => {
     const { rc, out } = await capture(() => finishWith2(TOPIC, "merge", () => r, false));
     expect(rc).toBe(0);
     expect(readFileSync(join(art, "finish-results.tsv"), "utf8")).toBe("main\tmerge\tbase-checkout-failed\n");
-    expect(readFileSync(out.trim(), "utf8")).toContain(
+    expect(readFileSync(out.trim().replace(/^QUEUED=/, ""), "utf8")).toContain(
       "finish merge: base-checkout-failed on 1 target(s) — the checkout of the baseline branch was refused (check the checkout's own error: e.g. a dirty tree, the baseline held by another worktree, or its ref gone), so NOTHING was merged or discarded; the work is still on the feature branch",
     );
   });
@@ -407,9 +407,9 @@ describe("implement finish — a detached job in flight allows only 'keep'", () 
     writeFileSync(join(art, "baselines", "main.tsv"), "slug=main\ncwd=/repo/main\nbranch=main\n");
   }
   function hubFlags(): string {
-    const root = join(h.home, "forensics");
-    if (!existsSync(root)) return "";
-    return readdirSync(root).flatMap((d) => readdirSync(join(root, d)).map((f) => readFileSync(join(root, d, f), "utf8"))).join("");
+    const dir = forensicsQueueDir();
+    if (!existsSync(dir)) return "";
+    return readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => readFileSync(join(dir, f), "utf8")).join("");
   }
 
   for (const action of ["merge", "pr", "discard"] as const) {

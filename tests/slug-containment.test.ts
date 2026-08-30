@@ -249,7 +249,7 @@ describe("happy path — valid slugs behave exactly as before", () => {
     let rc: number;
     try { rc = await dispatch(quickRun, ["flag", "t", "an observation"]); } finally { out.restore(); }
     expect(rc).toBe(0);
-    const path = out.text().trim();
+    const path = out.text().trim().replace(/^QUEUED=/, "");
     expect(path.startsWith(join(globalRoot(), "forensics"))).toBe(true);
     expect(readFileSync(path, "utf8")).toContain("an observation");
     outsideUntouched(box, canary);

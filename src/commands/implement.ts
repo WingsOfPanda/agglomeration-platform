@@ -1,7 +1,7 @@
 // src/commands/implement.ts — single-repo command path for /ap:implement.
 // Byte-faithful port of the prior bash plugin's deploy verb set; WIRES the Phase-A core modules.
 // Rebrand: _deploy/->_implement/, feat/deploy-->feat/implement-, conductor sender->From: hub.
-import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, statSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, statSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile, kvParse } from "../args.js";
@@ -16,7 +16,7 @@ import {
 import { isoUtc, archiveTopic } from "../core/archive.js";
 import { extractComponentsPaths, extractTestingPaths, lintComponentsPaths, matchDiffAgainstComponents, pathsInvisibleInTarget, testingBulletsWithoutPaths, unresolvedDeclaredPaths } from "../core/implementScope.js";
 import { runnerAt, preSnapshot, createOrResumeBranch, currentBranch, shortstat, finishWork, hasDistinctBranch, targetProblem, type Runner } from "../core/gitwork.js";
-import { runForensics, runFlag, recordHubFlag } from "../core/forensics.js";
+import { runForensics, runFlag, recordHubFlag, runReflect } from "../core/forensics.js";
 import { haveCmd } from "../core/deps.js";
 import { implementState, composeRound1Prompt, composeFixPrompt } from "../core/implementTurn.js";
 import { extractQuestionPayload, parseQuestionPayload } from "../core/questionCodec.js";
@@ -128,6 +128,7 @@ async function dispatchVerb(args: string[]): Promise<number> {
     case "finish":       return finishRun(rest);
     case "forensics":    return forensicsRun(rest);
     case "flag":         return runFlag("implement", rest[0], rest.slice(1).join(" "));
+    case "reflect":      return runReflect("implement", rest[0], rest[1]);
     case "archive":      return archiveRun(rest);
     case "find-latest-doc": if (rest.length) { log.error("implement find-latest-doc: takes no arguments"); return 2; } return findLatestDocRun();
     default:          return usage();
@@ -172,6 +173,7 @@ export async function initWith(tokens: string[], d: ImplementInitDeps): Promise<
   const provider = detectProvider(targetCwd);
 
   mkdirSync(art, { recursive: true });
+  rmSync(join(art, "issue.txt"), { force: true }); // a repeated slug must not inherit the prior run's issue
   atomicWrite(join(art, "design.md"), text);
   atomicWrite(join(art, "topic.txt"), topic);                       // NO trailing newline
   atomicWrite(join(art, "target_cwd.txt"), targetCwd + "\n");

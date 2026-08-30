@@ -1,11 +1,11 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, readFileSync as rfs } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, readdirSync, readFileSync, writeFileSync, readFileSync as rfs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import * as F from "../src/core/forensics.js";
-import { scrapeAuditLog, scrapeOutbox, scrapeStatus, scrapeSpawnResults, scrapeLogs, scrapeArtDir, renderArtForensics, captureArtDir } from "../src/core/forensics.js";
-import { workerDir } from "../src/core/paths.js";
+import { scrapeOutbox, scrapeArtDir, renderArtForensics, captureArtDir } from "../src/core/forensics.js";
+import { workerDir, forensicsQueueDir } from "../src/core/paths.js";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => { while (cleanups.length) cleanups.pop()!(); });
@@ -47,17 +47,12 @@ describe("forensics", () => {
   });
   it("invalid reason → code 2", async () => {
     home(); mkdirSync(workerDir("bravo", "codex", "demo"), { recursive: true });
-    const r = await F.captureFailure({ agent: "bravo", model: "codex", topic: "demo", paneId: "%1", reason: "kaboom" as any }, deps());
+    const r = await F.captureFailure({ agent: "bravo", model: "codex", topic: "demo", paneId: "%1", reason: "kaboom" as never }, deps());
     expect(r).toEqual({ ok: false, code: 2 });
   });
 });
 
 describe("forensics scrapers", () => {
-  it("audit.log → ^ISSUE= lines", () => {
-    expect(scrapeAuditLog("VERDICT=FAIL\nISSUE=no_goal_section\nISSUE=tbd_marker\n"))
-      .toEqual([{ source: "audit_log", key: "ISSUE=no_goal_section", context: "audit.log" },
-                { source: "audit_log", key: "ISSUE=tbd_marker", context: "audit.log" }]);
-  });
   it("outbox → error/question events via JSON.parse, labelled by worker; skips non-JSON + done", () => {
     const ob = '{"event":"done","summary":"ok"}\nnot json\n{"event":"error","reason":"boom"}\n{"event":"question","message":"?"}\n';
     const f = scrapeOutbox(ob, "alpha");
@@ -85,28 +80,17 @@ describe("forensics scrapers", () => {
     const f = scrapeOutbox('{"event":"progress","note":"  flag: lowercase works"}', "golf");
     expect(f).toEqual([{ source: "part_note", key: "lowercase works", context: "worker=golf" }]);
   });
-  it("status.json state=error; spawn-results rc!=0; logs [error]/log_error", () => {
-    expect(scrapeStatus('{"state":"error","updated":"x"}', "charlie")).toEqual([{ source: "status", key: "state=error", context: "worker=charlie" }]);
-    expect(scrapeStatus('{"state":"ready"}', "charlie")).toEqual([]);
-    expect(scrapeSpawnResults("alpha\tcodex\t0\t\ncharlie\tclaude\t1\tspawn-failed\n").map((x) => x.context)).toEqual(["worker=charlie"]);
-    expect(scrapeLogs("all good\n[error] boom\nplain\n", "dispatch.log").length).toBe(1);
-  });
 });
 
 describe("scrapeArtDir + render", () => {
-  it("collects findings across the art dir + sibling worker dirs, deduped", () => {
-    const topicDir = mkdtempSync(join(tmpdir(), "fz-"));
-    const art = join(topicDir, "_design"); mkdirSync(join(art, "design-doc"), { recursive: true });
-    writeFileSync(join(art, "design-doc", "audit.log"), "VERDICT=FAIL\nISSUE=no_goal_section\n");
-    writeFileSync(join(art, "spawn-results.tsv"), "alpha\tcodex\t1\tspawn-failed\n");
-    const worker = join(topicDir, "alpha-codex"); mkdirSync(worker, { recursive: true });
-    writeFileSync(join(worker, "outbox.jsonl"), '{"event":"error","reason":"x"}\n');
-    writeFileSync(join(worker, "status.json"), '{"state":"error"}');
+  it("collects findings from the sibling worker dirs, deduped", () => {
+    const td = mkdtempSync(join(tmpdir(), "fz-"));
+    const art = join(td, "_design"); mkdirSync(art, { recursive: true });
+    const worker = join(td, "alpha-codex"); mkdirSync(worker, { recursive: true });
+    writeFileSync(join(worker, "outbox.jsonl"), '{"event":"error","reason":"x"}\n{"event":"error","reason":"x"}\n');
     const f = scrapeArtDir(art);
-    expect(f.some((x) => x.source === "audit_log")).toBe(true);
-    expect(f.some((x) => x.source === "outbox" && x.context === "worker=alpha-codex")).toBe(true);
-    expect(f.some((x) => x.source === "status")).toBe(true);
-    expect(f.some((x) => x.source === "spawn_results")).toBe(true);
+    expect(f).toHaveLength(1);                                    // the duplicate line collapses
+    expect(f[0]).toMatchObject({ source: "outbox", context: "worker=alpha-codex" });
   });
   it("render emits frontmatter + bullets", () => {
     const md = renderArtForensics({ command: "design", topicSlug: "t", repoHash: "abc", artDir: "/a", invokedAt: "2026-05-29T00:00:00Z" },
@@ -118,34 +102,46 @@ describe("scrapeArtDir + render", () => {
   });
 });
 
+/** Every queue record written under the current AP_HOME. */
+function queued(): string[] {
+  const dir = forensicsQueueDir();
+  return existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => join(dir, f)) : [];
+}
+
 describe("captureArtDir", () => {
-  it("zero findings → '' and no file", () => {
+  /** A topic dir whose one worker recorded an error event. */
+  function seed(): string {
+    const td = join(mkdtempSync(join(tmpdir(), "ft-")), "mytopic");
+    const art = join(td, "_design"); mkdirSync(art, { recursive: true });
+    const w = join(td, "alpha-codex"); mkdirSync(w, { recursive: true });
+    writeFileSync(join(w, "outbox.jsonl"), '{"event":"error","reason":"boom"}\n');
+    return art;
+  }
+
+  it("zero findings → '' and nothing queued", () => {
     home();
     const art = join(mkdtempSync(join(tmpdir(), "fa-")), "clean", "_design"); mkdirSync(art, { recursive: true });
-    expect(captureArtDir({ artDir: art, command: "design", now: new Date("2026-05-29T12:00:00Z") })).toBe("");
+    expect(captureArtDir({ artDir: art, command: "design" })).toBe("");
+    expect(queued()).toHaveLength(0);
   });
-  it("findings → writes under <home>/forensics/<date>/, returns the path", () => {
-    const h = home();
-    const topicDir = join(mkdtempSync(join(tmpdir(), "ft-")), "mytopic"); const art = join(topicDir, "_design");
-    mkdirSync(join(art, "design-doc"), { recursive: true });
-    writeFileSync(join(art, "design-doc", "audit.log"), "ISSUE=no_goal_section\n");
-    const p = captureArtDir({ artDir: art, command: "design", now: new Date("2026-05-29T12:34:56Z") });
-    expect(p).toContain(join(h, "forensics", "2026-05-29"));
-    expect(p).toMatch(/12-34-56-design-mytopic\.md$/);
-    expect(existsSync(p)).toBe(true);
-    expect(rfs(p, "utf8")).toContain("ISSUE=no_goal_section");
-  });
-  it("two captures in the same UTC second do not overwrite (suffix -2)", () => {
+  it("findings → one queue record under <home>/forensics/queue/, returns the QUEUED= line", () => {
     home();
-    const art = join(mkdtempSync(join(tmpdir(), "ft-")), "mytopic", "_design");
-    mkdirSync(join(art, "design-doc"), { recursive: true });
-    writeFileSync(join(art, "design-doc", "audit.log"), "ISSUE=no_goal_section\n");
-    const now = new Date("2026-05-29T12:34:56Z");
-    const p1 = captureArtDir({ artDir: art, command: "design", now });
-    const p2 = captureArtDir({ artDir: art, command: "design", now });
-    expect(p1).not.toBe(p2);
-    expect(existsSync(p1)).toBe(true);
-    expect(existsSync(p2)).toBe(true);
-    expect(p2).toMatch(/12-34-56-design-mytopic-2\.md$/);
+    const art = seed();
+    const line = captureArtDir({ artDir: art, command: "design" });
+    const files = queued();
+    expect(files).toHaveLength(1);
+    expect(line).toBe(`QUEUED=${files[0]}`);
+    const md = rfs(files[0], "utf8");
+    expect(md).toContain("command: design");
+    expect(md).toContain("topic_slug: mytopic");
+    expect(md).toContain("title: [ap:design] ");
+    expect(md).toContain("boom");
+  });
+  it("two captures for one run → two queue records (no name collision)", () => {
+    home();
+    const art = seed();
+    captureArtDir({ artDir: art, command: "design" });
+    captureArtDir({ artDir: art, command: "design" });
+    expect(queued()).toHaveLength(2);
   });
 });
