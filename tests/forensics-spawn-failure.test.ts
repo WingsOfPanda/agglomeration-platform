@@ -3,7 +3,7 @@ import { writeFileSync, mkdirSync, readdirSync, readFileSync, existsSync } from 
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { captureSpawnFailure, NO_EVENT_SENTINEL } from "../src/core/forensics.js";
-import { parseForensicsFrontmatter, parseMechanicalFindings } from "../src/core/review.js";
+import { parseMechanicalFindings } from "../src/core/review.js";
 import { globalRoot, forensicsQueueDir, workerDir } from "../src/core/paths.js";
 
 let env: { home: string; cleanup: () => void };
@@ -26,10 +26,9 @@ describe("captureSpawnFailure", () => {
     expect(files).toHaveLength(1);
     expect(line).toBe(`QUEUED=${files[0]}`);
     const md = readFileSync(files[0], "utf8");
-    const meta = parseForensicsFrontmatter(md);
-    expect(meta.command).toBe("spawn");
-    expect(meta.topic).toBe("plan-x");
-    expect(meta.nFindings).toBe(2);
+    expect(md).toContain("command: spawn");
+    expect(md).toContain("topic: plan-x");
+    expect(md).toContain("n_findings_mechanical: 2");
     expect(md).toContain("title: [ap:spawn] config_error");
     expect(md).toContain(`art_dir: ${workerDir("lima", "codex", "plan-x")}`);
     const findings = parseMechanicalFindings(md);
@@ -42,7 +41,7 @@ describe("captureSpawnFailure", () => {
 
   it("emits a single finding when no failure report is given", () => {
     captureSpawnFailure({ agent: "zulu", model: "claude", topic: "t", reason: "timeout", detail: NO_EVENT_SENTINEL });
-    expect(parseForensicsFrontmatter(readFileSync(queuedRecords()[0], "utf8")).nFindings).toBe(1);
+    expect(readFileSync(queuedRecords()[0], "utf8")).toContain("n_findings_mechanical: 1");
   });
 
   it("is best-effort: returns '' and queues nothing when the queue dir can't be created", () => {

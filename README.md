@@ -357,11 +357,13 @@ for the whole job, or the per-agent form for one worker.
 /ap:review
 ```
 
-Every command records **forensics** at teardown (spawn failures, worker errors and questions,
-`FLAG:` notes, audit issues — plus the hub's own reflection). `review` surveys everything recorded
-since you last looked, clusters recurring patterns with their lifetime trend, suggests one concrete
-action per cluster, then files the reviewed records away so the next run starts clean. Run it
-periodically; it is how the platform's own bugs get found.
+Every command files its **forensics** at teardown (spawn failures, worker errors and questions,
+`FLAG:` notes — plus the hub's own reflection) as an issue on the ap tracker, queued locally while
+you are offline or before this machine has answered the consent question. `review` surveys the open,
+still-**untriaged** `[ap:…]` issues, clusters recurring patterns with their lifetime trend, suggests
+one concrete action per cluster — handed off as `/ap:quick`/`/ap:implement` with `Closes #<n>` —
+then marks what you reviewed `triaged`. Run it periodically; it is how the platform's own bugs get
+found.
 
 ---
 
@@ -453,8 +455,8 @@ There are **two roots**:
 
 ~/.ap/                               # GLOBAL, survives teardown
   archive/<repo-hash>/<topic>/…      # archived workers + run dirs
-  forensics/<date>/…                 # what /ap:review reads
-  forensics/.reviewed/<date>/…       # what it has already filed away
+  forensics/queue/…                  # records waiting to be filed as issues (+ map.txt run -> issue)
+  issues-consent                     # your one-time yes/no for the public tracker
   providers-active.txt               # your /ap:check choice
   autoresearch-memory/               # cross-run lessons
 ```

@@ -112,7 +112,6 @@ export async function initWith(tokens: string[], d: DesignInitDeps): Promise<num
   const rows: ListRow[] = list.map((provider, i) => ({ provider, agent: agents[i] }));
 
   mkdirSync(designDraftDir(topic), { recursive: true }); // creates _design/design-doc/.draft
-  rmSync(join(art, "issue.txt"), { force: true }); // a repeated slug must not inherit the prior run's issue
   atomicWrite(join(art, "topic.txt"), topicText);
   atomicWrite(join(art, "skill.txt"), classifyTopic(topicText));
   // Full list written even on a fast-path run; the ensemble path (Phase C) reads list.txt back.

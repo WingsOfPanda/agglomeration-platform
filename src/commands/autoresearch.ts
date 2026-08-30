@@ -179,7 +179,6 @@ export async function initWith(args: string[], deps: AutoresearchInitDeps): Prom
   if (p.seedFrom && !existsSync(p.seedFrom)) { log.error(`autoresearch init: --seed-from not found: ${p.seedFrom}`); return 1; }
 
   mkdirSync(art, { recursive: true });
-  rmSync(join(art, "issue.txt"), { force: true }); // a repeated slug must not inherit the prior run's issue
   seedLib(art, deps.configRoot());
   atomicWrite(join(art, "topic.txt"), p.topic);
   atomicWrite(join(art, "metric.txt"), extractMetric(p.topic) + "\n");

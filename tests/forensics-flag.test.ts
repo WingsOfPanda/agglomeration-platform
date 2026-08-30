@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { recordHubFlag, runFlag } from "../src/core/forensics.js";
-import { parseForensicsFrontmatter, parseMechanicalFindings } from "../src/core/review.js";
+import { parseMechanicalFindings } from "../src/core/review.js";
 import { forensicsQueueDir } from "../src/core/paths.js";
 
 let env: { home: string; cleanup: () => void };
@@ -22,10 +22,9 @@ describe("recordHubFlag", () => {
     expect(files).toHaveLength(1);
     expect(line).toBe(`QUEUED=${files[0]}`);
     const text = readFileSync(files[0], "utf8");
-    const meta = parseForensicsFrontmatter(text);
-    expect(meta.command).toBe("implement");
-    expect(meta.topic).toBe("auth-x");
-    expect(meta.nFindings).toBe(1);
+    expect(text).toContain("command: implement");
+    expect(text).toContain("topic: auth-x");
+    expect(text).toContain("n_findings_mechanical: 1");
     expect(text).toContain("kind: flag");
     expect(text).toContain("title: [ap:implement] the diff touched an unrelated file");
     expect(parseMechanicalFindings(text)).toEqual([

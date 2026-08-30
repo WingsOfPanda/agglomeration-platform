@@ -1,8 +1,6 @@
 // tests/review-core.test.ts — pure logic for /ap:review.
 import { describe, it, expect } from "vitest";
-import {
-  parseSince, parseForensicsFrontmatter, parseMechanicalFindings,
-} from "../src/core/review.js";
+import { parseSince, parseMechanicalFindings } from "../src/core/review.js";
 
 describe("parseSince", () => {
   it("Nd / Nh to cutoff epoch-ms", () => {
@@ -16,23 +14,8 @@ describe("parseSince", () => {
   });
 });
 
-describe("parseForensicsFrontmatter", () => {
-  const doc =
-    "---\ncommand: implement\ntopic: add-oauth\ntopic_slug: add-oauth\n" +
-    "repo_hash: abc\nart_dir: /x\ninvoked_at: 2026-05-30T00:00:00Z\nn_findings_mechanical: 3\n---\n\n## Mechanical findings\n";
-  it("parses command / topic / n_findings", () => {
-    expect(parseForensicsFrontmatter(doc)).toEqual({ command: "implement", topic: "add-oauth", nFindings: 3 });
-  });
-  it("missing keys -> empty / 0", () => {
-    expect(parseForensicsFrontmatter("no frontmatter here")).toEqual({ command: "", topic: "", nFindings: 0 });
-  });
-  it("non-numeric n_findings_mechanical -> 0 (NaN guard)", () => {
-    expect(parseForensicsFrontmatter("n_findings_mechanical: not-a-number")).toEqual({ command: "", topic: "", nFindings: 0 });
-  });
-});
-
 describe("parseMechanicalFindings", () => {
-  it("parses bullets back into findings (inverse of renderArtForensics)", () => {
+  it("parses bullets back into findings (inverse of renderFindingBullets)", () => {
     const body =
       "## Mechanical findings\n\n" +
       "- **audit_log** ISSUE=todo_marker _(source: audit.log)_\n" +
@@ -102,7 +85,9 @@ describe("isTriaged", () => {
       comments: [triagedComment("2026-08-02T00:00:00Z"), forensicsComment("2026-08-03T00:00:00Z"), triagedComment("2026-08-04T00:00:00Z")],
     }))).toBe(true);
   });
-  it("label with no marker comment has no timestamp to beat -> stays triaged", () => {
+  // Only reachable for a label applied BY HAND in the GitHub UI: `review archive` always leaves the
+  // timestamped marker beside the label, so an ap-triaged issue always has something to beat.
+  it("a hand-applied label with no marker comment has no timestamp to beat -> stays triaged", () => {
     expect(isTriaged(issue({ labels: [{ name: "triaged" }], comments: [forensicsComment("2026-08-05T00:00:00Z")] }))).toBe(true);
   });
 });

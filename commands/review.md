@@ -32,6 +32,10 @@ Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
    marker comment — until a newer forensics comment lands on it, which makes it untriaged again. So
    a pattern that recurs after you triaged it comes back here on its own.
 
+   A survey that FAILS (rc 1 — `gh` missing, unauthenticated, offline: no rows and no `TRENDS`)
+   still prints `QUEUE=`/`CONSENT=needed` on stdout. Answer the consent question per step 2, then
+   retry the survey; never read a failed survey as a healthy one.
+
 2. **Consent — asked once per machine.** If a command prints `CONSENT=needed`, this machine has
    never answered whether ap may file to the public tracker. Call **AskUserQuestion**. Header
    `Issues`; question: "ap files run diagnostics as issues on the public repo
@@ -54,7 +58,7 @@ Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
 
 5. **Cluster.** Group issues whose failure matches — same normalized title, or the same
    `source` + meaningful `key`/`context` token across their findings (e.g. all
-   `audit_log ISSUE=unresolved_placeholder`; all `outbox` timeout events; all
+   `outbox` timeout events; all `part_note` flags on the same claim; all
    `spawn_failure reason=<reason>`). Rank clusters by count, descending.
 
 6. **Annotate with the trend.** Match each cluster to its `TRENDS` row and state the lifetime

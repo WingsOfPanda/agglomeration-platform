@@ -1,7 +1,8 @@
 // tests/review-cmd.test.ts — the /ap:review verbs over a FAKE gh runner. No test may reach live
 // `gh`: every verb takes an injectable runner, and the paths that use the default one (usage
-// errors, flush) are kept off `gh` by the env guard in tests/helpers/setupEnv.ts.
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+// errors, flush, survey, archive) are kept off `gh` by the env guard in tests/helpers/setupEnv.ts,
+// which forensicsRunner enforces on every `gh` argv it is handed.
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
@@ -67,6 +68,18 @@ describe("review survey", () => {
     expect(lines[lines.indexOf("TRENDS") + 1]).toBe(`[ap:quick] spawn rc=<n> at <path>\t2\t0\t${at("01")}\t${at("03")}`);
   });
 
+  it("an issue ap never filed is dropped — the tracker's search tokenizes `[ap:` away", async () => {
+    const { runner } = lister([
+      ...corpus,
+      issue({ number: 8, title: "turn-wait should be a persistent Monitor — ap's own rationale", createdAt: at("01") }),
+      issue({ number: 9, title: "turn-wait should be a persistent Monitor — ap's own rationale", createdAt: at("02") }),
+    ]);
+    expect(await surveyWith({ runner })).toBe(0);
+    const t = out.text();
+    expect(t).not.toContain("turn-wait");                   // neither a row nor a TRENDS cluster
+    expect(t).toContain("1\t[ap:quick] spawn rc=124 at /a/b");
+  });
+
   it("issues the one spec'd `gh issue list` argv", async () => {
     const { runner, calls } = lister([]);
     await surveyWith({ runner });
@@ -107,9 +120,20 @@ describe("review survey", () => {
     expect(await run(["survey", "--all"])).toBe(2);
   });
 
-  it("a failing gh issue list is rc 1, not a crash", async () => {
+  it("a failing gh issue list is rc 1, not a crash — and still prints QUEUE=/CONSENT=needed", async () => {
+    seedQueue(h.home);
     const { runner } = fake(() => ({ code: 1, stderr: "gh: not authenticated" }));
     expect(await surveyWith({ runner })).toBe(1);
+    // The box whose gh is broken is the box that never answered; losing the question here would
+    // leave the queue unanswerable.
+    expect(out.text()).toContain("QUEUE=1");
+    expect(out.text()).toContain("CONSENT=needed");
+  });
+
+  it("unparseable gh JSON is rc 1 and still prints the consent state", async () => {
+    const { runner } = fake((_c, a) => (a[1] === "list" ? { stdout: "not json" } : {}));
+    expect(await surveyWith({ runner })).toBe(1);
+    expect(out.text()).toContain("CONSENT=needed");
   });
 
   it("reports QUEUE=<remaining> for records the bounded flush could not drain", async () => {
@@ -137,14 +161,35 @@ describe("review archive", () => {
   beforeEach(() => { h = freshHome(); });
   afterEach(() => h.cleanup());
 
-  it("creates the label once, then labels each issue", async () => {
+  it("creates the label once, then labels AND timestamps each issue", async () => {
     const { runner, calls } = fake();
-    expect(await archiveWith(["7", "9"], { runner })).toBe(0);
+    const body = "<!-- ap-triaged at=2026-08-30T12:00:00Z -->\ntriaged by /ap:review";
+    expect(await archiveWith(["7", "9"], { runner, now: new Date("2026-08-30T12:00:00Z") })).toBe(0);
+    // The marker comment is posted even when the label lands: the label carries no timestamp, so
+    // without it a recurrence on a triaged issue could never re-open it.
     expect(calls).toEqual([
       ["gh", "label", "create", "triaged", "--repo", AP_ISSUES_REPO, "--description", "triaged by /ap:review"],
       ["gh", "issue", "edit", "7", "--repo", AP_ISSUES_REPO, "--add-label", "triaged"],
+      ["gh", "issue", "comment", "7", "--repo", AP_ISSUES_REPO, "--body", body],
       ["gh", "issue", "edit", "9", "--repo", AP_ISSUES_REPO, "--add-label", "triaged"],
+      ["gh", "issue", "comment", "9", "--repo", AP_ISSUES_REPO, "--body", body],
     ]);
+  });
+
+  it("the marker it leaves is what re-opens the issue on the next recurrence", async () => {
+    const { runner, calls } = fake();
+    await archiveWith(["7"], { runner, now: new Date(at("04")) });
+    const marker = calls.find((c) => c[2] === "comment")![7];
+    const triaged = issue({ number: 7, title: "[ap:quick] boom", createdAt: at("01"),
+      labels: [{ name: "triaged" }], comments: [{ body: marker, createdAt: at("04") }] });
+    const out2 = captureStdout();
+    try {
+      await surveyWith({ runner: lister([triaged]).runner });                       // nothing newer
+      expect(out2.text()).not.toContain("7\t[ap:quick] boom");
+      const recurred = { ...triaged, comments: [...triaged.comments!, apc(at("05"))] };
+      await surveyWith({ runner: lister([recurred]).runner });                      // a recurrence
+      expect(out2.text()).toContain("7\t[ap:quick] boom");
+    } finally { out2.restore(); }
   });
 
   it("falls back to the marker comment when this account cannot label", async () => {
@@ -213,5 +258,18 @@ describe("review flush / consent", () => {
 
   it("an unknown verb is a usage error", async () => {
     expect(await run(["nope"])).toBe(2);
+  });
+
+  it("the env guard keeps the DEFAULT runner's survey/archive off the live tracker", async () => {
+    expect(process.env.AP_FORENSICS_BACKEND).toBe("queue");
+    const err: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(((x: unknown) => { err.push(String(x)); return true; }) as never);
+    try {
+      expect(await run(["survey"])).toBe(1);                 // gh refused -> rc 1, nothing listed
+      expect(await run(["archive", "7"])).toBe(1);           // neither the label nor the marker
+    } finally { spy.mockRestore(); }
+    // Not just a non-zero rc — the refusal came from the guard, so no `gh` process ever existed.
+    expect(err.join("")).toContain("refusing to spawn gh");
+    expect(out.text()).toContain("CONSENT=needed");          // …and the state still prints
   });
 });

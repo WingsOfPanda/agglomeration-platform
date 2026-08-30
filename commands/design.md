@@ -370,7 +370,8 @@ Allow → `$CS review consent yes`, then `$CS review flush`. Never → `$CS revi
 Not now → nothing (the record stays queued; you are asked again next run). Mid-run flags never
 ask, and a detached run never asks — it queues.
 
-Then **reflect**, whenever a run record exists (`ISSUE=` or `QUEUED=`): Write 3-5 interpretive
+Then **reflect**, whenever this run has a record — after `ISSUE=`, after `QUEUED=`, and after the
+Allow → `$CS review flush` branch (that flush files the run and writes its record): Write 3-5 interpretive
 bullets to a temp file and run `$CS design reflect <TOPIC> @<file>`. Write for a teammate who will
 debug this from the issue alone: what the findings mean, what the hub did, what you would try first.
 It posts them as the run issue's reflection comment. Once per run — a second `reflect` is refused

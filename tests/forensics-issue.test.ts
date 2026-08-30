@@ -8,9 +8,9 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import {
-  AP_ISSUES_REPO, fileFinding, flushQueue, queueRecord, runIdentity, issueTitle, scrubSecrets,
-  readConsent, writeConsent, readIssueTxt, recordHubFlag, captureSpawnFailure, runReflect,
-  commandArtDir, type ForensicsRunner, type RunIdentity, type FlushResult,
+  AP_ISSUES_REPO, CALL_TIMEOUT_MS, fileFinding, flushQueue, queueRecord, runIdentity, issueTitle,
+  scrubSecrets, readConsent, writeConsent, readIssueTxt, recordHubFlag, captureSpawnFailure,
+  runReflect, commandArtDir, type ForensicsRunner, type RunIdentity, type FlushResult,
 } from "../src/core/forensics.js";
 import { forensicsQueueDir, topicDir, workerDir } from "../src/core/paths.js";
 
@@ -53,6 +53,8 @@ function queued(): string[] {
   const dir = forensicsQueueDir();
   return existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".md")).sort() : [];
 }
+/** Burn real wall clock synchronously — the flush budget is measured against Date.now(). */
+const burn = (ms: number): void => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
 const IDENTITY: RunIdentity = {
   version: "0.0.0", host: "box", user: "u", platform: "linux", node: "v22", providers: "", repo: "r",
 };
@@ -136,6 +138,20 @@ describe("fileFinding: the gh boundary", () => {
     expect(queued()).toHaveLength(1);
   });
 
+  it("the lock loser COMMENTS on the issue the winner just opened", () => {
+    allowFiling(); const art = seedArt();
+    writeFileSync(join(art, "issue.lock"), "");                        // another filer holds it
+    const f = fake();
+    const racing: ForensicsRunner = {                                  // the winner finishes mid-call
+      run: (c, a) => { if (c === "git") writeFileSync(join(art, "issue.txt"), "run_id=r1\nnumber=7\nurl=u\n"); return f.r.run(c, a); },
+    };
+    const res = fileFinding("flag", RUN(), "[ap:quick] boom", "body\n", racing);
+    expect(res).toMatchObject({ status: "filed", number: "7" });
+    expect(f.gh()).toHaveLength(1);
+    expect(f.gh()[0].slice(2, 4)).toEqual(["comment", "7"]);           // no second create
+    expect(queued()).toHaveLength(0);
+  });
+
   it("two filings in the same millisecond produce two queue records", () => {
     seedArt();
     const now = "2026-08-30T10:00:00.000Z";
@@ -166,7 +182,7 @@ describe("fileFinding: the gh boundary", () => {
     expect(existsSync(join(wd, "findings.log"))).toBe(true);
   });
 
-  it("the same slug run twice opens two issues (init resets issue.txt)", () => {
+  it("fileFinding opens a second issue once issue.txt is gone", () => {
     allowFiling(); const art = seedArt();
     const f = fake();
     fileFinding("flag", RUN(), "[ap:quick] one", "a\n", f.r);
@@ -183,6 +199,34 @@ describe("fileFinding: the gh boundary", () => {
     expect(f.gh().filter((c) => c[2] === "create")).toHaveLength(2);
     expect(existsSync(join(commandArtDir("design", "auth"), "issue.txt"))).toBe(true);
     expect(existsSync(join(commandArtDir("implement", "auth"), "issue.txt"))).toBe(true);
+  });
+
+  it("a queued run writes issue.txt at FIRST contact, so every later filing shares its run_id", () => {
+    delete process.env.AP_FORENSICS_BACKEND;                           // consent absent -> queue
+    const art = seedArt();
+    const f = fake();
+    vi.useFakeTimers(); vi.setSystemTime(new Date("2026-08-30T10:00:00.000Z"));
+    try {
+      expect(fileFinding("flag", RUN(), "[ap:quick] one", "a\n", f.r).status).toBe("consent");
+      const rec = readIssueTxt(art);
+      expect(rec).toMatchObject({ run_id: expect.any(String) });
+      expect(rec?.number).toBeUndefined();
+      vi.setSystemTime(new Date("2026-08-30T10:00:01.000Z"));          // a DIFFERENT second
+      expect(fileFinding("findings", RUN(), "[ap:quick] two", "b\n", f.r).status).toBe("consent");
+    } finally { vi.useRealTimers(); }
+    expect(f.calls).toHaveLength(0);
+    const recs = queued().map((n) => readFileSync(join(forensicsQueueDir(), n), "utf8"));
+    expect(recs).toHaveLength(2);
+    const runIds = recs.map((t) => /^run_id: (.*)$/m.exec(t)![1]);
+    expect(runIds[0]).toBe(runIds[1]);                                 // ONE run, not two
+    expect(recs.filter((t) => /^title: /m.test(t))).toHaveLength(1);   // exactly one create
+    // and the flush replays them as one issue even after the art dir is gone
+    writeConsent("yes");
+    rmSync(art, { recursive: true, force: true });
+    const g = fake();
+    expect(flushQueue(g.r)).toMatchObject({ filed: 2, remaining: 0 });
+    expect(g.gh().filter((c) => c[2] === "create")).toHaveLength(1);
+    expect(g.gh().filter((c) => c[2] === "comment")).toHaveLength(1);
   });
 
   it("two runs whose run_ids collide in one second stay separate through the queue", () => {
@@ -208,7 +252,7 @@ describe("consent", () => {
     expect(res.status).toBe("consent");
     expect(res.line).toBe("CONSENT=needed");
     expect(queued()).toHaveLength(1);
-    expect(f.gh()).toHaveLength(0);
+    expect(f.calls).toHaveLength(0);                                   // not even runIdentity's git
   });
 
   it("'no' queues permanently — flush files nothing either", () => {
@@ -218,7 +262,7 @@ describe("consent", () => {
     const f = fake();
     expect(fileFinding("flag", RUN(), "[ap:quick] boom", "body\n", f.r).status).toBe("queued");
     expect(flushQueue(f.r)).toEqual({ filed: 0, remaining: 1, failed: 0 } satisfies FlushResult);
-    expect(f.gh()).toHaveLength(0);
+    expect(f.calls).toHaveLength(0);                                   // not even runIdentity's git
   });
 
   it("'yes' files; the env guard still WINS over it (fail-closed)", () => {
@@ -226,9 +270,13 @@ describe("consent", () => {
     const f = fake();
     process.env.AP_FORENSICS_BACKEND = "queue";
     expect(fileFinding("flag", RUN(), "[ap:quick] boom", "b\n", f.r).status).toBe("queued");
-    expect(f.gh()).toHaveLength(0);
+    expect(f.calls).toHaveLength(0);                                   // not even runIdentity's git
     delete process.env.AP_FORENSICS_BACKEND;
-    expect(fileFinding("flag", RUN(), "[ap:quick] boom", "b\n", f.r).status).toBe("filed");
+    // the first record is still queued, so this one queues BEHIND it (spec A, create-or-comment #3)
+    expect(fileFinding("flag", RUN(), "[ap:quick] boom", "b\n", f.r).status).toBe("queued");
+    expect(flushQueue(f.r)).toMatchObject({ filed: 2, remaining: 0 });
+    expect(f.gh().filter((c) => c[2] === "create" || c[2] === "comment").map((c) => c[2]))
+      .toEqual(["create", "comment"]);
   });
 });
 
@@ -284,6 +332,46 @@ describe("flushQueue", () => {
     expect(f.gh().filter((c) => c[2] === "create")).toHaveLength(0);
   });
 
+  it("a comment for a run whose art dir is GONE lands on the issue map.txt remembers", () => {
+    allowFiling(); const art = seedArt();
+    queueRecord({ kind: "findings", runId: "r1", command: "quick", topic: "auth", artDir: art,
+      nFindings: 1, body: "late\n", identity: IDENTITY, now: "2026-08-30T10:00:00.000Z" });
+    writeFileSync(join(forensicsQueueDir(), "map.txt"), "r1\t7\n");
+    rmSync(art, { recursive: true, force: true });                     // archived / torn down
+    const f = fake();
+    expect(flushQueue(f.r)).toMatchObject({ filed: 1, remaining: 0 });
+    expect(f.gh()[0].slice(2, 4)).toEqual(["comment", "7"]);
+  });
+
+  it("the budget is checked before EVERY gh call, not once per record", () => {
+    allowFiling(); const art = seedArt();
+    queueRecord({ kind: "flag", runId: "r1", command: "quick", topic: "auth", artDir: art, nFindings: 1,
+      title: "[ap:quick] slow", body: "x\n", identity: IDENTITY, now: "2026-08-30T10:00:00.000Z" });
+    const f = fake();
+    const slow: ForensicsRunner = { run: (c, a) => { burn(600); return f.r.run(c, a); } };
+    // Budget = one call plus a little: the dedup lookup fits, the create that would follow does not.
+    expect(flushQueue(slow, { maxMs: CALL_TIMEOUT_MS + 500 })).toEqual({ filed: 0, remaining: 1, failed: 0 } satisfies FlushResult);
+    expect(f.gh()).toHaveLength(1);
+    expect(f.gh()[0][2]).toBe("list");
+  });
+
+  it("a run whose create can never land ages its orphaned comments out too", () => {
+    allowFiling(); const art = seedArt();
+    const err = vi.spyOn(process.stderr, "write").mockImplementation((() => true) as never);
+    try {
+      fileFinding("flag", RUN(), "[ap:quick] one", "a\n", fake().r);   // opens #7, drains
+      const g = fake({ comment: { code: 1, stdout: "" } });
+      expect(fileFinding("findings", RUN(), "[ap:quick] two", "b\n", g.r).status).toBe("queued");
+      rmSync(join(art, "issue.txt"), { force: true });                 // its run record is gone
+      expect(queued()).toHaveLength(1);
+      const h2 = fake();
+      flushQueue(h2.r); flushQueue(h2.r);
+      expect(flushQueue(h2.r)).toMatchObject({ filed: 0, failed: 1, remaining: 0 });
+      expect(h2.gh()).toHaveLength(0);                                 // never worth a gh call
+      expect(readdirSync(forensicsQueueDir()).some((n) => n.endsWith(".failed"))).toBe(true);
+    } finally { err.mockRestore(); }
+  });
+
   it("a successful filing drains what the offline stretch left behind", () => {
     allowFiling(); const art = seedArt();
     queueRecord({ kind: "flag", runId: "old", command: "quick", topic: "other", artDir: join(topicDir("other"), "_quick"),
@@ -318,6 +406,19 @@ describe("scrubSecrets", () => {
     const s = "/home/u/repo/src/core/forensics.ts on box-7 for topic add-oauth";
     expect(scrubSecrets(s)).toBe(s);
   });
+  it("a credential in the TOPIC text never reaches the posted body", () => {
+    allowFiling(); const art = seedArt();
+    writeFileSync(join(art, "topic-text.txt"), "rotate password=hunter2 with ghp_" + "z".repeat(36) + "\nEXTRA row injected\n");
+    const f = fake();
+    fileFinding("flag", RUN(), "[ap:quick] t", "clean\n", f.r);
+    const create = f.gh().find((c) => c[2] === "create")!;
+    const body = create[create.indexOf("--body") + 1];
+    expect(body).not.toContain("ghp_");
+    expect(body).not.toContain("hunter2");
+    expect(body).toContain("| topic | rotate password=<redacted>");
+    expect(body.split("\n").filter((l) => l.startsWith("| topic |"))).toHaveLength(1);  // no injected row
+  });
+
   it("a credential in the finding text never reaches the posted body or title", () => {
     allowFiling(); seedArt();
     const f = fake();
@@ -392,6 +493,26 @@ describe("reflect", () => {
     expect(readIssueTxt(art)).toMatchObject({ reflected: true });
     expect(queued().some((n) => n.includes("-reflection-"))).toBe(true);
     expect(runReflect("quick", "auth", "@" + reflectionFile("again"))).toBe(1);
+  });
+
+  it("a QUEUED run still queues its reflection, and the flush posts it on the run's issue", () => {
+    delete process.env.AP_FORENSICS_BACKEND;                           // consent absent -> queue
+    const art = seedArt();
+    const f = fake();
+    expect(fileFinding("flag", RUN(), "[ap:quick] boom", "body\n", f.r).status).toBe("consent");
+    const runId = readIssueTxt(art)!.run_id;
+    expect(runReflect("quick", "auth", "@" + reflectionFile("what I would try first"))).toBe(0);
+    const refl = queued().filter((n) => n.includes("-reflection-"));
+    expect(refl).toHaveLength(1);
+    expect(readFileSync(join(forensicsQueueDir(), refl[0]), "utf8")).toContain(`run_id: ${runId}`);
+    expect(readIssueTxt(art)).toMatchObject({ reflected: true });
+    writeConsent("yes");
+    const g = fake();
+    expect(flushQueue(g.r)).toMatchObject({ filed: 2, remaining: 0 });
+    expect(g.gh().filter((c) => c[2] === "create")).toHaveLength(1);
+    const comment = g.gh().find((c) => c[2] === "comment")!;
+    expect(comment[comment.indexOf("--body") + 1]).toContain("kind=reflection");
+    expect(readIssueTxt(art)).toMatchObject({ number: "7", reflected: true });  // the flush kept it
   });
 
   it("a fresh run on the same slug reflects again (the reflected flag is per run)", () => {

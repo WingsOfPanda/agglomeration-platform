@@ -125,7 +125,6 @@ export async function initWith(tokens: string[], d: ExploreInitDeps): Promise<nu
   const rows: ListRow[] = list.map((provider, i) => ({ provider, agent: agents[i] }));
 
   mkdirSync(art, { recursive: true });
-  rmSync(join(art, "issue.txt"), { force: true }); // a repeated slug must not inherit the prior run's issue
   atomicWrite(join(art, "topic.txt"), topicText);
   atomicWrite(join(art, "list.txt"), formatListFile(rows, isoUtc()));
 

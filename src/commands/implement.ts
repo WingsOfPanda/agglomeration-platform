@@ -1,7 +1,7 @@
 // src/commands/implement.ts — single-repo command path for /ap:implement.
 // Byte-faithful port of the prior bash plugin's deploy verb set; WIRES the Phase-A core modules.
 // Rebrand: _deploy/->_implement/, feat/deploy-->feat/implement-, conductor sender->From: hub.
-import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, statSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, statSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile, kvParse } from "../args.js";
@@ -173,7 +173,6 @@ export async function initWith(tokens: string[], d: ImplementInitDeps): Promise<
   const provider = detectProvider(targetCwd);
 
   mkdirSync(art, { recursive: true });
-  rmSync(join(art, "issue.txt"), { force: true }); // a repeated slug must not inherit the prior run's issue
   atomicWrite(join(art, "design.md"), text);
   atomicWrite(join(art, "topic.txt"), topic);                       // NO trailing newline
   atomicWrite(join(art, "target_cwd.txt"), targetCwd + "\n");
@@ -578,8 +577,8 @@ export async function finishWith(topic: string, action: "merge" | "pr" | "keep" 
   if (!existsSync(art)) { log.error(`implement finish: art-dir missing: ${art}`); return 1; }
   // The mechanical half of a detached run's "never merge, never push, never open a PR". The
   // directive says it in prose; this refuses it in code, before the results file is truncated, so a
-  // mis-instructed job hub cannot publish work no operator has seen. Recorded to the review feed as
-  // well as stderr: a hub that got here at all is a defect /ap:review must see.
+  // mis-instructed job hub cannot publish work no operator has seen. Filed as a flag on the run's
+  // issue as well as stderr: a hub that got here at all is a defect /ap:review must see.
   // `keep` is the ONLY ending a detached run has while its record exists — the recorded-action
   // indirection left with the `--finish pr` opt-in (removed 2026-08-18), so the gate is a literal
   // again: the operator finishes the branch themselves.

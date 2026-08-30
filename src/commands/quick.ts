@@ -99,7 +99,6 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
 
   const exec = quickExecDir(slug);
   mkdirSync(exec, { recursive: true });
-  rmSync(join(art, "issue.txt"), { force: true }); // a repeated slug must not inherit the prior run's issue
   atomicWrite(join(art, "topic.txt"), slug + "\n");
   atomicWrite(join(art, "topic-text.txt"), topicText);
   atomicWrite(join(art, "selected-provider.txt"), provider + "\n");

@@ -1,20 +1,8 @@
 // src/core/review.ts — pure logic for /ap:review (triage over the run issues).
 // The review half of the forensics system; the capture half lives in core/forensics.ts.
-// parseMechanicalFindings is the exact inverse of forensics.renderArtForensics's
+// parseMechanicalFindings is the exact inverse of forensics.renderFindingBullets's
 // `- **<source>** <key> _(source: <context>)_` bullet.
 import type { Finding } from "./forensics.js";
-
-export interface ForensicsMetaParsed { command: string; topic: string; nFindings: number; }
-
-/** Parse a captured forensics file's YAML frontmatter. Missing keys -> "" / 0. */
-export function parseForensicsFrontmatter(text: string): ForensicsMetaParsed {
-  const field = (k: string): string => {
-    const m = text.match(new RegExp(`^${k}:[ \\t]*(.*)$`, "m"));
-    return m ? m[1].trim() : "";
-  };
-  const n = Number(field("n_findings_mechanical"));
-  return { command: field("command"), topic: field("topic"), nFindings: Number.isFinite(n) ? n : 0 };
-}
 
 const BULLET = /^- \*\*(.+?)\*\* (.*?) _\(source: (.*)\)_$/;
 /** Parse the `## Mechanical findings` bullets back into Finding[]. Malformed lines are skipped. */

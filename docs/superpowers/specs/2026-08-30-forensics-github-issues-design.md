@@ -51,12 +51,12 @@ verbs' and the directive's alike. `gh` otherwise infers the repo from the *calle
 run into their project's tracker. With `--repo`, filing also works when cwd is not a git repo.
 
 **Run record** = `<artDir>/issue.txt` (the command's own `_<suite>` art dir — `_quick`, `_design`,
-`_implement`, `_explore`, `_autoresearch`, `_bridge`), **reset by that command's init/start verb**
-(`rmSync(join(artDir, "issue.txt"), { force: true })`, one line per init path). Not the topic dir:
-it is shared by every command on that slug and is never archived or removed (`archiveTopic` moves
-only `_<suite>`, `src/core/archive.ts:61-75`), so design→implement on one slug would inherit the
-design run's issue and `reflected=1`; and `_quick`/`_bridge` art dirs are never archived, so a
-repeated slug re-enters the same dir — hence the explicit reset.
+`_implement`, `_explore`, `_autoresearch`, `_bridge`), written at FIRST contact with `run_id` only
+and gaining `number`/`url` when a create lands. Not the topic dir: it is shared by every command on
+that slug and is never archived or removed (`archiveTopic` moves only `_<suite>`,
+`src/core/archive.ts:61-75`), so design→implement on one slug would inherit the design run's issue
+and `reflected=1`. No init resets it: every init refuses a slug whose art dir already exists
+(`topic already in flight`, rc 2), so a repeated slug never re-enters a live record.
 ```
 run_id=<repo_hash[:8]>-<topic_slug>-<YYYYMMDDTHHMMSSZ of first filing>
 number=<issue number>        (absent while queued)
@@ -303,7 +303,8 @@ GitHub issues after a one-time per-machine consent, and how to decline (`ap revi
 ## Testing
 
 Pure unit tests as enumerated; the `gh` boundary is the fake runner's recorded argv, the file
-boundary is a fresh `AP_HOME`, and the env guard makes live `gh` unreachable from any test or
+boundary is a fresh `AP_HOME`, and the env guard — enforced inside `forensicsRunner` itself, so it
+covers `review survey`/`archive` as well as filing — makes live `gh` unreachable from any test or
 child process. Live: the first ≥0.5.62 `/ap:quick` on this box (one deliberate `flag`) must ask
 for consent once, then show one issue with the identity block, the flag/findings/reflection
 comments, `issue.txt` under `_quick`; `/ap:review` lists it, `archive` labels it; a second run on
@@ -324,8 +325,8 @@ the same slug opens a second issue; then the same on xjp.
 - Credential patterns in §D never reach GitHub (table-tested); origin posts without userinfo.
 - No code path writes `~/.ap/forensics/<date>/`, `.reviewed/` or `.trends.json`; `forensics_flags`
   in the autoresearch corpus keeps counting.
-- No test can spawn live `gh` (env guard set in setup; asserted by a test that unsets consent and
-  checks the runner was never invoked).
+- No test can spawn live `gh` (env guard set in setup and enforced at the `gh` boundary itself;
+  asserted by a test that unsets consent and checks the runner was never invoked).
 
 ## Non-goals (settled — do not re-propose)
 

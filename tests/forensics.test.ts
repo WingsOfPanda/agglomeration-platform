@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import * as F from "../src/core/forensics.js";
-import { scrapeOutbox, scrapeArtDir, renderArtForensics, captureArtDir } from "../src/core/forensics.js";
+import { scrapeOutbox, scrapeArtDir, captureArtDir } from "../src/core/forensics.js";
 import { workerDir, forensicsQueueDir } from "../src/core/paths.js";
 
 const cleanups: Array<() => void> = [];
@@ -82,7 +82,7 @@ describe("forensics scrapers", () => {
   });
 });
 
-describe("scrapeArtDir + render", () => {
+describe("scrapeArtDir", () => {
   it("collects findings from the sibling worker dirs, deduped", () => {
     const td = mkdtempSync(join(tmpdir(), "fz-"));
     const art = join(td, "_design"); mkdirSync(art, { recursive: true });
@@ -91,14 +91,6 @@ describe("scrapeArtDir + render", () => {
     const f = scrapeArtDir(art);
     expect(f).toHaveLength(1);                                    // the duplicate line collapses
     expect(f[0]).toMatchObject({ source: "outbox", context: "worker=alpha-codex" });
-  });
-  it("render emits frontmatter + bullets", () => {
-    const md = renderArtForensics({ command: "design", topicSlug: "t", repoHash: "abc", artDir: "/a", invokedAt: "2026-05-29T00:00:00Z" },
-      [{ source: "audit_log", key: "ISSUE=no_goal_section", context: "audit.log" }]);
-    expect(md).toContain("command: design");
-    expect(md).toContain("n_findings_mechanical: 1");
-    expect(md).toContain("## Mechanical findings");
-    expect(md).toContain("- **audit_log** ISSUE=no_goal_section _(source: audit.log)_");
   });
 });
 

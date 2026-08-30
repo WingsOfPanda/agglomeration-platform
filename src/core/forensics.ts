@@ -112,22 +112,10 @@ export function scrapeArtDir(artDir: string): Finding[] {
   return out.filter((f) => { const k = `${f.source}|${f.key}|${f.context}`; if (seen.has(k)) return false; seen.add(k); return true; });
 }
 
-export interface ForensicsMeta { command: string; topicSlug: string; repoHash: string; artDir: string; invokedAt: string; }
-
 /** The `- **<source>** <key> _(source: <context>)_` bullet block — review.parseMechanicalFindings is
  *  its exact inverse, and the posted issue body carries it verbatim. */
 export function renderFindingBullets(findings: Finding[]): string {
   return findings.map((f) => `- **${f.source}** ${f.key} _(source: ${f.context})_`).join("\n") + "\n";
-}
-
-/** YAML frontmatter + `## Mechanical findings` bullets. */
-export function renderArtForensics(meta: ForensicsMeta, findings: Finding[]): string {
-  const fm = [
-    "---", `command: ${meta.command}`, `topic: ${meta.topicSlug}`, `topic_slug: ${meta.topicSlug}`,
-    `repo_hash: ${meta.repoHash}`, `art_dir: ${meta.artDir}`, `invoked_at: ${meta.invokedAt}`,
-    `n_findings_mechanical: ${findings.length}`, "---", "",
-  ].join("\n");
-  return fm + "## Mechanical findings\n\n" + renderFindingBullets(findings);
 }
 
 // ---------------------------------------------------------------------------
@@ -137,14 +125,23 @@ export function renderArtForensics(meta: ForensicsMeta, findings: Finding[]): st
 export interface ForensicsRunResult { code: number; stdout: string; stderr: string }
 export interface ForensicsRunner { run(cmd: string, args: string[]): ForensicsRunResult }
 
+/** The per-call ceiling every real forensics subprocess runs under; flushQueue budgets against it. */
+export const CALL_TIMEOUT_MS = 15_000;
+
 /** Forensics' OWN runner: time-boxed (a hung `gh` must never hold a run open) and cwd-free (every
  *  call carries `--repo`). A timeout surfaces as `{ code: 1 }` — execFileSync's ETIMEDOUT error has
  *  no `status`. Never the cwd-bound gitwork Runner: that one has no timeout slot. */
 export function forensicsRunner(): ForensicsRunner {
   return {
     run(cmd, args) {
+      // The env guard is fail-closed at the ONE boundary that can reach the live tracker, so every
+      // caller (fileFinding, flushQueue, review survey/archive) is covered, now and later. `git`
+      // still runs: runIdentity needs it, and it touches nothing remote.
+      if (cmd === "gh" && process.env.AP_FORENSICS_BACKEND === "queue") {
+        return { code: 1, stdout: "", stderr: "AP_FORENSICS_BACKEND=queue: refusing to spawn gh" };
+      }
       try {
-        const stdout = execFileSync(cmd, args, { encoding: "utf8", timeout: 15_000, killSignal: "SIGKILL", stdio: ["ignore", "pipe", "pipe"] });
+        const stdout = execFileSync(cmd, args, { encoding: "utf8", timeout: CALL_TIMEOUT_MS, killSignal: "SIGKILL", stdio: ["ignore", "pipe", "pipe"] });
         return { code: 0, stdout, stderr: "" };
       } catch (e: unknown) {
         const err = e as { status?: number; stdout?: Buffer | string; stderr?: Buffer | string };
@@ -157,6 +154,10 @@ export function forensicsRunner(): ForensicsRunner {
     },
   };
 }
+
+/** The runner handed to identity collection when the gate says "do not file": every call fails, so
+ *  nothing is spawned and the callers take their own no-subprocess fallbacks. */
+const NO_RUN: ForensicsRunner = { run: () => ({ code: 1, stdout: "", stderr: "" }) };
 
 // ---------------------------------------------------------------------------
 // Consent (ask once per box) + the env guard
@@ -265,9 +266,13 @@ export function renderIssueBody(o: {
     ["providers", o.identity.providers], ["repo", o.identity.repo],
     ["art dir", o.artDir], ["filed at", o.filedAt],
   ];
+  // Every row value is scrubbed HERE, not at its source: `topic` is operator-typed prose (the most
+  // likely place for a pasted credential) and the whitespace collapse keeps a newline in it from
+  // injecting extra table rows. `body` arrives already scrubbed; re-scrubbing is idempotent.
+  const cell = (v: string): string => scrubSecrets(v).replace(/\s+/g, " ").trim();
   return `<!-- ap-forensics run=${o.runId} cmd=${o.command} v=${o.identity.version} kind=${o.kind} -->\n` +
     "### Run\n| | |\n|---|---|\n" +
-    rows.map(([k, v]) => `| ${k} | ${v} |`).join("\n") + "\n\n" +
+    rows.map(([k, v]) => `| ${k} | ${cell(v)} |`).join("\n") + "\n\n" +
     `### ${o.section}\n${o.body}`;
 }
 
@@ -418,10 +423,18 @@ export function fileFinding(
     traceLine(run.artDir, kind, now);
     const existing = readIssueTxt(run.artDir);
     const runId = existing?.run_id ?? `${safeRepoHash().slice(0, 8)}-${run.topic}-${stamp(now).replace(/\.\d+Z$/, "Z")}`;
-    const identity = runIdentity(run, r);
+    // The run record exists from FIRST contact, `number` absent until a create lands (spec §A). That
+    // is what keeps run_id stable across an offline run, makes the "an earlier filing is still
+    // queued" branch below reachable, and lets recordHubReflection queue rather than drop. Written
+    // HERE, one statement after the read, so a concurrent filer's `number` is never clobbered.
+    if (!existing) writeIssueTxt(run.artDir, { run_id: runId });
+    // The gate decides BEFORE anything shells out: `no`/`queue`/unanswered must never spawn a
+    // subprocess, and runIdentity's `git remote get-url` is one. It falls back to the repo hash.
+    const g = gate();
+    const identity = runIdentity(run, g === "file" ? r : NO_RUN);
     const scrubbedTitle = scrubSecrets(title);
     const scrubbedBody = scrubSecrets(body);
-    const isCreate = !existing?.number;
+    const isCreate = !existing;
     const nFindings = (scrubbedBody.match(/^- \*\*/gm) ?? []).length;
     const doc = isCreate
       ? renderIssueBody({
@@ -435,7 +448,6 @@ export function fileFinding(
       nFindings, title: isCreate ? scrubbedTitle : undefined, body: doc, identity, now,
     });
 
-    const g = gate();
     if (g !== "file") return { status: g === "queue" ? "queued" : "consent", line: g === "queue" ? `QUEUED=${qpath}` : "CONSENT=needed", path: qpath };
 
     // An earlier filing for this run is still queued: this one must land AFTER it.
@@ -554,6 +566,10 @@ export function flushQueue(r: ForensicsRunner = forensicsRunner(), opts: { maxMs
     if (list) list.push(rec); else byRun.set(key, [rec]);
   }
   const deadline = Date.now() + (opts.maxMs ?? 30_000);
+  // Checked before EVERY gh call, not once per record: a call started with less than its own
+  // timeout left is what turned a 30 s bound into a 60 s one. Each call is capped at
+  // CALL_TIMEOUT_MS, so refusing to start one inside that window keeps the drain inside maxMs.
+  const outOfTime = (): boolean => Date.now() + CALL_TIMEOUT_MS > deadline;
   let filed = 0, failed = 0;
 
   for (const list of byRun.values()) {
@@ -564,17 +580,22 @@ export function flushQueue(r: ForensicsRunner = forensicsRunner(), opts: { maxMs
     const art = list[0].artDir;
     let number = readIssueTxt(art)?.number ?? (existsSync(art) ? undefined : mapLookup(runId));
     for (const rec of list) {
-      if (Date.now() > deadline) return tally(dir, filed, failed);
-      if (!number && !rec.title) break;                       // its create is still queued/failed
+      if (outOfTime()) return tally(dir, filed, failed);
+      // Its create is still queued, or dead-lettered: age this one out too, or a run whose create
+      // can never land keeps its comments (and QUEUE=<n>) alive forever.
+      if (!number && !rec.title) { if (bumpAttempts(rec)) failed++; break; }
       let ok: boolean;
       if (number) ok = ghComment(r, number, rec.body);
       else {
         const dup = findOpenIssue(r, rec.command, rec.title!);
+        if (outOfTime()) return tally(dir, filed, failed);
         if (dup) { ok = ghComment(r, dup, rec.body); if (ok) number = dup; }
         else { const made = ghCreate(r, rec.title!, rec.body); ok = made !== null; if (made) number = made.number; }
         if (ok && number) {
           mapRecord(runId, number);
-          if (existsSync(rec.artDir)) writeIssueTxt(rec.artDir, { run_id: runId, number, url: issueUrl(number) });
+          // Merge, never overwrite: `reflected=1` on the record must survive the flush or a second
+          // `reflect` for the run stops being refused.
+          if (existsSync(rec.artDir)) writeIssueTxt(rec.artDir, { ...readIssueTxt(rec.artDir), run_id: runId, number, url: issueUrl(number) });
         }
       }
       if (!ok) { if (bumpAttempts(rec)) failed++; break; }

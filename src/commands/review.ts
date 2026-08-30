@@ -29,14 +29,24 @@ export async function surveyWith(o: SurveyOpts = {}): Promise<number> {
   }
   const r = o.runner ?? forensicsRunner();
   const flushed = flushQueue(r, { maxMs: 30_000 });
+  // Printed at EVERY exit, failures included: a box whose `gh` is missing or unauthenticated is
+  // exactly the one that has never answered the consent question, and the question is the only way
+  // out of the queue. Losing it on rc 1 leaves the queue unanswerable.
+  const tail = (): void => {
+    if (flushed.remaining > 0) out(`QUEUE=${flushed.remaining}`);
+    if (readConsent() === null) out("CONSENT=needed");
+  };
   const res = r.run("gh", ["issue", "list", "--repo", AP_ISSUES_REPO, "--state", "open",
     "--search", 'in:title "[ap:"',
     "--json", "number,title,createdAt,labels,comments,url", "--limit", "200"]);
-  if (res.code !== 0) { log.error(`review survey: gh issue list failed (rc ${res.code}): ${res.stderr.trim()}`); return 1; }
+  if (res.code !== 0) { tail(); log.error(`review survey: gh issue list failed (rc ${res.code}): ${res.stderr.trim()}`); return 1; }
   let issues: GhIssue[];
   try { issues = JSON.parse(res.stdout.trim() || "[]") as GhIssue[]; }
-  catch { log.error("review survey: gh issue list returned unparseable JSON"); return 1; }
-  if (o.command) issues = issues.filter((i) => i.title.startsWith(`[ap:${o.command}]`));
+  catch { tail(); log.error("review survey: gh issue list returned unparseable JSON"); return 1; }
+  // GitHub tokenizes `in:title "[ap:"` down to the bare word `ap`, so the list comes back with
+  // foreign issues in it. ap must never row up — let alone LABEL — an issue it did not file.
+  const prefix = o.command ? `[ap:${o.command}]` : "[ap:";
+  issues = issues.filter((i) => i.title.startsWith(prefix));
 
   let n = 0;
   for (const i of issues) {
@@ -51,24 +61,25 @@ export async function surveyWith(o: SurveyOpts = {}): Promise<number> {
   // short-circuit reads "zero rows before TRENDS".
   out("TRENDS");
   for (const c of clusterByTitle(issues)) out(`${c.title}\t${c.open}\t${c.seenAgain}\t${c.first}\t${c.last}`);
-  if (flushed.remaining > 0) out(`QUEUE=${flushed.remaining}`);
-  if (readConsent() === null) out("CONSENT=needed");
+  tail();
   log.info(`review survey: ${n} untriaged issue(s)`);
   return 0;
 }
 
 export interface ArchiveOpts { now?: Date; runner?: ForensicsRunner }
 
-/** Mark the reviewed issues triaged. The label is the primary marker; a non-collaborator cannot
- *  label, so a failed edit falls back to the marker comment `isTriaged` reads identically. */
+/** Mark the reviewed issues triaged. The marker comment is what counts — it carries the TIMESTAMP
+ *  `isTriaged` compares newer forensics comments against, so a recurrence re-opens triage — and it
+ *  is posted always, not only when this account cannot label. The label is the human-visible half. */
 export async function archiveWith(numbers: string[], o: ArchiveOpts = {}): Promise<number> {
   const r = o.runner ?? forensicsRunner();
   r.run("gh", ["label", "create", "triaged", "--repo", AP_ISSUES_REPO, "--description", "triaged by /ap:review"]);
   let done = 0, failed = 0;
   for (const n of numbers) {
-    if (r.run("gh", ["issue", "edit", n, "--repo", AP_ISSUES_REPO, "--add-label", "triaged"]).code === 0) { done++; continue; }
+    const labelled = r.run("gh", ["issue", "edit", n, "--repo", AP_ISSUES_REPO, "--add-label", "triaged"]).code === 0;
     const body = `${AP_TRIAGED_MARKER} at=${isoUtc(o.now)} -->\ntriaged by /ap:review`;
-    if (r.run("gh", ["issue", "comment", n, "--repo", AP_ISSUES_REPO, "--body", body]).code === 0) done++;
+    const marked = r.run("gh", ["issue", "comment", n, "--repo", AP_ISSUES_REPO, "--body", body]).code === 0;
+    if (labelled || marked) done++;
     else { log.warn(`review archive: could not mark #${n} triaged`); failed++; }
   }
   log.ok(`review archive: ${done} issue(s) triaged`);

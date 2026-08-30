@@ -18,9 +18,12 @@ Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
 > only write path into a job, and it targets the job hub.
 
 > **Detached runs never ask for consent.** Filing forensics to the ap tracker is gated by a
-> one-time per-machine consent question, and a job hub has nobody to ask — so a detached run always
-> queues its records (`QUEUED=<path>`) and never fires that AskUserQuestion. The queue is flushed by
-> the next attached run that files, or by `/ap:review`; answer the consent question there.
+> one-time per-machine consent question, and a job hub has nobody to ask — so a detached run
+> never fires that AskUserQuestion here. What it prints depends on what this machine answered:
+> `ISSUE=<url>` once consent was granted (a detached run files exactly like an attached one),
+> `QUEUED=<path>` once it was declined, and `CONSENT=needed` when the machine has never answered —
+> the record is queued either way. The queue is flushed by the next attached run that files, or by
+> `/ap:review`; answer the consent question there.
 
 ## Subcommands
 

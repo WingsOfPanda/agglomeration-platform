@@ -119,7 +119,7 @@ status to `idle`, and wait for your inbox. Resume from exactly where you parked.
 | 1 — `turn-send` "not idle" | AskUserQuestion wait/force/abort | wait 60s and retry once, then `reset-status` and retry once, then PARK. Never a third silent force. |
 | 1 — `ROUTE=escalate` | AskUserQuestion | PARK, carrying the worker's decoded text verbatim as your `message`. |
 | 4 — scope check `OOS_COUNT > 0` | AskUserQuestion amend/send-back/force-keep | PARK. Never auto-force-keep, never auto-amend. (`SCOPE_DECLARED=0` is still the documented no-op — say so in the parked message.) |
-| 4 — finish menu | AskUserQuestion merge/pr/keep/discard | `$CS implement finish <TOPIC> keep`. Never merge, never push, never open a PR — the operator finishes the branch. The gate is **mechanical**: the finish verb refuses `merge`/`pr`/`discard` (rc 2, recorded to the review feed) while a `_job` record exists for the topic. |
+| 4 — finish menu | AskUserQuestion merge/pr/keep/discard | `$CS implement finish <TOPIC> keep`. Never merge, never push, never open a PR — the operator finishes the branch. The gate is **mechanical**: the finish verb refuses `merge`/`pr`/`discard` (rc 2, filed as a flag on the run's issue) while a `_job` record exists for the topic. |
 | 5 — teardown | `$CS stop <TOPIC>` | `$CS stop lead <TOPIC>` — the per-agent form ONLY. The topic form REFUSES (rc 1) while the job record exists, deliberately: you are a worker under this topic, so it would tear YOU down mid-run. `job stop` sweeps you and the session later. |
 
 `ROUTE=verify` and `ROUTE=objection` are **not** parked: verify claims against ground truth and
@@ -552,7 +552,8 @@ Then `ROUND=$((ROUND+1))`, `RETRY=0`, and loop back to Stage 1.
    Not now → nothing (the record stays queued; you are asked again next run). Mid-run flags never
    ask, and a detached run never asks — it queues.
 
-   Then **reflect**, whenever a run record exists (`ISSUE=` or `QUEUED=`): Write 3-5 interpretive
+   Then **reflect**, whenever this run has a record — after `ISSUE=`, after `QUEUED=`, and after the
+   Allow → `$CS review flush` branch (that flush files the run and writes its record): Write 3-5 interpretive
    bullets to a temp file and run `$CS implement reflect <TOPIC> @<file>`. Write for a teammate who will
    debug this from the issue alone: what the findings mean, what the hub did, what you would try first.
    It posts them as the run issue's reflection comment. Once per run — a second `reflect` is refused

@@ -297,9 +297,9 @@ HEAD is probably still on `feat/quick-<SLUG>`, not the start branch. Give the br
 ## Stage 3 — Teardown + SUMMARY
 
 1. **Forensics + reflection (best-effort, BEFORE teardown).** `$CS quick forensics <SLUG>` — scrapes
-   the worker's outbox/status/logs for mechanical signals and files them as a GitHub issue on the ap
+   the worker's outbox for mechanical signals and files them as a GitHub issue on the ap
    tracker. It never blocks and never fails the run. Run it **before** `stop`, because `stop` archives
-   the worker dir and moves its `outbox.jsonl` / `status.json` out of reach.
+   the worker dir and moves its `outbox.jsonl` out of reach.
 
    Read the single line `forensics` prints:
 
@@ -318,7 +318,8 @@ HEAD is probably still on `feat/quick-<SLUG>`, not the start branch. Give the br
    Not now → nothing (the record stays queued; you are asked again next run). Mid-run flags never
    ask, and a detached run never asks — it queues.
 
-   Then **reflect**, whenever a run record exists (`ISSUE=` or `QUEUED=`): Write 3-5 interpretive
+   Then **reflect**, whenever this run has a record — after `ISSUE=`, after `QUEUED=`, and after the
+   Allow → `$CS review flush` branch (that flush files the run and writes its record): Write 3-5 interpretive
    bullets to a temp file and run `$CS quick reflect <SLUG> @<file>`. Write for a teammate who will
    debug this from the issue alone: what the findings mean, what the hub did, what you would try first.
    It posts them as the run issue's reflection comment. Once per run — a second `reflect` is refused

@@ -30,6 +30,9 @@ describe("run directives — forensics filing", () => {
     expect(md).toContain("debug this from the issue alone");   // teammate audience (spec B)
     expect(md).toContain("NO_RUN_ISSUE");
     expect(md).not.toContain("## Hub reflection");             // the append-to-file rule is gone
+    // The first consented run prints only CONSENT=needed, so the trigger must name the flush
+    // branch too or every box's first run files without a reflection.
+    expect(md).toContain("after `ISSUE=`, after `QUEUED=`, and after the Allow → `$CS review flush` branch");
   });
 
   it.each(RUN_COMMANDS)("%s.md fires the consent AskUserQuestion, attached runs only", (cmd) => {
@@ -54,6 +57,11 @@ describe("run directives — forensics filing", () => {
     expect(section).toContain("Flags never ask for consent");
   });
 
+  it.each(RUN_COMMANDS)("%s.md names no retired forensics source", (cmd) => {
+    const md = flat(`${cmd}.md`);
+    for (const gone of RETIRED_SOURCES) expect(md).not.toContain(gone);
+  });
+
   it.each(RUN_COMMANDS)("%s.md's front matter allows AskUserQuestion", (cmd) => {
     const raw = read(join("commands", `${cmd}.md`));
     const fm = raw.slice(0, raw.indexOf("\n---", 3));
@@ -62,6 +70,8 @@ describe("run directives — forensics filing", () => {
 });
 
 const RETIRED = ["ssh", "xjp"];
+// The scrapers spec §F deleted: no issue can ever carry these sources, so no directive may teach them.
+const RETIRED_SOURCES = ["audit_log", "spawn_results", "session_log", "outbox/status/logs"];
 
 describe("review.md — triage over issues", () => {
   const md = flat("review.md");
@@ -97,18 +107,26 @@ describe("review.md — triage over issues", () => {
   });
   it("the local-file / remote-box era is gone", () => {
     // RETIRED[0] = the remote-box pull, RETIRED[1] = the box it pulled from.
-    for (const gone of [...RETIRED, ".reviewed", ".trends.json", "~/.ap/forensics/<date>"]) {
+    for (const gone of [...RETIRED, ...RETIRED_SOURCES, ".reviewed", ".trends.json", "~/.ap/forensics/<date>"]) {
       expect(md.toLowerCase()).not.toContain(gone);
     }
+  });
+  it("says a FAILED survey still carries the consent question", () => {
+    expect(md).toContain("A survey that FAILS");
+    expect(md).toContain("still prints `QUEUE=`/`CONSENT=needed`");
   });
 });
 
 describe("job.md — detached runs never ask", () => {
   const md = flat("job.md");
-  it("says so, and says they queue instead", () => {
+  it("says so — and names the three lines a detached run can actually print", () => {
     expect(md).toContain("Detached runs never ask for consent");
-    expect(md).toContain("QUEUED=");
     expect(md).toContain("never fires that AskUserQuestion");
+    // never ASKS is not never FILES: with consent already granted a detached run files like any other.
+    expect(md).toContain("ISSUE=");
+    expect(md).toContain("QUEUED=");
+    expect(md).toContain("CONSENT=needed");
+    expect(md).not.toContain("a detached run always queues its records");
   });
 });
 
@@ -119,5 +137,12 @@ describe("README.md — security posture names the public tracker", () => {
     expect(readme).toContain("github.com/WingsOfPanda/agglomeration-platform");
     expect(readme).toContain("asks once per machine");
     expect(readme).toContain("ap review consent no");
+  });
+  it("the local-file forensics tree is gone from the state map and the /ap:review blurb", () => {
+    for (const gone of [".reviewed", ".trends.json", "forensics/<date>", "since you last looked"]) {
+      expect(readme.toLowerCase()).not.toContain(gone);
+    }
+    expect(readme).toContain("forensics/queue/");
+    expect(readme).toContain("issues-consent");
   });
 });
