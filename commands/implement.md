@@ -265,8 +265,15 @@ branches on. Never wait on the worker with an unbounded `until ... sleep` loop; 
 wait verbs are the only waits. A spawn killed anyway exits **143** — treat it exactly as rc 1
 (it has already FAILED-archived the worker).
 
-On spawn failure (non-zero): `$CS implement archive <TOPIC>` and stop (nothing to tear down — the worker
-never came up).
+On spawn failure (non-zero) — **spawn-retry-once**. The failure prints one machine-readable stdout
+line, `SPAWN_FAILED reason=<reason>`; branch on it, never on stderr. `pane_dead` and `timeout` are
+the cold-start reasons — a provider TUI that died or never reported inside its ready window,
+transient and recurring — so on the **FIRST** of those re-run the SAME `$CS spawn ...` command
+**once**, with the same `timeout: 300000`. Nothing to clean up first: the failed spawn already
+FAILED-archived its worker dir, which frees `lead` for the retry. Every other reason
+(`binary_not_found`, `config_error`, `killed`, ...) is deterministic — a retry would fail
+identically — and so is a **second** failure, whatever its reason. Terminal → `$CS implement archive
+<TOPIC>` and stop (nothing to tear down — the worker never came up).
 
 ## Stage 1 — run the worker turn (round-aware, auto-retry-once)
 
