@@ -190,9 +190,16 @@ consent, never block, and cost nothing, so prefer over-recording. Review later w
    branches on. Never wait on the worker with an unbounded `until ... sleep` loop; the bounded
    wait verbs are the only waits. A spawn killed anyway exits **143** — treat it exactly as rc 1
    (it has already FAILED-archived the worker).
-   On **rc 1** (bootstrap failed) → abort: `$CS quick summary <SLUG> --aborted build spawn-failed "worker failed
-   bootstrap"`, print the SUMMARY, and stop. Do **not** run `stop` — `spawn` already
-   FAILED-archived the worker.
+   On **rc 1** (bootstrap failed) → **spawn-retry-once**. The failure prints one machine-readable
+   stdout line, `SPAWN_FAILED reason=<reason>`; branch on it, never on stderr. `pane_dead` and
+   `timeout` are the cold-start reasons — a provider TUI that died or never reported inside its
+   ready window, transient and recurring — so on the **FIRST** of those re-run the SAME
+   `$CS spawn ...` command **once**, with the same `timeout: 300000`. Nothing to clean up first:
+   the failed spawn already FAILED-archived its worker dir, which frees the agent name for the
+   retry. Every other reason (`binary_not_found`, `config_error`, `killed`, ...) is deterministic —
+   a retry would fail identically — and so is a **second** failure, whatever its reason. Terminal →
+   abort: `$CS quick summary <SLUG> --aborted build spawn-failed "worker failed bootstrap"`, print
+   the SUMMARY, and stop. Do **not** run `stop` — `spawn` already FAILED-archived the worker.
 3. Dispatch round 1: `$CS quick turn-send <SLUG> 1`.
 4. Await it under a persistent **Monitor**, never a plain background shell. The Monitor runs the
    SAME bounded `turn-wait` verb and then derives the turn's outcome from the file that verb wrote,

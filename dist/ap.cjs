@@ -9918,6 +9918,8 @@ function runForensics(command, artDirFor, topic) {
   return 0;
 }
 function captureSpawnFailure(opts) {
+  process.stdout.write(`SPAWN_FAILED reason=${opts.reason}
+`);
   try {
     const ctx = `worker=${opts.agent}-${opts.model}`;
     const findings = [

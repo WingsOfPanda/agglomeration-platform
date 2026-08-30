@@ -645,11 +645,18 @@ export function runForensics(command: string, artDirFor: (topic: string) => stri
 }
 
 /** A spawn/bootstrap failure is its OWN run: `spawn` is a CLI verb with no owning command in
- *  process, so the run record lives under the worker dir. Returns the status line, "" on any error. */
+ *  process, so the run record lives under the worker dir. Returns the status line, "" on any error.
+ *
+ *  It also prints `SPAWN_FAILED reason=<reason>` on STDOUT — the ONE machine-readable line the
+ *  quick/implement directives branch on to decide whether a cold start earns a retry (`pane_dead`,
+ *  `timeout`) or is deterministic (`binary_not_found`, `config_error`, ...). It lives here, at the
+ *  single choke point every failure path already crosses, so no site can ship without it; it is a
+ *  CLI contract, so keep it before the catch-all — a failure that cannot be filed still prints. */
 export function captureSpawnFailure(opts: {
   agent: string; model: string; topic: string;
   reason: string; detail: string; failureReportPath?: string; now?: Date;
 }): string {
+  process.stdout.write(`SPAWN_FAILED reason=${opts.reason}\n`);
   try { // NOTE: swallows everything — a topic/path validation must run in the CALLER, outside this catch
     const ctx = `worker=${opts.agent}-${opts.model}`;
     const findings: Finding[] = [
