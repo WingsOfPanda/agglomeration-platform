@@ -101,7 +101,7 @@ export interface PhaseRow {
   /** Whether the wait honours a `<key>=skipped` fast-path. Research never skips — nothing precedes
    *  it — so its wait reads the offset unconditionally, exactly as its hand-written body did. */
   skippable: boolean;
-  /** The exists-precondition's tail, after `${stateFile} `. Seven phases say `rm to retry`; the two
+  /** The exists-precondition's tail, after `${stateFile} `. Seven phases say `rm to retry`; the three
    *  one-turn-cap phases each name their own cap in their own words, so it is a string, not a flag. */
   retryNote?: string;
   guard?: PhaseGuard;
@@ -371,7 +371,7 @@ export interface PhaseSendHooks {
 /** The send head every dispatching phase opens with, in the shipped order: art dir, state file, the
  *  exists-precondition in the row's own words, the trigger check where a phase has one, the
  *  dispatch guard (a no-op for rows without one), the phase's own preconditions + composer, the
- *  prompt file, and dispatchPrompt's tail. Nine verbs hand-copied this; the only per-verb parts are
+ *  prompt file, and dispatchPrompt's tail. Ten verbs hand-copied this; the only per-verb parts are
  *  the two hooks. */
 export async function phaseSend(
   row: PhaseRow,
@@ -434,7 +434,7 @@ export async function dispatchPrompt(
   return 0;
 }
 
-/** The phase-wait body, identical for all nine phases: skipped fast-path, provider-scaled timeout,
+/** The phase-wait body, identical for all ten phases: skipped fast-path, provider-scaled timeout,
  *  `awaitTurn` under the artifact policy, classify, record the outcome (a question re-arms the
  *  offset instead of terminating), drop the `.done` marker the wait gate reads, log. */
 export async function phaseWait(
@@ -617,7 +617,7 @@ export function waitGateVerb(row: PhaseRow, topic: string): number {
   return states.every((s) => s.status === "terminal") ? 0 : 1;
 }
 
-/** The `<topic> <agent> <provider>` arg-parse wrapper the eighteen send/wait verbs share. `usageLabel`
+/** The `<topic> <agent> <provider>` arg-parse wrapper the twenty send/wait verbs share. `usageLabel`
  *  is the full verb name ("explore gap-send"), so the usage line stays byte-identical per verb. */
 export function triad<D>(
   usageLabel: string,

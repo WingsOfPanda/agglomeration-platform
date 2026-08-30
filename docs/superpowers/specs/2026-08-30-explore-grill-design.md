@@ -147,7 +147,7 @@ written twice.
    drilled worker: `$ART/drill-<agent>.done` exists AND the last `DS=` line of
    `$ART/drill-<agent>.txt` is present. Only then may `$ART/drill-<agent>.md` (sections `## F1`,
    `## F2`, … each with a `[citation]` or the literal `cannot resolve, because …`) be read. If
-   `.done` is absent, or `DS=` is `timeout`/`failed`/`missing`/`skipped`, or the state file's `AC=`
+   `.done` is absent, or `DS=` is `question`/`timeout`/`failed`/`missing`/`skipped`, or the state file's `AC=`
    line is `expired`, that round's facts stay `unresolved` for the next round and the dependent
    decisions are asked under uncertainty; a later round's check picks the answers up, and whatever
    settles after the last round is folded into the handoff Evidence table at termination. A round

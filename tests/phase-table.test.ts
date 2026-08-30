@@ -78,7 +78,7 @@ describe("PHASES/DESIGN_PHASES shape", () => {
     } finally { cleanup(); }
   });
 
-  it("guards: the six post-research explore rows only — design dispatches behind its own gate", () => {
+  it("guards: the seven post-research explore rows only — design dispatches behind its own gate", () => {
     expect(PHASES.filter((r) => r.guard).map((r) => r.phase))
       .toEqual(["openq", "crossverify", "adversary", "rebuttal", "gap", "signoff", "drill"]);
     expect(DESIGN_PHASES.some((r) => r.guard)).toBe(false);

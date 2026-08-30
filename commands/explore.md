@@ -801,7 +801,7 @@ user; a fact with no evidence in any artifact is a **drill fact**.
    worker: `$ART/drill-<agent>.done` exists AND the last `DS=` line of `$ART/drill-<agent>.txt` is
    present. ONLY then may `$ART/drill-<agent>.md` (sections `## F1`, `## F2`, … each with a
    `[citation]` anchor or the literal `cannot resolve, because …`) be read. If `.done` is absent,
-   or `DS=` is `timeout`/`failed`/`missing`/`skipped`, or that state file's `AC=` line is
+   or `DS=` is `question`/`timeout`/`failed`/`missing`/`skipped`, or that state file's `AC=` line is
    `expired`, that round's facts stay `unresolved` for the next round and the dependent decisions
    are asked under uncertainty; a later round's check picks the answers up, and whatever settles
    after the last round is folded into the handoff `## Evidence` table at termination. **A round

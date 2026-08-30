@@ -85,6 +85,7 @@ describe("explore directive: frame + grill contract", () => {
     expect(grill).toContain(
       '$CS explore drill-send <TOPIC> "$INST" "$PROV" || echo "SEND_FAILED=$INST rc=$?";',
     );
+    expect(grill).toContain("note `no drill facts routed`");
     expect(grill).toContain("`$CS explore wait-gate <TOPIC> drill` exits 0");
     expect(grill.indexOf(mopup)).toBeLessThan(grill.indexOf("wait-gate <TOPIC> drill"));
   });
@@ -93,7 +94,14 @@ describe("explore directive: frame + grill contract", () => {
     const grill = between(P8C, P8A);
     expect(grill).toContain("# Grill: <topic> ## Round 1 - Q1 [decision] <title>: <question>");
     expect(grill).toContain("routed: <agent> | hub-answered (<citation>) | unresolved");
-    expect(grill).toContain("- <title>: <answer> (round <r>, settled|defaulted[, degraded: single-source evidence])");
+    // One contiguous pin: the closing sections and their three bullet forms, IN ORDER.
+    expect(grill).toContain(
+      "## Settled decisions " +
+      "- <title>: <answer> (round <r>, settled|defaulted[, degraded: single-source evidence]) " +
+      "## Left open " +
+      "- <title>: hub-defaulted to <answer> — <why not reached> (round cap | stop | prerequisite unresolved fact F<n>) " +
+      "- <title>: <why> (unresolved fact: F<n>)",
+    );
     expect(grill).toContain("The final landscape doc is **never rewritten** by the grill");
     expect(grill).toContain("Phase 8c **never rewrites `$ART/topic.txt`**");
     expect(grill).toContain("The confidence gate is **NEVER re-run**");
@@ -129,6 +137,10 @@ describe("explore directive: frame + grill contract", () => {
     expect(handoff).toContain("`Hub-defaulted (grill, unconfirmed):`");
     expect(handoff).toContain("NEVER drop a defaulted line");
     expect(handoff).toContain("The KV's `mode` key is **not** rewritten by the grill");
+    // no-convergence: the survey's own verdict leads, the grill's choice trails it, no Recipe.
+    expect(handoff).toContain("the fixed no-convergence sentence below stays FIRST");
+    expect(handoff).toContain("it is not a survey finding.");
+    expect(handoff).toContain("`## Recipe` stays OMITTED");
   });
 
   it("Phase 10 prints the grill override before the conclusion body and the tally after it", () => {
@@ -136,7 +148,7 @@ describe("explore directive: frame + grill contract", () => {
     expect(present).toContain("`Grill override: the survey suggested <A>; you settled on <Y>");
     expect(present).toContain("The Conclusion body itself stays VERBATIM");
     expect(present).toContain("`Grill: <n> decisions settled (<d> defaulted), <m> left open — $ART/grill.md`");
-    expect(at("Grill override:")).toBeLessThan(at("Suggested next step:"));
-    expect(at("**Degraded run** (single survivor)")).toBeLessThan(at("**Grill override**"));
+    expect(present).toContain("print ONE line BEFORE the conclusion body — after the DEGRADED caveat line when both apply");
+    expect(present).toContain("**After the conclusion body**, whenever `$ART/grill.md` exists");
   });
 });

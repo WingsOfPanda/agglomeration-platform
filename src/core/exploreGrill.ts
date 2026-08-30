@@ -5,13 +5,6 @@
 // (same contract as exploreTurn.ts / exploreOpenq.ts).
 import { artifactContract } from "./artifact.js";
 
-/** Bounded grill: at most three rounds, then every still-open decision is hub-defaulted. */
-export const GRILL_MAX_ROUNDS = 3;
-
-/** `$ART/frame.md`'s fixed headings, in order. The hub writes them; nothing here parses them —
- *  `frameBlock` passes the body through verbatim so a user's wording is never reshaped. */
-export const FRAME_HEADINGS = ["Scope", "Constraints", "Good means", "Decided"] as const;
-
 /** The research-prompt block for a run that answered the frame round. Empty (or whitespace-only)
  *  input returns "" so the prompt stays byte-identical to a run without `frame.md`. */
 export function frameBlock(frameText: string): string {

@@ -350,7 +350,9 @@ export async function drillSendWith(topic: string, agent: string, provider: stri
       // (the mop-up's every-undrilled-worker pass) or no bullets in it = nothing to ask.
       const facts = parseFacts(readIf(join(art, `grill-facts-${agent}.txt`)));
       if (facts.length === 0) return { skip: "no drill facts routed" };
-      return { prompt: composeDrillPrompt(topic, facts, artifact) };
+      // The verbatim topic, not the slug the state dir is keyed by (a slug reads as garbage to a worker).
+      const topicText = readIf(join(art, "topic.txt")).trim() || topic;
+      return { prompt: composeDrillPrompt(topicText, facts, artifact) };
     },
   });
 }

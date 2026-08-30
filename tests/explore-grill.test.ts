@@ -8,9 +8,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { sendDeps, waitDeps } from "./helpers/phaseDeps.js";
-import { GRILL_MAX_ROUNDS, FRAME_HEADINGS, frameBlock, parseFacts, composeDrillPrompt } from "../src/core/exploreGrill.js";
+import { frameBlock, parseFacts, composeDrillPrompt } from "../src/core/exploreGrill.js";
 import { composeExploreResearchPrompt } from "../src/core/exploreTurn.js";
-import { drillSendWith } from "../src/commands/explore.js";
+import { drillSendWith, researchSendWith } from "../src/commands/explore.js";
 import { exploreArtDir } from "../src/core/explore.js";
 import { PHASES, phaseWait } from "../src/core/phaseTable.js";
 import { END_OF_ARTIFACT } from "../src/core/artifact.js";
@@ -18,11 +18,6 @@ import { END_OF_ARTIFACT } from "../src/core/artifact.js";
 const DRILL = PHASES.find((p) => p.phase === "drill")!;
 
 describe("exploreGrill helpers", () => {
-  it("the round cap is 3 and the frame headings are the four the directive writes", () => {
-    expect(GRILL_MAX_ROUNDS).toBe(3);
-    expect([...FRAME_HEADINGS]).toEqual(["Scope", "Constraints", "Good means", "Decided"]);
-  });
-
   it("frameBlock: empty / whitespace-only → '' (the no-frame run must add nothing)", () => {
     expect(frameBlock("")).toBe("");
     expect(frameBlock("   \n\n  ")).toBe("");
@@ -58,8 +53,8 @@ describe("composeExploreResearchPrompt frame block", () => {
   const args = ["topic", "/art/findings-alpha.md", "lit", "the lens", "/art/selfassess-alpha.md"] as const;
 
   it("no frame → byte-identical to the 5-arg call (the 0.5.60 prompt)", () => {
-    expect(composeExploreResearchPrompt(...args, "")).toBe(composeExploreResearchPrompt(...args));
     expect(composeExploreResearchPrompt(...args, "  \n ")).toBe(composeExploreResearchPrompt(...args));
+    expect(composeExploreResearchPrompt(...args)).not.toContain("Framing (");
   });
 
   it("a frame is inserted right after the Research lens line, before the output requirements", () => {
@@ -93,6 +88,13 @@ describe("explore drill-send", () => {
     expect(send).toHaveBeenCalled();
   });
 
+  it("the prompt carries the VERBATIM topic from topic.txt, not the slug the art dir is keyed by", async () => {
+    writeFileSync(join(art, "topic.txt"), "attention kernels on H100\n");
+    writeFileSync(join(art, `grill-facts-${AGENT}.txt`), "- does X ship Y?\n");
+    expect(await drillSendWith(TOPIC, AGENT, PROVIDER, sendDeps())).toBe(0);
+    expect(readFileSync(join(art, `${AGENT}_drill_prompt.md`), "utf8")).toContain("Topic: attention kernels on H100");
+  });
+
   it("no facts file (the mop-up pass) → DS=skipped, rc 0, no send, no prompt", async () => {
     const send = vi.fn(async () => 0);
     expect(await drillSendWith(TOPIC, AGENT, PROVIDER, sendDeps({ send }))).toBe(0);
@@ -115,6 +117,32 @@ describe("explore drill-send", () => {
     const send = vi.fn(async () => 0);
     expect(await drillSendWith(TOPIC, AGENT, PROVIDER, sendDeps({ send }))).toBe(1);
     expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe("explore research-send frame wiring", () => {
+  const TOPIC = "x", AGENT = "alpha", PROVIDER = "codex";
+  let h: { home: string; cleanup: () => void };
+  let art: string;
+  beforeEach(() => {
+    h = freshHome();
+    art = exploreArtDir(TOPIC);
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "topic.txt"), "kernels\n");
+  });
+  afterEach(() => { h.cleanup(); });
+
+  it("frame.md on disk → its body reaches the research prompt as user-settled constraints", async () => {
+    writeFileSync(join(art, "frame.md"), "# Frame: kernels\n## Scope\n- inference only\n");
+    expect(await researchSendWith(TOPIC, AGENT, PROVIDER, sendDeps())).toBe(0);
+    const prompt = readFileSync(join(art, `${AGENT}_research_prompt.md`), "utf8");
+    expect(prompt).toContain("Framing (user-settled — treat as constraints, do not re-litigate):");
+    expect(prompt).toContain("- inference only");
+  });
+
+  it("no frame.md (every pre-0.5.61 run) → the prompt carries no framing block at all", async () => {
+    expect(await researchSendWith(TOPIC, AGENT, PROVIDER, sendDeps())).toBe(0);
+    expect(readFileSync(join(art, `${AGENT}_research_prompt.md`), "utf8")).not.toContain("Framing (");
   });
 });
 
