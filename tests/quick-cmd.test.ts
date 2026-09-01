@@ -1196,6 +1196,49 @@ describe("quick branch: brief lint", () => {
     expect(readFileSync(join(forensicsQueueDir(), f[0]), "utf8")).toContain("brief-state-relative");
   });
 
+  it("a bare state filename in prose warns, records, and files one flag", async () => {
+    brief(["## Goal", "Read topic-text.txt next to this file before coding."].join("\n"));
+    const { rc, err } = await capture(() => branchWith("auth", target, okRepo()));
+    expect(rc).toBe(0);
+    expect(err).toContain("brief cites the state path topic-text.txt RELATIVE");
+    expect(readFileSync(lintFile(), "utf8")).toContain("STATE_RELATIVE_PATH=topic-text.txt\n");
+
+    const f = flags();
+    expect(f).toHaveLength(1);
+    expect(readFileSync(join(forensicsQueueDir(), f[0]), "utf8")).toContain("topic-text.txt");
+  });
+
+  it("a prohibition-only relative state path warns and records without a flag", async () => {
+    brief(["## Constraints", "Never touch .ap/worktrees/launch-the-refreshed (LIVE training run)."].join("\n"));
+    const { rc, err } = await capture(() => branchWith("auth", target, okRepo()));
+    expect(rc).toBe(0);
+    expect(err).toContain("brief constrains the state path .ap/worktrees/launch-the-refreshed RELATIVE");
+    expect(readFileSync(lintFile(), "utf8")).toContain(
+      "STATE_RELATIVE=0\nCONSTRAINT_RELATIVE=1\nCONSTRAINT_RELATIVE_PATH=.ap/worktrees/launch-the-refreshed\n",
+    );
+    expect(flags()).toHaveLength(0);
+  });
+
+  it("mixed citation and prohibition files one flag naming only the citation path", async () => {
+    brief([
+      "## Goal", "Read the cleaned topic from _quick/topic-text.txt.",
+      "## Constraints", "Do not touch .ap/worktrees/live-run.",
+    ].join("\n"));
+    const { rc, err } = await capture(() => branchWith("auth", target, okRepo()));
+    expect(rc).toBe(0);
+    expect(err).toContain("brief cites the state path _quick/topic-text.txt RELATIVE");
+    expect(err).toContain("brief constrains the state path .ap/worktrees/live-run RELATIVE");
+
+    const rec = readFileSync(lintFile(), "utf8");
+    expect(rec).toContain("STATE_RELATIVE=1\nSTATE_RELATIVE_PATH=_quick/topic-text.txt\n");
+    expect(rec).toContain("CONSTRAINT_RELATIVE=1\nCONSTRAINT_RELATIVE_PATH=.ap/worktrees/live-run\n");
+    const f = flags();
+    expect(f).toHaveLength(1);
+    const flag = readFileSync(join(forensicsQueueDir(), f[0]), "utf8");
+    expect(flag).toContain("_quick/topic-text.txt");
+    expect(flag).not.toContain(".ap/worktrees/live-run");
+  });
+
   it("a clean brief: no warns, no flag, but the verdict is still recorded", async () => {
     brief(["## Goal", "Rename the guard.", "", "## Touch-points", `${join(target, "new.ts")} (new)`].join("\n"));
     const { rc, err } = await capture(() => branchWith("auth", target, okRepo()));

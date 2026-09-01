@@ -174,6 +174,8 @@ function readStashMarker(exec: string, topic: string): { sha: string; message: s
  *  (sha256 of its realpath), so a relative `_quick/...` resolves against whatever cwd the worker
  *  happens to hold — which under `--target` is not the repo the state dir belongs to. */
 const STATE_RELATIVE_PREFIXES = ["_quick/", "_implement/", ".ap/"];
+const STATE_FILE_BASENAMES = ["topic-text.txt", "task-brief.md"];
+const PROHIBITION_LINE = /\b(never|do not|don't|must not)\s+(touch|modify|edit|write|create|delete|read)\b/i;
 
 /** Warn-only brief lint (2026-08-23-brief-path-correctness-design.md, C2). Reads the hub's
  *  `task-brief.md` and reports two classes of path citation that cannot resolve where the worker
@@ -195,14 +197,21 @@ const STATE_RELATIVE_PREFIXES = ["_quick/", "_implement/", ".ap/"];
 function lintBrief(topic: string, target: string, exec: string): void {
   const brief = readIfExistsOrNull(join(quickArtDir(topic), "task-brief.md"));
   if (brief === null) return;
-  const cited: string[] = [];
-  for (const line of brief.split("\n")) cited.push(...pathTokensFrom(line));
+  const citedByLine = brief.split("\n").map((line) => ({ line, paths: pathTokensFrom(line) }));
+  const cited = citedByLine.flatMap(({ paths }) => paths);
   const root = repoRoot();
   const invisible = invisibleInTarget(cited, root, target);
   const stateRelative: string[] = [];
-  for (const p of cited) {
-    if (isAbsolute(p) || stateRelative.includes(p)) continue;
-    if (STATE_RELATIVE_PREFIXES.some((pre) => p.startsWith(pre))) stateRelative.push(p);
+  const constraintRelative: string[] = [];
+  for (const { line, paths } of citedByLine) {
+    for (const p of paths) {
+      if (isAbsolute(p)) continue;
+      const isState = STATE_RELATIVE_PREFIXES.some((pre) => p.startsWith(pre)) ||
+        (!p.includes("/") && STATE_FILE_BASENAMES.includes(p));
+      if (!isState) continue;
+      const bucket = PROHIBITION_LINE.test(line) ? constraintRelative : stateRelative;
+      if (!bucket.includes(p)) bucket.push(p);
+    }
   }
   for (const p of invisible) {
     log.warn(`quick branch: brief cites ${p}, which exists in ${root} but NOT in the target ${target} — the worker cannot read it; cite it absolute or commit it first`);
@@ -210,11 +219,15 @@ function lintBrief(topic: string, target: string, exec: string): void {
   for (const p of stateRelative) {
     log.warn(`quick branch: brief cites the state path ${p} RELATIVE — the state dir is keyed to the repo root and never travels with --target; cite it absolute`);
   }
+  for (const p of constraintRelative) {
+    log.warn(`quick branch: brief constrains the state path ${p} RELATIVE — the state dir is keyed to the repo root and never travels with --target; cite it absolute even in a constraint`);
+  }
   atomicWrite(join(exec, "brief-lint.txt"),
     `MAIN_ROOT=${root}\nTARGET_CWD=${target}\n` +
     `INVISIBLE_IN_TARGET=${invisible.length}\n` + invisible.map((p) => `INVISIBLE_PATH=${p}\n`).join("") +
-    `STATE_RELATIVE=${stateRelative.length}\n` + stateRelative.map((p) => `STATE_RELATIVE_PATH=${p}\n`).join(""));
-  // ONE flag, for the state-relative class only.
+    `STATE_RELATIVE=${stateRelative.length}\n` + stateRelative.map((p) => `STATE_RELATIVE_PATH=${p}\n`).join("") +
+    `CONSTRAINT_RELATIVE=${constraintRelative.length}\n` + constraintRelative.map((p) => `CONSTRAINT_RELATIVE_PATH=${p}\n`).join(""));
+  // ONE flag, for citation-context state-relative paths only.
   if (stateRelative.length > 0) {
     runFlag("quick", topic, `brief-state-relative: the brief cites ${stateRelative.length} state path(s) RELATIVE (${stateRelative.join(", ")}) — unresolvable from the worker's cwd; state paths must be cited absolute`);
   }

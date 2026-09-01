@@ -147,9 +147,11 @@ consent, never block, and cost nothing, so prefer over-recording. Review later w
      Read/Glob/`ls` in *this* session. State-dir paths especially: the state dir is keyed to the repo
      **root** and never travels with `--target`, so a relative `_quick/topic-text.txt` resolves
      against the worker's cwd and is simply not there. `quick branch` warn-lints the brief for both
-     failures (a path visible here and missing in the target; a relative state path) and records the
-     result in `<SLUG state>/_quick/execute/brief-lint.txt`; a relative state path also files a
-     forensics flag. It never rewrites the brief and never changes an rc — fixing it is yours.
+     failures (a path visible here and missing in the target; a relative state path, including bare
+     `topic-text.txt` or `task-brief.md`) and records the result in
+     `<SLUG state>/_quick/execute/brief-lint.txt`; a relative state path also files a forensics flag,
+     while one in a do-not-touch clause warns without filing. It never rewrites the brief and never
+     changes an rc — fixing it is yours.
    - **Every number arrives with the command that produced it**, pasted from a run you did (`` 158
      matches (`rg -c foo src/`) ``), or handed to the worker as a command to run. Never a predicted
      delta: a brief that says `158->154` when the change actually lands at `159` burns a round on

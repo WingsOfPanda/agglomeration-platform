@@ -12365,20 +12365,29 @@ function readStashMarker(exec, topic) {
 function lintBrief(topic, target, exec) {
   const brief = readIfExistsOrNull((0, import_node_path23.join)(quickArtDir(topic), "task-brief.md"));
   if (brief === null) return;
-  const cited = [];
-  for (const line of brief.split("\n")) cited.push(...pathTokensFrom(line));
+  const citedByLine = brief.split("\n").map((line) => ({ line, paths: pathTokensFrom(line) }));
+  const cited = citedByLine.flatMap(({ paths }) => paths);
   const root = repoRoot();
   const invisible = invisibleInTarget(cited, root, target);
   const stateRelative = [];
-  for (const p of cited) {
-    if ((0, import_node_path23.isAbsolute)(p) || stateRelative.includes(p)) continue;
-    if (STATE_RELATIVE_PREFIXES.some((pre) => p.startsWith(pre))) stateRelative.push(p);
+  const constraintRelative = [];
+  for (const { line, paths } of citedByLine) {
+    for (const p of paths) {
+      if ((0, import_node_path23.isAbsolute)(p)) continue;
+      const isState = STATE_RELATIVE_PREFIXES.some((pre) => p.startsWith(pre)) || !p.includes("/") && STATE_FILE_BASENAMES.includes(p);
+      if (!isState) continue;
+      const bucket = PROHIBITION_LINE.test(line) ? constraintRelative : stateRelative;
+      if (!bucket.includes(p)) bucket.push(p);
+    }
   }
   for (const p of invisible) {
     log.warn(`quick branch: brief cites ${p}, which exists in ${root} but NOT in the target ${target} \u2014 the worker cannot read it; cite it absolute or commit it first`);
   }
   for (const p of stateRelative) {
     log.warn(`quick branch: brief cites the state path ${p} RELATIVE \u2014 the state dir is keyed to the repo root and never travels with --target; cite it absolute`);
+  }
+  for (const p of constraintRelative) {
+    log.warn(`quick branch: brief constrains the state path ${p} RELATIVE \u2014 the state dir is keyed to the repo root and never travels with --target; cite it absolute even in a constraint`);
   }
   atomicWrite(
     (0, import_node_path23.join)(exec, "brief-lint.txt"),
@@ -12388,6 +12397,8 @@ INVISIBLE_IN_TARGET=${invisible.length}
 ` + invisible.map((p) => `INVISIBLE_PATH=${p}
 `).join("") + `STATE_RELATIVE=${stateRelative.length}
 ` + stateRelative.map((p) => `STATE_RELATIVE_PATH=${p}
+`).join("") + `CONSTRAINT_RELATIVE=${constraintRelative.length}
+` + constraintRelative.map((p) => `CONSTRAINT_RELATIVE_PATH=${p}
 `).join("")
   );
   if (stateRelative.length > 0) {
@@ -12650,7 +12661,7 @@ duration=${duration}
   log.ok(`quick summary: wrote ${(0, import_node_path23.join)(art, "SUMMARY.md")}`);
   return 0;
 }
-var import_node_fs29, import_node_path23, liveInitDeps, STATE_RELATIVE_PREFIXES, QUICK_TURN_TIMEOUT, QUICK_ROUND;
+var import_node_fs29, import_node_path23, liveInitDeps, STATE_RELATIVE_PREFIXES, STATE_FILE_BASENAMES, PROHIBITION_LINE, QUICK_TURN_TIMEOUT, QUICK_ROUND;
 var init_quick2 = __esm({
   "src/commands/quick.ts"() {
     "use strict";
@@ -12680,6 +12691,8 @@ var init_quick2 = __esm({
     init_implementScope();
     liveInitDeps = { haveCmd, agentBinary, pickRandomAgent };
     STATE_RELATIVE_PREFIXES = ["_quick/", "_implement/", ".ap/"];
+    STATE_FILE_BASENAMES = ["topic-text.txt", "task-brief.md"];
+    PROHIBITION_LINE = /\b(never|do not|don't|must not)\s+(touch|modify|edit|write|create|delete|read)\b/i;
     QUICK_TURN_TIMEOUT = envNum("AP_QUICK_TURN_TIMEOUT", DEFAULT_TURN_BUDGET_S);
     QUICK_ROUND = {
       command: "quick",
