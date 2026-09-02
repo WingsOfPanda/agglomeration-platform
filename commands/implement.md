@@ -208,7 +208,9 @@ consent, never block, and cost nothing, so prefer over-recording. Review later w
    - **rc 1** — the doc/topic/target was unreadable/unresolvable (the audit was already cleared
      above). Surface the message and stop.
    - **rc 2** — usage error, or the topic is already in flight (run `/ap:stop <TOPIC>` to clear it
-     first). Stop.
+     first) — or, when stderr says `args file not found`, the one-shot args file was already
+     consumed by an earlier init: that topic is NOT in flight, so never `/ap:stop` it — redo steps
+     2–3 (re-mint, re-write) and retry. Otherwise stop.
 5. **Pre-snapshot + branch.** `$CS implement pre-snapshot <TOPIC>` (commits any dirty tree so the
    implement branch forks clean; rc 2 = the target is not a git repo → surface and stop). Then, unless
    the user passed `--no-branch`, `$CS implement branch <TOPIC>` (creates/resumes `feat/implement-<TOPIC>`
