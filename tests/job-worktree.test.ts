@@ -709,6 +709,23 @@ describe("job stop — a worktree an editable install now points INTO is kept", 
     expect(err).toContain(`cd ${root} && pip install -e .`);
   });
 
+  // The #183 hand-rolled shape pointed at the WORKTREE: an exec line ap cannot resolve to an import
+  // root, but which names the worktree textually. A9 says keep and NAME; the repair is the file itself.
+  it("an exec .pth line naming the worktree keeps it too, names the file, and says to edit it", async () => {
+    const root = repo();
+    const wt = await started(root);
+    const home = fakeHome();
+    const pth = siteUnder(join(home, ".local"), `import sys; sys.path.insert(0,'${wt}')\n`);
+    const { rc, err } = await capture(() => (sweepWorktree(record(root), root, runnerAt(root), { home, env: NOENV }) ? 0 : 1));
+    expect(rc).toBe(1);
+    expect(existsSync(wt)).toBe(true);
+    expect(err).toContain("resolves INTO the worktree");
+    expect(err).toContain(`  ${pth}:1`);
+    expect(err).toContain("edit that file");
+    expect(err).not.toContain("pip install -e .");     // no editable install to repair here
+    expect(err).toContain(`re-run 'ap job stop ${TOPIC}'`);
+  });
+
   // The scan is WIDENED at teardown to the conventional venv locations beside the checkout.
   it("the widened scan sees <root>/.venv and <root>/venv", async () => {
     for (const venv of [".venv", "venv"]) {

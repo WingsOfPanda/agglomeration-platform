@@ -338,11 +338,15 @@ export function sweepWorktree(rec: J.JobRecord, root: string, r: Runner, deps: E
   // presence of an unprovisioned `*.egg-info` is deliberately NOT a keep condition: `setup.py
   // build_ext --inplace` produces one as a normal byproduct, and keeping on it would keep every
   // python worktree forever and train the operator to force-remove.
-  const into = shadowHits(wt, deps.home, deps.env, [join(root, ".venv"), join(root, "venv")]).filter((h) => h.importRoot !== null);
+  // Warn-only hits (an exec `.pth` line ap cannot resolve to an import root) KEEP too: after the A1
+  // narrowing such a hit fires only on a line naming a path under the scanned root — here the
+  // worktree — so it is the #183 hand-rolled shape pointed at exactly the directory about to go.
+  const into = shadowHits(wt, deps.home, deps.env, [join(root, ".venv"), join(root, "venv")]);
   if (into.length) {
-    log.warn(`job stop: an editable install now resolves INTO the worktree ${wt}, which is being KEPT — removing it would leave the operator's python importing a deleted directory:`);
-    for (const h of into) log.warn(`  ${h.source}`);
-    log.warn(`  repair the install from the main checkout first: cd ${root} && pip install -e .   then re-run 'ap job stop ${rec.topic}' (or discard: git -C ${root} worktree remove --force ${wt})`);
+    log.warn(`job stop: an editable install or a .pth hook now resolves INTO the worktree ${wt}, which is being KEPT — removing it would leave the operator's python importing a deleted directory:`);
+    for (const h of into) log.warn(`  ${h.source}${h.importRoot === null ? `   (an exec line naming the worktree: edit that file so it no longer does, or point it at ${root})` : ""}`);
+    if (into.some((h) => h.importRoot !== null)) log.warn(`  repair the editable install from the main checkout first: cd ${root} && pip install -e .`);
+    log.warn(`  then re-run 'ap job stop ${rec.topic}' (or discard: git -C ${root} worktree remove --force ${wt})`);
     return false;
   }
   const rm = r.run("git", ["worktree", "remove", wt]);
