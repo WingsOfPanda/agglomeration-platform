@@ -348,7 +348,7 @@ export function sweepWorktree(rec: J.JobRecord, root: string, r: Runner, deps: E
     // A path entry has two shapes and two repairs: a src-layout `.pth` or a finder written by an
     // editable install is repaired by reinstalling from the main checkout; a hand-written path file
     // is repaired only by editing it — `pip install -e .` never touches it.
-    if (into.some((h) => h.importRoot !== null)) log.warn(`  for a path entry above: if an editable install wrote it, reinstall from the main checkout first (cd ${root} && pip install -e .); if it is a hand-written path file, edit it so it points at the main checkout`);
+    if (into.some((h) => h.importRoot !== null)) log.warn(`  for an entry above that is not an exec line (a path entry or an editable finder): if an editable install wrote it, reinstall from the main checkout first (cd ${root} && pip install -e .); if it is a hand-written path file, edit it so it points at the main checkout`);
     log.warn(`  then re-run 'ap job stop ${rec.topic}' (or discard: git -C ${root} worktree remove --force ${wt})`);
     return false;
   }

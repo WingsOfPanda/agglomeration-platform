@@ -708,8 +708,27 @@ describe("job stop — a worktree an editable install now points INTO is kept", 
     expect(err).toContain(`  ${pth}:1`);
     // a plain path entry has two shapes, and the remedy names both: reinstall for an editable
     // install's .pth, edit the file for a hand-written one (pip install -e never touches that).
+    expect(err).toContain("for an entry above that is not an exec line (a path entry or an editable finder):");
     expect(err).toContain(`if an editable install wrote it, reinstall from the main checkout first (cd ${root} && pip install -e .)`);
     expect(err).toContain("if it is a hand-written path file, edit it so it points at the main checkout");
+  });
+
+  // The other pinnable shape: a setuptools editable finder whose MAPPING now names the worktree —
+  // `pip install -e .` run from it. Kept, the finder named, and the same two-shape remedy printed.
+  it("an editable finder whose MAPPING names the worktree keeps it too, names the finder, and prints the reinstall remedy", async () => {
+    const root = repo();
+    const wt = await started(root);
+    const home = fakeHome();
+    const site = join(home, ".local", "lib", "python3.12", "site-packages");
+    mkdirSync(site, { recursive: true });
+    const finder = join(site, "__editable___p_finder.py");
+    writeFileSync(finder, `MAPPING: dict[str, str] = {'pkg': '${join(wt, "pkg")}'}\n`);
+    const { rc, err } = await capture(() => (sweepWorktree(record(root), root, runnerAt(root), { home, env: NOENV }) ? 0 : 1));
+    expect(rc).toBe(1);
+    expect(existsSync(wt)).toBe(true);
+    expect(err).toContain(`  ${finder}:1`);
+    expect(err).toContain("(a path entry or an editable finder)");
+    expect(err).toContain(`cd ${root} && pip install -e .`);
   });
 
   // The #183 hand-rolled shape pointed at the WORKTREE: an exec line ap cannot resolve to an import
