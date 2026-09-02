@@ -400,7 +400,16 @@ describe("jobBrief", () => {
       expect(s).toContain("NOTHING is pinned");
       expect(s).toContain("pin by hand");
       expect(s).not.toContain("export PYTHONPATH=");
-      expect(s).toContain("cd '/repo/.ap/worktrees/demo' && python3 -c 'from pkg.ext import sym'");
+      // A found-but-unpinnable shadow is NOT a clean box: the bare probe would answer about the MAIN
+      // checkout on a src-layout shadow (SC6), so the slot carries a placeholder that cannot be pasted
+      // as-is and points at the correction, instead of the clean-box form.
+      expect(s).not.toContain("cd '/repo/.ap/worktrees/demo' && python3 -c 'from pkg.ext import sym'");
+      expect(s).toContain("cd '/repo/.ap/worktrees/demo' && PYTHONPATH='<PIN BY HAND: the shadowed directory re-rooted under /repo/.ap/worktrees/demo — see NOTHING is pinned, below>' python3 -c 'from pkg.ext import sym'");
+      // the same for the #183 hand-rolled shape, and the correction it points at is present
+      const h = J.jobBrief({ ...REC, python_shadow: ["/home/op/.local/lib/python3.12/site-packages/hand.pth:1"] });
+      expect(h).not.toContain("&& python3 -c");
+      expect(h).toContain("PYTHONPATH='<PIN BY HAND:");
+      expect(h).toContain("NOTHING is pinned");
     });
     // A6/A13: the run that gets bitten arms the repo for the next one — the only mechanism by which
     // `.ap-provision` ever gets written.

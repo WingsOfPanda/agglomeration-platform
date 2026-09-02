@@ -544,7 +544,7 @@ function worktreeLines(j: JobRecord): string[] {
     ``,
     // Single-quoted so a path with a space pastes and runs: every pin entry passed provision.ts's
     // UNSAFE filter, which rejects the quote itself, and the worktree path is one ap built.
-    `    cd '${j.worktree}' && ${j.python_pin ? `PYTHONPATH='${j.python_pin}' ` : ""}python3 -c 'from pkg.ext import sym'`,
+    `    cd '${j.worktree}' && ${pinSlot(j)}python3 -c 'from pkg.ext import sym'`,
     ``,
     `Verify a compiled extension by its own path under the worktree, never by an import that succeeded:`,
     `an editable-install finder silently serves a submodule the worktree lacks from the main tree.`,
@@ -555,6 +555,18 @@ function worktreeLines(j: JobRecord): string[] {
     `load-bearing, not a backstop.`,
     ...shadowLines(j),
   ];
+}
+
+/** The `PYTHONPATH=` slot of the probe. Three states, and the middle one is the trap: with a pin it
+ *  is the pin; on a clean box (no shadow found) it is absent, as the design's probe rule says; but a
+ *  shadow that ap could NOT pin — an exec line it cannot resolve, an unsafe entry, an import root
+ *  the worktree lacks — is not a clean box, and rendering the bare probe there is exactly the probe
+ *  SC6 says must not be satisfiable (on a src-layout shadow it answers about the MAIN checkout). So
+ *  that state gets a placeholder the hub cannot paste as-is, pointing at the correction below. */
+function pinSlot(j: JobRecord): string {
+  if (j.python_pin) return `PYTHONPATH='${j.python_pin}' `;
+  if (j.python_shadow?.length) return `PYTHONPATH='<PIN BY HAND: the shadowed directory re-rooted under ${j.worktree} — see NOTHING is pinned, below>' `;
+  return "";
 }
 
 /** What the worktree carries beyond the fork. With nothing provisioned the wording is the one shipped
