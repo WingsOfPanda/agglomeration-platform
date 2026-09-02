@@ -45,7 +45,8 @@ function siteDirsUnder(prefix: string): string[] {
 }
 
 /** The site dirs a scan covers, in precedence order, de-duplicated. `extraPrefixes` is the teardown
- *  widening (`<root>/.venv`, `<root>/venv`, `<worktree>/.venv`); a launch-time scan passes none. */
+ *  widening (`<root>/.venv`, `<root>/venv` — a venv inside the worktree dies with it and is not
+ *  scanned); a launch-time scan passes none. */
 export function siteDirs(home: string, env: NodeJS.ProcessEnv, extraPrefixes: string[] = []): string[] {
   const prefixes = [env.VIRTUAL_ENV, env.CONDA_PREFIX, join(home, ".local"), ...extraPrefixes].filter((p): p is string => Boolean(p));
   const out: string[] = [];

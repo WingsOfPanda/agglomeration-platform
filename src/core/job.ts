@@ -542,7 +542,9 @@ function worktreeLines(j: JobRecord): string[] {
     `answer about the MAIN checkout. Probe the exact symbol a gate imports, from the worktree, with the`,
     `pin prefixed when the launch reported one:`,
     ``,
-    `    cd ${j.worktree} && ${j.python_pin ? `PYTHONPATH=${j.python_pin} ` : ""}python3 -c 'from pkg.ext import sym'`,
+    // Single-quoted so a path with a space pastes and runs: every pin entry passed provision.ts's
+    // UNSAFE filter, which rejects the quote itself, and the worktree path is one ap built.
+    `    cd '${j.worktree}' && ${j.python_pin ? `PYTHONPATH='${j.python_pin}' ` : ""}python3 -c 'from pkg.ext import sym'`,
     ``,
     `Verify a compiled extension by its own path under the worktree, never by an import that succeeded:`,
     `an editable-install finder silently serves a submodule the worktree lacks from the main tree.`,
@@ -568,9 +570,9 @@ function manifestLines(j: JobRecord): string[] {
       `and none of the operator's uncommitted work. Anything the run needs that is not committed is`,
       `simply not there — treat a file you cannot find as absent, not as a path to guess at.`,
       `A gitignored artifact the run needs (a compiled extension, a native build product) is rebuilt`,
-      `HERE with the repo's own build command. The lasting repair is to declare it: a committed`,
-      `\`.ap-provision\` at the repo root listing that artifact's git pathspecs, one per line, so a launch`,
-      `can copy it in — name that in your handoff so the next run starts armed.`,
+      `HERE with the repo's own build command. The lasting repair is to declare it — a committed`,
+      `\`.ap-provision\` at the repo root listing that artifact's git pathspecs, one per line — so ap can`,
+      `provision it into the worktree once that support lands; name that in your handoff.`,
     ];
   }
   return [

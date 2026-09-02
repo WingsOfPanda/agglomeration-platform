@@ -31,8 +31,8 @@ function repoAndWorktree(): { root: string; target: string } {
   return { root, target };
 }
 const ENV = {} as NodeJS.ProcessEnv;
-const finderText = (mapping: string) =>
-  `from importlib.machinery import PathFinder\n\nMAPPING: dict[str, str] = ${mapping}\nNAMESPACES: dict[str, list[str]] = {}\n\nclass _EditableFinder:\n    pass\n`;
+const finderText = (mapping: string, namespaces = "{}") =>
+  `from importlib.machinery import PathFinder\n\nMAPPING: dict[str, str] = ${mapping}\nNAMESPACES: dict[str, list[str]] = ${namespaces}\n\nclass _EditableFinder:\n    pass\n`;
 
 describe("shadowHits — what on the box resolves this repo from the main checkout", () => {
   it("a plain .pth line under the root is a hit whose importRoot is that directory (the iriscortex-src.pth shape)", () => {
@@ -74,6 +74,26 @@ describe("shadowHits — what on the box resolves this repo from the main checko
     writeFileSync(finder, finderText(`{'pkg': '${join(root, "pkg")}'}`));
     writeFileSync(join(site, "__editable__.pkg-0.1.0.pth"), "import __editable___pkg_0_1_0_finder; __editable___pkg_0_1_0_finder.install()\n");
     expect(shadowHits(root, home, ENV)).toEqual([{ source: `${finder}:3`, importRoot: root }]);
+  });
+
+  // The live artifact's NAMESPACES dict names 55 subdirectories of the same tree. They are NOT import
+  // roots — reading them would turn one hit into fifty-six and the pin into a 56-entry list.
+  it("a populated NAMESPACES line adds no hit: only the MAPPING value's parent is an import root", () => {
+    const { home, site } = homeWithSite();
+    const { root } = repoAndWorktree();
+    const finder = join(site, "__editable___ns_finder.py");
+    writeFileSync(finder, finderText(`{'pkg': '${join(root, "pkg")}'}`,
+      `{'pkg.sub': ['${join(root, "pkg", "sub")}'], 'pkg.sub.deeper': ['${join(root, "pkg", "sub", "deeper")}'], 'pkg.tests': ['${join(root, "pkg", "tests")}']}`));
+    expect(shadowHits(root, home, ENV)).toEqual([{ source: `${finder}:3`, importRoot: root }]);
+  });
+
+  // A MAPPING value that IS the root has no import root inside the repo: its parent is OUTSIDE, and
+  // re-rooting that would export `<worktree>/..` — the worktrees dir — onto PYTHONPATH.
+  it("a MAPPING value equal to the root itself yields no hit rather than a pin outside the worktree", () => {
+    const { home, site } = homeWithSite();
+    const { root } = repoAndWorktree();
+    writeFileSync(join(site, "__editable___self_finder.py"), finderText(`{'repo': '${root}'}`));
+    expect(shadowHits(root, home, ENV)).toEqual([]);
   });
 
   it("a src-layout MAPPING (<root>/src/pkg) re-roots to <root>/src, and a foreign MAPPING is ignored", () => {

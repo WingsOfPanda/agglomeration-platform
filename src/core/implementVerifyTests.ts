@@ -109,10 +109,12 @@ export function runBounded(bin: string | null, cwd: string, testCmd: string, tim
  *  entry list, exported FIRST so a site-packages shadow of the repo cannot make this in-place re-run
  *  test the main checkout while reporting on the worktree (issue #183 landed exactly here: the hub
  *  pane is spawned at the repo root and stays unpinned on purpose, so the pin has to ride the one
- *  child process whose cwd ap chooses). An empty pin is byte-identical to the script shipped before
+ *  child process whose cwd ap chooses). A pinned run ANNOUNCES its pin as the first line of its own
+ *  log — `export` prints nothing, and a layer records its own verdict rather than leaving the hub to
+ *  infer which tree its re-run tested. An empty pin is byte-identical to the script shipped before
  *  the pin existed. Pure, so the composition is testable without an exec. */
 export function verifyScript(testCmd: string, pin: string): string {
-  return pin ? `${pinExport(pin)}; ${testCmd} 2>&1` : `${testCmd} 2>&1`;
+  return pin ? `printf '%s\\n' "PYTHONPATH_PIN=${pin}"; ${pinExport(pin)}; ${testCmd} 2>&1` : `${testCmd} 2>&1`;
 }
 
 /** Live runner: resolve the bounding binary, derive the pin for THIS cwd, then `runBounded`. Never

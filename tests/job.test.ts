@@ -350,7 +350,7 @@ describe("jobBrief", () => {
       for (const command of ["quick", "implement"] as const) {
         const t = J.jobBrief({ ...REC, command });
         expect(t).toContain("A package-level import proves nothing about its");
-        expect(t).toContain("cd /repo/.ap/worktrees/demo && python3 -c 'from pkg.ext import sym'");
+        expect(t).toContain("cd '/repo/.ap/worktrees/demo' && python3 -c 'from pkg.ext import sym'");
         expect(t).toContain("by its own path under the worktree");
         expect(t).toContain("serves a submodule the worktree lacks from the main tree");
         expect(t).toContain("Never run `pip install -e .`");
@@ -368,13 +368,13 @@ describe("jobBrief", () => {
     });
     it("a clean record contains no PYTHONPATH at all, and the probe carries no prefix", () => {
       expect(b).not.toContain("PYTHONPATH");
-      expect(b).toContain("cd /repo/.ap/worktrees/demo && python3 -c 'from pkg.ext import sym'");
+      expect(b).toContain("cd '/repo/.ap/worktrees/demo' && python3 -c 'from pkg.ext import sym'");
     });
     it("a shadowed record names the source, the pasteable export, the pin INSIDE the probe, and both caveats", () => {
       const s = J.jobBrief({ ...REC, python_shadow: ["/home/op/.local/lib/python3.12/site-packages/x.pth:1"], python_pin: "/repo/.ap/worktrees/demo" });
       expect(s).toContain("    /home/op/.local/lib/python3.12/site-packages/x.pth:1");
       expect(s).toContain('export PYTHONPATH="/repo/.ap/worktrees/demo${PYTHONPATH:+:$PYTHONPATH}"');
-      expect(s).toContain("cd /repo/.ap/worktrees/demo && PYTHONPATH=/repo/.ap/worktrees/demo python3 -c 'from pkg.ext import sym'");
+      expect(s).toContain("cd '/repo/.ap/worktrees/demo' && PYTHONPATH='/repo/.ap/worktrees/demo' python3 -c 'from pkg.ext import sym'");
       expect(s).toContain("`sys.path[0]` is the SCRIPT's directory");
       expect(s).toContain("the pin does not buy everything");
       expect(s).toContain("serves a submodule the worktree lacks from the main tree");
@@ -385,7 +385,14 @@ describe("jobBrief", () => {
       // two sources -> two lines, each named
       const two = J.jobBrief({ ...REC, python_shadow: ["/a/x.pth:1", "/b/__editable___y_finder.py:9"], python_pin: "/repo/.ap/worktrees/demo/src" });
       expect(two).toContain("    /a/x.pth:1\n    /b/__editable___y_finder.py:9");
-      expect(two).toContain("PYTHONPATH=/repo/.ap/worktrees/demo/src python3 -c");
+      expect(two).toContain("PYTHONPATH='/repo/.ap/worktrees/demo/src' python3 -c");
+    });
+    // The probe is rendered for a hub to PASTE: a space in the checkout path or the import root must
+    // survive as one word (the pin filter rejects the quote itself, so single quotes are safe).
+    it("the probe line is single-quoted, so a path with a space pastes and runs", () => {
+      const wt = "/home/op/my repo/.ap/worktrees/demo";
+      const s = J.jobBrief({ ...REC, worktree: wt, python_shadow: ["/x.pth:1"], python_pin: `${wt}/my src` });
+      expect(s).toContain(`cd '${wt}' && PYTHONPATH='${wt}/my src' python3 -c 'from pkg.ext import sym'`);
     });
     it("a shadow ap could NOT pin (exec line, or an unsafe path) is still named, with the by-hand remedy and no export", () => {
       const s = J.jobBrief({ ...REC, python_shadow: ["/home/op/.local/lib/python3.12/site-packages/hook.pth:1"] });
@@ -393,7 +400,7 @@ describe("jobBrief", () => {
       expect(s).toContain("NOTHING is pinned");
       expect(s).toContain("pin by hand");
       expect(s).not.toContain("export PYTHONPATH=");
-      expect(s).toContain("cd /repo/.ap/worktrees/demo && python3 -c 'from pkg.ext import sym'");
+      expect(s).toContain("cd '/repo/.ap/worktrees/demo' && python3 -c 'from pkg.ext import sym'");
     });
     // A6/A13: the run that gets bitten arms the repo for the next one — the only mechanism by which
     // `.ap-provision` ever gets written.
@@ -402,6 +409,9 @@ describe("jobBrief", () => {
       expect(b).toContain("rebuilt\nHERE with the repo's own build command");
       expect(b).toContain("`.ap-provision` at the repo root");
       expect(b).toContain("name that in your handoff");
+      // PR A ships no reader for the file, so the clause must not claim one exists yet
+      expect(b).toContain("once that support lands");
+      expect(b).not.toContain("starts armed");
       expect(b).not.toContain("declared gitignored artifact");
     });
     it("with provisioned artifacts the manifest lists them, drops the 'no build products' claim, and says they were built from MAIN", () => {

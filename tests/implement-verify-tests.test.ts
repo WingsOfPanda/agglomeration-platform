@@ -264,9 +264,12 @@ describe("verifyScript — the pin is prepended to the re-run, and an empty pin 
   it("with no pin the script is byte-identical to what shipped: `<cmd> 2>&1`", () => {
     expect(verifyScript("npm test", "")).toBe("npm test 2>&1");
   });
-  it("with a pin the export comes FIRST, in the one spelling wrapLaunch uses", () => {
-    expect(verifyScript("npm test", "/wt")).toBe('export PYTHONPATH="/wt${PYTHONPATH:+:$PYTHONPATH}"; npm test 2>&1');
-    expect(verifyScript("pytest -q", "/wt:/wt/src")).toBe('export PYTHONPATH="/wt:/wt/src${PYTHONPATH:+:$PYTHONPATH}"; pytest -q 2>&1');
+  // A pinned run announces its pin as its log's FIRST line, then exports it in the one spelling
+  // wrapLaunch uses: `export` prints nothing, and the hub must be able to read which tree its own
+  // re-run tested from the log rather than infer it.
+  it("with a pin the announce line comes first, then the export, then the command", () => {
+    expect(verifyScript("npm test", "/wt")).toBe(`printf '%s\\n' "PYTHONPATH_PIN=/wt"; export PYTHONPATH="/wt\${PYTHONPATH:+:$PYTHONPATH}"; npm test 2>&1`);
+    expect(verifyScript("pytest -q", "/wt:/wt/src")).toBe(`printf '%s\\n' "PYTHONPATH_PIN=/wt:/wt/src"; export PYTHONPATH="/wt:/wt/src\${PYTHONPATH:+:$PYTHONPATH}"; pytest -q 2>&1`);
   });
   it("runBounded with a bounding binary passes the pinned script as the argv's last element (recording shim)", () => {
     const d = mkdtempSync(join(tmpdir(), "rb-pin-shim-"));
@@ -275,15 +278,24 @@ describe("verifyScript — the pin is prepended to the re-run, and an empty pin 
     chmodSync(shim, 0o755);
     expect(runBounded(shim, d, "npm test", 30, "/wt").code).toBe(0);
     expect(readFileSync(record, "utf8").split("\n").slice(0, -1))
-      .toEqual(["--kill-after=5", "30", "bash", "-c", "--", 'export PYTHONPATH="/wt${PYTHONPATH:+:$PYTHONPATH}"; npm test 2>&1']);
+      .toEqual(["--kill-after=5", "30", "bash", "-c", "--", `printf '%s\\n' "PYTHONPATH_PIN=/wt"; export PYTHONPATH="/wt\${PYTHONPATH:+:$PYTHONPATH}"; npm test 2>&1`]);
   });
-  it("runBounded hands the pin to the child, ahead of any PYTHONPATH already in the environment", () => {
-    const r = runBounded(null, mkdtempSync(join(tmpdir(), "rb-pin-")), "printf '%s' \"$PYTHONPATH\"", 30, "/wt/src");
+  it("runBounded hands the pin to the child, ahead of any PYTHONPATH already in the environment, and the log's first line names it", () => {
+    const d = mkdtempSync(join(tmpdir(), "rb-pin-"));
+    // The ordering claim is only observable with something inherited: set PYTHONPATH for the child's
+    // parent (this process) for the duration, and restore it whatever happens. ap never reads it.
+    const prev = process.env.PYTHONPATH;
+    process.env.PYTHONPATH = "/inherited";
+    let r;
+    try { r = runBounded(null, d, "printf '%s' \"$PYTHONPATH\"", 30, "/wt/src"); }
+    finally { if (prev === undefined) delete process.env.PYTHONPATH; else process.env.PYTHONPATH = prev; }
     expect(r.code).toBe(0);
-    expect(r.output.startsWith("/wt/src")).toBe(true);
-    // and the inherited value, if any, is appended rather than replaced
-    const inherited = process.env.PYTHONPATH;
-    expect(r.output).toBe(inherited ? `/wt/src:${inherited}` : "/wt/src");
+    expect(r.output).toBe("PYTHONPATH_PIN=/wt/src\n/wt/src:/inherited");
+    // with nothing inherited the pin stands alone — no trailing colon
+    delete process.env.PYTHONPATH;
+    try { r = runBounded(null, d, "printf '%s' \"$PYTHONPATH\"", 30, "/wt/src"); }
+    finally { if (prev !== undefined) process.env.PYTHONPATH = prev; }
+    expect(r.output).toBe("PYTHONPATH_PIN=/wt/src\n/wt/src");
   });
   it("runBounded with no pin leaves the child's PYTHONPATH exactly as inherited", () => {
     const r = runBounded(null, mkdtempSync(join(tmpdir(), "rb-nopin-")), "printf '%s' \"${PYTHONPATH-unset}\"", 30);
