@@ -6,12 +6,15 @@ import { isAbsolute } from "node:path";
 export interface RunResult { code: number; stdout: string; }
 export interface Runner { run(cmd: string, args: string[]): RunResult; }
 
-/** A cwd-bound synchronous command runner. execFileSync — never shell. */
+/** A cwd-bound synchronous command runner. execFileSync — never shell. The explicit maxBuffer is
+ *  the same value implementVerifyTests.ts uses: Node's 1 MiB default turns a large stdout into an
+ *  ENOBUFS throw with `status` null and a truncated buffer, which this wrapper would hand back as
+ *  `{code: 1, stdout: <partial>}` — a silent partial rather than a failure. */
 export function runnerAt(cwd: string): Runner {
   return {
     run(cmd, args) {
       try {
-        const stdout = execFileSync(cmd, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+        const stdout = execFileSync(cmd, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
         return { code: 0, stdout };
       } catch (e: unknown) {
         const err = e as { status?: number; stdout?: Buffer | string };
