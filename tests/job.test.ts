@@ -61,6 +61,28 @@ describe("job record codec", () => {
     expect(r.start_branch).toBe("");
     expect(r.origin_session).toBe("");
   });
+  // The environment-parity keys are OMITTED when empty, never written as [] or "": formatJob is
+  // JSON.stringify, so an always-present key would change every clean-box job.json on disk.
+  it("python_shadow / python_pin / provisioned are absent from a clean-box record, in both directions", () => {
+    const text = J.formatJob(REC);
+    expect(text).not.toContain("python_shadow");
+    expect(text).not.toContain("python_pin");
+    expect(text).not.toContain("provisioned");
+    const r = J.parseJob(JSON.stringify({ ...REC, python_shadow: [], python_pin: "", provisioned: [] }))!;
+    expect(r).toEqual(REC);
+    expect(Object.keys(r)).not.toContain("python_shadow");
+    expect(Object.keys(r)).not.toContain("python_pin");
+    expect(Object.keys(r)).not.toContain("provisioned");
+  });
+  it("round-trips them when present, and reads each as a string-only value", () => {
+    const full: J.JobRecord = { ...REC, python_shadow: ["/home/op/.local/lib/python3.12/site-packages/x.pth:1"], python_pin: "/repo/.ap/worktrees/demo/src", provisioned: ["pkg/_ext.so"] };
+    expect(J.parseJob(J.formatJob(full))).toEqual(full);
+    expect(J.parseJob(JSON.stringify({ ...REC, python_shadow: "not-an-array" }))!.python_shadow).toBeUndefined();
+    expect(J.parseJob(JSON.stringify({ ...REC, python_shadow: ["a", 3] }))!.python_shadow).toEqual(["a"]);
+    expect(J.parseJob(JSON.stringify({ ...REC, python_shadow: [3] }))!.python_shadow).toBeUndefined();
+    expect(J.parseJob(JSON.stringify({ ...REC, python_pin: 7 }))!.python_pin).toBeUndefined();
+    expect(J.parseJob(JSON.stringify({ ...REC, provisioned: [null, "pkg/_ext.so"] }))!.provisioned).toEqual(["pkg/_ext.so"]);
+  });
 });
 
 describe("worktree location + provenance", () => {
@@ -317,6 +339,81 @@ describe("jobBrief", () => {
     expect(none).not.toContain("WORKTREE");
     expect(none).not.toContain("--target");
     expect(none).not.toContain("FRESH checkout of the committed HEAD");
+  });
+
+  // Environment parity (2026-09-02 worktree-run-provisi design, A4/A6). #197's hub probed a
+  // package-level import in the MAIN checkout and wrote "the .so is already built here" into the
+  // brief; on a src-layout shadow the same probe with cwd in the worktree but no pin answers about
+  // the main checkout too. The rule therefore carries the submodule, the cwd and the pin.
+  describe("python environment parity", () => {
+    it("EVERY worktree brief carries the probe rule and the pip -e prohibition, for quick and implement", () => {
+      for (const command of ["quick", "implement"] as const) {
+        const t = J.jobBrief({ ...REC, command });
+        expect(t).toContain("A package-level import proves nothing about its");
+        expect(t).toContain("cd /repo/.ap/worktrees/demo && python3 -c 'from pkg.ext import sym'");
+        expect(t).toContain("by its own path under the worktree");
+        expect(t).toContain("serves a submodule the worktree lacks from the main tree");
+        expect(t).toContain("Never run `pip install -e .`");
+        expect(t).toContain("re-points the operator's");
+        // A9's ceiling, in the brief: the teardown keep-check is best-effort, so the prohibition stays load-bearing.
+        expect(t).toContain("best-effort");
+        expect(t).toContain("load-bearing, not a backstop");
+      }
+    });
+    it("and none of it in a --no-worktree brief", () => {
+      const none = J.jobBrief({ ...REC, worktree: "", base_sha: "" });
+      expect(none).not.toContain("python3 -c");
+      expect(none).not.toContain("pip install -e");
+      expect(none).not.toContain("PYTHON");
+    });
+    it("a clean record contains no PYTHONPATH at all, and the probe carries no prefix", () => {
+      expect(b).not.toContain("PYTHONPATH");
+      expect(b).toContain("cd /repo/.ap/worktrees/demo && python3 -c 'from pkg.ext import sym'");
+    });
+    it("a shadowed record names the source, the pasteable export, the pin INSIDE the probe, and both caveats", () => {
+      const s = J.jobBrief({ ...REC, python_shadow: ["/home/op/.local/lib/python3.12/site-packages/x.pth:1"], python_pin: "/repo/.ap/worktrees/demo" });
+      expect(s).toContain("    /home/op/.local/lib/python3.12/site-packages/x.pth:1");
+      expect(s).toContain('export PYTHONPATH="/repo/.ap/worktrees/demo${PYTHONPATH:+:$PYTHONPATH}"');
+      expect(s).toContain("cd /repo/.ap/worktrees/demo && PYTHONPATH=/repo/.ap/worktrees/demo python3 -c 'from pkg.ext import sym'");
+      expect(s).toContain("`sys.path[0]` is the SCRIPT's directory");
+      expect(s).toContain("the pin does not buy everything");
+      expect(s).toContain("serves a submodule the worktree lacks from the main tree");
+      // it says what ap already pinned, and what a quick hub must prefix by hand
+      expect(s).toContain("`implement verify-tests`");
+      expect(s).toContain("YOUR pane is not pinned");
+      expect(s).toContain("TEST_CMD");
+      // two sources -> two lines, each named
+      const two = J.jobBrief({ ...REC, python_shadow: ["/a/x.pth:1", "/b/__editable___y_finder.py:9"], python_pin: "/repo/.ap/worktrees/demo/src" });
+      expect(two).toContain("    /a/x.pth:1\n    /b/__editable___y_finder.py:9");
+      expect(two).toContain("PYTHONPATH=/repo/.ap/worktrees/demo/src python3 -c");
+    });
+    it("a shadow ap could NOT pin (exec line, or an unsafe path) is still named, with the by-hand remedy and no export", () => {
+      const s = J.jobBrief({ ...REC, python_shadow: ["/home/op/.local/lib/python3.12/site-packages/hook.pth:1"] });
+      expect(s).toContain("    /home/op/.local/lib/python3.12/site-packages/hook.pth:1");
+      expect(s).toContain("NOTHING is pinned");
+      expect(s).toContain("pin by hand");
+      expect(s).not.toContain("export PYTHONPATH=");
+      expect(s).toContain("cd /repo/.ap/worktrees/demo && python3 -c 'from pkg.ext import sym'");
+    });
+    // A6/A13: the run that gets bitten arms the repo for the next one — the only mechanism by which
+    // `.ap-provision` ever gets written.
+    it("with nothing provisioned the manifest is unchanged AND names .ap-provision as the durable fix", () => {
+      expect(b).toContain("no build products");
+      expect(b).toContain("rebuilt\nHERE with the repo's own build command");
+      expect(b).toContain("`.ap-provision` at the repo root");
+      expect(b).toContain("name that in your handoff");
+      expect(b).not.toContain("declared gitignored artifact");
+    });
+    it("with provisioned artifacts the manifest lists them, drops the 'no build products' claim, and says they were built from MAIN", () => {
+      const p = J.jobBrief({ ...REC, provisioned: ["pkg/_ext.so", "pkg/_other.so"] });
+      expect(p).toContain("2 declared gitignored artifacts copied from the main checkout:");
+      expect(p).toContain("    pkg/_ext.so\n    pkg/_other.so");
+      expect(p).toContain("built from MAIN sources at launch");
+      expect(p).not.toContain("no build products");
+      expect(p).toContain("FRESH checkout of the committed HEAD");
+      expect(p).toContain("treat a file you cannot find as absent");
+      expect(J.jobBrief({ ...REC, provisioned: ["pkg/_ext.so"] })).toContain("1 declared gitignored artifact copied");
+    });
   });
   // The return address for the hub's completion hint. A run launched outside tmux has none, and the
   // line is still rendered empty — the hub reads the empty value as "send no hint", which is a
