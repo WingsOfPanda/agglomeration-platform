@@ -1509,11 +1509,14 @@ describe("quick init: a predecessor that initialised but never reached a worker 
     expect(staleDirs()).toEqual([]);
   });
 
-  it("a record that cannot name its agent is not this case: the refusal stands", async () => {
-    const art = seedPredecessor();
-    rmSync(join(art, "agent.txt"));
-    expect(await initWith(ARGS, deps())).toBe(2);
-    expect(staleDirs()).toEqual([]);
+  it("a record that cannot name its agent, or its provider, is not this case: the refusal stands", async () => {
+    for (const f of ["agent.txt", "selected-provider.txt"]) {
+      const art = seedPredecessor();
+      rmSync(join(art, f));
+      expect(await initWith(ARGS, deps())).toBe(2);
+      expect(staleDirs()).toEqual([]);
+      rmSync(art, { recursive: true, force: true });
+    }
   });
 
   it("A1: a detached job record for the topic (Stage 0: no worker dir yet) holds the refusal, record intact", async () => {
@@ -1524,11 +1527,16 @@ describe("quick init: a predecessor that initialised but never reached a worker 
       command: "quick", topic: TOPIC, session: "ap-stale-topic", hub: { agent: "november", model: "claude" },
       provider: "codex", finish: "keep", budget_hours: 6, max_rounds: 5, args_file: "/tmp/args", started: "2026-09-02T00:00:00Z",
     }));
-    expect(await initWith(ARGS, deps())).toBe(2);
+    const errs: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    (process.stderr as any).write = (s: string) => { errs.push(String(s)); return true; };
+    try { expect(await initWith(ARGS, deps())).toBe(2); }
+    finally { (process.stderr as any).write = orig; }
     expect(staleDirs()).toEqual([]);
     expect(existsSync(p)).toBe(true);
     expect(readFileSync(join(art, "topic-text.txt"), "utf8")).toBe("stale topic (first attempt)");
     expect(outSpy.text()).not.toContain("ARCHIVED_STALE");
+    expect(errs.join("")).toContain(`ap job stop ${TOPIC}`);   // `/ap:stop <topic>` refuses while the record exists
   });
 
   it("A2: a SIBLING worker dir (a job hub, not the recorded pair) with a live nonce-verified pane holds, busy or idle", async () => {
@@ -1586,6 +1594,54 @@ describe("quick init: a predecessor that initialised but never reached a worker 
     expect(readFileSync(join(art, "topic-text.txt"), "utf8")).toBe("stale topic (first attempt)");
     expect(staleDirs()).toEqual([]);
     expect(outSpy.text()).not.toContain("ARCHIVED_STALE");
+  });
+
+  it("A: a dead worker is archived BY ITS DIR NAME, whatever its pane.json claims (even a traversal model): the topic dir stays put", async () => {
+    seedPredecessor();
+    const wd = join(topicDir(TOPIC), "weirdname");
+    mkdirSync(wd, { recursive: true });
+    writeFileSync(join(wd, "pane.json"), JSON.stringify({ pane_id: "%9", pane_nonce: randomUUID(), agent: "bravo", model: "../..", spawned_at: "2026-09-02T00:00:00Z" }) + "\n");
+    writeFileSync(join(wd, "status.json"), '{"state":"idle","last_event":"done"}');
+    expect(await initWith(ARGS, deps())).toBe(0);
+    expect(existsSync(wd)).toBe(false);
+    expect(archivedWorkers()).toEqual([expect.stringMatching(/^weirdname-\d{8}T\d{6}Z-stale$/)]);
+    expect(existsSync(join(quickArtDir(TOPIC), "topic-text.txt"))).toBe(true);   // the topic dir and the new run are where they were
+    expect(staleDirs()).toHaveLength(1);
+  });
+
+  it("A: EVERY proven-dead worker dir is archived, not just the recorded pair", async () => {
+    seedPredecessor();
+    seedWorker("idle", "%9", randomUUID(), "done");
+    const wd2 = workerDir("november", "claude", TOPIC);
+    mkdirSync(wd2, { recursive: true });
+    paneMetaWrite("november", "claude", TOPIC, "%8", randomUUID());
+    writeFileSync(join(wd2, "status.json"), '{"state":"done","last_event":"done"}');
+    expect(await initWith(ARGS, deps())).toBe(0);
+    expect(archivedWorkers().sort()).toEqual([expect.stringMatching(/^bravo-codex-\d{8}T\d{6}Z-stale$/), expect.stringMatching(/^november-claude-\d{8}T\d{6}Z-stale$/)]);
+    expect(outSpy.text().match(/ARCHIVED_STALE_WORKER=/g)).toHaveLength(2);
+    expect(existsSync(wd2)).toBe(false);
+  });
+
+  it("A: the platform's spawn seed (last_event spawn) holds even when its pane is proven gone — a spawn killed mid-way is not a death verdict", async () => {
+    seedPredecessor();
+    seedWorker("idle", "%9", randomUUID(), "spawn");
+    expect(await initWith(ARGS, deps())).toBe(2);
+    expect(staleDirs()).toEqual([]);
+  });
+
+  it("A: a zero-length status.json (the O_TRUNC crash remnant) reads as busy → hold", async () => {
+    seedPredecessor();
+    seedWorker("idle");
+    writeFileSync(join(workerDir("bravo", "codex", TOPIC), "status.json"), "");
+    expect(await initWith(ARGS, deps())).toBe(2);
+    expect(staleDirs()).toEqual([]);
+  });
+
+  it("A: an empty worker dir (prepareWorkerState's first instant: no status, no pane) holds", async () => {
+    seedPredecessor();
+    mkdirSync(workerDir("bravo", "codex", TOPIC), { recursive: true });
+    expect(await initWith(ARGS, deps())).toBe(2);
+    expect(staleDirs()).toEqual([]);
   });
 
   it("agent.txt naming a traversal segment is not an agent: the refusal stands, nothing renamed", async () => {

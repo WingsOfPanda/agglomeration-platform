@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, renameSync, rmSync, readdirSync, readFileSync, openSync, closeSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, basename } from "node:path";
 import { workerDir, topicDir, globalRoot, repoHash } from "./paths.js";
 import { atomicWrite } from "./atomic.js";
+import { assertSlug } from "./slug.js";
 
 export function archiveTs(now: Date = new Date()): string {
   return isoUtc(now).replace(/[-:]/g, "");
@@ -36,10 +37,17 @@ export function moveToArchive(src: string, base: string): string {
 }
 
 export function stateArchive(agent: string, model: string, topic: string, suffix?: string, opts?: { now?: Date }): string | null {
-  const src = workerDir(agent, model, topic);
+  return archiveWorkerDir(workerDir(agent, model, topic), topic, suffix, opts);
+}
+
+/** The same move for a worker dir a topic scan already HOLDS, keyed on the dir's own name — never on
+ *  a pane.json's claim of who it is: rebuilt through workerDir(), a record naming `model: "../.."`
+ *  resolves to the topic dir itself and the whole topic state moves. `src` is a real directory
+ *  entry, so it can only ever be that entry. */
+export function archiveWorkerDir(src: string, topic: string, suffix?: string, opts?: { now?: Date }): string | null {
   if (!existsSync(src)) return null;
   const ts = archiveTs(opts?.now);
-  let base = join(globalRoot(), "archive", repoHash(), topic, `${agent}-${model}-${ts}`);
+  let base = join(globalRoot(), "archive", repoHash(), assertSlug("topic", topic), `${basename(src)}-${ts}`);
   if (suffix) base += `-${suffix}`;
   return moveToArchive(src, base);
 }

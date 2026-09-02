@@ -4,7 +4,7 @@ import { isAbsolute, join, dirname } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
-import { isoUtc, archiveTs, moveToArchive, stateArchive } from "../core/archive.js";
+import { isoUtc, archiveTs, moveToArchive, archiveWorkerDir } from "../core/archive.js";
 import { repoRoot, topicDir, isArtifactDir } from "../core/paths.js";
 import { jobPath, keepOnBranch, withMainCheckout } from "../core/job.js";
 import { quickArtDir, quickExecDir, deriveSlug, parseQuickArgs, parseBranchArgs, detectTestCommand, renderSummary, renderResume, type SummaryFacts } from "../core/quick.js";
@@ -132,7 +132,7 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
     // `stop` would have sent them, so the agents return to the pool and `list` shows no permanent
     // orphan under a topic whose run is gone.
     for (const w of stale.workers) {
-      const wdest = stateArchive(w.agent, w.model, slug, "stale");
+      const wdest = archiveWorkerDir(w, slug, "stale");
       if (wdest) process.stdout.write(`ARCHIVED_STALE_WORKER=${wdest}\n`);
     }
     // The run's RECORDS carry forward — copied, so the archive stays a faithful record of that
@@ -182,8 +182,9 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
  *  ran); and nothing under the topic may still be running (`deadWorkers`). A record that cannot
  *  name its agent is not this case either (the archive name needs one), and the hold is the safe
  *  answer. Returns the archive names — the predecessor's agent and every worker dir to move — or
- *  null when the refusal stands. */
-async function stalePredecessor(art: string, topic: string, d: InitDeps): Promise<{ agent: string; workers: WorkerId[] } | null> {
+ *  null when the refusal stands. The worker dirs are the paths the scan HELD, archived by their own
+ *  names (archiveWorkerDir): a pane.json's claim of who it is could name any path. */
+async function stalePredecessor(art: string, topic: string, d: InitDeps): Promise<{ agent: string; workers: string[] } | null> {
   const exec = quickExecDir(topic);
   if (existsSync(join(exec, "turn-1.txt"))) return null;
   const base = readField(join(exec, "branch-base.sha"));
@@ -192,13 +193,11 @@ async function stalePredecessor(art: string, topic: string, d: InitDeps): Promis
     if (head && head !== base) return null;
   }
   const agent = readField(join(art, "agent.txt"));
-  if (!validateSlug(agent)) return null;
+  if (!validateSlug(agent) || !readField(join(art, "selected-provider.txt"))) return null;
   const workers = await deadWorkers(topic, d);
   if (workers === null) return null;   // something under the topic may still be running
   return { agent, workers };
 }
-
-interface WorkerId { agent: string; model: string; }
 
 /** Every worker dir under the topic, each PROVEN dead — or null the moment anything under the topic
  *  may still be running, which is the refusal. The scan covers the whole topic dir, not just the pair
@@ -212,14 +211,19 @@ interface WorkerId { agent: string; model: string; }
  *   - no pane record at all: the spawn window runs ~200 lines before the tmux split, and the
  *     absence of a record is not evidence of death;
  *   - an owned pane, an EMPTY snapshot (tmux gave no answer), or a live id under a pre-nonce record. */
-async function deadWorkers(topic: string, d: InitDeps): Promise<WorkerId[] | null> {
-  if (existsSync(jobPath(topic))) return null;
+async function deadWorkers(topic: string, d: InitDeps): Promise<string[] | null> {
+  if (existsSync(jobPath(topic))) {
+    // Named here because the generic remedy line that follows (`/ap:stop`) is a dead end for this
+    // shape: `stop <topic>` refuses while a job record exists, and only `job stop` tears it down.
+    log.error(`quick init: a detached job owns this topic (${jobPath(topic)}); tear it down with: ap job stop ${topic}`);
+    return null;
+  }
   const td = topicDir(topic);
   let names: string[] = [];
   try {
     names = readdirSync(td, { withFileTypes: true }).filter((e) => e.isDirectory() && !isArtifactDir(e.name)).map((e) => e.name).sort();
   } catch { /* no topic dir: no workers */ }
-  const dead: WorkerId[] = [];
+  const dead: string[] = [];
   let snap: Map<string, string> | null = null;
   for (const name of names) {
     const wd = join(td, name);
@@ -230,7 +234,7 @@ async function deadWorkers(topic: string, d: InitDeps): Promise<WorkerId[] | nul
     snap ??= await d.livePanes();
     if (ownsPane(snap, pane.paneId, pane.nonce)) return null;
     if (snap.size === 0 || (snap.has(pane.paneId) && !verifiableNonce(pane.nonce))) return null;
-    dead.push({ agent: pane.agent, model: pane.model });
+    dead.push(wd);
   }
   return dead;
 }
