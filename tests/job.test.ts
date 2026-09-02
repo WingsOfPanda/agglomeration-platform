@@ -381,10 +381,13 @@ describe("jobBrief", () => {
       expect(s).toContain("`sys.path[0]` is the SCRIPT's directory");
       expect(s).toContain("the pin does not buy everything");
       expect(s).toContain("serves a submodule the worktree lacks from the main tree");
-      // it says what ap already pinned, and what a quick hub must prefix by hand
+      // it says what ap already pinned, and what a quick hub must prefix by hand — on the SAME command
+      // line as the python it pins, because a Bash call is its own shell
       expect(s).toContain("`implement verify-tests`");
       expect(s).toContain("YOUR pane is not pinned");
       expect(s).toContain("TEST_CMD");
+      expect(s).toContain("on the SAME command line (`<the export>; cd '<worktree>' && <command>`)");
+      expect(s).toContain("an export in an earlier call never reaches the next one");
       // two sources -> two lines, each named
       const two = J.jobBrief({ ...REC, python_shadow: ["/a/x.pth:1", "/b/__editable___y_finder.py:9"], python_pin: "/repo/.ap/worktrees/demo/src" });
       expect(two).toContain("    /a/x.pth:1\n    /b/__editable___y_finder.py:9");
@@ -410,7 +413,7 @@ describe("jobBrief", () => {
       // ...and that the export rides the probe's OWN command line: a hub's Bash calls are separate
       // shells, so an `export` in an earlier call never reaches the pasted line — and a bare prefix
       // binds only to the `cd` that opens the line.
-      expect(s).toContain("put `export PIN_BY_HAND=<that directory>;` in front of it on the SAME command line");
+      expect(s).toContain('put `export PIN_BY_HAND="<that directory>";` in front of it on the SAME command line');
       expect(s).toContain("export it as PYTHONPATH");
       expect(s).not.toContain("export PYTHONPATH=");
       // A found-but-unpinnable shadow is NOT a clean box: the bare probe would answer about the MAIN
@@ -446,16 +449,20 @@ describe("jobBrief", () => {
         expect(pinned.status).toBe(0);
         expect(pinned.stdout.trim()).toBe("RAN:/wt/src");
       }
-      // The remedy's own instruction — `export PIN_BY_HAND=<dir>;` in front of the line on the SAME
-      // command line — runs; the two shapes the remedy warns against do not: an export in a separate
-      // earlier shell (the shell-per-call hub), and a bare `VAR=… ` prefix, which binds only to the
-      // `cd` that opens the line and leaves the probe's own expansion unset.
-      const line = probeOf(J.jobBrief({ ...REC, python_shadow: ["/x.pth:1"] }))
+      // The remedy's own instruction — its EXACT template, `export PIN_BY_HAND="<that directory>";`,
+      // taken from the rendered brief and filled with a directory that has a space — in front of the
+      // line on the SAME command line runs with that pin, untruncated; the two shapes the remedy warns
+      // against do not: an export in a separate earlier shell (the shell-per-call hub), and a bare
+      // `VAR=… ` prefix, which binds only to the `cd` that opens the line.
+      const brief = J.jobBrief({ ...REC, python_shadow: ["/x.pth:1"] });
+      const line = probeOf(brief)
         .replace("cd '/repo/.ap/worktrees/demo'", "true").replace("python3 -c 'from pkg.ext import sym'", "sh -c 'echo RAN:$PYTHONPATH'");
+      const template = 'export PIN_BY_HAND="<that directory>";';
+      expect(brief).toContain(`\`${template}\``);
       const sh = (cmd: string) => spawnSync("bash", ["-c", cmd], { encoding: "utf8", env: { PATH: process.env.PATH ?? "" } });
-      const sameLine = sh(`export PIN_BY_HAND=/wt/src; ${line}`);
+      const sameLine = sh(`${template.replace("<that directory>", "/wt/my src")} ${line}`);
       expect(sameLine.status).toBe(0);
-      expect(sameLine.stdout.trim()).toBe("RAN:/wt/src");
+      expect(sameLine.stdout.trim()).toBe("RAN:/wt/my src");
       for (const wrong of [`bash -c 'export PIN_BY_HAND=/wt/src'; ${line}`, `PIN_BY_HAND=/wt/src ${line}`]) {
         const r = sh(wrong);
         expect(r.status).not.toBe(0);
