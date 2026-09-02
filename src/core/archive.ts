@@ -28,7 +28,7 @@ function uniqueDest(base: string): string {
 }
 
 /** Move `src` to a collision-free destination under `base` (mkdir-parent + rename); returns dest. */
-function moveToArchive(src: string, base: string): string {
+export function moveToArchive(src: string, base: string): string {
   const dest = uniqueDest(base);
   mkdirSync(dirname(dest), { recursive: true });
   renameSync(src, dest);

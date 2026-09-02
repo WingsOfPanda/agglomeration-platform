@@ -35,7 +35,7 @@ describe("quick init", () => {
   afterEach(() => { outSpy.restore(); h.cleanup(); });
 
   // Deterministic deps: provider present + on PATH, agent fixed — no env dependency.
-  const okDeps: InitDeps = { haveCmd: () => true, agentBinary: () => "codex", pickRandomAgent: () => "bravo" };
+  const okDeps: InitDeps = { haveCmd: () => true, agentBinary: () => "codex", pickRandomAgent: () => "bravo", livePanes: async () => new Map(), branchSha: () => "" };
 
   it("scaffolds _quick, validates provider, prints KV; rc 0", async () => {
     const rc = await initWith(["add", "oauth", "login", "--provider", "codex"], okDeps);
@@ -83,7 +83,7 @@ describe("quick init", () => {
   });
 
   it("provider known but binary not on PATH → rc 3", async () => {
-    const rc = await initWith(["do", "thing"], { haveCmd: () => false, agentBinary: () => "codex", pickRandomAgent: () => "bravo" });
+    const rc = await initWith(["do", "thing"], { ...okDeps, haveCmd: () => false });
     expect(rc).toBe(3);
   });
 
@@ -101,8 +101,9 @@ describe("quick init", () => {
     expect(readFileSync(join(art, "topic-text.txt"), "utf8")).toBe("flagged topic");
   });
 
-  it("in-flight (art dir exists) → rc 2", async () => {
+  it("in-flight (a predecessor that reached a worker turn) → rc 2", async () => {
     expect(await initWith(["dup", "topic", "--provider", "codex"], okDeps)).toBe(0);
+    writeFileSync(join(quickExecDir("dup-topic"), "turn-1.txt"), "OFFSET=0\n");
     expect(await initWith(["dup", "topic", "--provider", "codex"], okDeps)).toBe(2);
   });
 });
@@ -1306,5 +1307,125 @@ describe("quick init: a consumed args file", () => {
     finally { (process.stderr as any).write = orig; }
     expect(rc).toBe(2);
     expect(errs.join("")).toBe(`args file not found: ${gone} (a one-shot args file is consumed by the first init that reads it; re-mint with --mint-args-file)\n`);
+  });
+});
+
+import { randomUUID } from "node:crypto";
+import { paneMetaWrite } from "../src/core/ipc.js";
+import { topicDir } from "../src/core/paths.js";
+
+describe("quick init: a predecessor that initialised but never reached a worker turn", () => {
+  let h: { home: string; cleanup: () => void };
+  let outSpy: ReturnType<typeof captureStdout>;
+  beforeEach(() => { h = freshHome(); outSpy = captureStdout(); });
+  afterEach(() => { outSpy.restore(); h.cleanup(); });
+
+  const TOPIC = "stale-topic";
+  const ARGS = ["stale", "topic", "--provider", "codex"];
+  function deps(o: { panes?: Map<string, string>; sha?: string } = {}): InitDeps {
+    return {
+      haveCmd: () => true, agentBinary: () => "codex", pickRandomAgent: () => "charlie",
+      livePanes: async () => o.panes ?? new Map(), branchSha: () => o.sha ?? "base000",
+    };
+  }
+  /** What init + branch leave behind before any turn: the init records plus the branch snapshot. */
+  function seedPredecessor(opts: { branched: boolean } = { branched: true }): string {
+    const art = quickArtDir(TOPIC); const exec = quickExecDir(TOPIC);
+    mkdirSync(exec, { recursive: true });
+    writeFileSync(join(art, "topic.txt"), TOPIC + "\n");
+    writeFileSync(join(art, "topic-text.txt"), "stale topic (first attempt)");
+    writeFileSync(join(art, "agent.txt"), "bravo\n");
+    writeFileSync(join(art, "selected-provider.txt"), "codex\n");
+    if (opts.branched) {
+      writeFileSync(join(exec, "branch-base.sha"), "base000\n");
+      writeFileSync(join(exec, "target_cwd.txt"), "/proj\n");
+      writeFileSync(join(exec, "branch.txt"), "feat/quick-stale-topic\n");
+    }
+    return art;
+  }
+  function seedWorker(status: string, paneId = "%9", nonce = randomUUID()): string {
+    const wd = workerDir("bravo", "codex", TOPIC);
+    mkdirSync(wd, { recursive: true });
+    paneMetaWrite("bravo", "codex", TOPIC, paneId, nonce);
+    writeFileSync(join(wd, "status.json"), `{"state":"${status}","last_event":"spawn"}`);
+    return nonce;
+  }
+  const staleDirs = () => readdirSync(topicDir(TOPIC)).filter((n) => n.startsWith("_quick.stale-"));
+
+  it("no turn record, feat branch at its base, worker never spawned → archived to _quick.stale-<agent>-<utc-ts>, named on stdout, init proceeds", async () => {
+    const art = seedPredecessor();
+    expect(await initWith(ARGS, deps())).toBe(0);
+    const [dir, ...more] = staleDirs();
+    expect(more).toEqual([]);
+    expect(dir).toMatch(/^_quick\.stale-bravo-\d{8}T\d{6}Z$/);
+    expect(readFileSync(join(topicDir(TOPIC), dir, "topic-text.txt"), "utf8")).toBe("stale topic (first attempt)");
+    expect(readFileSync(join(topicDir(TOPIC), dir, "execute", "branch-base.sha"), "utf8").trim()).toBe("base000");
+    expect(readFileSync(join(art, "topic-text.txt"), "utf8")).toBe("stale topic");
+    expect(readFileSync(join(art, "agent.txt"), "utf8").trim()).toBe("charlie");
+    expect(existsSync(join(art, "execute", "branch-base.sha"))).toBe(false); // a fresh run, not a resumed one
+    expect(outSpy.text()).toContain(`ARCHIVED_STALE=${join(topicDir(TOPIC), dir)}\n`);
+    expect(outSpy.text()).toMatch(/^SLUG=stale-topic$/m);
+  });
+
+  it("a worker dir whose pane is gone and whose status is idle is not live → archived", async () => {
+    seedPredecessor();
+    seedWorker("idle");
+    expect(await initWith(ARGS, deps())).toBe(0); // the snapshot holds no pane, so none is owned
+    expect(staleDirs()).toHaveLength(1);
+  });
+
+  it("the branch step never ran (no branch-base.sha) → untouched, archived", async () => {
+    seedPredecessor({ branched: false });
+    expect(await initWith(ARGS, deps({ sha: "" }))).toBe(0);
+    expect(staleDirs()).toHaveLength(1);
+  });
+
+  it("the feat branch ref is gone (probe answers \"\") → untouched, archived", async () => {
+    seedPredecessor();
+    expect(await initWith(ARGS, deps({ sha: "" }))).toBe(0);
+    expect(staleDirs()).toHaveLength(1);
+  });
+
+  it("the branch probe is asked about the predecessor's own target and branch", async () => {
+    seedPredecessor();
+    let seen: string[] = [];
+    expect(await initWith(ARGS, { ...deps(), branchSha: (cwd, branch) => { seen = [cwd, branch]; return "base000"; } })).toBe(0);
+    expect(seen).toEqual(["/proj", "feat/quick-stale-topic"]);
+  });
+
+  it("ANY turn record keeps the refusal: rc 2, nothing archived, the predecessor untouched", async () => {
+    const art = seedPredecessor();
+    writeFileSync(join(quickExecDir(TOPIC), "turn-1.txt"), "OFFSET=0\n");
+    expect(await initWith(ARGS, deps())).toBe(2);
+    expect(staleDirs()).toEqual([]);
+    expect(readFileSync(join(art, "topic-text.txt"), "utf8")).toBe("stale topic (first attempt)");
+    expect(outSpy.text()).not.toContain("ARCHIVED_STALE=");
+  });
+
+  it("the feat branch moved past its base keeps the refusal", async () => {
+    seedPredecessor();
+    expect(await initWith(ARGS, deps({ sha: "moved01" }))).toBe(2);
+    expect(staleDirs()).toEqual([]);
+  });
+
+  it("a worker whose status is `working` keeps the refusal, pane or no pane", async () => {
+    seedPredecessor();
+    seedWorker("working");
+    expect(await initWith(ARGS, deps())).toBe(2);
+    expect(staleDirs()).toEqual([]);
+  });
+
+  it("a worker that still owns its pane keeps the refusal even with an idle status", async () => {
+    seedPredecessor();
+    const nonce = seedWorker("idle", "%9");
+    expect(await initWith(ARGS, deps({ panes: new Map([["%9", nonce]]) }))).toBe(2);
+    expect(staleDirs()).toEqual([]);
+  });
+
+  it("a record that cannot name its agent is not this case: the refusal stands", async () => {
+    const art = seedPredecessor();
+    rmSync(join(art, "agent.txt"));
+    expect(await initWith(ARGS, deps())).toBe(2);
+    expect(staleDirs()).toEqual([]);
   });
 });

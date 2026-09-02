@@ -4,8 +4,8 @@ import { isAbsolute, join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
-import { isoUtc } from "../core/archive.js";
-import { repoRoot } from "../core/paths.js";
+import { isoUtc, archiveTs, moveToArchive } from "../core/archive.js";
+import { repoRoot, workerDir } from "../core/paths.js";
 import { jobPath, keepOnBranch, withMainCheckout } from "../core/job.js";
 import { quickArtDir, quickExecDir, deriveSlug, parseQuickArgs, parseBranchArgs, detectTestCommand, renderSummary, renderResume, type SummaryFacts } from "../core/quick.js";
 import { parseSetProviderArgs, FALLBACK_REASONS, recordProviderFallback, readProviderFallback } from "../core/implement.js";
@@ -16,7 +16,9 @@ import { haveCmd } from "../core/deps.js";
 import { pickRandomAgent } from "../core/agents.js";
 import { runnerAt, preSnapshot, createOrResumeBranch, finishWork, classifyDirty, currentBranch, hasDistinctBranch, stashPush, stashPopOnBranch, targetProblem } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
-import { outboxOffset, outboxPath } from "../core/ipc.js";
+import { outboxOffset, outboxPath, paneMetaReadForDir } from "../core/ipc.js";
+import { livePaneNonces, ownsPane } from "../core/tmux.js";
+import { readWorkerStatusRec } from "../core/workerLiveness.js";
 import { composeRound1Prompt, composeFixPrompt } from "../core/turn.js";
 import { sendRound, waitRound, type RoundDescriptor, type RoundSendDeps, type RoundWaitDeps } from "../core/roundProtocol.js";
 import { envNum, DEFAULT_TURN_BUDGET_S } from "../core/env.js";
@@ -34,8 +36,20 @@ export interface InitDeps {
   haveCmd(name: string): boolean;
   agentBinary(name: string): string | undefined;
   pickRandomAgent(topic: string): string | null;
+  /** pane id -> @ap_nonce for every live pane; EMPTY on any tmux error, which every ownership
+   *  check reads as "not ours" (livePaneNonces' own contract). */
+  livePanes(): Promise<Map<string, string>>;
+  /** The sha `refs/heads/<branch>` points at in `cwd`; "" when the ref, or the repo, is absent. */
+  branchSha(cwd: string, branch: string): string;
 }
-const liveInitDeps: InitDeps = { haveCmd, agentBinary, pickRandomAgent };
+const liveInitDeps: InitDeps = {
+  haveCmd, agentBinary, pickRandomAgent,
+  livePanes: livePaneNonces,
+  branchSha: (cwd, branch) => {
+    const r = runnerAt(cwd).run("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]);
+    return r.code === 0 ? r.stdout.trim() : "";
+  },
+};
 
 export async function run(args: string[]): Promise<number> {
   // ONE state tree per run, whatever directory the hub is standing in. Every state path derives
@@ -100,7 +114,15 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
   // alone re-blocked every retry. They are left exactly where they are, so the pre-init flag stays on
   // the run record the new run keeps writing to.
   const prior = STATE_FILE_BASENAMES.some((f) => existsSync(join(art, f)));
-  if (prior) { log.error(`quick init: topic already in flight: ${art}`); log.error("  run /ap:stop or pick a different topic"); return 2; }
+  // A predecessor that initialised but never reached a worker turn, and whose worker is not live,
+  // is archived HERE rather than refused: there is no work to lose, and a detached run has no
+  // operator to ask. A live worker, or ANY turn record, keeps the refusal — see stalePredecessor.
+  const stale = prior ? await stalePredecessor(art, slug, d) : null;
+  if (stale) {
+    const dest = moveToArchive(art, `${art}.stale-${stale}-${archiveTs()}`);
+    log.warn(`quick init: archived a predecessor that never reached a worker turn: ${dest}`);
+    process.stdout.write(`ARCHIVED_STALE=${dest}\n`);
+  } else if (prior) { log.error(`quick init: topic already in flight: ${art}`); log.error("  run /ap:stop or pick a different topic"); return 2; }
 
   const agent = d.pickRandomAgent(slug);
   if (!agent) { log.error(`quick init: no available agent in the pool for '${slug}'`); return 1; }
@@ -127,6 +149,34 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
   log.ok(`quick init: topic=${slug} agent=${agent} provider=${provider} finish=${finish ? "yes" : "no"} stash-wip=${stashWip ? "yes" : "no"}`);
   process.stdout.write(`SLUG=${slug}\nAGENT=${agent}\nPROVIDER=${provider}\nFINISH=${finish ? "yes" : "no"}\nTARGET=${target}\nSTASH_WIP=${stashWip ? "yes" : "no"}\n`);
   return 0;
+}
+/** Is the run under `art` a predecessor init may archive on its own? Only when every probe says
+ *  nothing was started: no turn record (`execute/turn-1.txt` — round 1 is idempotent, so no later
+ *  round exists without it); the run's feat branch has not moved past `execute/branch-base.sha`
+ *  (a ref never created, or since deleted, is untouched; no base sha means the branch step never
+ *  ran); and the worker init named — `agent.txt` + `selected-provider.txt`, the pair every worker
+ *  path is built from — is not live: it owns no pane and its status is not `working`. A record
+ *  that cannot name its agent is not this case either (the archive name needs one), and the hold
+ *  is the safe answer. Returns the predecessor's agent — the archive name's middle segment — or
+ *  null when the refusal stands. */
+async function stalePredecessor(art: string, topic: string, d: InitDeps): Promise<string | null> {
+  const exec = quickExecDir(topic);
+  if (existsSync(join(exec, "turn-1.txt"))) return null;
+  const base = readField(join(exec, "branch-base.sha"));
+  if (base) {
+    const head = d.branchSha(readField(join(exec, "target_cwd.txt")) || repoRoot(), branchNameFor("quick", topic));
+    if (head && head !== base) return null;
+  }
+  const agent = readField(join(art, "agent.txt"));
+  const model = readField(join(art, "selected-provider.txt"));
+  if (!validateSlug(agent) || !model) return null;
+  const wd = workerDir(agent, model, topic);
+  if (existsSync(wd)) {
+    const pane = paneMetaReadForDir(wd);
+    if (ownsPane(await d.livePanes(), pane.paneId, pane.nonce)) return null;
+    if ((readWorkerStatusRec(wd)?.state ?? "").toLowerCase() === "working") return null;
+  }
+  return agent;
 }
 // ---- set-provider — quick's mirror of `implement set-provider`: the ONE mechanical way an
 // override reaches `selected-provider.txt`, the file `roundProtocol` routes the turn verbs by. A
