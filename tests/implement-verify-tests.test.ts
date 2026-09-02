@@ -268,6 +268,15 @@ describe("verifyScript — the pin is prepended to the re-run, and an empty pin 
     expect(verifyScript("npm test", "/wt")).toBe('export PYTHONPATH="/wt${PYTHONPATH:+:$PYTHONPATH}"; npm test 2>&1');
     expect(verifyScript("pytest -q", "/wt:/wt/src")).toBe('export PYTHONPATH="/wt:/wt/src${PYTHONPATH:+:$PYTHONPATH}"; pytest -q 2>&1');
   });
+  it("runBounded with a bounding binary passes the pinned script as the argv's last element (recording shim)", () => {
+    const d = mkdtempSync(join(tmpdir(), "rb-pin-shim-"));
+    const shim = join(d, "timeout"); const record = join(d, "argv.txt");
+    writeFileSync(shim, `#!/bin/sh\nprintf '%s\\n' "$@" > ${record}\n`);
+    chmodSync(shim, 0o755);
+    expect(runBounded(shim, d, "npm test", 30, "/wt").code).toBe(0);
+    expect(readFileSync(record, "utf8").split("\n").slice(0, -1))
+      .toEqual(["--kill-after=5", "30", "bash", "-c", "--", 'export PYTHONPATH="/wt${PYTHONPATH:+:$PYTHONPATH}"; npm test 2>&1']);
+  });
   it("runBounded hands the pin to the child, ahead of any PYTHONPATH already in the environment", () => {
     const r = runBounded(null, mkdtempSync(join(tmpdir(), "rb-pin-")), "printf '%s' \"$PYTHONPATH\"", 30, "/wt/src");
     expect(r.code).toBe(0);
