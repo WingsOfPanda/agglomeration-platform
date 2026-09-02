@@ -85,9 +85,10 @@ describe("shadowHits — what on the box resolves this repo from the main checko
   });
 
   // An exec line the sibling finder accounts for is the ordinary setuptools case: no extra hit. One
-  // NO finder accounts for is the hand-rolled `import sys; sys.path.insert(0, '<main>')` idiom #183
-  // describes, which cannot be resolved textually — warned about, never pinned.
-  it("an exec line WITH its sibling finder parsed adds nothing; one with NO finder is a warn-only hit", () => {
+  // NO finder accounts for that NAMES this checkout is the hand-rolled `import sys;
+  // sys.path.insert(0, '<main>')` idiom #183 describes, which cannot be resolved to an import root
+  // textually — warned about, never pinned.
+  it("an exec line WITH its sibling finder parsed adds nothing; one with NO finder that names the root is a warn-only hit", () => {
     const { home, site } = homeWithSite();
     const { root } = repoAndWorktree();
     writeFileSync(join(site, "__editable___pkg_finder.py"), finderText(`{'pkg': '${join(root, "pkg")}'}`));
@@ -98,6 +99,27 @@ describe("shadowHits — what on the box resolves this repo from the main checko
       { source: `${join(site, "__editable___pkg_finder.py")}:3`, importRoot: root },
       { source: `${join(site, "hand-rolled.pth")}:1`, importRoot: null },
     ]);
+  });
+
+  // setuptools' distutils-precedence.pth and virtualenv's _virtualenv.pth are exec-only, finder-less,
+  // and present in every venv. A warn on them would fire on every run on every box — the exact
+  // clean-box silence this layer promises. Naming the root is what makes an exec line this repo's.
+  it("an exec line that names NOTHING under the root is silent, however finder-less (distutils-precedence.pth, _virtualenv.pth)", () => {
+    const { home, site } = homeWithSite();
+    const { root } = repoAndWorktree();
+    writeFileSync(join(site, "distutils-precedence.pth"), "import os; var = 'SETUPTOOLS_USE_DISTUTILS'; enabled = os.environ.get(var, 'local') == 'local'; enabled and __import__('_distutils_hack').add_shim();\n");
+    writeFileSync(join(site, "_virtualenv.pth"), "import _virtualenv\n");
+    writeFileSync(join(site, "other-proj.pth"), `import sys; sys.path.insert(0, '${root}-old')\n`);
+    expect(shadowHits(root, home, ENV)).toEqual([]);
+  });
+
+  it("an unreadable finder leaves its exec line unaccounted for: named root -> warn-only hit", () => {
+    const { home, site } = homeWithSite();
+    const { root } = repoAndWorktree();
+    // a finder that is a DIRECTORY reads as unreadable, so nothing under it was parsed
+    mkdirSync(join(site, "__editable___pkg_finder.py"));
+    writeFileSync(join(site, "__editable__.pkg.pth"), `import __editable___pkg_finder; __editable___pkg_finder.install()  # ${root}\n`);
+    expect(shadowHits(root, home, ENV)).toEqual([{ source: `${join(site, "__editable__.pkg.pth")}:1`, importRoot: null }]);
   });
 
   it("an injected home with no .local/lib returns [] without throwing", () => {
@@ -158,8 +180,8 @@ describe("pythonPin — the import root is derived and re-rooted, never a blind 
 
   // The pin is interpolated into a single-quoted shell word and split on ":" by python: an entry
   // carrying a quote, `$`, a backtick, a backslash, a newline or a colon empties the pin instead.
-  it("a target containing ' or $ (or :) sets unsafe with an EMPTY pin", () => {
-    for (const bad of ["it's", "a$b", "a:b"]) {
+  it("a target containing ' or $ (or a backtick, backslash, newline or :) sets unsafe with an EMPTY pin", () => {
+    for (const bad of ["it's", "a$b", "a`b", "a\\b", "a\nb", "a:b", 'a"b']) {
       const parent = tmp("ap-prov-unsafe-");
       const root = join(parent, "repo"); mkdirSync(root);
       const target = join(root, ".ap", "worktrees", bad); mkdirSync(target, { recursive: true });

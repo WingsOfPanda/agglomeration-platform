@@ -74,8 +74,15 @@ function finderHits(file: string, root: string): ShadowHit[] | null {
 }
 
 /** The hits one `.pth` yields, read the way `site.addpackage` does: blank and `#` lines skipped, an
- *  `import ` / `import\t` line executed (here: accounted for by a parsed sibling finder, or a warn-only
- *  hit), anything else joined onto the site dir. */
+ *  `import ` / `import\t` line executed (here: accounted for by a parsed sibling finder, or — when the
+ *  line itself names this checkout — a warn-only hit), anything else joined onto the site dir.
+ *
+ *  The exec-line warn is gated on the line NAMING the root, not emitted for every unaccounted hook:
+ *  setuptools' own `distutils-precedence.pth` and virtualenv's `_virtualenv.pth` are exec-only lines
+ *  with no finder sibling and sit in every venv, so an unconditional warn would fire on every run on
+ *  every box and break the clean-box silence this layer promises. The hand-rolled
+ *  `import sys; sys.path.insert(0, '<main checkout>')` idiom of issue #183 carries its path textually
+ *  and is still caught; a hook that computes the path degrades to today's behaviour. */
 function pthHits(file: string, siteDir: string, root: string, parsedFinders: Set<string>): ShadowHit[] {
   let text: string;
   try { text = readFileSync(file, "utf8"); } catch { return []; }
@@ -85,7 +92,8 @@ function pthHits(file: string, siteDir: string, root: string, parsedFinders: Set
     if (line === "" || line.startsWith("#")) return;
     if (line.startsWith("import ") || line.startsWith("import\t")) {
       const mod = line.slice("import".length).trim().split(/[;\s]/)[0] ?? "";
-      if (!parsedFinders.has(mod)) out.push({ source: `${file}:${i + 1}`, importRoot: null });
+      if (parsedFinders.has(mod)) return;
+      if (pathTokensFrom(line).some((t) => isAbsolute(t) && under(root, t))) out.push({ source: `${file}:${i + 1}`, importRoot: null });
       return;
     }
     const p = resolve(siteDir, line);
