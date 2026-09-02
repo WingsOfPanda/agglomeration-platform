@@ -1857,6 +1857,24 @@ describe("quick init: a stale archive keeps the predecessor's git side effects r
     expect(git(root, "status", "--porcelain")).toContain("wip2.txt");
   });
 
+  it("B: a stash list that fails ONLY on the formatted read (the one stashEntry parses) still keeps the marker — the guard probes that read, not a bare `git stash list`", async () => {
+    const root = repo();
+    const args = ["retry", "topic", "--target", root, "--stash-wip"];
+    writeFileSync(join(root, "wip1.txt"), "first\n");
+    expect(await initWith(args, realDeps())).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    const exec = quickExecDir(TOPIC);
+    const marker = readFileSync(join(exec, "stash-wip.txt"), "utf8");
+    writeFileSync(join(root, "wip2.txt"), "later\n");
+    expect(await initWith(args, realDeps())).toBe(0);
+    const real = runnerAt(root);
+    const formattedBlind: Runner = { run: (cmd, a) => (cmd === "git" && a[0] === "stash" && a[1] === "list" && a.length > 2) ? { code: 128, stdout: "" } : real.run(cmd, a) };
+    expect(await branchWith(TOPIC, root, formattedBlind, true)).toBe(1);
+    expect(readFileSync(join(exec, "stash-wip.txt"), "utf8")).toBe(marker);   // not dropped: the entry is still there
+    expect(git(root, "stash", "list").split("\n").filter((l) => l.includes("ap-quick-retry-topic-wip"))).toHaveLength(1);   // not re-parked on top
+    expect(git(root, "status", "--porcelain")).toContain("wip2.txt");
+  });
+
   it("B: a park dropped out of band with a clean tree → the stale marker is dropped too, nothing to park", async () => {
     const root = repo();
     const args = ["retry", "topic", "--target", root, "--stash-wip"];

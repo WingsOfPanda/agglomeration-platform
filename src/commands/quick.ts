@@ -14,7 +14,7 @@ import { runForensics, runFlag, runReflect } from "../core/forensics.js";
 import { agentBinary } from "../core/contracts.js";
 import { haveCmd } from "../core/deps.js";
 import { pickRandomAgent } from "../core/agents.js";
-import { runnerAt, preSnapshot, createOrResumeBranch, finishWork, classifyDirty, currentBranch, hasDistinctBranch, stashPush, stashEntry, stashPopOnBranch, targetProblem } from "../core/gitwork.js";
+import { runnerAt, preSnapshot, createOrResumeBranch, finishWork, classifyDirty, currentBranch, hasDistinctBranch, stashPush, stashEntry, stashList, stashPopOnBranch, targetProblem } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
 import { outboxOffset, outboxPath, paneMetaReadForDir, workerBusyStateForDir } from "../core/ipc.js";
 import { livePaneNonces, ownsPane, verifiableNonce } from "../core/tmux.js";
@@ -379,15 +379,17 @@ export async function branchWith(topic: string, target: string, r: Runner, stash
   if (stashWip) {
     const carried = readStashMarker(exec, topic);
     // An UNREADABLE stash list is not an absence — the rule stashPopByMessage's `list-failed` keeps:
-    // the entry may well exist, so the marker stays and a dirty tree is refused below.
-    const listOk = carried ? r.run("git", ["stash", "list"]).code === 0 : true;
+    // the entry may well exist, so the marker stays and a dirty tree is refused below. The probe is the
+    // SAME formatted read stashEntry parses: a bare `git stash list` succeeding while the formatted one
+    // failed would drop the marker over an entry that is still there.
+    const listOk = carried ? stashList(r).code === 0 : true;
     const entry = carried && listOk ? stashEntry(r, carried.message) : null;
     if (carried && listOk && !entry) {
       rmSync(join(exec, "stash-wip.txt"), { force: true });
-      log.warn(`quick branch: the --stash-wip park recorded by an earlier attempt ('${carried.message}') is no longer in the stash — dropping the stale marker`);
+      log.warn(`quick branch: the --stash-wip park recorded for this topic ('${carried.message}') is no longer in the stash — dropping the stale marker`);
     } else if (carried && dirtyTree()) {
       const ref = entry?.ref ?? "<ref>";
-      log.error(`quick branch: the tree is dirty again while the --stash-wip park from an earlier attempt ('${carried.message}', ${ref}) is still in the stash${listOk ? "" : " (the stash list could not be read)"} — nothing stashed, nothing committed, HEAD untouched`);
+      log.error(`quick branch: the tree is dirty again while the --stash-wip park recorded for this topic ('${carried.message}', ${ref}) is still in the stash${listOk ? "" : " (the stash list could not be read)"} — nothing stashed, nothing committed, HEAD untouched`);
       log.error(`  restore it first (git -C ${target} stash pop ${ref}, then resolve), or drop it (git -C ${target} stash drop ${ref}), then re-run`);
       return 1;
     }

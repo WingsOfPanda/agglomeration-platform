@@ -132,7 +132,7 @@ export function findStashRef(list: string, message: string): string {
 /** The stash list, in the `<ref>\t<subject>` form `findStashRef` parses — the one place that
  *  format string is spelled. Callers that need the exit code read `.code` (an unreadable list is
  *  never an absence). */
-function stashList(r: Runner): RunResult {
+export function stashList(r: Runner): RunResult {
   return r.run("git", ["stash", "list", "--format=%gd%x09%gs"]);
 }
 
