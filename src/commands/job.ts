@@ -7,6 +7,7 @@
 // running worker's inbox task and the worker idles.
 
 import { existsSync, mkdirSync, readdirSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { kvParse } from "../args.js";
 import { log } from "../core/log.js";
@@ -18,7 +19,8 @@ import { validateSlug } from "../core/slug.js";
 import { envNum } from "../core/env.js";
 import { pickRandomAgent } from "../core/agents.js";
 import { deriveSlug } from "../core/quick.js";
-import { livePaneNonces, ownsPane, sessionExists, sessionPaneIds, killSession, validSessionName, currentSessionName } from "../core/tmux.js";
+import { livePaneNonces, ownsPane, pinExport, sessionExists, sessionPaneIds, killSession, validSessionName, currentSessionName } from "../core/tmux.js";
+import { pinReport, shadowHits } from "../core/provision.js";
 import { paneMetaRead, paneMetaReadForDir, outboxPath, statusPath, type Clock, type OutboxEvent } from "../core/ipc.js";
 import { liveOutboxWait } from "../core/waitLive.js";
 import { scanTopicWorkers } from "../core/workerLiveness.js";
@@ -166,6 +168,36 @@ function dirtyPaths(porcelain: string): string[] {
 }
 
 
+/** The operator's home and environment, as the site-packages scan (src/core/provision.ts) sees them.
+ *  Injected for the same reason `WaitDeps` is: a test must be able to point the scan at a synthetic
+ *  site tree without mutating `process.env`, which would also flip `wrapLaunch`'s bashrc default. The
+ *  default binds the real ones, so `run()` is unchanged. */
+export interface EnvDeps { home: string; env: NodeJS.ProcessEnv; }
+const realEnvDeps = (): EnvDeps => ({ home: homedir(), env: process.env });
+
+/** Name what on this box resolves the repo from the MAIN checkout, and the PYTHONPATH pin derived for
+ *  the worktree (design A1-A3). WARN and PIN, never refuse: a shadow is a standing property of the
+ *  operator's box, present on every run there, and it is repaired mechanically at the worker pane
+ *  (`spawn`) and the hub's own verify re-run — the two places ap chooses a cwd. What is printed here
+ *  reaches the OPERATOR; the job hub reads the same facts from the record through its brief. Complete
+ *  silence when nothing is found, so a clean box's stderr is byte-identical. */
+function reportShadows(root: string, worktree: string, deps: EnvDeps): { shadows: string[]; pin: string } {
+  const rep = pinReport(root, worktree, deps.home, deps.env);
+  if (!rep.hits.length) return { shadows: [], pin: "" };
+  log.warn(`job start: this box resolves ${root} from the MAIN checkout — python in the worktree would import the wrong tree. Found:`);
+  for (const h of rep.hits) log.warn(`  ${h.source}${h.importRoot === null ? "   (an exec line ap cannot resolve to an import root; not pinned)" : ""}`);
+  for (const m of rep.missing) log.warn(`  no counterpart in the worktree, dropped from the pin: ${m}`);
+  if (rep.unsafe) {
+    log.warn(`  the pin would carry a quote, $, backtick, backslash, newline or colon and cannot be exported safely — the worker is UNPINNED; pin by hand in its pane`);
+  } else if (rep.pin) {
+    log.warn(`  pinned for the worker pane and the hub's verify-tests re-run; prefix the same on any python you run yourself in the worktree:`);
+    log.warn(`    ${pinExport(rep.pin)}`);
+  } else {
+    log.warn(`  no usable import root under the worktree, so NOTHING is pinned; if a file above names this checkout, pin by hand: export PYTHONPATH to the same directory under ${worktree}`);
+  }
+  return { shadows: rep.hits.map((h) => h.source), pin: rep.pin };
+}
+
 /** Create the worktree the WORKER will run in, and return what the record must carry.
  *
  *  Detached runs used to check `feat/<cmd>-<topic>` out in the MAIN checkout, which froze the origin
@@ -185,7 +217,7 @@ function dirtyPaths(porcelain: string): string[] {
  *
  *  `null` means ABORT the start. Every failure here is fail-closed: a half-made worktree would send
  *  the worker into the main checkout, which is the exact thing this exists to prevent. */
-export function startWorktree(root: string, topic: string, r: Runner): { worktree: string; baseSha: string } | null {
+export function startWorktree(root: string, topic: string, r: Runner, envDeps: EnvDeps = realEnvDeps()): { worktree: string; baseSha: string; shadows: string[]; pin: string } | null {
   const head = r.run("git", ["rev-parse", "HEAD"]);
   const baseSha = head.stdout.trim();
   if (head.code !== 0 || !baseSha) {
@@ -235,6 +267,7 @@ export function startWorktree(root: string, topic: string, r: Runner): { worktre
     if (mode) log.ok(`job start: ${mode} node_modules into the worktree`);
     else log.warn(`job start: could not clone node_modules into ${worktree} (cp -al, -cR and -R all failed) — the worker will have to install dependencies itself`);
   }
+  const shadow = reportShadows(root, worktree, envDeps);
   const porcelain = r.run("git", ["status", "--porcelain", "-z"]).stdout;
   if (classifyDirty(porcelain)) {
     // WHICH files, not just "the tree is dirty". Twice now the invisible file was the design doc the
@@ -249,7 +282,7 @@ export function startWorktree(root: string, topic: string, r: Runner): { worktre
     log.warn(`  If the run must READ any of those — a design doc especially — stop now: 'ap job stop ${topic}', commit them, and start again.`);
   }
   log.ok(`job start: worktree ${worktree} on ${baseBranch} at ${baseSha.slice(0, 8)}`);
-  return { worktree, baseSha };
+  return { worktree, baseSha, ...shadow };
 }
 
 /** Delete the `base/<topic>` branch `startWorktree` cut for a worktree that is now GONE — but only
@@ -278,7 +311,7 @@ function sweepBaseBranch(rec: J.JobRecord, root: string, r: Runner): void {
  *  The run's `feat/<cmd>-<topic>` branch always survives either way: worktrees share the repo's ref
  *  store. The `base/<topic>` branch the worktree was born on goes with the worktree (see
  *  `sweepBaseBranch`); a KEPT worktree still has it checked out, so it is left alone and unmentioned. */
-export function sweepWorktree(rec: J.JobRecord, root: string, r: Runner): boolean {
+export function sweepWorktree(rec: J.JobRecord, root: string, r: Runner, deps: EnvDeps = realEnvDeps()): boolean {
   const wt = rec.worktree ?? "";
   if (!wt) return true;                                   // --no-worktree, or a pre-0.5.36 record
   // Provenance before removal, the same rule pane ownership follows: ap deletes only what it can
@@ -293,6 +326,23 @@ export function sweepWorktree(rec: J.JobRecord, root: string, r: Runner): boolea
   if (classifyDirty(runnerAt(wt).run("git", ["status", "--porcelain"]).stdout)) {
     log.warn(`job stop: the worktree ${wt} has UNCOMMITTED work in it and is being KEPT — a crashed worker's unarchived changes look exactly like this. Inspect: git -C ${wt} status`);
     log.warn(`  then either commit them on ${branchNameFor(rec.command, rec.topic)}, or discard: git -C ${root} worktree remove --force ${wt}`);
+    return false;
+  }
+  // A9: an editable install that now resolves INTO the worktree — `pip install -e .` run from it,
+  // which the brief forbids — would be broken by the removal: the operator's own site-packages finder
+  // would point at a deleted directory (issues #196, #197, twice in one day). Keep, and name the
+  // repair. The scan is widened to the conventional venv locations beside the checkout; a venv INSIDE
+  // the worktree is not scanned because it dies with the worktree and nothing outside is left
+  // dangling. Best-effort by construction — the worker pane is `bash -ic` and may have activated a
+  // venv this process never saw — which is why the brief's prohibition stays load-bearing. The mere
+  // presence of an unprovisioned `*.egg-info` is deliberately NOT a keep condition: `setup.py
+  // build_ext --inplace` produces one as a normal byproduct, and keeping on it would keep every
+  // python worktree forever and train the operator to force-remove.
+  const into = shadowHits(wt, deps.home, deps.env, [join(root, ".venv"), join(root, "venv")]).filter((h) => h.importRoot !== null);
+  if (into.length) {
+    log.warn(`job stop: an editable install now resolves INTO the worktree ${wt}, which is being KEPT — removing it would leave the operator's python importing a deleted directory:`);
+    for (const h of into) log.warn(`  ${h.source}`);
+    log.warn(`  repair the install from the main checkout first: cd ${root} && pip install -e .   then re-run 'ap job stop ${rec.topic}' (or discard: git -C ${root} worktree remove --force ${wt})`);
     return false;
   }
   const rm = r.run("git", ["worktree", "remove", wt]);
@@ -383,7 +433,9 @@ function refuseInvisibleDoc(argsText: string, root: string, origCwd: string, r: 
   return 2;
 }
 
-async function startRun(rest: string[], origCwd: string): Promise<number> {
+/** Exported for the one test that needs the record written by the WHOLE verb with an injected site
+ *  tree; `run()` binds the real deps and is otherwise the only caller. */
+export async function startRun(rest: string[], origCwd: string, deps: EnvDeps = realEnvDeps()): Promise<number> {
   let command = "", argsFile = "", topic = "", provider = "";
   let budgetHours = 6, maxRounds = 5, useWorktree = true, allowInvisibleDoc = false;
   for (let i = 0; i < rest.length; i++) {
@@ -443,7 +495,7 @@ async function startRun(rest: string[], origCwd: string): Promise<number> {
   // the ORIGIN's own session is observable: the hub runs in a detached session of ap's making and
   // could never name the one it was launched from. "" outside tmux, and "" is a legal record.
   const originSession = await currentSessionName();
-  const wt = useWorktree ? startWorktree(root, topic, r) : null;
+  const wt = useWorktree ? startWorktree(root, topic, r, deps) : null;
   if (useWorktree && !wt) return 1;
 
   const rec: J.JobRecord = {
@@ -457,6 +509,9 @@ async function startRun(rest: string[], origCwd: string): Promise<number> {
     args_file: argsFile, started: isoUtc(),
     worktree: wt?.worktree ?? "", base_sha: wt?.baseSha ?? "", start_branch: startBranch,
     origin_session: originSession,
+    // Omitted when empty, never written as [] / "": a clean-box record stays byte-identical (A5).
+    ...(wt?.shadows.length ? { python_shadow: wt.shadows } : {}),
+    ...(wt?.pin ? { python_pin: wt.pin } : {}),
   };
   mkdirSync(jobDir(topic), { recursive: true });
   // The record is written BEFORE the spawn on purpose: a spawn that dies half-way leaves evidence
