@@ -407,6 +407,10 @@ describe("jobBrief", () => {
       // ...and BOTH variables the reader must set: PIN_BY_HAND for the pasteable probe (the slot keys on
       // it, so a reader who only exports PYTHONPATH still gets the refusal), PYTHONPATH for the pane/gates.
       expect(s.split("\n").filter((l) => l.includes("PIN_BY_HAND=") && !l.includes("python3 -c"))).toHaveLength(1);
+      // ...and that the export rides the probe's OWN command line: a hub's Bash calls are separate
+      // shells, so an `export` in an earlier call never reaches the pasted line — and a bare prefix
+      // binds only to the `cd` that opens the line.
+      expect(s).toContain("put `export PIN_BY_HAND=<that directory>;` in front of it on the SAME command line");
       expect(s).toContain("export it as PYTHONPATH");
       expect(s).not.toContain("export PYTHONPATH=");
       // A found-but-unpinnable shadow is NOT a clean box: the bare probe would answer about the MAIN
@@ -441,6 +445,21 @@ describe("jobBrief", () => {
         const pinned = run(wt, "/wt/src");
         expect(pinned.status).toBe(0);
         expect(pinned.stdout.trim()).toBe("RAN:/wt/src");
+      }
+      // The remedy's own instruction — `export PIN_BY_HAND=<dir>;` in front of the line on the SAME
+      // command line — runs; the two shapes the remedy warns against do not: an export in a separate
+      // earlier shell (the shell-per-call hub), and a bare `VAR=… ` prefix, which binds only to the
+      // `cd` that opens the line and leaves the probe's own expansion unset.
+      const line = probeOf(J.jobBrief({ ...REC, python_shadow: ["/x.pth:1"] }))
+        .replace("cd '/repo/.ap/worktrees/demo'", "true").replace("python3 -c 'from pkg.ext import sym'", "sh -c 'echo RAN:$PYTHONPATH'");
+      const sh = (cmd: string) => spawnSync("bash", ["-c", cmd], { encoding: "utf8", env: { PATH: process.env.PATH ?? "" } });
+      const sameLine = sh(`export PIN_BY_HAND=/wt/src; ${line}`);
+      expect(sameLine.status).toBe(0);
+      expect(sameLine.stdout.trim()).toBe("RAN:/wt/src");
+      for (const wrong of [`bash -c 'export PIN_BY_HAND=/wt/src'; ${line}`, `PIN_BY_HAND=/wt/src ${line}`]) {
+        const r = sh(wrong);
+        expect(r.status).not.toBe(0);
+        expect(r.stdout).not.toContain("RAN");
       }
     });
     // A6/A13: the run that gets bitten arms the repo for the next one — the only mechanism by which

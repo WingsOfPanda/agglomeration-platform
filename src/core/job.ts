@@ -632,8 +632,10 @@ function shadowLines(j: JobRecord): string[] {
       `ap could not derive a pin from that (an exec line it cannot resolve textually, or a path it cannot`,
       `export safely), so NOTHING is pinned. If it names this repo's main checkout, pin by hand before any`,
       `python: take the same directory re-rooted under ${j.worktree} and (a) for the pasteable probe`,
-      `above, export PIN_BY_HAND=<that directory> — the probe refuses to run until it is set — and (b) in`,
-      `the worker's pane and on every probe or gate run of your own, export it as PYTHONPATH.`,
+      `above, put \`export PIN_BY_HAND=<that directory>;\` in front of it on the SAME command line — a`,
+      `separate earlier shell call does not reach it, nor does a bare \`VAR=… \` prefix (that binds only to`,
+      `the \`cd\`), and the probe refuses to run until it is set — and (b) in the worker's pane and on`,
+      `every probe or gate run of your own, export it as PYTHONPATH.`,
     ];
   }
   return [
