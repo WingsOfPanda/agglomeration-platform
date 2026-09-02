@@ -726,6 +726,19 @@ describe("job stop — a worktree an editable install now points INTO is kept", 
     expect(err).toContain(`re-run 'ap job stop ${TOPIC}'`);
   });
 
+  // `python -m venv .` puts the venv AT the repo root: VIRTUAL_ENV === <root>, site dir under
+  // <root>/lib. That prefix is an ANCESTOR of the worktree and must exclude nothing at teardown.
+  it("with the venv at the repo root (VIRTUAL_ENV === <root>) a .pth there naming the worktree still keeps it", async () => {
+    const root = repo();
+    const wt = await started(root);
+    const pth = siteUnder(root, `${join(wt, "src")}\n`);                 // <root>/lib/python3.12/site-packages/e.pth
+    const { rc, err } = await capture(() => (sweepWorktree(record(root), root, runnerAt(root), { home: fakeHome(), env: { VIRTUAL_ENV: root } as NodeJS.ProcessEnv }) ? 0 : 1));
+    expect(rc).toBe(1);
+    expect(existsSync(wt)).toBe(true);
+    expect(err).toContain("resolves INTO the worktree");
+    expect(err).toContain(`  ${pth}:1`);
+  });
+
   // The scan is WIDENED at teardown to the conventional venv locations beside the checkout.
   it("the widened scan sees <root>/.venv and <root>/venv", async () => {
     for (const venv of [".venv", "venv"]) {

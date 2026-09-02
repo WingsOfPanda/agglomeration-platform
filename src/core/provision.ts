@@ -64,9 +64,14 @@ export function siteDirs(home: string, env: NodeJS.ProcessEnv, extraPrefixes: st
 }
 
 /** A path under `root` that is NOT inside the prefix owning the site dir it was read from — the one
- *  test every signal shares. `<root>/.venv/lib/python3.12/site-packages` is under the repo root and
- *  under the venv prefix: the venv's own `easy-install.pth` entries (`.`, `./x.egg`) land there. */
-const shadows = (root: string, prefix: string, p: string): boolean => under(root, p) && !under(prefix, p);
+ *  test every signal shares — where the exclusion applies ONLY to a prefix that itself lies inside
+ *  the root. `<root>/.venv/lib/python3.12/site-packages` is under the repo root and under the venv
+ *  prefix: the venv's own `easy-install.pth` entries (`.`, `./x.egg`) land there. A prefix that is an
+ *  ANCESTOR of the root (`CONDA_PREFIX=<parent>`; `VIRTUAL_ENV === <root>` while teardown scans the
+ *  worktree, the `python -m venv .` layout) owns nothing of the root's and must exclude nothing, or
+ *  every signal from that site dir vanishes and `job stop` removes a worktree the operator's install
+ *  points into. */
+const shadows = (root: string, prefix: string, p: string): boolean => under(root, p) && !(under(prefix, p) && under(root, prefix));
 
 /** The hits a setuptools editable finder's `MAPPING` line yields, or null when the file could not be
  *  read (so its exec line in the sibling `.pth` stays unaccounted for). `NAMESPACES` is deliberately

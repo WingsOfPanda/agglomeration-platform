@@ -211,6 +211,30 @@ describe("shadowHits — what on the box resolves this repo from the main checko
     expect(shadowHits(root, home, { VIRTUAL_ENV: venv + "/" } as NodeJS.ProcessEnv)).toEqual(real);
   });
 
+  // The exclusion is for a venv INSIDE the repo. A prefix that is an ANCESTOR of the root — a conda
+  // env holding the checkout, or `python -m venv .` (VIRTUAL_ENV === root) while teardown scans the
+  // worktree — owns nothing of the root's: every signal from its site dir must still hit.
+  it("a prefix that is an ANCESTOR of the root excludes nothing: a .pth, a finder and an exec line there all still hit", () => {
+    const home = tmp("ap-prov-empty-");
+    const parent = tmp("ap-prov-parent-");
+    const root = join(parent, "repo");
+    mkdirSync(join(root, "src"), { recursive: true }); mkdirSync(join(root, "pkg"));
+    const psite = join(parent, "lib", "python3.12", "site-packages");
+    mkdirSync(psite, { recursive: true });
+    writeFileSync(join(psite, "proj.pth"), `${join(root, "src")}\n`);
+    const finder = join(psite, "__editable___p_finder.py");
+    writeFileSync(finder, finderText(`{'pkg': '${join(root, "pkg")}'}`));
+    writeFileSync(join(psite, "exec.pth"), `import sys; sys.path.insert(0,'${root}')\n`);
+    const all = [
+      { source: `${finder}:3`, importRoot: root },
+      { source: `${join(psite, "exec.pth")}:1`, importRoot: null },
+      { source: `${join(psite, "proj.pth")}:1`, importRoot: join(root, "src") },
+    ];
+    expect(shadowHits(root, home, { CONDA_PREFIX: parent } as NodeJS.ProcessEnv)).toEqual(all);
+    expect(shadowHits(root, home, { VIRTUAL_ENV: parent } as NodeJS.ProcessEnv)).toEqual(all);
+    expect(shadowHits(root, home, ENV, [parent])).toEqual(all);           // the teardown widening, same rule
+  });
+
   it("the teardown widening scans the extra prefixes' site dirs too", () => {
     const home = tmp("ap-prov-empty-");
     const { root } = repoAndWorktree();
