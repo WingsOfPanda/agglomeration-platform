@@ -245,6 +245,8 @@ describe("worker VERDICT <-> commands/implement.md directive contract", () => {
     expect(md).toContain("`bash -ic 'exec <binary>'`");
     expect(md).toMatch(/`~\/\.bashrc` \*\*is\*\* sourced and\s+only `~\/\.profile` is not/);
     expect(md).toMatch(/the hub's own re-run is `bash -c`\s+\(`src\/core\/implementVerifyTests\.ts`, `runBounded`\) and sources \*\*nothing\*\*/);
+    // The design's dogfood acceptance line: a pinned re-run announces its pin as the log's first line.
+    expect(md).toMatch(/`hub-test-output-<ROUND>\.log` opens with `PYTHONPATH_PIN=<pin>`/);
   });
 
   it("Stage 3 carries the regenerate-never-edit rules", () => {
