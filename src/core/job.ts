@@ -546,7 +546,9 @@ function worktreeLines(j: JobRecord): string[] {
     // filter, which rejects the quote itself); nothing on a clean box; and a double-quoted refusal
     // expansion whose message interpolates NOTHING — the worktree path is not filtered, and a `}`,
     // `"`, `$` or backtick in it would close, break or expand a double-quoted word. The `cd` target
-    // is single-quoted so a space pastes and runs.
+    // is single-quoted so a space pastes and runs; a `'` in the operator's repo root still breaks it
+    // (the topic segment is slug-validated, the root is not) — the pre-existing class every raw
+    // worktree rendering in this brief shares.
     `    cd '${j.worktree}' && ${pinSlot(j)}python3 -c 'from pkg.ext import sym'`,
     ``,
     `Verify a compiled extension by its own path under the worktree, never by an import that succeeded:`,

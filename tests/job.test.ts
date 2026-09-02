@@ -400,6 +400,8 @@ describe("jobBrief", () => {
       expect(s).toContain("    /home/op/.local/lib/python3.12/site-packages/hook.pth:1");
       expect(s).toContain("NOTHING is pinned");
       expect(s).toContain("pin by hand");
+      // the refusal slot's message names no path on purpose; the remedy it defers to must name the worktree
+      expect(s).toContain("re-rooted under /repo/.ap/worktrees/demo");
       expect(s).not.toContain("export PYTHONPATH=");
       // A found-but-unpinnable shadow is NOT a clean box: the bare probe would answer about the MAIN
       // checkout on a src-layout shadow (SC6), so the slot carries a `${PIN_BY_HAND:?msg}` expansion
