@@ -345,7 +345,10 @@ export function sweepWorktree(rec: J.JobRecord, root: string, r: Runner, deps: E
   if (into.length) {
     log.warn(`job stop: an editable install or a .pth hook now resolves INTO the worktree ${wt}, which is being KEPT — removing it would leave the operator's python importing a deleted directory:`);
     for (const h of into) log.warn(`  ${h.source}${h.importRoot === null ? `   (an exec line naming the worktree: edit that file so it no longer does, or point it at ${root})` : ""}`);
-    if (into.some((h) => h.importRoot !== null)) log.warn(`  repair the editable install from the main checkout first: cd ${root} && pip install -e .`);
+    // A path entry has two shapes and two repairs: a src-layout `.pth` or a finder written by an
+    // editable install is repaired by reinstalling from the main checkout; a hand-written path file
+    // is repaired only by editing it — `pip install -e .` never touches it.
+    if (into.some((h) => h.importRoot !== null)) log.warn(`  for a path entry above: if an editable install wrote it, reinstall from the main checkout first (cd ${root} && pip install -e .); if it is a hand-written path file, edit it so it points at the main checkout`);
     log.warn(`  then re-run 'ap job stop ${rec.topic}' (or discard: git -C ${root} worktree remove --force ${wt})`);
     return false;
   }

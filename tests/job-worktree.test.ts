@@ -706,7 +706,10 @@ describe("job stop — a worktree an editable install now points INTO is kept", 
     expect(existsSync(wt)).toBe(true);
     expect(err).toContain("resolves INTO the worktree");
     expect(err).toContain(`  ${pth}:1`);
-    expect(err).toContain(`cd ${root} && pip install -e .`);
+    // a plain path entry has two shapes, and the remedy names both: reinstall for an editable
+    // install's .pth, edit the file for a hand-written one (pip install -e never touches that).
+    expect(err).toContain(`if an editable install wrote it, reinstall from the main checkout first (cd ${root} && pip install -e .)`);
+    expect(err).toContain("if it is a hand-written path file, edit it so it points at the main checkout");
   });
 
   // The #183 hand-rolled shape pointed at the WORKTREE: an exec line ap cannot resolve to an import
