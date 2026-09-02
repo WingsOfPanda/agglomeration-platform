@@ -635,7 +635,8 @@ function shadowLines(j: JobRecord): string[] {
       `above, put \`export PIN_BY_HAND="<that directory>";\` in front of it on the SAME command line — a`,
       `separate earlier shell call does not reach it, nor does a bare \`VAR=… \` prefix (that binds only to`,
       `the \`cd\`), and the probe refuses to run until it is set — and (b) in the worker's pane and on`,
-      `every probe or gate run of your own, export it as PYTHONPATH.`,
+      `every probe or gate run of your own, export it as PYTHONPATH, again on the SAME command line as`,
+      `the command it pins (\`export PYTHONPATH="<that directory>"; cd '${j.worktree}' && <command>\`).`,
     ];
   }
   return [
