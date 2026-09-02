@@ -211,6 +211,28 @@ describe("shadowHits — what on the box resolves this repo from the main checko
     expect(shadowHits(root, home, { VIRTUAL_ENV: venv + "/" } as NodeJS.ProcessEnv)).toEqual(real);
   });
 
+  // The venv AT the repo root (`python -m venv .`): VIRTUAL_ENV === root, site dir <root>/lib/…. The
+  // prefix IS the checkout, so only the site dir's own tree is the environment's — an editable
+  // install's `<root>/src` there is exactly the #183 shadow and must hit at LAUNCH, not only at teardown.
+  it("a venv AT the repo root (VIRTUAL_ENV === root): its site dir's own entries are silent, everything naming the repo still hits", () => {
+    const home = tmp("ap-prov-empty-");
+    const { root } = repoAndWorktree();
+    const rsite = join(root, "lib", "python3.12", "site-packages");
+    mkdirSync(rsite, { recursive: true });
+    writeFileSync(join(rsite, "easy-install.pth"), ".\n./foo.egg\n");
+    writeFileSync(join(rsite, "proj.pth"), `${join(root, "src")}\n`);
+    const finder = join(rsite, "__editable___p_finder.py");
+    writeFileSync(finder, finderText(`{'pkg': '${join(root, "pkg")}'}`));
+    writeFileSync(join(rsite, "exec.pth"), `import sys; sys.path.insert(0,'${root}')\n`);
+    const expected = [
+      { source: `${finder}:3`, importRoot: root },
+      { source: `${join(rsite, "exec.pth")}:1`, importRoot: null },
+      { source: `${join(rsite, "proj.pth")}:1`, importRoot: join(root, "src") },
+    ];
+    expect(shadowHits(root, home, { VIRTUAL_ENV: root } as NodeJS.ProcessEnv)).toEqual(expected);
+    expect(shadowHits(root, home, { VIRTUAL_ENV: root + "/" } as NodeJS.ProcessEnv)).toEqual(expected);
+  });
+
   // The exclusion is for a venv INSIDE the repo. A prefix that is an ANCESTOR of the root — a conda
   // env holding the checkout, or `python -m venv .` (VIRTUAL_ENV === root) while teardown scans the
   // worktree — owns nothing of the root's: every signal from its site dir must still hit.

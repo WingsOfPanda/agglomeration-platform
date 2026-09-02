@@ -63,20 +63,22 @@ export function siteDirs(home: string, env: NodeJS.ProcessEnv, extraPrefixes: st
   return out;
 }
 
-/** A path under `root` that is NOT inside the prefix owning the site dir it was read from — the one
- *  test every signal shares — where the exclusion applies ONLY to a prefix that itself lies inside
- *  the root. `<root>/.venv/lib/python3.12/site-packages` is under the repo root and under the venv
- *  prefix: the venv's own `easy-install.pth` entries (`.`, `./x.egg`) land there. A prefix that is an
- *  ANCESTOR of the root (`CONDA_PREFIX=<parent>`; `VIRTUAL_ENV === <root>` while teardown scans the
- *  worktree, the `python -m venv .` layout) owns nothing of the root's and must exclude nothing, or
- *  every signal from that site dir vanishes and `job stop` removes a worktree the operator's install
- *  points into. */
-const shadows = (root: string, prefix: string, p: string): boolean => under(root, p) && !(under(prefix, p) && under(root, prefix));
+/** A path under `root` that is NOT the environment's own — the one test every signal shares. Two
+ *  things are the environment's own: the site dir's own tree (the `easy-install.pth` entries `.`
+ *  and `./x.egg` resolve there), and, for a venv nested STRICTLY inside the root
+ *  (`<root>/.venv`, the `python -m venv .venv` / uv layout), the whole venv directory. Never the root
+ *  itself: with the venv AT the repo root (`python -m venv .`, `VIRTUAL_ENV === <root>`) the prefix
+ *  IS the checkout, and excluding it would drop every signal — `<root>/src` from an editable
+ *  install is the shadow this module exists to catch. A prefix that is an ANCESTOR of the root
+ *  (`CONDA_PREFIX=<parent>`; `VIRTUAL_ENV === <root>` while teardown scans the worktree) owns nothing
+ *  of the root's either, or `job stop` would remove a worktree the operator's install points into. */
+const shadows = (root: string, site: SiteDir, p: string): boolean =>
+  under(root, p) && !under(site.dir, p) && !(site.prefix !== root && under(root, site.prefix) && under(site.prefix, p));
 
 /** The hits a setuptools editable finder's `MAPPING` line yields, or null when the file could not be
  *  read (so its exec line in the sibling `.pth` stays unaccounted for). `NAMESPACES` is deliberately
  *  not read: subdirectories of the same tree, no new import root. */
-function finderHits(file: string, root: string, prefix: string): ShadowHit[] | null {
+function finderHits(file: string, root: string, site: SiteDir): ShadowHit[] | null {
   let text: string;
   try { text = readFileSync(file, "utf8"); } catch { return null; }
   const out: ShadowHit[] = [];
@@ -87,7 +89,7 @@ function finderHits(file: string, root: string, prefix: string): ShadowHit[] | n
       // The MAPPING value is the PACKAGE dir; its parent is what goes on sys.path. A value that IS the
       // root has no import root inside the repo to re-root, so it is skipped rather than pinned wrong.
       const importRoot = dirname(tok);
-      if (shadows(root, prefix, importRoot)) out.push({ source: `${file}:${i + 1}`, importRoot });
+      if (shadows(root, site, importRoot)) out.push({ source: `${file}:${i + 1}`, importRoot });
     }
   });
   return out;
@@ -125,11 +127,11 @@ function pthHits(file: string, site: SiteDir, root: string, parsedFinders: Set<s
     if (line.startsWith("import ") || line.startsWith("import\t")) {
       const mod = line.slice("import".length).trim().split(/[;\s]/)[0] ?? "";
       if (parsedFinders.has(mod)) return;
-      if (rootPathsIn(line, root).some((p) => shadows(root, site.prefix, p))) out.push({ source: `${file}:${i + 1}`, importRoot: null });
+      if (rootPathsIn(line, root).some((p) => shadows(root, site, p))) out.push({ source: `${file}:${i + 1}`, importRoot: null });
       return;
     }
     const p = resolve(site.dir, line);
-    if (shadows(root, site.prefix, p)) out.push({ source: `${file}:${i + 1}`, importRoot: p });
+    if (shadows(root, site, p)) out.push({ source: `${file}:${i + 1}`, importRoot: p });
   });
   return out;
 }
@@ -146,7 +148,7 @@ export function shadowHits(root: string, home: string = homedir(), env: NodeJS.P
     const parsed = new Set<string>();
     for (const n of names) {
       if (!/^__editable___.*_finder\.py$/.test(n)) continue;
-      const hits = finderHits(join(site.dir, n), root, site.prefix);
+      const hits = finderHits(join(site.dir, n), root, site);
       if (hits === null) continue;
       parsed.add(n.slice(0, -".py".length));
       out.push(...hits);
