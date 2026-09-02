@@ -1339,6 +1339,7 @@ describe("quick init: a consumed args file", () => {
 import { randomUUID } from "node:crypto";
 import { paneMetaWrite } from "../src/core/ipc.js";
 import { topicDir, repoHash } from "../src/core/paths.js";
+import { prepareWorkerState } from "../src/commands/spawn.js";
 
 describe("quick init: a predecessor that initialised but never reached a worker turn", () => {
   let h: { home: string; cleanup: () => void };
@@ -1371,11 +1372,12 @@ describe("quick init: a predecessor that initialised but never reached a worker 
     }
     return art;
   }
-  function seedWorker(status: string, paneId = "%9", nonce: string = randomUUID()): string {
+  /** A worker that REPORTED (last_event is an outbox event, not the platform's `spawn` seed). */
+  function seedWorker(status: string, paneId = "%9", nonce: string = randomUUID(), lastEvent = "progress"): string {
     const wd = workerDir("bravo", "codex", TOPIC);
     mkdirSync(wd, { recursive: true });
     if (paneId) paneMetaWrite("bravo", "codex", TOPIC, paneId, nonce);
-    writeFileSync(join(wd, "status.json"), `{"state":"${status}","last_event":"spawn"}`);
+    writeFileSync(join(wd, "status.json"), `{"state":"${status}","last_event":"${lastEvent}"}`);
     return nonce;
   }
   const staleDirs = () => readdirSync(topicDir(TOPIC)).filter((n) => n.startsWith("_quick.stale-"));
@@ -1416,9 +1418,9 @@ describe("quick init: a predecessor that initialised but never reached a worker 
     expect(staleDirs()).toHaveLength(1);
   });
 
-  it("a spawn that died leaves status error → not live → archived", async () => {
+  it("a spawn that died leaves status error (bootstrap-failed) with its pane gone → not live → archived", async () => {
     seedPredecessor();
-    seedWorker("error");
+    seedWorker("error", "%9", randomUUID(), "bootstrap-failed");
     expect(await initWith(ARGS, deps())).toBe(0);
     expect(staleDirs()).toHaveLength(1);
   });
@@ -1507,6 +1509,70 @@ describe("quick init: a predecessor that initialised but never reached a worker 
   it("a record that cannot name its agent is not this case: the refusal stands", async () => {
     const art = seedPredecessor();
     rmSync(join(art, "agent.txt"));
+    expect(await initWith(ARGS, deps())).toBe(2);
+    expect(staleDirs()).toEqual([]);
+  });
+
+  it("A1: a detached job record for the topic (Stage 0: no worker dir yet) holds the refusal, record intact", async () => {
+    const art = seedPredecessor();
+    const p = jobPath(TOPIC);
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, formatJob({
+      command: "quick", topic: TOPIC, session: "ap-stale-topic", hub: { agent: "november", model: "claude" },
+      provider: "codex", finish: "keep", budget_hours: 6, max_rounds: 5, args_file: "/tmp/args", started: "2026-09-02T00:00:00Z",
+    }));
+    expect(await initWith(ARGS, deps())).toBe(2);
+    expect(staleDirs()).toEqual([]);
+    expect(existsSync(p)).toBe(true);
+    expect(readFileSync(join(art, "topic-text.txt"), "utf8")).toBe("stale topic (first attempt)");
+    expect(outSpy.text()).not.toContain("ARCHIVED_STALE");
+  });
+
+  it("A2: a SIBLING worker dir (a job hub, not the recorded pair) with a live nonce-verified pane holds, busy or idle", async () => {
+    for (const state of ["working", "idle"]) {
+      seedPredecessor();
+      const wd = workerDir("november", "claude", TOPIC);
+      mkdirSync(wd, { recursive: true });
+      const nonce = randomUUID();
+      paneMetaWrite("november", "claude", TOPIC, "%4", nonce);
+      writeFileSync(join(wd, "status.json"), `{"state":"${state}","last_event":"ack"}`);
+      expect(await initWith(ARGS, deps({ panes: new Map([["%4", nonce]]) }))).toBe(2);
+      expect(staleDirs()).toEqual([]);
+      expect(existsSync(join(wd, "pane.json"))).toBe(true);
+      rmSync(wd, { recursive: true, force: true });
+    }
+  });
+
+  it("A3: a worker dir the REAL prepareWorkerState just seeded (idle/spawn, no pane.json: the spawn window) holds, dir intact", async () => {
+    seedPredecessor();
+    prepareWorkerState("bravo", "codex", TOPIC);
+    const wd = workerDir("bravo", "codex", TOPIC);
+    expect(existsSync(join(wd, "pane.json"))).toBe(false);
+    expect(await initWith(ARGS, deps())).toBe(2);
+    expect(staleDirs()).toEqual([]);
+    expect(existsSync(join(wd, "identity.md"))).toBe(true);
+    expect(readFileSync(join(wd, "status.json"), "utf8")).toMatch(/"last_event":"spawn"/);
+    expect(archivedWorkers()).toEqual([]);
+  });
+
+  it("A4: a busy status (blocked / question) holds with no pane record, and holds even when its pane is proven gone", async () => {
+    for (const state of ["blocked", "question"]) {
+      seedPredecessor();
+      seedWorker(state, "");           // no pane.json
+      expect(await initWith(ARGS, deps())).toBe(2);
+      expect(staleDirs()).toEqual([]);
+      rmSync(workerDir("bravo", "codex", TOPIC), { recursive: true, force: true });
+    }
+    seedPredecessor();
+    seedWorker("blocked", "%9");       // pane recorded; the snapshot answers without it
+    expect(await initWith(ARGS, deps())).toBe(2);
+    expect(staleDirs()).toEqual([]);
+    expect(existsSync(workerDir("bravo", "codex", TOPIC))).toBe(true);
+  });
+
+  it("A: a reported worker with no pane record (never split) holds too — absence of a record is not death", async () => {
+    seedPredecessor();
+    seedWorker("idle", "");
     expect(await initWith(ARGS, deps())).toBe(2);
     expect(staleDirs()).toEqual([]);
   });
