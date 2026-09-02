@@ -145,6 +145,7 @@ describe("shadowHits — what on the box resolves this repo from the main checko
     writeFileSync(join(site, "c.pth"), `import os, sys; sys.path[:0] = ["${join(root, "src")}"]\n`);
     writeFileSync(join(site, "d.pth"), `import sys; sys.path.insert(0,'${root}-old')\n`);
     writeFileSync(join(site, "e.pth"), `import sys; sys.path.append('${root}-old/src')\n`);
+    writeFileSync(join(site, "f.pth"), `import sys; sys.path.insert(0,'/mnt/backup${root}')\n`);   // ENDS with the root: a different tree
     expect(shadowHits(root, home, ENV)).toEqual([
       { source: `${join(site, "a.pth")}:1`, importRoot: null },
       { source: `${join(site, "b.pth")}:1`, importRoot: null },

@@ -88,15 +88,15 @@ function finderHits(file: string, root: string, prefix: string): ShadowHit[] | n
   return out;
 }
 
-/** Every path in an exec line that starts with `root` as a BOUNDED substring: the root, optionally
- *  followed by `/…`, ended by a quote, `)`, `]`, `}`, `,`, `;`, whitespace or the end of the line.
- *  Python source is not whitespace-delimited — `sys.path.append('<root>')` and
- *  `sys.path.insert(0,'<root>')` are the common spellings of the #183 idiom, and a token split on
- *  whitespace never sees the root in either — while `<root>-old` is a different tree, which the
- *  boundary excludes. */
+/** Every path in an exec line that is `root` as a BOUNDED substring: the root, optionally followed
+ *  by `/…`, preceded by the start of the line, a quote, whitespace, `,`, `;`, `(`, `[`, `{` or `=`,
+ *  and ended by a quote, `)`, `]`, `}`, `,`, `;`, whitespace or the end of the line. Python source is
+ *  not whitespace-delimited — `sys.path.append('<root>')` and `sys.path.insert(0,'<root>')` are the
+ *  common spellings of the #183 idiom, and a token split on whitespace never sees the root in either
+ *  — while `<root>-old` (right boundary) and `/mnt/backup<root>` (left boundary) are different trees. */
 function rootPathsIn(line: string, root: string): string[] {
   const esc = root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`${esc}(?:/[^'"\\s,;)\\]}]*)?(?=['"\\s,;)\\]}]|$)`, "g");
+  const re = new RegExp(`(?<=^|['"\\s,;([{=])${esc}(?:/[^'"\\s,;)\\]}]*)?(?=['"\\s,;)\\]}]|$)`, "g");
   return [...line.matchAll(re)].map((m) => m[0]);
 }
 

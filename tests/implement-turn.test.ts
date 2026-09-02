@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { implementState, composeRound1Prompt, composeFixPrompt, blockers, WORKER_VERDICTS } from "../src/core/implementTurn.js";
+import { PIN_MARKER } from "../src/core/implementVerifyTests.js";
 
 describe("implement test-command auto-detect", () => {
   it("round-1 prompt names the detected command and drops the hardcoded one", () => {
@@ -247,6 +248,11 @@ describe("worker VERDICT <-> commands/implement.md directive contract", () => {
     expect(md).toMatch(/the hub's own re-run is `bash -c`\s+\(`src\/core\/implementVerifyTests\.ts`, `runBounded`\) and sources \*\*nothing\*\*/);
     // The design's dogfood acceptance line: a pinned re-run announces its pin as the log's first line.
     expect(md).toMatch(/`hub-test-output-<ROUND>\.log` opens with `PYTHONPATH_PIN=<pin>`/);
+    // ...and the marker the directive names is the one the producer emits (the TEST_VERDICTS pattern).
+    expect(md).toContain(`\`hub-test-output-<ROUND>.log\` opens with \`${PIN_MARKER}<pin>\``);
+    // The absence of that line means "unpinned" only for a re-run that RAN: a spawn failure writes
+    // the error as the whole log, marker or not.
+    expect(md).toMatch(/before trusting a re-run that actually ran \(`VERDICT=pass\|fail`\)/);
   });
 
   it("Stage 3 carries the regenerate-never-edit rules", () => {

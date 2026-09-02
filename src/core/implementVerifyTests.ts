@@ -114,8 +114,12 @@ export function runBounded(bin: string | null, cwd: string, testCmd: string, tim
  *  infer which tree its re-run tested. An empty pin is byte-identical to the script shipped before
  *  the pin existed. Pure, so the composition is testable without an exec. */
 export function verifyScript(testCmd: string, pin: string): string {
-  return pin ? `printf '%s\\n' "PYTHONPATH_PIN=${pin}"; ${pinExport(pin)}; ${testCmd} 2>&1` : `${testCmd} 2>&1`;
+  return pin ? `printf '%s\\n' "${PIN_MARKER}${pin}"; ${pinExport(pin)}; ${testCmd} 2>&1` : `${testCmd} 2>&1`;
 }
+/** The first-line marker a pinned re-run writes. Exported so the directive test can assert
+ *  commands/implement.md names the marker the producer actually emits — the producer<->directive
+ *  contract TEST_VERDICTS follows — rather than a literal that a rename would leave stale. */
+export const PIN_MARKER = "PYTHONPATH_PIN=";
 
 /** Live runner: resolve the bounding binary, derive the pin for THIS cwd, then `runBounded`. Never
  *  throws. The pin is "" unless `cwd` is a worktree ap created under the main checkout AND something
