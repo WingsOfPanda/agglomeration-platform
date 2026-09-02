@@ -8,7 +8,7 @@
 // the outbox, and the hub's own state from its status.json. Four independent reads, no inference.
 
 import { existsSync, realpathSync } from "node:fs";
-import { basename, dirname, join, sep } from "node:path";
+import { basename, dirname, join, sep, resolve } from "node:path";
 import { readIfExists } from "./fsread.js";
 import { log } from "./log.js";
 import { jobDir, repoRoot, topicDir } from "./paths.js";
@@ -76,7 +76,13 @@ export function worktreePathFor(root: string, topic: string): string {
  *  follows: teardown removes only what ap can prove is its own, so a hand-edited (or carried-over)
  *  record naming some other checkout is never a path `job stop` will delete. */
 export function worktreeProvenanced(path: string, root: string): boolean {
-  return path.startsWith(join(root, ".ap", "worktrees") + sep) && path.length > join(root, ".ap", "worktrees").length + sep.length;
+  // Compare NORMALISED paths: every in-tree producer (`worktreePathFor`) is already normalised, but
+  // a hand-typed `--cwd <root>/.ap/worktrees/../../../elsewhere` would otherwise pass a raw prefix
+  // test and be pinned or torn down as ap's own. (A symlink INSIDE the worktrees dir is out of scope:
+  // ap never creates one.)
+  const base = resolve(join(root, ".ap", "worktrees"));
+  const p = resolve(path);
+  return p.startsWith(base + sep) && p.length > base.length + sep.length;
 }
 /** The MAIN checkout a `job` verb must resolve its state against, given the root git reported for
  *  wherever it was invoked. A run worktree is `<root>/.ap/worktrees/<topic>` BY CONSTRUCTION

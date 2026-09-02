@@ -5,7 +5,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { pinFor, pinReport, pythonPin, shadowHits, siteDirs, type ShadowHit } from "../src/core/provision.js";
 
 const cleanups: Array<() => void> = [];
@@ -329,6 +329,17 @@ describe("pinFor — the ONE gate all three application sites share", () => {
     expect(pinFor(root, elsewhere, home, ENV)).toBe("");
     expect(pinFor(root, join(root, "wt", "feature"), home, ENV)).toBe("");
     expect(pinReport(root, elsewhere, home, ENV).hits).toEqual([]);
+  });
+  // The gate compares NORMALISED paths: a hand-typed `--cwd <root>/.ap/worktrees/../../../other` names an
+  // unrelated checkout through the worktrees prefix, and a raw prefix test would pin it (origin-hub refuter, P3).
+  it("is empty for an unrelated checkout reached through `<root>/.ap/worktrees/..` segments", () => {
+    const { home, root } = shadowed();
+    const evil = join(dirname(root), "unrelated-checkout");
+    mkdirSync(join(evil, "src"), { recursive: true });
+    const viaDots = `${root}/.ap/worktrees/../../../unrelated-checkout`;   // raw string: join() would normalise the `..` away
+    expect(viaDots).toContain("/../");                                     // the un-normalised spelling reaches the gate
+    expect(pinFor(root, viaDots, home, ENV)).toBe("");
+    expect(pinReport(root, viaDots, home, ENV).hits).toEqual([]);
   });
   it("is empty for target === root (the hub pane's shape), and on a clean box", () => {
     const { home, root, target } = shadowed();

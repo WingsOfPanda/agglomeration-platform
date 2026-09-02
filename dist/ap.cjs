@@ -9602,7 +9602,9 @@ function worktreePathFor(root, topic) {
   return (0, import_node_path9.join)(root, ".ap", "worktrees", topic);
 }
 function worktreeProvenanced(path, root) {
-  return path.startsWith((0, import_node_path9.join)(root, ".ap", "worktrees") + import_node_path9.sep) && path.length > (0, import_node_path9.join)(root, ".ap", "worktrees").length + import_node_path9.sep.length;
+  const base = (0, import_node_path9.resolve)((0, import_node_path9.join)(root, ".ap", "worktrees"));
+  const p = (0, import_node_path9.resolve)(path);
+  return p.startsWith(base + import_node_path9.sep) && p.length > base.length + import_node_path9.sep.length;
 }
 function mainCheckoutRoot(root) {
   const recovered = (0, import_node_path9.dirname)((0, import_node_path9.dirname)((0, import_node_path9.dirname)(root)));
