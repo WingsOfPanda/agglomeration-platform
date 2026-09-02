@@ -10,7 +10,7 @@ describe("quick dispatcher", () => {
   });
 });
 
-import { existsSync, readFileSync, writeFileSync, mkdtempSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdtempSync, mkdirSync, readdirSync, rmSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { freshHome } from "./helpers/tmpHome.js";
@@ -1644,10 +1644,14 @@ describe("quick init: a predecessor that initialised but never reached a worker 
     expect(staleDirs()).toEqual([]);
   });
 
-  it("2: a worker-dir archive that throws leaves the predecessor intact — `_quick` still there, no `_quick.stale-*`, rc 1", async () => {
+  it.skipIf(process.getuid?.() === 0)("2: a worker-dir archive whose RENAME throws leaves the predecessor intact — `_quick` still there, no `_quick.stale-*`, rc 1", async () => {
     seedPredecessor();
     seedWorker("idle");
-    writeFileSync(join(h.home, "archive"), "");     // the archive root is a FILE: the cross-root move must throw
+    // The per-topic archive dir exists but is read-only: every parent mkdir succeeds and the
+    // renameSync itself is what throws (EACCES) — a pre-flight on the archive root cannot see it.
+    const arch = join(h.home, "archive", repoHash(), TOPIC);
+    mkdirSync(arch, { recursive: true });
+    chmodSync(arch, 0o555);
     expect(await initWith(ARGS, deps())).toBe(1);
     expect(readFileSync(join(quickArtDir(TOPIC), "topic-text.txt"), "utf8")).toBe("stale topic (first attempt)");
     expect(staleDirs()).toEqual([]);
