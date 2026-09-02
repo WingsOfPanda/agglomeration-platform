@@ -1,6 +1,6 @@
 // src/commands/quick.ts
 import { mkdirSync, existsSync, rmSync, copyFileSync, readdirSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, dirname } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
@@ -129,12 +129,21 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
       const wdest = stateArchive(w.agent, w.model, slug, "stale");
       if (wdest) process.stdout.write(`ARCHIVED_STALE_WORKER=${wdest}\n`);
     }
-    // The run RECORD carries forward — copied, so the archive stays a faithful record of that
-    // attempt: issue.txt is the topic's tracker id and findings.log its trace, and a retry that
-    // opened a second issue would orphan every flag filed on the first, the same loss the flag-only
-    // case above refuses to incur.
+    // The run's RECORDS carry forward — copied, so the archive stays a faithful record of that
+    // attempt. issue.txt is the topic's tracker id and findings.log its trace: a retry that opened a
+    // second issue would orphan every flag filed on the first, the same loss the flag-only case
+    // above refuses to incur. start-branch.txt and stash-wip.txt record git side effects that are
+    // STILL STANDING in the target — HEAD left on feat/quick-<slug>, a --stash-wip park still in the
+    // stash — which the retry's `quick branch` (honours a carried start branch) and `finish` (pops
+    // the carried marker) undo; archived with the dir, the retry would snapshot the feat branch as
+    // its own start branch and finish "no-branch", and the park would sit in the stash forever.
     mkdirSync(art, { recursive: true });
-    for (const f of ["findings.log", "issue.txt"]) if (existsSync(join(dest, f))) copyFileSync(join(dest, f), join(art, f));
+    for (const f of CARRIED_RECORDS) {
+      const src = join(dest, f);
+      if (!existsSync(src)) continue;
+      mkdirSync(dirname(join(art, f)), { recursive: true });
+      copyFileSync(src, join(art, f));
+    }
   } else if (prior) { log.error(`quick init: topic already in flight: ${art}`); log.error("  run /ap:stop or pick a different topic"); return 2; }
 
   const agent = d.pickRandomAgent(slug);
@@ -274,6 +283,8 @@ function readStashMarker(exec: string, topic: string): { sha: string; message: s
  *  happens to hold — which under `--target` is not the repo the state dir belongs to. */
 const STATE_RELATIVE_PREFIXES = ["_quick/", "_implement/", ".ap/"];
 const STATE_FILE_BASENAMES = ["topic-text.txt", "task-brief.md"];
+/** What init copies out of a stale predecessor's `_quick` into the new run (see initWith). */
+const CARRIED_RECORDS = ["findings.log", "issue.txt", "execute/start-branch.txt", "execute/stash-wip.txt"];
 const PROHIBITION_LINE = /\b(never|do not|don't|must not)\s+(touch|modify|edit|write|create|delete|read)\b/i;
 
 /** Warn-only brief lint (2026-08-23-brief-path-correctness-design.md, C2). Reads the hub's
@@ -386,7 +397,14 @@ export async function branchWith(topic: string, target: string, r: Runner, stash
   const onBranch = outcome !== "failed";
   atomicWrite(join(exec, "target_cwd.txt"), target + "\n");
   lintBrief(topic, target, exec);
-  atomicWrite(join(exec, "start-branch.txt"), snap.branch + "\n");
+  // A retry after init's stale archive finds HEAD still on this run's own feat branch — the
+  // predecessor's checkout stood, and init carried its start-branch.txt forward. Snapshotting THAT
+  // as the start branch made finish's hasDistinctBranch false: nothing pushed, no PR, a misleading
+  // recovery hint. So a carried record wins whenever HEAD already sits on the run's branch; any
+  // other HEAD is a genuine start branch and is recorded as before.
+  const carried = readField(join(exec, "start-branch.txt"));
+  const startBranch = carried && snap.branch === branch ? carried : snap.branch;
+  atomicWrite(join(exec, "start-branch.txt"), startBranch + "\n");
   atomicWrite(join(exec, "branch-base.sha"), snap.baseSha + "\n");
   // The branch the run is ACTUALLY on, the way implement records its `recorded`: a failed checkout
   // leaves HEAD on the start branch, and writing the intended name there is what lets a leftover

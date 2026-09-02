@@ -1340,6 +1340,9 @@ import { randomUUID } from "node:crypto";
 import { paneMetaWrite } from "../src/core/ipc.js";
 import { topicDir, repoHash } from "../src/core/paths.js";
 import { prepareWorkerState } from "../src/commands/spawn.js";
+import { runnerAt } from "../src/core/gitwork.js";
+import { execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 
 describe("quick init: a predecessor that initialised but never reached a worker turn", () => {
   let h: { home: string; cleanup: () => void };
@@ -1583,5 +1586,81 @@ describe("quick init: a predecessor that initialised but never reached a worker 
     expect(await initWith(ARGS, deps())).toBe(2);
     expect(staleDirs()).toEqual([]);
     expect(existsSync(join(art, "topic-text.txt"))).toBe(true);
+  });
+});
+
+describe("quick init: a stale archive keeps the predecessor's git side effects recoverable (real git)", () => {
+  let h: { home: string; cleanup: () => void };
+  let outSpy: ReturnType<typeof captureStdout>;
+  const roots: string[] = [];
+  beforeEach(() => { h = freshHome(); outSpy = captureStdout(); });
+  afterEach(() => { outSpy.restore(); h.cleanup(); while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true }); });
+
+  const TOPIC = "retry-topic";
+  const BRANCH = "feat/quick-retry-topic";
+  function git(cwd: string, ...args: string[]): string {
+    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  }
+  function repo(): string {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ap-retry-")));
+    roots.push(root);
+    git(root, "init", "-q");
+    git(root, "symbolic-ref", "HEAD", "refs/heads/main");
+    git(root, "config", "user.email", "t@example.com");
+    git(root, "config", "user.name", "ap tests");
+    git(root, "config", "commit.gpgsign", "false");
+    writeFileSync(join(root, "README.md"), "hello\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "init");
+    return root;
+  }
+  const realDeps = (): InitDeps => ({
+    haveCmd: () => true, agentBinary: () => "codex", pickRandomAgent: () => "bravo",
+    livePanes: async () => new Map([["%0", randomUUID()]]),
+    branchSha: (cwd, b) => { try { return git(cwd, "rev-parse", "--verify", "--quiet", `refs/heads/${b}`); } catch { return ""; } },
+  });
+  const head = (root: string) => git(root, "symbolic-ref", "--short", "HEAD");
+  function commitWork(root: string): void { writeFileSync(join(root, "work.txt"), "done\n"); git(root, "add", "-A"); git(root, "commit", "-q", "-m", "work"); }
+
+  it("B1: init → branch → spawn failed (no worker) → init → branch → commit → finish: `main` stays the start branch, finish ends on it, never `no-branch`", async () => {
+    const root = repo();
+    const args = ["retry", "topic", "--target", root];
+    expect(await initWith(args, realDeps())).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root))).toBe(0);
+    expect(head(root)).toBe(BRANCH);                                   // the predecessor's checkout stands
+    expect(await initWith(args, realDeps())).toBe(0);                  // spawn failed twice, hub aborted without stop: retry
+    expect(outSpy.text()).toContain("ARCHIVED_STALE=");
+    const exec = quickExecDir(TOPIC);
+    expect(readFileSync(join(exec, "start-branch.txt"), "utf8").trim()).toBe("main");   // carried
+    expect(await branchWith(TOPIC, root, runnerAt(root))).toBe(0);
+    expect(readFileSync(join(exec, "start-branch.txt"), "utf8").trim()).toBe("main");   // honoured, not re-snapshotted from HEAD
+    expect(readFileSync(join(exec, "branch.txt"), "utf8").trim()).toBe(BRANCH);
+    expect(head(root)).toBe(BRANCH);
+    commitWork(root);
+    expect(await finishWith(TOPIC, runnerAt(root), false)).toBe(0);
+    const result = readFileSync(join(exec, "finish-result.txt"), "utf8");
+    expect(result).not.toContain("no-branch");
+    expect(result).toMatch(/^keep\t/);
+    expect(head(root)).toBe("main");
+  });
+
+  it("B2: with --stash-wip, the carried marker lets the retry's finish pop the park: WIP file back, stash entry gone", async () => {
+    const root = repo();
+    const args = ["retry", "topic", "--target", root, "--stash-wip"];
+    writeFileSync(join(root, "wip.txt"), "unfinished\n");
+    expect(await initWith(args, realDeps())).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    expect(existsSync(join(root, "wip.txt"))).toBe(false);
+    expect(git(root, "stash", "list")).toContain("ap-quick-retry-topic-wip");
+    expect(await initWith(args, realDeps())).toBe(0);
+    const exec = quickExecDir(TOPIC);
+    expect(existsSync(join(exec, "stash-wip.txt"))).toBe(true);        // carried
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0); // clean tree: parks nothing, keeps the marker
+    expect(existsSync(join(exec, "stash-wip.txt"))).toBe(true);
+    commitWork(root);
+    expect(await finishWith(TOPIC, runnerAt(root), false)).toBe(0);
+    expect(git(root, "stash", "list")).not.toContain("ap-quick-retry-topic-wip");
+    expect(readFileSync(join(root, "wip.txt"), "utf8")).toBe("unfinished\n");
+    expect(head(root)).toBe("main");
   });
 });
