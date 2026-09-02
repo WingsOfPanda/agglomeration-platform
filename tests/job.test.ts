@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { spawnSync } from "node:child_process";
 import * as J from "../src/core/job.js";
 import type { OutboxEvent, PaneOwner } from "../src/core/ipc.js";
 
@@ -401,14 +402,25 @@ describe("jobBrief", () => {
       expect(s).toContain("pin by hand");
       expect(s).not.toContain("export PYTHONPATH=");
       // A found-but-unpinnable shadow is NOT a clean box: the bare probe would answer about the MAIN
-      // checkout on a src-layout shadow (SC6), so the slot carries a placeholder that cannot be pasted
-      // as-is and points at the correction, instead of the clean-box form.
+      // checkout on a src-layout shadow (SC6), so the slot carries a `${PIN_BY_HAND:?msg}` expansion
+      // that makes the shell refuse the whole line until a pin is exported, instead of the clean form.
       expect(s).not.toContain("cd '/repo/.ap/worktrees/demo' && python3 -c 'from pkg.ext import sym'");
-      expect(s).toContain("cd '/repo/.ap/worktrees/demo' && PYTHONPATH='<PIN BY HAND: the shadowed directory re-rooted under /repo/.ap/worktrees/demo — see NOTHING is pinned, below>' python3 -c 'from pkg.ext import sym'");
+      const probe = s.split("\n").find((l) => l.includes("python3 -c 'from pkg.ext import sym'"))!.trim();
+      expect(probe).toBe("cd '/repo/.ap/worktrees/demo' && PYTHONPATH=\"${PIN_BY_HAND:?this box shadows the repo and ap could not derive a pin - export PIN_BY_HAND=<the shadowed directory re-rooted under /repo/.ap/worktrees/demo> first, see NOTHING is pinned below}\" python3 -c 'from pkg.ext import sym'");
+      // SC6 by execution: pasted as-is the line refuses to run python (the shell aborts on the unset
+      // parameter and creates nothing); with the pin exported it runs with exactly that PYTHONPATH.
+      const runnable = probe.replace("cd '/repo/.ap/worktrees/demo'", "true").replace("python3 -c 'from pkg.ext import sym'", "sh -c 'echo RAN:$PYTHONPATH'");
+      const bare = spawnSync("bash", ["-c", runnable], { encoding: "utf8", env: { PATH: process.env.PATH ?? "" } });
+      expect(bare.status).not.toBe(0);
+      expect(bare.stdout).not.toContain("RAN");
+      expect(bare.stderr).toContain("PIN_BY_HAND");
+      const pinned = spawnSync("bash", ["-c", runnable], { encoding: "utf8", env: { PATH: process.env.PATH ?? "", PIN_BY_HAND: "/wt/src" } });
+      expect(pinned.status).toBe(0);
+      expect(pinned.stdout.trim()).toBe("RAN:/wt/src");
       // the same for the #183 hand-rolled shape, and the correction it points at is present
       const h = J.jobBrief({ ...REC, python_shadow: ["/home/op/.local/lib/python3.12/site-packages/hand.pth:1"] });
       expect(h).not.toContain("&& python3 -c");
-      expect(h).toContain("PYTHONPATH='<PIN BY HAND:");
+      expect(h).toContain('PYTHONPATH="${PIN_BY_HAND:?');
       expect(h).toContain("NOTHING is pinned");
     });
     // A6/A13: the run that gets bitten arms the repo for the next one — the only mechanism by which

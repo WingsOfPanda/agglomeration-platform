@@ -562,10 +562,14 @@ function worktreeLines(j: JobRecord): string[] {
  *  shadow that ap could NOT pin — an exec line it cannot resolve, an unsafe entry, an import root
  *  the worktree lacks — is not a clean box, and rendering the bare probe there is exactly the probe
  *  SC6 says must not be satisfiable (on a src-layout shadow it answers about the MAIN checkout). So
- *  that state gets a placeholder the hub cannot paste as-is, pointing at the correction below. */
+ *  that state gets a slot that REFUSES to run until a pin is supplied: `${PIN_BY_HAND:?msg}` makes
+ *  the shell abort the whole command with `msg` before python starts (rc 127 under `bash -c`, rc 1
+ *  in an interactive pane; verified), and creates nothing. A quoted prose placeholder would be a
+ *  valid shell word — the line would run with rc 0, python silently ignoring the missing entry,
+ *  which is the #197 replay with a green rc for the hub to write into a brief. */
 function pinSlot(j: JobRecord): string {
   if (j.python_pin) return `PYTHONPATH='${j.python_pin}' `;
-  if (j.python_shadow?.length) return `PYTHONPATH='<PIN BY HAND: the shadowed directory re-rooted under ${j.worktree} — see NOTHING is pinned, below>' `;
+  if (j.python_shadow?.length) return `PYTHONPATH="\${PIN_BY_HAND:?this box shadows the repo and ap could not derive a pin - export PIN_BY_HAND=<the shadowed directory re-rooted under ${j.worktree}> first, see NOTHING is pinned below}" `;
   return "";
 }
 
