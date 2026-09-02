@@ -1766,7 +1766,13 @@ describe("quick init: a stale archive keeps the predecessor's git side effects r
     const tip = git(root, "rev-parse", "HEAD");
     writeFileSync(join(root, "wip2.txt"), "later\n");                  // the operator kept working
     expect(await initWith(args, realDeps())).toBe(0);
-    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(1);
+    const errs: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    (process.stderr as any).write = (s: string) => { errs.push(String(s)); return true; };
+    try { expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(1); }
+    finally { (process.stderr as any).write = orig; }
+    expect(errs.join("")).toContain("nothing stashed, nothing committed");
+    expect(errs.join("")).toContain("git -C " + root + " stash pop stash@{0}");                    // the real ref, not a placeholder
     expect(readFileSync(join(exec, "stash-wip.txt"), "utf8")).toBe(marker);                          // untouched
     expect(git(root, "stash", "list").split("\n").filter((l) => l.includes("ap-quick-retry-topic-wip"))).toHaveLength(1);
     expect(git(root, "rev-parse", "HEAD")).toBe(tip);                                                // no snapshot commit anywhere
@@ -1804,13 +1810,17 @@ describe("quick init: a stale archive keeps the predecessor's git side effects r
     expect(head(root)).toBe("main");
   });
 
-  it("B: a park popped out of band between attempts → the carried marker is stale: dropped, the tree parks normally, finish restores it", async () => {
+  it("B: a park popped out of band between attempts → the carried marker is stale: dropped, the tree parks normally, finish restores it (an unrelated stash entry is neither mistaken for it nor touched)", async () => {
     const root = repo();
     const args = ["retry", "topic", "--target", root, "--stash-wip"];
     writeFileSync(join(root, "wip1.txt"), "first\n");
     expect(await initWith(args, realDeps())).toBe(0);
     expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
-    git(root, "stash", "pop");                                          // the operator took the WIP back by hand
+    git(root, "stash", "pop");                                          // the operator took the WIP back by hand ...
+    writeFileSync(join(root, "other.txt"), "theirs\n");
+    git(root, "stash", "push", "-u", "-m", "unrelated", "--", "other.txt");   // ... and parked something else of their own
+    expect(git(root, "stash", "list")).toContain("unrelated");
+    expect(git(root, "stash", "list")).not.toContain("ap-quick-retry-topic-wip");
     expect(await initWith(args, realDeps())).toBe(0);
     const exec = quickExecDir(TOPIC);
     expect(existsSync(join(exec, "stash-wip.txt"))).toBe(true);        // carried, but naming an entry that is gone
@@ -1821,6 +1831,40 @@ describe("quick init: a stale archive keeps the predecessor's git side effects r
     expect(await finishWith(TOPIC, runnerAt(root), false)).toBe(0);
     expect(readFileSync(join(root, "wip1.txt"), "utf8")).toBe("first\n");
     expect(git(root, "stash", "list")).not.toContain("ap-quick-retry-topic-wip");
+    expect(git(root, "stash", "list")).toContain("unrelated");         // theirs is still theirs
     expect(head(root)).toBe("main");
+  });
+
+  it("B: an UNREADABLE stash list keeps the carried marker: the dirty retry is refused, nothing dropped, nothing re-parked", async () => {
+    const root = repo();
+    const args = ["retry", "topic", "--target", root, "--stash-wip"];
+    writeFileSync(join(root, "wip1.txt"), "first\n");
+    expect(await initWith(args, realDeps())).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    const exec = quickExecDir(TOPIC);
+    const marker = readFileSync(join(exec, "stash-wip.txt"), "utf8");
+    writeFileSync(join(root, "wip2.txt"), "later\n");
+    expect(await initWith(args, realDeps())).toBe(0);
+    const real = runnerAt(root);
+    const blind: Runner = { run: (cmd, a) => (cmd === "git" && a[0] === "stash" && a[1] === "list") ? { code: 128, stdout: "" } : real.run(cmd, a) };
+    expect(await branchWith(TOPIC, root, blind, true)).toBe(1);
+    expect(readFileSync(join(exec, "stash-wip.txt"), "utf8")).toBe(marker);
+    expect(git(root, "stash", "list").split("\n").filter((l) => l.includes("ap-quick-retry-topic-wip"))).toHaveLength(1);
+    expect(git(root, "status", "--porcelain")).toContain("wip2.txt");
+  });
+
+  it("B: a park dropped out of band with a clean tree → the stale marker is dropped too, nothing to park", async () => {
+    const root = repo();
+    const args = ["retry", "topic", "--target", root, "--stash-wip"];
+    writeFileSync(join(root, "wip1.txt"), "first\n");
+    expect(await initWith(args, realDeps())).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    git(root, "stash", "drop");                                         // the operator threw the WIP away
+    expect(await initWith(args, realDeps())).toBe(0);
+    const exec = quickExecDir(TOPIC);
+    expect(existsSync(join(exec, "stash-wip.txt"))).toBe(true);
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    expect(existsSync(join(exec, "stash-wip.txt"))).toBe(false);
+    expect(git(root, "stash", "list")).toBe("");
   });
 });

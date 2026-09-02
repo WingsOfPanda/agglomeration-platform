@@ -369,7 +369,7 @@ export async function branchWith(topic: string, target: string, r: Runner, stash
   // bare --porcelain report a clean tree that git will still refuse to leave behind.
   const dirtyTree = (): boolean => classifyDirty(r.run("git", ["status", "--porcelain", "--untracked-files=all"]).stdout);
   // A marker carried in from a stale predecessor (init's CARRIED_RECORDS) names a park that may still
-  // be in the stash. The operator's WIP is NEVER committed anywhere: a second push under the same
+  // be in the stash. This arm never sends the operator's WIP into a commit: a second push under the same
   // topic-derived name would overwrite the only record finish pops from, and letting the tree fall
   // through to the snapshot commit below lands it on whatever branch HEAD is on — permanently on
   // `main`, in review. So: the entry is still there and the tree is dirty again → refuse, before any
@@ -378,12 +378,17 @@ export async function branchWith(topic: string, target: string, r: Runner, stash
   // ponytail: one park per run; a second park under a distinct name, popped in order at finish, is the upgrade path.
   if (stashWip) {
     const carried = readStashMarker(exec, topic);
-    if (carried && !stashEntry(r, carried.message)) {
+    // An UNREADABLE stash list is not an absence — the rule stashPopByMessage's `list-failed` keeps:
+    // the entry may well exist, so the marker stays and a dirty tree is refused below.
+    const listOk = carried ? r.run("git", ["stash", "list"]).code === 0 : true;
+    const entry = carried && listOk ? stashEntry(r, carried.message) : null;
+    if (carried && listOk && !entry) {
       rmSync(join(exec, "stash-wip.txt"), { force: true });
       log.warn(`quick branch: the --stash-wip park recorded by an earlier attempt ('${carried.message}') is no longer in the stash — dropping the stale marker`);
     } else if (carried && dirtyTree()) {
-      log.error(`quick branch: the tree is dirty again while the --stash-wip park from an earlier attempt ('${carried.message}') is still in the stash — nothing stashed, nothing committed, HEAD untouched`);
-      log.error(`  restore it first (git -C ${target} stash pop <ref>, then resolve), or drop it (git -C ${target} stash drop <ref>), then re-run`);
+      const ref = entry?.ref ?? "<ref>";
+      log.error(`quick branch: the tree is dirty again while the --stash-wip park from an earlier attempt ('${carried.message}', ${ref}) is still in the stash${listOk ? "" : " (the stash list could not be read)"} — nothing stashed, nothing committed, HEAD untouched`);
+      log.error(`  restore it first (git -C ${target} stash pop ${ref}, then resolve), or drop it (git -C ${target} stash drop ${ref}), then re-run`);
       return 1;
     }
   }
