@@ -125,16 +125,23 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
   if (!agent) { log.error(`quick init: no available agent in the pool for '${slug}'`); return 1; }
 
   if (stale) {
+    // Its worker dirs — every one under the topic, each PROVEN dead by stalePredecessor — go where
+    // `stop` would have sent them, so the agents return to the pool and `list` shows no permanent
+    // orphan under a topic whose run is gone. They go FIRST: this is the one move that crosses into
+    // the archive root (a rename that can throw — EXDEV when <repo>/.ap and ~/.ap sit on different
+    // filesystems), and a throw here leaves `_quick` intact, so the retry simply holds again. Only
+    // then the same-dir `_quick` rename, then the new art dir and its carried records.
+    const wdests: string[] = [];
+    try {
+      for (const w of stale.workers) { const wdest = archiveWorkerDir(w, slug, "stale"); if (wdest) wdests.push(wdest); }
+    } catch (e) {
+      log.error(`quick init: could not archive a dead worker dir of the earlier attempt (${(e as Error).message}) — ${art} is intact; clear it by hand or with /ap:stop`);
+      return 1;
+    }
     const dest = moveToArchive(art, `${art}.stale-${stale.agent}-${archiveTs()}`);
     log.warn(`quick init: archived a predecessor that never reached a worker turn: ${dest}`);
     process.stdout.write(`ARCHIVED_STALE=${dest}\n`);
-    // Its worker dirs — every one under the topic, each PROVEN dead by stalePredecessor — go where
-    // `stop` would have sent them, so the agents return to the pool and `list` shows no permanent
-    // orphan under a topic whose run is gone.
-    for (const w of stale.workers) {
-      const wdest = archiveWorkerDir(w, slug, "stale");
-      if (wdest) process.stdout.write(`ARCHIVED_STALE_WORKER=${wdest}\n`);
-    }
+    for (const wdest of wdests) process.stdout.write(`ARCHIVED_STALE_WORKER=${wdest}\n`);
     // The run's RECORDS carry forward — copied, so the archive stays a faithful record of that
     // attempt. issue.txt is the topic's tracker id and findings.log its trace: a retry that opened a
     // second issue would orphan every flag filed on the first, the same loss the flag-only case

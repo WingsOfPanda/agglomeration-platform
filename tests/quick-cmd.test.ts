@@ -1644,6 +1644,17 @@ describe("quick init: a predecessor that initialised but never reached a worker 
     expect(staleDirs()).toEqual([]);
   });
 
+  it("2: a worker-dir archive that throws leaves the predecessor intact — `_quick` still there, no `_quick.stale-*`, rc 1", async () => {
+    seedPredecessor();
+    seedWorker("idle");
+    writeFileSync(join(h.home, "archive"), "");     // the archive root is a FILE: the cross-root move must throw
+    expect(await initWith(ARGS, deps())).toBe(1);
+    expect(readFileSync(join(quickArtDir(TOPIC), "topic-text.txt"), "utf8")).toBe("stale topic (first attempt)");
+    expect(staleDirs()).toEqual([]);
+    expect(existsSync(workerDir("bravo", "codex", TOPIC))).toBe(true);
+    expect(outSpy.text()).not.toContain("ARCHIVED_STALE");
+  });
+
   it("agent.txt naming a traversal segment is not an agent: the refusal stands, nothing renamed", async () => {
     const art = seedPredecessor();
     writeFileSync(join(art, "agent.txt"), "../../x\n");
