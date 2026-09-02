@@ -157,9 +157,33 @@ describe("shadowHits — what on the box resolves this repo from the main checko
     mkdirSync(vsite, { recursive: true });
     writeFileSync(join(vsite, "v.pth"), `${join(root, "src")}\n`);
     writeFileSync(join(site, "u.pth"), `${root}\n`);
-    expect(siteDirs(home, { VIRTUAL_ENV: venv } as NodeJS.ProcessEnv)).toEqual([vsite, site]);
+    expect(siteDirs(home, { VIRTUAL_ENV: venv } as NodeJS.ProcessEnv)).toEqual([{ dir: vsite, prefix: venv }, { dir: site, prefix: join(home, ".local") }]);
     expect(shadowHits(root, home, { VIRTUAL_ENV: venv } as NodeJS.ProcessEnv).map((h) => h.importRoot)).toEqual([join(root, "src"), root]);
     expect(shadowHits(root, home, { CONDA_PREFIX: venv } as NodeJS.ProcessEnv).map((h) => h.importRoot)).toEqual([join(root, "src"), root]);
+  });
+
+  // `python -m venv .venv` (and uv's layout) put the venv INSIDE the repo. Its own site dir is then
+  // under the root, and its `easy-install.pth`-style relative entries (`.`, `./x.egg`) resolve there —
+  // that is the venv's tree, not a shadow of the checkout it sits in. Anything in that same venv that
+  // names the repo proper (a `.pth` line, a finder MAPPING) is still exactly the shadow this detects.
+  it("a venv INSIDE the repo: its own entries are not shadows, while entries there naming <root>/src or <root>/pkg still hit", () => {
+    const home = tmp("ap-prov-empty-");
+    const { root } = repoAndWorktree();
+    const venv = join(root, ".venv");
+    const vsite = join(venv, "lib", "python3.12", "site-packages");
+    mkdirSync(vsite, { recursive: true });
+    writeFileSync(join(vsite, "easy-install.pth"), ".\n./foo.egg\n");
+    writeFileSync(join(vsite, "abs.pth"), `${join(vsite, "bar.egg")}\n`);
+    const env = { VIRTUAL_ENV: venv } as NodeJS.ProcessEnv;
+    expect(shadowHits(root, home, env)).toEqual([]);
+    expect(shadowHits(root, home, ENV, [venv])).toEqual([]);          // the teardown widening, same rule
+    writeFileSync(join(vsite, "proj.pth"), `${join(root, "src")}\n`);
+    const finder = join(vsite, "__editable___pkg_finder.py");
+    writeFileSync(finder, finderText(`{'pkg': '${join(root, "pkg")}'}`));
+    expect(shadowHits(root, home, env)).toEqual([
+      { source: `${finder}:3`, importRoot: root },
+      { source: `${join(vsite, "proj.pth")}:1`, importRoot: join(root, "src") },
+    ]);
   });
 
   it("the teardown widening scans the extra prefixes' site dirs too", () => {

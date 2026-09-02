@@ -44,20 +44,31 @@ function siteDirsUnder(prefix: string): string[] {
   return names.filter((n) => n.startsWith("python")).map((n) => join(lib, n, "site-packages")).filter((d) => existsSync(d));
 }
 
-/** The site dirs a scan covers, in precedence order, de-duplicated. `extraPrefixes` is the teardown
- *  widening (`<root>/.venv`, `<root>/venv` — a venv inside the worktree dies with it and is not
- *  scanned); a launch-time scan passes none. */
-export function siteDirs(home: string, env: NodeJS.ProcessEnv, extraPrefixes: string[] = []): string[] {
+/** A site dir together with the PREFIX that owns it — the `VIRTUAL_ENV` / `CONDA_PREFIX` value, the
+ *  user site's `<home>/.local`, or a teardown extra. The prefix is what tells a venv that lives INSIDE
+ *  the repo (`python -m venv .venv`, uv's layout) apart from the repo: an entry that resolves under
+ *  the venv's own tree is that venv's, never a shadow of the checkout it happens to sit in. */
+export interface SiteDir { dir: string; prefix: string; }
+
+/** The site dirs a scan covers, in precedence order, de-duplicated by dir. `extraPrefixes` is the
+ *  teardown widening (`<root>/.venv`, `<root>/venv` — a venv inside the worktree dies with it and is
+ *  not scanned); a launch-time scan passes none. */
+export function siteDirs(home: string, env: NodeJS.ProcessEnv, extraPrefixes: string[] = []): SiteDir[] {
   const prefixes = [env.VIRTUAL_ENV, env.CONDA_PREFIX, join(home, ".local"), ...extraPrefixes].filter((p): p is string => Boolean(p));
-  const out: string[] = [];
-  for (const p of prefixes) for (const d of siteDirsUnder(p)) if (!out.includes(d)) out.push(d);
+  const out: SiteDir[] = [];
+  for (const prefix of prefixes) for (const dir of siteDirsUnder(prefix)) if (!out.some((s) => s.dir === dir)) out.push({ dir, prefix });
   return out;
 }
+
+/** A path under `root` that is NOT inside the prefix owning the site dir it was read from — the one
+ *  test every signal shares. `<root>/.venv/lib/python3.12/site-packages` is under the repo root and
+ *  under the venv prefix: the venv's own `easy-install.pth` entries (`.`, `./x.egg`) land there. */
+const shadows = (root: string, prefix: string, p: string): boolean => under(root, p) && !under(prefix, p);
 
 /** The hits a setuptools editable finder's `MAPPING` line yields, or null when the file could not be
  *  read (so its exec line in the sibling `.pth` stays unaccounted for). `NAMESPACES` is deliberately
  *  not read: subdirectories of the same tree, no new import root. */
-function finderHits(file: string, root: string): ShadowHit[] | null {
+function finderHits(file: string, root: string, prefix: string): ShadowHit[] | null {
   let text: string;
   try { text = readFileSync(file, "utf8"); } catch { return null; }
   const out: ShadowHit[] = [];
@@ -68,7 +79,7 @@ function finderHits(file: string, root: string): ShadowHit[] | null {
       // The MAPPING value is the PACKAGE dir; its parent is what goes on sys.path. A value that IS the
       // root has no import root inside the repo to re-root, so it is skipped rather than pinned wrong.
       const importRoot = dirname(tok);
-      if (under(root, importRoot)) out.push({ source: `${file}:${i + 1}`, importRoot });
+      if (shadows(root, prefix, importRoot)) out.push({ source: `${file}:${i + 1}`, importRoot });
     }
   });
   return out;
@@ -84,7 +95,7 @@ function finderHits(file: string, root: string): ShadowHit[] | null {
  *  every box and break the clean-box silence this layer promises. The hand-rolled
  *  `import sys; sys.path.insert(0, '<main checkout>')` idiom of issue #183 carries its path textually
  *  and is still caught; a hook that computes the path degrades to today's behaviour. */
-function pthHits(file: string, siteDir: string, root: string, parsedFinders: Set<string>): ShadowHit[] {
+function pthHits(file: string, site: SiteDir, root: string, parsedFinders: Set<string>): ShadowHit[] {
   let text: string;
   try { text = readFileSync(file, "utf8"); } catch { return []; }
   const out: ShadowHit[] = [];
@@ -94,11 +105,11 @@ function pthHits(file: string, siteDir: string, root: string, parsedFinders: Set
     if (line.startsWith("import ") || line.startsWith("import\t")) {
       const mod = line.slice("import".length).trim().split(/[;\s]/)[0] ?? "";
       if (parsedFinders.has(mod)) return;
-      if (pathTokensFrom(line).some((t) => isAbsolute(t) && under(root, t))) out.push({ source: `${file}:${i + 1}`, importRoot: null });
+      if (pathTokensFrom(line).some((t) => isAbsolute(t) && shadows(root, site.prefix, t))) out.push({ source: `${file}:${i + 1}`, importRoot: null });
       return;
     }
-    const p = resolve(siteDir, line);
-    if (under(root, p)) out.push({ source: `${file}:${i + 1}`, importRoot: p });
+    const p = resolve(site.dir, line);
+    if (shadows(root, site.prefix, p)) out.push({ source: `${file}:${i + 1}`, importRoot: p });
   });
   return out;
 }
@@ -110,17 +121,17 @@ export function shadowHits(root: string, home: string = homedir(), env: NodeJS.P
   const out: ShadowHit[] = [];
   for (const site of siteDirs(home, env, extraPrefixes)) {
     let names: string[];
-    try { names = readdirSync(site).sort(); } catch { continue; }
+    try { names = readdirSync(site.dir).sort(); } catch { continue; }
     // Finders FIRST: an exec line is accounted for only by a finder that was actually parsed.
     const parsed = new Set<string>();
     for (const n of names) {
       if (!/^__editable___.*_finder\.py$/.test(n)) continue;
-      const hits = finderHits(join(site, n), root);
+      const hits = finderHits(join(site.dir, n), root, site.prefix);
       if (hits === null) continue;
       parsed.add(n.slice(0, -".py".length));
       out.push(...hits);
     }
-    for (const n of names) if (n.endsWith(".pth")) out.push(...pthHits(join(site, n), site, root, parsed));
+    for (const n of names) if (n.endsWith(".pth")) out.push(...pthHits(join(site.dir, n), site, root, parsed));
   }
   return out;
 }
