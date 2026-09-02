@@ -360,7 +360,15 @@ export async function branchWith(topic: string, target: string, r: Runner, stash
   // the PR base carries no unrelated snapshot commit. An unstashable tree must not block the run.
   // The dirty gate reads --untracked-files=all: a repo with `status.showUntrackedFiles no` makes a
   // bare --porcelain report a clean tree that git will still refuse to leave behind.
-  if (stashWip && classifyDirty(r.run("git", ["status", "--porcelain", "--untracked-files=all"]).stdout)) {
+  const dirtyTree = (): boolean => classifyDirty(r.run("git", ["status", "--porcelain", "--untracked-files=all"]).stdout);
+  if (stashWip && readStashMarker(exec, topic) && dirtyTree()) {
+    // ponytail: ONE marker per run. A park carried in from a stale predecessor (init's CARRIED_RECORDS)
+    // is the only record finish pops from, and a second push under the same topic-derived name would
+    // overwrite it — the first park would sit in the stash forever. So the current changes take the
+    // WIP snapshot commit below instead, where they stay visible on the branch. Upgrade path: a
+    // multi-entry marker that finish pops in order.
+    log.warn(`quick branch: a --stash-wip park from an earlier attempt is still recorded ('${stashWipMessage(topic)}') — the current changes go into the WIP snapshot commit instead, so that park stays restorable at finish`);
+  } else if (stashWip && dirtyTree()) {
     const message = stashWipMessage(topic);
     const st = stashPush(r, message);
     switch (st.outcome) {

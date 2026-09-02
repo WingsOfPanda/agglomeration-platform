@@ -1727,4 +1727,42 @@ describe("quick init: a stale archive keeps the predecessor's git side effects r
     expect(readFileSync(join(root, "wip.txt"), "utf8")).toBe("unfinished\n");
     expect(head(root)).toBe("main");
   });
+
+  it("B: HEAD on a foreign branch at retry → the start branch is re-snapshotted from HEAD; the carried value is NOT preferred", async () => {
+    const root = repo();
+    const args = ["retry", "topic", "--target", root];
+    expect(await initWith(args, realDeps())).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root))).toBe(0);
+    git(root, "checkout", "-q", "-b", "release");                     // the operator moved on before the retry
+    expect(await initWith(args, realDeps())).toBe(0);
+    const exec = quickExecDir(TOPIC);
+    expect(readFileSync(join(exec, "start-branch.txt"), "utf8").trim()).toBe("main");      // carried ...
+    expect(await branchWith(TOPIC, root, runnerAt(root))).toBe(0);
+    expect(readFileSync(join(exec, "start-branch.txt"), "utf8").trim()).toBe("release");   // ... but HEAD was not on the run's branch
+    commitWork(root);
+    expect(await finishWith(TOPIC, runnerAt(root), false)).toBe(0);
+    expect(head(root)).toBe("release");
+  });
+
+  it("B: a dirty tree at retry does NOT overwrite the carried park — the new changes take the WIP snapshot commit, the first park is restored at finish", async () => {
+    const root = repo();
+    const args = ["retry", "topic", "--target", root, "--stash-wip"];
+    writeFileSync(join(root, "wip1.txt"), "first\n");
+    expect(await initWith(args, realDeps())).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    const exec = quickExecDir(TOPIC);
+    const marker = readFileSync(join(exec, "stash-wip.txt"), "utf8");
+    writeFileSync(join(root, "wip2.txt"), "later\n");                  // the operator kept working
+    expect(await initWith(args, realDeps())).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    expect(readFileSync(join(exec, "stash-wip.txt"), "utf8")).toBe(marker);                          // untouched
+    expect(git(root, "stash", "list").split("\n").filter((l) => l.includes("ap-quick-retry-topic-wip"))).toHaveLength(1);
+    expect(git(root, "log", "--oneline", "-1")).toContain("WIP before quick retry-topic");           // wip2 rode the snapshot commit
+    commitWork(root);
+    expect(await finishWith(TOPIC, runnerAt(root), false)).toBe(0);
+    expect(readFileSync(join(root, "wip1.txt"), "utf8")).toBe("first\n");                           // the first park came back
+    expect(git(root, "stash", "list")).not.toContain("ap-quick-retry-topic-wip");
+    expect(git(root, "show", `${BRANCH}:wip2.txt`)).toBe("later");                                   // and wip2 is on the branch
+    expect(head(root)).toBe("main");
+  });
 });
