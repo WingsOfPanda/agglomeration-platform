@@ -11,7 +11,7 @@ import { freshHome } from "./helpers/tmpHome.js";
 import { parseImplementArgs, implementArtDir } from "../src/core/implement.js";
 import { parseQuickArgs, parseBranchArgs, quickExecDir } from "../src/core/quick.js";
 import { initWith as implementInit } from "../src/commands/implement.js";
-import { initWith as quickInit, run as quickRun } from "../src/commands/quick.js";
+import { initWith as quickInit, run as quickRun, branchShaAt } from "../src/commands/quick.js";
 
 const PASSING_DOC =
   "# Add OAuth Login\n\n## Goal\nShip OAuth.\n\n## Architecture\nA token exchange.\n\n" +
@@ -158,5 +158,17 @@ describe("quick --target", () => {
     expect(rc).toBe(1);
     expect(err).toContain("does not exist");
     expect(existsSync(join(quickExecDir("auth"), "target_cwd.txt"))).toBe(false);
+  });
+});
+
+describe("quick init: the live branchSha probe (real git)", () => {
+  it("an existing branch answers its sha; an absent one \"\"; a same-named TAG must not answer; a missing dir is \"\" not a throw", () => {
+    const root = repo();
+    git(root, "branch", "feat/quick-x");
+    expect(branchShaAt(root, "feat/quick-x")).toBe(git(root, "rev-parse", "refs/heads/feat/quick-x"));
+    expect(branchShaAt(root, "feat/quick-absent")).toBe("");
+    git(root, "tag", "feat/quick-tagonly");
+    expect(branchShaAt(root, "feat/quick-tagonly")).toBe("");   // refs/heads/ is load-bearing
+    expect(branchShaAt(join(root, "nope"), "main")).toBe("");
   });
 });

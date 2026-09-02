@@ -42,14 +42,13 @@ export interface InitDeps {
   /** The sha `refs/heads/<branch>` points at in `cwd`; "" when the ref, or the repo, is absent. */
   branchSha(cwd: string, branch: string): string;
 }
-const liveInitDeps: InitDeps = {
-  haveCmd, agentBinary, pickRandomAgent,
-  livePanes: livePaneNonces,
-  branchSha: (cwd, branch) => {
-    const r = runnerAt(cwd).run("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]);
-    return r.code === 0 ? r.stdout.trim() : "";
-  },
-};
+/** The live `branchSha` probe: the sha `refs/heads/<branch>` points at in `cwd`, "" when the ref or
+ *  the repo is absent. The `refs/heads/` prefix is load-bearing — a same-named TAG must not answer. */
+export function branchShaAt(cwd: string, branch: string): string {
+  const r = runnerAt(cwd).run("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]);
+  return r.code === 0 ? r.stdout.trim() : "";
+}
+const liveInitDeps: InitDeps = { haveCmd, agentBinary, pickRandomAgent, livePanes: livePaneNonces, branchSha: branchShaAt };
 
 export async function run(args: string[]): Promise<number> {
   // ONE state tree per run, whatever directory the hub is standing in. Every state path derives
