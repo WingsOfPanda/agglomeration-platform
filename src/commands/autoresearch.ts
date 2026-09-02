@@ -5,7 +5,7 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { log } from "../core/log.js";
-import { applyArgsFile, hoistArgsFile, kvParse } from "../args.js";
+import { applyArgsFile, kvParse } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
 import { readIfExists, readIfExistsOrNull, readJsonOr, readOr } from "../core/fsread.js";
 import { envNum } from "../core/env.js";
@@ -2028,12 +2028,12 @@ async function dispatchVerb(args: string[]): Promise<number> {
     case "verify-check": return verifyCheckWith(rest, liveVerifyCheckDeps);
     case "inspect-plan": return inspectPlanWith(rest, liveInspectPlanDeps);
     case "inspect-check": return inspectCheckWith(rest, liveInspectCheckDeps);
-    case "experiment-send": return experimentSendWith(hoistArgsFile(rest), liveExperimentSendDeps);
+    case "experiment-send": return experimentSendWith(applyArgsFile(rest), liveExperimentSendDeps);
     case "score": return scoreWith(rest, liveScoreDeps);
     case "monitor": return monitorRun(rest);
     case "status-brief": return statusBriefWith(rest);
     case "finalize": return finalizeWith(rest, liveFinalizeDeps);
-    case "refine": return refineWith(hoistArgsFile(rest), liveRefineDeps);
+    case "refine": return refineWith(applyArgsFile(rest), liveRefineDeps);
     case "handoff-extract": return handoffExtractWith(rest, liveHandoffDeps);
     case "teardown": return teardownWith(rest, liveTeardownDeps);
     case "fresh-worker": return freshWorkerWith(rest, liveFreshWorkerDeps);
@@ -2041,7 +2041,7 @@ async function dispatchVerb(args: string[]): Promise<number> {
     case "forensics": return forensicsRun(rest);
     case "flag": return runFlag("autoresearch", rest[0], rest.slice(1).join(" "));
     case "reflect": return runReflect("autoresearch", rest[0], rest[1]);
-    case "abort": return abortWith(hoistArgsFile(rest), liveAbortDeps);
+    case "abort": return abortWith(applyArgsFile(rest), liveAbortDeps);
     case "consensus": return consensusWith(rest, liveConsensusDeps);
     case "memory-retrieve": return memoryRetrieveWith(rest, liveMemoryRetrieveDeps);
     case "corpus-digest": return corpusDigestWith(rest, {});

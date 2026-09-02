@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { tokenizeArgsLine, applyArgsFile, hoistArgsFile, kvParse, ArgsFileError, KvError } from "../src/args.js";
+import { tokenizeArgsLine, applyArgsFile, expandArgsFile, kvParse, ArgsFileError, KvError } from "../src/args.js";
 import { dispatch } from "../src/core/dispatch.js";
 
 describe("args", () => {
@@ -145,42 +146,85 @@ describe("applyArgsFile position refusal", () => {
   });
 });
 
-describe("hoistArgsFile (the verb-level no-opts loader)", () => {
+describe("expandArgsFile (the verb-level no-opts loader)", () => {
   function af(content: string): string {
     const f = join(mkdtempSync(join(tmpdir(), "afh-")), "args");
     writeFileSync(f, content);
     return f;
   }
 
-  it("a non-first --args-file pair is hoisted: file tokens lead, the rest of argv follows, file consumed", () => {
+  it("a non-first --args-file pair is expanded IN PLACE: tokens on both sides keep their order, file consumed", () => {
     const f = af("docs/design.md --topic add-oauth");
-    expect(hoistArgsFile(["--target", "/wt", "--args-file", f])).toEqual(["docs/design.md", "--topic", "add-oauth", "--target", "/wt"]);
+    expect(expandArgsFile(["--no-worktree", "--args-file", f, "--target", "/wt"]))
+      .toEqual(["--no-worktree", "docs/design.md", "--topic", "add-oauth", "--target", "/wt"]);
     expect(existsSync(f)).toBe(false);
   });
 
-  it("argv[0] pair is the plain applyArgsFile shape (tokens, then the tail)", () => {
+  it("any position: index 1, index 3, and last", () => {
+    expect(expandArgsFile(["a", "--args-file", af("X Y")])).toEqual(["a", "X", "Y"]);
+    expect(expandArgsFile(["a", "b", "c", "--args-file", af("X")])).toEqual(["a", "b", "c", "X"]);
+    expect(expandArgsFile(["a", "b", "c", "--args-file", af("X"), "d"])).toEqual(["a", "b", "c", "X", "d"]);
+  });
+
+  it("a positional-first verb keeps its positional first: `<topic> --args-file <reason>` never swaps them", () => {
+    expect(expandArgsFile(["realtopic", "--args-file", af("budget blown")])).toEqual(["realtopic", "budget", "blown"]);
+  });
+
+  it("argv[0] pair is exactly applyArgsFile's shape (tokens, then the tail)", () => {
     const f = af("docs/design.md");
-    expect(hoistArgsFile(["--args-file", f, "--target", "/wt"])).toEqual(["docs/design.md", "--target", "/wt"]);
+    expect(expandArgsFile(["--args-file", f, "--target", "/wt"])).toEqual(["docs/design.md", "--target", "/wt"]);
     expect(existsSync(f)).toBe(false);
   });
 
   it("no --args-file at all is a passthrough", () => {
-    expect(hoistArgsFile(["--target", "/wt", "docs/design.md"])).toEqual(["--target", "/wt", "docs/design.md"]);
+    expect(expandArgsFile(["--target", "/wt", "docs/design.md"])).toEqual(["--target", "/wt", "docs/design.md"]);
   });
 
   it("a trailing --args-file with no path is rc 2, never a neighbour token read as the path", () => {
-    expect(() => hoistArgsFile(["--target", "/wt", "--args-file"])).toThrow(ArgsFileError);
-    expect(() => hoistArgsFile(["--target", "/wt", "--args-file"])).toThrow("--args-file requires a path");
+    expect(() => expandArgsFile(["--target", "/wt", "--args-file"])).toThrow(ArgsFileError);
+    expect(() => expandArgsFile(["--target", "/wt", "--args-file"])).toThrow("--args-file requires a path");
   });
 
-  it("the top-level dispatch shape [verb, ..., --args-file, p] passes through applyArgsFile untouched, file kept (ap.ts never hoists)", () => {
+  it("a second --args-file pair is refused BEFORE either file is consumed", () => {
+    const a = af("AAA"), b = af("BBB");
+    expect(() => expandArgsFile(["--target", "/wt", "--args-file", a, "--args-file", b])).toThrow("--args-file may be given once");
+    expect(existsSync(a)).toBe(true);
+    expect(existsSync(b)).toBe(true);
+  });
+
+  it("the top-level dispatch shape [verb, ..., --args-file, p] passes through applyArgsFile untouched, file kept (ap.ts never expands)", () => {
     for (const argv of [["quick", "init", "--args-file", af("topic body")], ["job", "start", "--command", "quick", "--args-file", af("topic body")]]) {
       expect(applyArgsFile(argv)).toEqual(argv);
       expect(existsSync(argv[argv.length - 1])).toBe(true);
     }
-    // The site itself: src/ap.ts calls the plain loader and never the hoisting one.
+    // The site itself: src/ap.ts calls the plain loader and never the expanding one.
     const ap = readFileSync(join(process.cwd(), "src", "ap.ts"), "utf8");
     expect(ap).toMatch(/applyArgsFile\(rest\)/);
-    expect(ap).not.toMatch(/hoistArgsFile/);
+    expect(ap).not.toMatch(/expandArgsFile/);
+  });
+});
+
+describe("src/ap.ts top-level dispatch, built and executed", () => {
+  // A source-text pin cannot see an inline expansion, so the real site is exercised: build src/ap.ts
+  // with package.json's own esbuild flags (as dist-fresh does) and run the bundle.
+  it.skipIf(process.platform === "win32")("a non-first pair reaches the verb UNCONSUMED; an argv[0] pair is consumed (today's list/stop/check contract)", () => {
+    const ROOT = process.cwd();
+    const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+    const out = join(mkdtempSync(join(tmpdir(), "aptop-")), "ap.cjs");
+    const args = String(pkg.scripts.build).split(/\s+/).slice(1).map((a) => (a.startsWith("--outfile=") ? `--outfile=${out}` : a));
+    execFileSync(join(ROOT, "node_modules", ".bin", "esbuild"), args, { cwd: ROOT });
+    const home = mkdtempSync(join(tmpdir(), "aptop-home-"));
+    const run = (argv: string[]) => spawnSync(process.execPath, [out, ...argv], { cwd: home, env: { ...process.env, AP_HOME: home }, encoding: "utf8" });
+
+    const kept = join(home, "kept"); writeFileSync(kept, "topic body\n");
+    const r1 = run(["quick", "frob", "--args-file", kept]);   // rest = [frob, --args-file, p]: not rest[0]
+    expect(r1.status).toBe(2);
+    expect(r1.stderr).toMatch(/usage: quick/);                // the verb's usage, never an args-file error
+    expect(existsSync(kept)).toBe(true);
+
+    const eaten = join(home, "eaten"); writeFileSync(eaten, "");
+    const r2 = run(["list", "--args-file", eaten]);           // rest[0] IS --args-file: consumed here
+    expect(r2.status).toBe(0);
+    expect(existsSync(eaten)).toBe(false);
   });
 });

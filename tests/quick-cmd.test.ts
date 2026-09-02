@@ -101,6 +101,30 @@ describe("quick init", () => {
     expect(readFileSync(join(art, "topic-text.txt"), "utf8")).toBe("flagged topic");
   });
 
+  it("only the hub's task-brief.md present → in flight, rc 2 (the second init-written key)", async () => {
+    const art = quickArtDir("briefed-topic");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "task-brief.md"), "# brief\n");
+    expect(await initWith(["briefed", "topic", "--provider", "codex"], okDeps)).toBe(2);
+  });
+
+  it("a bare `quick branch` before init (execute/ only) does not block init", async () => {
+    const exec = quickExecDir("branched-first");
+    mkdirSync(exec, { recursive: true });
+    writeFileSync(join(exec, "target_cwd.txt"), "/proj\n");
+    writeFileSync(join(exec, "branch-base.sha"), "base000\n");
+    expect(await initWith(["branched", "first", "--provider", "codex"], okDeps)).toBe(0);
+    expect(readFileSync(join(exec, "target_cwd.txt"), "utf8")).toBe("/proj\n"); // untouched
+  });
+
+  it("a torn init that wrote only topic.txt does not block (nothing of a run exists yet)", async () => {
+    const art = quickArtDir("torn-topic");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "topic.txt"), "torn-topic\n");
+    expect(await initWith(["torn", "topic", "--provider", "codex"], okDeps)).toBe(0);
+    expect(existsSync(join(art, "topic-text.txt"))).toBe(true);
+  });
+
   it("in-flight (a predecessor that reached a worker turn) → rc 2", async () => {
     expect(await initWith(["dup", "topic", "--provider", "codex"], okDeps)).toBe(0);
     writeFileSync(join(quickExecDir("dup-topic"), "turn-1.txt"), "OFFSET=0\n");
@@ -1314,7 +1338,7 @@ describe("quick init: a consumed args file", () => {
 
 import { randomUUID } from "node:crypto";
 import { paneMetaWrite } from "../src/core/ipc.js";
-import { topicDir } from "../src/core/paths.js";
+import { topicDir, repoHash } from "../src/core/paths.js";
 
 describe("quick init: a predecessor that initialised but never reached a worker turn", () => {
   let h: { home: string; cleanup: () => void };
@@ -1324,10 +1348,12 @@ describe("quick init: a predecessor that initialised but never reached a worker 
 
   const TOPIC = "stale-topic";
   const ARGS = ["stale", "topic", "--provider", "codex"];
+  /** tmux answered: the hub's own pane is in the snapshot. */
+  const ANSWERED = () => new Map([["%0", randomUUID()]]);
   function deps(o: { panes?: Map<string, string>; sha?: string } = {}): InitDeps {
     return {
       haveCmd: () => true, agentBinary: () => "codex", pickRandomAgent: () => "charlie",
-      livePanes: async () => o.panes ?? new Map(), branchSha: () => o.sha ?? "base000",
+      livePanes: async () => o.panes ?? ANSWERED(), branchSha: () => o.sha ?? "base000",
     };
   }
   /** What init + branch leave behind before any turn: the init records plus the branch snapshot. */
@@ -1345,18 +1371,19 @@ describe("quick init: a predecessor that initialised but never reached a worker 
     }
     return art;
   }
-  function seedWorker(status: string, paneId = "%9", nonce = randomUUID()): string {
+  function seedWorker(status: string, paneId = "%9", nonce: string = randomUUID()): string {
     const wd = workerDir("bravo", "codex", TOPIC);
     mkdirSync(wd, { recursive: true });
-    paneMetaWrite("bravo", "codex", TOPIC, paneId, nonce);
+    if (paneId) paneMetaWrite("bravo", "codex", TOPIC, paneId, nonce);
     writeFileSync(join(wd, "status.json"), `{"state":"${status}","last_event":"spawn"}`);
     return nonce;
   }
   const staleDirs = () => readdirSync(topicDir(TOPIC)).filter((n) => n.startsWith("_quick.stale-"));
+  const archivedWorkers = () => { const d = join(h.home, "archive", repoHash(), TOPIC); return existsSync(d) ? readdirSync(d) : []; };
 
   it("no turn record, feat branch at its base, worker never spawned → archived to _quick.stale-<agent>-<utc-ts>, named on stdout, init proceeds", async () => {
     const art = seedPredecessor();
-    expect(await initWith(ARGS, deps())).toBe(0);
+    expect(await initWith(ARGS, deps({ panes: new Map() }))).toBe(0); // no worker dir: the snapshot is not even consulted
     const [dir, ...more] = staleDirs();
     expect(more).toEqual([]);
     expect(dir).toMatch(/^_quick\.stale-bravo-\d{8}T\d{6}Z$/);
@@ -1366,13 +1393,33 @@ describe("quick init: a predecessor that initialised but never reached a worker 
     expect(readFileSync(join(art, "agent.txt"), "utf8").trim()).toBe("charlie");
     expect(existsSync(join(art, "execute", "branch-base.sha"))).toBe(false); // a fresh run, not a resumed one
     expect(outSpy.text()).toContain(`ARCHIVED_STALE=${join(topicDir(TOPIC), dir)}\n`);
+    expect(outSpy.text()).not.toContain("ARCHIVED_STALE_WORKER=");
     expect(outSpy.text()).toMatch(/^SLUG=stale-topic$/m);
   });
 
-  it("a worker dir whose pane is gone and whose status is idle is not live → archived", async () => {
+  it("tmux answered and the recorded pane is gone, status idle → not live: _quick AND the worker dir are archived, the agent is free again", async () => {
     seedPredecessor();
     seedWorker("idle");
-    expect(await initWith(ARGS, deps())).toBe(0); // the snapshot holds no pane, so none is owned
+    expect(await initWith(ARGS, deps())).toBe(0);
+    expect(staleDirs()).toHaveLength(1);
+    expect(existsSync(workerDir("bravo", "codex", TOPIC))).toBe(false);
+    const [w, ...more] = archivedWorkers();
+    expect(more).toEqual([]);
+    expect(w).toMatch(/^bravo-codex-\d{8}T\d{6}Z-stale$/);
+    expect(outSpy.text()).toContain(`ARCHIVED_STALE_WORKER=${join(h.home, "archive", repoHash(), TOPIC, w)}\n`);
+  });
+
+  it("the recorded pane id is live under a DIFFERENT nonce (tmux recycled it) → gone → archived", async () => {
+    seedPredecessor();
+    seedWorker("idle", "%9");
+    expect(await initWith(ARGS, deps({ panes: new Map([["%9", randomUUID()]]) }))).toBe(0);
+    expect(staleDirs()).toHaveLength(1);
+  });
+
+  it("a spawn that died leaves status error → not live → archived", async () => {
+    seedPredecessor();
+    seedWorker("error");
+    expect(await initWith(ARGS, deps())).toBe(0);
     expect(staleDirs()).toHaveLength(1);
   });
 
@@ -1395,13 +1442,27 @@ describe("quick init: a predecessor that initialised but never reached a worker 
     expect(seen).toEqual(["/proj", "feat/quick-stale-topic"]);
   });
 
+  it("a pre-init flag AND a stale predecessor: findings.log + issue.txt carry into the new run and stay in the archive", async () => {
+    expect(runFlag("quick", TOPIC, "spawn died")).toBe(0);
+    const art = seedPredecessor();
+    const log0 = readFileSync(join(art, "findings.log"), "utf8");
+    const issue0 = readFileSync(join(art, "issue.txt"), "utf8");
+    expect(await initWith(ARGS, deps())).toBe(0);
+    const [dir] = staleDirs();
+    expect(readFileSync(join(art, "findings.log"), "utf8")).toBe(log0);
+    expect(readFileSync(join(art, "issue.txt"), "utf8")).toBe(issue0);
+    expect(readFileSync(join(topicDir(TOPIC), dir, "findings.log"), "utf8")).toBe(log0);
+    expect(readFileSync(join(topicDir(TOPIC), dir, "issue.txt"), "utf8")).toBe(issue0);
+    expect(readFileSync(join(art, "topic-text.txt"), "utf8")).toBe("stale topic");
+  });
+
   it("ANY turn record keeps the refusal: rc 2, nothing archived, the predecessor untouched", async () => {
     const art = seedPredecessor();
     writeFileSync(join(quickExecDir(TOPIC), "turn-1.txt"), "OFFSET=0\n");
     expect(await initWith(ARGS, deps())).toBe(2);
     expect(staleDirs()).toEqual([]);
     expect(readFileSync(join(art, "topic-text.txt"), "utf8")).toBe("stale topic (first attempt)");
-    expect(outSpy.text()).not.toContain("ARCHIVED_STALE=");
+    expect(outSpy.text()).not.toContain("ARCHIVED_STALE");
   });
 
   it("the feat branch moved past its base keeps the refusal", async () => {
@@ -1410,11 +1471,15 @@ describe("quick init: a predecessor that initialised but never reached a worker 
     expect(staleDirs()).toEqual([]);
   });
 
-  it("a worker whose status is `working` keeps the refusal, pane or no pane", async () => {
-    seedPredecessor();
-    seedWorker("working");
-    expect(await initWith(ARGS, deps())).toBe(2);
-    expect(staleDirs()).toEqual([]);
+  it("a worker whose status is `working` (any case) keeps the refusal, pane or no pane", async () => {
+    for (const state of ["working", "Working"]) {
+      seedPredecessor();
+      seedWorker(state);
+      expect(await initWith(ARGS, deps())).toBe(2);
+      expect(staleDirs()).toEqual([]);
+      expect(existsSync(workerDir("bravo", "codex", TOPIC))).toBe(true);
+      rmSync(workerDir("bravo", "codex", TOPIC), { recursive: true, force: true });
+    }
   });
 
   it("a worker that still owns its pane keeps the refusal even with an idle status", async () => {
@@ -1424,10 +1489,33 @@ describe("quick init: a predecessor that initialised but never reached a worker 
     expect(staleDirs()).toEqual([]);
   });
 
+  it("tmux gave no answer (empty snapshot) while a pane is recorded → cannot prove it gone → refusal", async () => {
+    seedPredecessor();
+    seedWorker("idle", "%9");
+    expect(await initWith(ARGS, deps({ panes: new Map() }))).toBe(2);
+    expect(staleDirs()).toEqual([]);
+    expect(existsSync(workerDir("bravo", "codex", TOPIC))).toBe(true);
+  });
+
+  it("a pre-nonce pane.json whose id is live → cannot say whose → refusal", async () => {
+    seedPredecessor();
+    seedWorker("idle", "%9", "");
+    expect(await initWith(ARGS, deps({ panes: new Map([["%9", randomUUID()]]) }))).toBe(2);
+    expect(staleDirs()).toEqual([]);
+  });
+
   it("a record that cannot name its agent is not this case: the refusal stands", async () => {
     const art = seedPredecessor();
     rmSync(join(art, "agent.txt"));
     expect(await initWith(ARGS, deps())).toBe(2);
     expect(staleDirs()).toEqual([]);
+  });
+
+  it("agent.txt naming a traversal segment is not an agent: the refusal stands, nothing renamed", async () => {
+    const art = seedPredecessor();
+    writeFileSync(join(art, "agent.txt"), "../../x\n");
+    expect(await initWith(ARGS, deps())).toBe(2);
+    expect(staleDirs()).toEqual([]);
+    expect(existsSync(join(art, "topic-text.txt"))).toBe(true);
   });
 });

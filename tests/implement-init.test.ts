@@ -56,7 +56,7 @@ describe("implement init", () => {
     return p;
   }
 
-  it("init --target <dir> --args-file <f> (the job-mode order) is accepted: the pair is hoisted, not an unknown flag", async () => {
+  it("init --target <dir> --args-file <f> (the job-mode order) is accepted: the pair is expanded in place, not an unknown flag", async () => {
     execFileSync("git", ["init", "-q", tmpRepo]);
     const p = docFile("2026-05-30-add-oauth-design.md", PASSING_DOC);
     const f = join(h.home, "args");
@@ -67,6 +67,15 @@ describe("implement init", () => {
     expect(existsSync(f)).toBe(false); // consumed
     expect(outSpy.text()).toMatch(/^TOPIC=add-oauth$/m);
     expect(outSpy.text()).toMatch(new RegExp(`^TARGET_CWD=${tmpRepo}$`, "m"));
+  });
+
+  it("branch --no-branch --args-file <f> (topic in the file): the pair is expanded in place, not read as two positionals", async () => {
+    const f = join(h.home, "args");
+    writeFileSync(f, "add-oauth\n");
+    const rc = await implementRun(["branch", "--no-branch", "--args-file", f]);
+    expect(errSpy.text()).not.toMatch(/usage: implement branch/);
+    expect(rc).toBe(1);                 // past arg parsing: the art dir for add-oauth does not exist
+    expect(existsSync(f)).toBe(false);  // consumed
   });
 
   it("happy single-repo → rc 0, scaffolds _implement with all artifacts (no trailing \\n in topic.txt)", async () => {

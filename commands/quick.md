@@ -73,7 +73,9 @@ Two entry paths, decided once before Stage 0 — the same shape `/ap:implement` 
   no interactive gates, so only these things change:
   - **The run works in a worktree.** Your inbox task has a WORKTREE paragraph with an absolute path.
     Pass it as `--target <WORKTREE>` to **both** `$CS quick init` and `$CS quick branch` (init echoes
-    it back as `TARGET=`; branch is what records it). No WORKTREE paragraph — a `--no-worktree` run —
+    it back as `TARGET=`; branch is what records it). For init it goes **after** the
+    `--args-file <args-path>` pair — `$CS quick init --args-file <args-path> --target <WORKTREE>` —
+    because init reads its args file verbatim and refuses a pair that is not first. No WORKTREE paragraph — a `--no-worktree` run —
     means no flag anywhere. Never check a branch out in the operator's own checkout.
   - **Finishing is forced to keep.** The default finish — push the branch and open a PR when a
     remote exists — is exactly what an unattended run must not do. Behave as if `--no-finish` were
@@ -121,8 +123,13 @@ consent, never block, and cost nothing, so prefer over-recording. Review later w
    TARGET=<abs target checkout>
    STASH_WIP=<yes|no>
    ```
-   Non-zero exit aborts: rc 1 = bad/empty topic, rc 2 = topic already in flight, rc 3 = provider
-   not installed. No SUMMARY is written (state dir was never created).
+   An extra `ARCHIVED_STALE=<path>` line (with `ARCHIVED_STALE_WORKER=<path>` when a worker dir
+   existed) means init archived an earlier run of this topic that never reached a worker turn and
+   whose worker was not live — nothing to do, proceed.
+   Non-zero exit aborts: rc 1 = bad/empty topic; rc 2 = topic already in flight — or, when stderr
+   says `args file not found`, the one-shot args file was already consumed by an earlier init: redo
+   step 1 and retry; rc 3 = provider not installed. No SUMMARY is written (state dir was never
+   created).
 3. **Brief.** Read the cleaned topic from `<SLUG state>/_quick/topic-text.txt` if needed, then
    **Write** `<SLUG state>/_quick/task-brief.md` using exactly this shape (keep it short — a brief,
    not a design doc). To find the state path, the directive does not need it: every later step

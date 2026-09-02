@@ -1,10 +1,10 @@
 // src/commands/quick.ts
-import { mkdirSync, existsSync, rmSync } from "node:fs";
+import { mkdirSync, existsSync, rmSync, copyFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { log } from "../core/log.js";
 import { applyArgsFile } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
-import { isoUtc, archiveTs, moveToArchive } from "../core/archive.js";
+import { isoUtc, archiveTs, moveToArchive, stateArchive } from "../core/archive.js";
 import { repoRoot, workerDir } from "../core/paths.js";
 import { jobPath, keepOnBranch, withMainCheckout } from "../core/job.js";
 import { quickArtDir, quickExecDir, deriveSlug, parseQuickArgs, parseBranchArgs, detectTestCommand, renderSummary, renderResume, type SummaryFacts } from "../core/quick.js";
@@ -17,7 +17,7 @@ import { pickRandomAgent } from "../core/agents.js";
 import { runnerAt, preSnapshot, createOrResumeBranch, finishWork, classifyDirty, currentBranch, hasDistinctBranch, stashPush, stashPopOnBranch, targetProblem } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
 import { outboxOffset, outboxPath, paneMetaReadForDir } from "../core/ipc.js";
-import { livePaneNonces, ownsPane } from "../core/tmux.js";
+import { livePaneNonces, ownsPane, verifiableNonce } from "../core/tmux.js";
 import { readWorkerStatusRec } from "../core/workerLiveness.js";
 import { composeRound1Prompt, composeFixPrompt } from "../core/turn.js";
 import { sendRound, waitRound, type RoundDescriptor, type RoundSendDeps, type RoundWaitDeps } from "../core/roundProtocol.js";
@@ -119,9 +119,19 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
   // operator to ask. A live worker, or ANY turn record, keeps the refusal — see stalePredecessor.
   const stale = prior ? await stalePredecessor(art, slug, d) : null;
   if (stale) {
-    const dest = moveToArchive(art, `${art}.stale-${stale}-${archiveTs()}`);
+    const dest = moveToArchive(art, `${art}.stale-${stale.agent}-${archiveTs()}`);
     log.warn(`quick init: archived a predecessor that never reached a worker turn: ${dest}`);
     process.stdout.write(`ARCHIVED_STALE=${dest}\n`);
+    // Its worker dir goes where `stop` would have sent it, so the agent returns to the pool and
+    // `list` shows no permanent orphan under a topic whose run is gone.
+    const wdest = stateArchive(stale.agent, stale.model, slug, "stale");
+    if (wdest) process.stdout.write(`ARCHIVED_STALE_WORKER=${wdest}\n`);
+    // The run RECORD carries forward — copied, so the archive stays a faithful record of that
+    // attempt: issue.txt is the topic's tracker id and findings.log its trace, and a retry that
+    // opened a second issue would orphan every flag filed on the first, the same loss the flag-only
+    // case above refuses to incur.
+    mkdirSync(art, { recursive: true });
+    for (const f of ["findings.log", "issue.txt"]) if (existsSync(join(dest, f))) copyFileSync(join(dest, f), join(art, f));
   } else if (prior) { log.error(`quick init: topic already in flight: ${art}`); log.error("  run /ap:stop or pick a different topic"); return 2; }
 
   const agent = d.pickRandomAgent(slug);
@@ -157,9 +167,9 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
  *  ran); and the worker init named — `agent.txt` + `selected-provider.txt`, the pair every worker
  *  path is built from — is not live: it owns no pane and its status is not `working`. A record
  *  that cannot name its agent is not this case either (the archive name needs one), and the hold
- *  is the safe answer. Returns the predecessor's agent — the archive name's middle segment — or
- *  null when the refusal stands. */
-async function stalePredecessor(art: string, topic: string, d: InitDeps): Promise<string | null> {
+ *  is the safe answer. Returns the predecessor's worker identity (the archive names) or null when
+ *  the refusal stands. */
+async function stalePredecessor(art: string, topic: string, d: InitDeps): Promise<{ agent: string; model: string } | null> {
   const exec = quickExecDir(topic);
   if (existsSync(join(exec, "turn-1.txt"))) return null;
   const base = readField(join(exec, "branch-base.sha"));
@@ -173,10 +183,18 @@ async function stalePredecessor(art: string, topic: string, d: InitDeps): Promis
   const wd = workerDir(agent, model, topic);
   if (existsSync(wd)) {
     const pane = paneMetaReadForDir(wd);
-    if (ownsPane(await d.livePanes(), pane.paneId, pane.nonce)) return null;
+    if (pane.paneId) {
+      const snap = await d.livePanes();
+      if (ownsPane(snap, pane.paneId, pane.nonce)) return null;   // provably ours, and alive
+      // "Not owned" is evidence of death only when tmux actually answered: the snapshot is EMPTY on
+      // any tmux error (its documented contract), and no answer must hold, never archive — the
+      // dead-vs-unknown split job.ts draws with verifiableNonce. A live id under a record that
+      // cannot say whose it is (a pre-nonce pane.json) is the same unknown.
+      if (snap.size === 0 || (snap.has(pane.paneId) && !verifiableNonce(pane.nonce))) return null;
+    }
     if ((readWorkerStatusRec(wd)?.state ?? "").toLowerCase() === "working") return null;
   }
-  return agent;
+  return { agent, model };
 }
 // ---- set-provider — quick's mirror of `implement set-provider`: the ONE mechanical way an
 // override reaches `selected-provider.txt`, the file `roundProtocol` routes the turn verbs by. A
