@@ -347,6 +347,8 @@ describe("jobBrief", () => {
   // brief; on a src-layout shadow the same probe with cwd in the worktree but no pin answers about
   // the main checkout too. The rule therefore carries the submodule, the cwd and the pin.
   describe("python environment parity", () => {
+    /** The rendered probe line of a brief. */
+    const probeOf = (brief: string) => brief.split("\n").find((l) => l.includes("python3 -c 'from pkg.ext import sym'"))!.trim();
     it("EVERY worktree brief carries the probe rule and the pip -e prohibition, for quick and implement", () => {
       for (const command of ["quick", "implement"] as const) {
         const t = J.jobBrief({ ...REC, command });
@@ -411,12 +413,20 @@ describe("jobBrief", () => {
       // checkout on a src-layout shadow (SC6), so the slot carries a `${PIN_BY_HAND:?msg}` expansion
       // that makes the shell refuse the whole line until a pin is exported, instead of the clean form.
       expect(s).not.toContain("cd '/repo/.ap/worktrees/demo' && python3 -c 'from pkg.ext import sym'");
-      const probeOf = (brief: string) => brief.split("\n").find((l) => l.includes("python3 -c 'from pkg.ext import sym'"))!.trim();
       expect(probeOf(s)).toBe("cd '/repo/.ap/worktrees/demo' && PYTHONPATH=\"${PIN_BY_HAND:?this box shadows the repo and ap could not derive a pin - export PIN_BY_HAND to the shadowed directory re-rooted under the worktree first, see NOTHING is pinned below}\" python3 -c 'from pkg.ext import sym'");
-      // SC6 by execution: pasted as-is the line refuses to run python (the shell aborts on the unset
-      // parameter and creates nothing); with the pin exported it runs with EXACTLY that PYTHONPATH.
-      // Run for the plain worktree and for one whose path carries every character that would break
-      // a double-quoted word — the refusal message must interpolate nothing path-derived.
+      // the same for the #183 hand-rolled shape, and the correction it points at is present
+      const h = J.jobBrief({ ...REC, python_shadow: ["/home/op/.local/lib/python3.12/site-packages/hand.pth:1"] });
+      expect(h).not.toContain("&& python3 -c");
+      expect(h).toContain('PYTHONPATH="${PIN_BY_HAND:?');
+      expect(h).toContain("NOTHING is pinned");
+    });
+    // SC6 by EXECUTION, load-bearing on its own: pasted as-is the unpinnable probe refuses to run
+    // python (the shell aborts on the unset parameter and creates nothing); with the pin exported it
+    // runs with EXACTLY that PYTHONPATH. Its own `it`, so a mutant that survives the string compare
+    // above — or a future weakening of that literal — still meets these assertions. Run for the plain
+    // worktree and for one whose path carries every character that would break a double-quoted word:
+    // the refusal message must interpolate nothing path-derived.
+    it("the unpinnable probe REFUSES to run until PIN_BY_HAND is exported, then runs with exactly that pin (executed)", () => {
       const run = (wt: string, pin?: string) => {
         const line = probeOf(J.jobBrief({ ...REC, worktree: wt, python_shadow: ["/x.pth:1"] }));
         const runnable = line.replace(`cd '${wt}'`, "true").replace("python3 -c 'from pkg.ext import sym'", "sh -c 'echo RAN:$PYTHONPATH'");
@@ -432,11 +442,6 @@ describe("jobBrief", () => {
         expect(pinned.status).toBe(0);
         expect(pinned.stdout.trim()).toBe("RAN:/wt/src");
       }
-      // the same for the #183 hand-rolled shape, and the correction it points at is present
-      const h = J.jobBrief({ ...REC, python_shadow: ["/home/op/.local/lib/python3.12/site-packages/hand.pth:1"] });
-      expect(h).not.toContain("&& python3 -c");
-      expect(h).toContain('PYTHONPATH="${PIN_BY_HAND:?');
-      expect(h).toContain("NOTHING is pinned");
     });
     // A6/A13: the run that gets bitten arms the repo for the next one — the only mechanism by which
     // `.ap-provision` ever gets written.
