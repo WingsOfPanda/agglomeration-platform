@@ -187,10 +187,11 @@ consent, never block, and cost nothing, so prefer over-recording. Review later w
    finish's `no-branch` refusal rather than a PR containing none of the run's work. The verb acts on
    the repo root unless you pass `--target <abs>` (as a detached run does, with the worktree from its
    brief); it is this verb that records the target for every later step.
-   On **rc 1** (target is not a git repo — or, with `--stash-wip`, the carried-park refusal above;
-   stderr says which, and the gate is then `stash-wip-conflict` with the printed message) → abort:
+   On **rc 1** (target is not a git repo) → abort:
    `$CS quick summary <SLUG> --aborted build not-a-git-repo "target is not a git repository"`,
-   print the SUMMARY, and stop. No worker was spawned, so do **not** run `stop`.
+   print the SUMMARY, and stop. No worker was spawned, so do **not** run `stop`. With `--stash-wip`,
+   rc 1 can instead be the carried-park refusal above — stderr names the stash entry — and then the
+   abort is `$CS quick summary <SLUG> --aborted build stash-wip-conflict "<the printed message>"`.
    Also **rc 1** when `feat/quick-<SLUG>` already exists and has **diverged from the current HEAD** —
    typically the leftover of an earlier run of this same topic whose PR was **squash-merged**, whose
    commits are therefore already in the base by content. Resuming it would open a PR re-proposing
