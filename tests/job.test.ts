@@ -413,10 +413,13 @@ describe("jobBrief", () => {
       // ...and that the export rides the probe's OWN command line: a hub's Bash calls are separate
       // shells, so an `export` in an earlier call never reaches the pasted line — and a bare prefix
       // binds only to the `cd` that opens the line.
-      expect(s).toContain('put `export PIN_BY_HAND="<that directory>";` in front of it on the SAME command line');
+      expect(s).toContain("put `export PIN_BY_HAND='<that directory>';` in front of it on the SAME command line");
       // clause (b), the hub's own gate run, carries the same rule — a separate export call never reaches it
       expect(s).toContain("on every probe or gate run of your own on the SAME command line as the");
-      expect(s).toContain("(`export PYTHONPATH=\"<that directory>\"; cd '/repo/.ap/worktrees/demo' && <command>`)");
+      expect(s).toContain("(`export PYTHONPATH='<that directory>'; cd '/repo/.ap/worktrees/demo' && <command>`)");
+      // single-quoted in both templates: a double-quoted value would let the shell expand `$` or run a
+      // backtick inside the path and the probe would run green with a wrong pin
+      expect(s).not.toContain('="<that directory>"');
       // no pasteable export with a REAL pin: neither the pinExport spelling (which appears only when
       // ap derived one) nor any export whose value starts with an absolute path — ap could not derive a
       // safe pin here, so a concrete export would be a fabricated one.
@@ -455,20 +458,24 @@ describe("jobBrief", () => {
         expect(pinned.status).toBe(0);
         expect(pinned.stdout.trim()).toBe("RAN:/wt/src");
       }
-      // The remedy's own instruction — its EXACT template, `export PIN_BY_HAND="<that directory>";`,
-      // taken from the rendered brief and filled with a directory that has a space — in front of the
-      // line on the SAME command line runs with that pin, untruncated; the two shapes the remedy warns
-      // against do not: an export in a separate earlier shell (the shell-per-call hub), and a bare
-      // `VAR=… ` prefix, which binds only to the `cd` that opens the line.
+      // The remedy's own instruction — its EXACT template, `export PIN_BY_HAND='<that directory>';`,
+      // taken from the rendered brief and filled with a directory — in front of the line on the SAME
+      // command line runs with that pin, whole: a space survives, and so do a `$…`, a backtick and a
+      // backslash, which a double-quoted value would expand, execute or eat (a wrong pin that runs
+      // green is the outcome the refusal exists to prevent). The two shapes the remedy warns against
+      // do not run: an export in a separate earlier shell (the shell-per-call hub), and a bare `VAR=… `
+      // prefix, which binds only to the `cd` that opens the line.
       const brief = J.jobBrief({ ...REC, python_shadow: ["/x.pth:1"] });
       const line = probeOf(brief)
         .replace("cd '/repo/.ap/worktrees/demo'", "true").replace("python3 -c 'from pkg.ext import sym'", "sh -c 'echo RAN:$PYTHONPATH'");
-      const template = 'export PIN_BY_HAND="<that directory>";';
+      const template = "export PIN_BY_HAND='<that directory>';";
       expect(brief).toContain(`\`${template}\``);
-      const sh = (cmd: string) => spawnSync("bash", ["-c", cmd], { encoding: "utf8", env: { PATH: process.env.PATH ?? "" } });
-      const sameLine = sh(`${template.replace("<that directory>", "/wt/my src")} ${line}`);
-      expect(sameLine.status).toBe(0);
-      expect(sameLine.stdout.trim()).toBe("RAN:/wt/my src");
+      const sh = (cmd: string) => spawnSync("bash", ["-c", cmd], { encoding: "utf8", env: { PATH: process.env.PATH ?? "", USER: "bob" } });
+      for (const dir of ["/wt/my src", "/wt/pay$USER/src", "/wt/x`id -u`y/src", "/wt/back\\slash/src"]) {
+        const sameLine = sh(`${template.replace("<that directory>", dir)} ${line}`);
+        expect(sameLine.status).toBe(0);
+        expect(sameLine.stdout.trim()).toBe(`RAN:${dir}`);
+      }
       for (const wrong of [`bash -c 'export PIN_BY_HAND=/wt/src'; ${line}`, `PIN_BY_HAND=/wt/src ${line}`]) {
         const r = sh(wrong);
         expect(r.status).not.toBe(0);
