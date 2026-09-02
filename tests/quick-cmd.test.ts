@@ -19,6 +19,7 @@ import { quickArtDir, quickExecDir } from "../src/core/quick.js";
 import { forensicsQueueDir, workerDir } from "../src/core/paths.js";
 import { outboxPath } from "../src/core/ipc.js";
 import { formatJob, jobPath } from "../src/core/job.js";
+import { runFlag } from "../src/core/forensics.js";
 
 // Build an --args-file the way the dispatcher expects (first line tokenized).
 function argsFile(home: string, line: string): string {
@@ -84,6 +85,20 @@ describe("quick init", () => {
   it("provider known but binary not on PATH → rc 3", async () => {
     const rc = await initWith(["do", "thing"], { haveCmd: () => false, agentBinary: () => "codex", pickRandomAgent: () => "bravo" });
     expect(rc).toBe(3);
+  });
+
+  it("a flag-only _quick (findings.log + issue.txt from a pre-init `quick flag`) never blocks init, and both records carry forward", async () => {
+    expect(runFlag("quick", "flagged-topic", "spawn died before init")).toBe(0);
+    const art = quickArtDir("flagged-topic");
+    const log0 = readFileSync(join(art, "findings.log"), "utf8");
+    const issue0 = readFileSync(join(art, "issue.txt"), "utf8");
+    expect(log0).toMatch(/ flag\n$/);
+    expect(issue0).toMatch(/^run_id=/m);
+    expect(existsSync(join(art, "topic-text.txt"))).toBe(false); // nothing init writes is there yet
+    expect(await initWith(["flagged", "topic", "--provider", "codex"], okDeps)).toBe(0);
+    expect(readFileSync(join(art, "findings.log"), "utf8")).toBe(log0);
+    expect(readFileSync(join(art, "issue.txt"), "utf8")).toBe(issue0);
+    expect(readFileSync(join(art, "topic-text.txt"), "utf8")).toBe("flagged topic");
   });
 
   it("in-flight (art dir exists) → rc 2", async () => {

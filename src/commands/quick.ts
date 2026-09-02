@@ -95,7 +95,12 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
   if (!d.haveCmd(binary)) { log.error(`quick init: ${provider}'s binary '${binary}' is not on PATH`); return 3; }
 
   const art = quickArtDir(slug);
-  if (existsSync(art)) { log.error(`quick init: topic already in flight: ${art}`); log.error("  run /ap:stop or pick a different topic"); return 2; }
+  // "In flight" means INIT wrote here, not that the dir exists: `quick flag` creates it (findings.log
+  // + issue.txt) when the hub records a failure BEFORE init — a spawn that died — and those two files
+  // alone re-blocked every retry. They are left exactly where they are, so the pre-init flag stays on
+  // the run record the new run keeps writing to.
+  const prior = STATE_FILE_BASENAMES.some((f) => existsSync(join(art, f)));
+  if (prior) { log.error(`quick init: topic already in flight: ${art}`); log.error("  run /ap:stop or pick a different topic"); return 2; }
 
   const agent = d.pickRandomAgent(slug);
   if (!agent) { log.error(`quick init: no available agent in the pool for '${slug}'`); return 1; }
