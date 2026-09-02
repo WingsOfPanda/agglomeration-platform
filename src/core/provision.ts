@@ -18,6 +18,10 @@
 // from the job's own python, which costs a python subprocess ap does not have.
 // ponytail: a PEP 660 backend that installs its finder at `sys.meta_path[0]` and writes no plain
 // `.pth` is invisible to a textual scan; it degrades to today's behaviour.
+// ponytail: with the venv AT the repo root (`python -m venv .`) the venv and the checkout are one
+// directory, so everything of the venv's outside its site dir — `bin`, `lib64`, pip's VCS editables at
+// `<root>/src/<pkg>` — is indistinguishable from the repo's tree and is reported as a shadow; the safe
+// direction, since the pin drops any entry with no counterpart in the worktree and only warns.
 // ponytail: PYTHONPATH precedes the stdlib, so a pinned import root holding a stdlib-colliding
 // top-level name (`types.py`, `select.py`) shadows it for every interpreter in the pane. Checked
 // clean for the dogfood repo; written down rather than discovered later.
