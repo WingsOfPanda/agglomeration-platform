@@ -194,6 +194,9 @@ describe("shadowHits — what on the box resolves this repo from the main checko
     mkdirSync(vsite, { recursive: true });
     writeFileSync(join(vsite, "easy-install.pth"), ".\n./foo.egg\n");
     writeFileSync(join(vsite, "abs.pth"), `${join(vsite, "bar.egg")}\n`);
+    // pip's VCS editables live under <venv>/src — inside the venv, outside its site dir: still the venv's own
+    mkdirSync(join(venv, "src", "vcspkg"), { recursive: true });
+    writeFileSync(join(vsite, "vcs.pth"), `${join(venv, "src", "vcspkg")}\n`);
     const env = { VIRTUAL_ENV: venv } as NodeJS.ProcessEnv;
     expect(shadowHits(root, home, env)).toEqual([]);
     expect(shadowHits(root, home, { VIRTUAL_ENV: venv + "/" } as NodeJS.ProcessEnv)).toEqual([]);   // an operator-typed trailing slash
