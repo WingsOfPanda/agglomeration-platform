@@ -246,9 +246,10 @@ describe("worker VERDICT <-> commands/implement.md directive contract", () => {
     expect(md).toContain("`bash -ic 'exec <binary>'`");
     expect(md).toMatch(/`~\/\.bashrc` \*\*is\*\* sourced and\s+only `~\/\.profile` is not/);
     expect(md).toMatch(/the hub's own re-run is `bash -c`\s+\(`src\/core\/implementVerifyTests\.ts`, `runBounded`\) and sources \*\*nothing\*\*/);
-    // The design's dogfood acceptance line: a pinned re-run announces its pin as the log's first line.
-    expect(md).toMatch(/`hub-test-output-<ROUND>\.log` opens with `PYTHONPATH_PIN=<pin>`/);
-    // ...and the marker the directive names is the one the producer emits (the TEST_VERDICTS pattern).
+    // The design's dogfood acceptance line: a pinned re-run announces its pin as the log's first line,
+    // and the marker the directive names is the one the producer emits (the TEST_VERDICTS pattern) —
+    // derived, not a literal, so a coherent rename of PIN_MARKER + prose stays green while a stale
+    // directive goes red.
     expect(md).toContain(`\`hub-test-output-<ROUND>.log\` opens with \`${PIN_MARKER}<pin>\``);
     // The absence of that line means "unpinned" only for a re-run that RAN: a spawn failure writes
     // the error as the whole log, marker or not.
