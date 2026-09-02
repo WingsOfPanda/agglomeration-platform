@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { tokenizeArgsLine, applyArgsFile, kvParse, ArgsFileError, KvError } from "../src/args.js";
+import { tokenizeArgsLine, applyArgsFile, hoistArgsFile, kvParse, ArgsFileError, KvError } from "../src/args.js";
 import { dispatch } from "../src/core/dispatch.js";
 
 describe("args", () => {
@@ -142,5 +142,45 @@ describe("applyArgsFile position refusal", () => {
     finally { (process.stderr as any).write = orig; }
     expect(rc).toBe(2);
     expect(errs.join("")).toBe("--args-file must be the first argument\n"); // message, not a stack
+  });
+});
+
+describe("hoistArgsFile (the verb-level no-opts loader)", () => {
+  function af(content: string): string {
+    const f = join(mkdtempSync(join(tmpdir(), "afh-")), "args");
+    writeFileSync(f, content);
+    return f;
+  }
+
+  it("a non-first --args-file pair is hoisted: file tokens lead, the rest of argv follows, file consumed", () => {
+    const f = af("docs/design.md --topic add-oauth");
+    expect(hoistArgsFile(["--target", "/wt", "--args-file", f])).toEqual(["docs/design.md", "--topic", "add-oauth", "--target", "/wt"]);
+    expect(existsSync(f)).toBe(false);
+  });
+
+  it("argv[0] pair is the plain applyArgsFile shape (tokens, then the tail)", () => {
+    const f = af("docs/design.md");
+    expect(hoistArgsFile(["--args-file", f, "--target", "/wt"])).toEqual(["docs/design.md", "--target", "/wt"]);
+    expect(existsSync(f)).toBe(false);
+  });
+
+  it("no --args-file at all is a passthrough", () => {
+    expect(hoistArgsFile(["--target", "/wt", "docs/design.md"])).toEqual(["--target", "/wt", "docs/design.md"]);
+  });
+
+  it("a trailing --args-file with no path is rc 2, never a neighbour token read as the path", () => {
+    expect(() => hoistArgsFile(["--target", "/wt", "--args-file"])).toThrow(ArgsFileError);
+    expect(() => hoistArgsFile(["--target", "/wt", "--args-file"])).toThrow("--args-file requires a path");
+  });
+
+  it("the top-level dispatch shape [verb, ..., --args-file, p] passes through applyArgsFile untouched, file kept (ap.ts never hoists)", () => {
+    for (const argv of [["quick", "init", "--args-file", af("topic body")], ["job", "start", "--command", "quick", "--args-file", af("topic body")]]) {
+      expect(applyArgsFile(argv)).toEqual(argv);
+      expect(existsSync(argv[argv.length - 1])).toBe(true);
+    }
+    // The site itself: src/ap.ts calls the plain loader and never the hoisting one.
+    const ap = readFileSync(join(process.cwd(), "src", "ap.ts"), "utf8");
+    expect(ap).toMatch(/applyArgsFile\(rest\)/);
+    expect(ap).not.toMatch(/hoistArgsFile/);
   });
 });

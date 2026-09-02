@@ -4,7 +4,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, statSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../core/log.js";
-import { applyArgsFile, kvParse } from "../args.js";
+import { hoistArgsFile, kvParse } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
 import { repoRoot, repoStateDir } from "../core/paths.js";
 import { jobPath, keepOnBranch, withMainCheckout } from "../core/job.js";
@@ -115,14 +115,14 @@ export async function run(args: string[]): Promise<number> {
 async function dispatchVerb(args: string[]): Promise<number> {
   const verb = args[0]; const rest = args.slice(1);
   switch (verb) {
-    case "init":      return initRun(applyArgsFile(rest));
+    case "init":      return initRun(hoistArgsFile(rest));
     case "audit":     return auditRun(rest);
     case "set-provider": return setProviderRun(rest);
     case "turn-send": return turnSendRun(rest);
     case "turn-wait": return turnWaitRun(rest);
     case "reset-status": return resetStatusRun(rest);
     case "pre-snapshot": return preSnapshotRun(rest);
-    case "branch":       return branchRun(applyArgsFile(rest));
+    case "branch":       return branchRun(hoistArgsFile(rest));
     case "scope-check":  return scopeCheckRun(rest);
     case "verify-tests": return verifyTestsRun(rest);
     case "summary":      return summaryRun(rest);

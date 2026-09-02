@@ -87,6 +87,21 @@ export function applyArgsFile(argv: string[], opts?: ArgsFileOpts): string[] {
   return [...tokens, ...argv.slice(2)];
 }
 
+/** The no-opts loader for a verb whose OWN flag parser refuses unknown flags (`implement init`,
+ *  `implement branch`, autoresearch's `experiment-send`/`refine`/`abort`): an `--args-file <path>`
+ *  pair is taken from ANY position — `implement init --target <w> --args-file <p>` was rc 2
+ *  "unknown flag '--args-file'" — with the file's tokens leading and the rest of argv following,
+ *  the same shape the first-position form yields. NOT for the top-level dispatch site (src/ap.ts):
+ *  that one must pass a non-first pair through untouched, because `job start --args-file <p>`
+ *  parses the path itself and the prose-body inits read theirs verbatim at their own verb site. */
+export function hoistArgsFile(argv: string[]): string[] {
+  const i = argv.indexOf("--args-file");
+  if (i <= 0) return applyArgsFile(argv);
+  const path = argv[i + 1];
+  if (!path) throw new ArgsFileError("--args-file requires a path");
+  return applyArgsFile(["--args-file", path, ...argv.slice(0, i), ...argv.slice(i + 2)]);
+}
+
 export interface KvParseResult { value: string; shift: 1 | 2; }
 export function kvParse(flag: string, next?: string): KvParseResult {
   if (flag.includes("=")) return { value: flag.slice(flag.indexOf("=") + 1), shift: 1 };

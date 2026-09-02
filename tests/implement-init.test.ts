@@ -56,6 +56,19 @@ describe("implement init", () => {
     return p;
   }
 
+  it("init --target <dir> --args-file <f> (the job-mode order) is accepted: the pair is hoisted, not an unknown flag", async () => {
+    execFileSync("git", ["init", "-q", tmpRepo]);
+    const p = docFile("2026-05-30-add-oauth-design.md", PASSING_DOC);
+    const f = join(h.home, "args");
+    writeFileSync(f, p + "\n");
+    const rc = await implementRun(["init", "--target", tmpRepo, "--args-file", f]);
+    expect(errSpy.text()).not.toMatch(/unknown flag/);
+    expect(rc).toBe(0);
+    expect(existsSync(f)).toBe(false); // consumed
+    expect(outSpy.text()).toMatch(/^TOPIC=add-oauth$/m);
+    expect(outSpy.text()).toMatch(new RegExp(`^TARGET_CWD=${tmpRepo}$`, "m"));
+  });
+
   it("happy single-repo → rc 0, scaffolds _implement with all artifacts (no trailing \\n in topic.txt)", async () => {
     const p = docFile("2026-05-30-add-oauth-design.md", PASSING_DOC);
     const rc = await initWith([p], deps);
