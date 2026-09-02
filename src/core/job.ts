@@ -542,8 +542,11 @@ function worktreeLines(j: JobRecord): string[] {
     `answer about the MAIN checkout. Probe the exact symbol a gate imports, from the worktree, with the`,
     `pin prefixed when the launch reported one:`,
     ``,
-    // Single-quoted so a path with a space pastes and runs: every pin entry passed provision.ts's
-    // UNSAFE filter, which rejects the quote itself, and the worktree path is one ap built.
+    // Three slot shapes (pinSlot): the pin single-quoted (every entry passed provision.ts's UNSAFE
+    // filter, which rejects the quote itself); nothing on a clean box; and a double-quoted refusal
+    // expansion whose message interpolates NOTHING — the worktree path is not filtered, and a `}`,
+    // `"`, `$` or backtick in it would close, break or expand a double-quoted word. The `cd` target
+    // is single-quoted so a space pastes and runs.
     `    cd '${j.worktree}' && ${pinSlot(j)}python3 -c 'from pkg.ext import sym'`,
     ``,
     `Verify a compiled extension by its own path under the worktree, never by an import that succeeded:`,
@@ -566,10 +569,13 @@ function worktreeLines(j: JobRecord): string[] {
  *  the shell abort the whole command with `msg` before python starts (rc 127 under `bash -c`, rc 1
  *  in an interactive pane; verified), and creates nothing. A quoted prose placeholder would be a
  *  valid shell word — the line would run with rc 0, python silently ignoring the missing entry,
- *  which is the #197 replay with a green rc for the hub to write into a brief. */
+ *  which is the #197 replay with a green rc for the hub to write into a brief. The message is a
+ *  STATIC string: it sits inside a double-quoted word, and the worktree path (unfiltered) would
+ *  break it — `}` closes the expansion early and corrupts the pin once exported, `"` makes the line
+ *  unparseable, `$`/backtick expand. The shadow block below names the worktree. */
 function pinSlot(j: JobRecord): string {
   if (j.python_pin) return `PYTHONPATH='${j.python_pin}' `;
-  if (j.python_shadow?.length) return `PYTHONPATH="\${PIN_BY_HAND:?this box shadows the repo and ap could not derive a pin - export PIN_BY_HAND=<the shadowed directory re-rooted under ${j.worktree}> first, see NOTHING is pinned below}" `;
+  if (j.python_shadow?.length) return `PYTHONPATH="\${PIN_BY_HAND:?this box shadows the repo and ap could not derive a pin - export PIN_BY_HAND to the shadowed directory re-rooted under the worktree first, see NOTHING is pinned below}" `;
   return "";
 }
 
