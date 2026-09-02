@@ -22,9 +22,9 @@
 // directory, so nothing of the venv's outside its site dir is recognised as the environment's own:
 // any such path a `.pth` line, a finder MAPPING or an exec line names (pip's VCS editables at
 // `<root>/src/<pkg>`; a `lib64` entry) is reported as a shadow — the safe direction, since the pin
-// drops any entry with no counterpart in the worktree and only warns, at the cost that the brief's
-// pasteable probe then REFUSES until the hub exports PIN_BY_HAND (a shadow with no pin is not a
-// clean box).
+// drops any entry with no counterpart in the worktree and only warns; when nothing survives the drop
+// the brief's pasteable probe then REFUSES until the hub exports PIN_BY_HAND (a shadow with no pin
+// is not a clean box).
 // ponytail: PYTHONPATH precedes the stdlib, so a pinned import root holding a stdlib-colliding
 // top-level name (`types.py`, `select.py`) shadows it for every interpreter in the pane. Checked
 // clean for the dogfood repo; written down rather than discovered later.
