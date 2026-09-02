@@ -415,10 +415,13 @@ describe("jobBrief", () => {
       // binds only to the `cd` that opens the line.
       expect(s).toContain('put `export PIN_BY_HAND="<that directory>";` in front of it on the SAME command line');
       // clause (b), the hub's own gate run, carries the same rule — a separate export call never reaches it
-      expect(s).toContain("export it as PYTHONPATH, again on the SAME command line as");
+      expect(s).toContain("on every probe or gate run of your own on the SAME command line as the");
       expect(s).toContain("(`export PYTHONPATH=\"<that directory>\"; cd '/repo/.ap/worktrees/demo' && <command>`)");
-      // no pasteable export with a REAL pin: the pinExport spelling appears only when ap derived one
+      // no pasteable export with a REAL pin: neither the pinExport spelling (which appears only when
+      // ap derived one) nor any export whose value starts with an absolute path — ap could not derive a
+      // safe pin here, so a concrete export would be a fabricated one.
       expect(s).not.toContain("${PYTHONPATH:+:$PYTHONPATH}");
+      expect(s).not.toMatch(/export PYTHONPATH=["']\//);
       // A found-but-unpinnable shadow is NOT a clean box: the bare probe would answer about the MAIN
       // checkout on a src-layout shadow (SC6), so the slot carries a `${PIN_BY_HAND:?msg}` expansion
       // that makes the shell refuse the whole line until a pin is exported, instead of the clean form.
