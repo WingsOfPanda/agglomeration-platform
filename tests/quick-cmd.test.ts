@@ -1306,7 +1306,9 @@ describe("quick init: a consumed args file", () => {
     try { rc = await dispatch(quickRun, ["init", "--args-file", gone]); }
     finally { (process.stderr as any).write = orig; }
     expect(rc).toBe(2);
-    expect(errs.join("")).toBe(`args file not found: ${gone} (a one-shot args file is consumed by the first init that reads it; re-mint with --mint-args-file)\n`);
+    // toContain, not toBe: outside a git repo, repoRoot()'s child `git` echoes its own `fatal:` line
+    // onto stderr first; the claim here is the message, not that nothing else was said.
+    expect(errs.join("")).toContain(`args file not found: ${gone} (a one-shot args file is consumed by the first init that reads it; re-mint with --mint-args-file)\n`);
   });
 });
 
