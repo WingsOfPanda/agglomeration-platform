@@ -118,6 +118,13 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
   // is archived HERE rather than refused: there is no work to lose, and a detached run has no
   // operator to ask. A live worker, or ANY turn record, keeps the refusal — see stalePredecessor.
   const stale = prior ? await stalePredecessor(art, slug, d) : null;
+  if (prior && !stale) { log.error(`quick init: topic already in flight: ${art}`); log.error("  run /ap:stop or pick a different topic"); return 2; }
+
+  // Every refusal precedes the archive below: a non-zero init must change nothing (the directive
+  // promises "no state dir was created"), and the pool is the last thing that can still say no.
+  const agent = d.pickRandomAgent(slug);
+  if (!agent) { log.error(`quick init: no available agent in the pool for '${slug}'`); return 1; }
+
   if (stale) {
     const dest = moveToArchive(art, `${art}.stale-${stale.agent}-${archiveTs()}`);
     log.warn(`quick init: archived a predecessor that never reached a worker turn: ${dest}`);
@@ -144,10 +151,7 @@ export async function initWith(tokens: string[], d: InitDeps): Promise<number> {
       mkdirSync(dirname(join(art, f)), { recursive: true });
       copyFileSync(src, join(art, f));
     }
-  } else if (prior) { log.error(`quick init: topic already in flight: ${art}`); log.error("  run /ap:stop or pick a different topic"); return 2; }
-
-  const agent = d.pickRandomAgent(slug);
-  if (!agent) { log.error(`quick init: no available agent in the pool for '${slug}'`); return 1; }
+  }
 
   const exec = quickExecDir(slug);
   mkdirSync(exec, { recursive: true });
