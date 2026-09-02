@@ -1273,3 +1273,23 @@ describe("quick branch: brief lint", () => {
     expect(flags()).toHaveLength(0);
   });
 });
+
+import { dispatch } from "../src/core/dispatch.js";
+
+describe("quick init: a consumed args file", () => {
+  let h: { home: string; cleanup: () => void };
+  beforeEach(() => { h = freshHome(); });
+  afterEach(() => { h.cleanup(); });
+
+  it("names the missing path and the re-mint hint on stderr, rc 2 — never 'topic text is empty'", async () => {
+    const gone = join(h.home, "consumed-args");
+    const errs: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    (process.stderr as any).write = (s: string) => { errs.push(String(s)); return true; };
+    let rc = -1;
+    try { rc = await dispatch(quickRun, ["init", "--args-file", gone]); }
+    finally { (process.stderr as any).write = orig; }
+    expect(rc).toBe(2);
+    expect(errs.join("")).toBe(`args file not found: ${gone} (a one-shot args file is consumed by the first init that reads it; re-mint with --mint-args-file)\n`);
+  });
+});

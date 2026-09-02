@@ -23,8 +23,14 @@ describe("args", () => {
   it("applyArgsFile: no path throws code 2", () => {
     expect(() => applyArgsFile(["--args-file"])).toThrow(ArgsFileError);
   });
-  it("applyArgsFile: missing file → silent fallback", () => {
-    expect(applyArgsFile(["--args-file", "/nope/x", "extra"])).toEqual(["extra"]);
+  it("applyArgsFile: missing file fails closed — rc 2 and the re-mint hint, no-opts and verbatim alike", () => {
+    const msg = "args file not found: /nope/x (a one-shot args file is consumed by the first init that reads it; re-mint with --mint-args-file)";
+    expect(() => applyArgsFile(["--args-file", "/nope/x", "extra"])).toThrow(ArgsFileError);
+    expect(() => applyArgsFile(["--args-file", "/nope/x", "extra"])).toThrow(msg);
+    expect(() => applyArgsFile(["--args-file", "/nope/x"], { valueFlags: new Set<string>() })).toThrow(msg);
+    let code = -1;
+    try { applyArgsFile(["--args-file", "/nope/x"]); } catch (e) { code = (e as ArgsFileError).code; }
+    expect(code).toBe(2);
   });
   it("applyArgsFile preserves content after the first newline (multi-line $ARGUMENTS)", () => {
     const f = join(mkdtempSync(join(tmpdir(), "af-")), "args");

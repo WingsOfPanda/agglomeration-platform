@@ -19,8 +19,16 @@ export function tokenizeArgsLine(line: string): string[] {
   return out;
 }
 
+/** The fail-closed answer for a path that is not there — thrown by BOTH loaders. The file is
+ *  one-shot (consumed by the first init that reads it), so a retry after a failed init used to load
+ *  `[]` and die one verb later on "topic text is empty" / "exactly one design-doc path is required":
+ *  the symptom, never the cause. `ArgsFileError` carries rc 2. */
+function missingArgsFile(path: string): ArgsFileError {
+  return new ArgsFileError(`args file not found: ${path} (a one-shot args file is consumed by the first init that reads it; re-mint with --mint-args-file)`);
+}
+
 function loadArgsFile(path: string): string[] {
-  if (!existsSync(path)) return [];
+  if (!existsSync(path)) throw missingArgsFile(path);
   // The conductor writes $ARGUMENTS verbatim, which may span multiple lines (a
   // multi-paragraph topic). Read the WHOLE file; collapse newlines to spaces so line
   // breaks act as token separators without gluing words across the seam. Reading only
@@ -36,7 +44,7 @@ export interface ArgsFileOpts { valueFlags: Set<string>; }
  *  file as ONE verbatim body token — internal whitespace, newlines, apostrophes, and quotes intact.
  *  Mirrors the legacy plugin's verbatim-cat delivery; does NOT shell-tokenize the body. */
 function loadArgsFileVerbatim(path: string, valueFlags: Set<string>): string[] {
-  if (!existsSync(path)) return [];
+  if (!existsSync(path)) throw missingArgsFile(path);
   const raw = readFileSync(path, "utf8");
   const isWs = (c: string): boolean => c === " " || c === "\t" || c === "\n" || c === "\r";
   const flags: string[] = [];
