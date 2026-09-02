@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { implementArtDir } from "../src/core/implement.js";
-import { classifyTestRun, parseWorkerDuration, shouldSkipVerify, liveTestRunner, resolveTimeoutBin, runBounded, TEST_VERDICTS, type TestRunner } from "../src/core/implementVerifyTests.js";
+import { classifyTestRun, parseWorkerDuration, shouldSkipVerify, liveTestRunner, resolveTimeoutBin, runBounded, verifyScript, TEST_VERDICTS, type TestRunner } from "../src/core/implementVerifyTests.js";
 import { verifyTestsWith, type VerifyTestsDeps } from "../src/commands/implement.js";
 import { haveCmd } from "../src/core/deps.js";
 
@@ -254,6 +254,31 @@ describe("runBounded (real exec, every branch)", () => {
     expect(r.code).toBeNull();
     expect(r.output).toContain("ENOENT");
     expect(classifyTestRun("npm test", r.code)).toBe("unverifiable");
+  });
+});
+
+// The worktree PYTHONPATH pin (src/core/provision.ts) rides THIS child process: the hub pane is
+// spawned at the repo root and is deliberately unpinned, so the in-place re-run is the one place the
+// hub's verification can be re-rooted onto the worktree — issue #183 landed exactly here.
+describe("verifyScript — the pin is prepended to the re-run, and an empty pin changes nothing", () => {
+  it("with no pin the script is byte-identical to what shipped: `<cmd> 2>&1`", () => {
+    expect(verifyScript("npm test", "")).toBe("npm test 2>&1");
+  });
+  it("with a pin the export comes FIRST, in the one spelling wrapLaunch uses", () => {
+    expect(verifyScript("npm test", "/wt")).toBe('export PYTHONPATH="/wt${PYTHONPATH:+:$PYTHONPATH}"; npm test 2>&1');
+    expect(verifyScript("pytest -q", "/wt:/wt/src")).toBe('export PYTHONPATH="/wt:/wt/src${PYTHONPATH:+:$PYTHONPATH}"; pytest -q 2>&1');
+  });
+  it("runBounded hands the pin to the child, ahead of any PYTHONPATH already in the environment", () => {
+    const r = runBounded(null, mkdtempSync(join(tmpdir(), "rb-pin-")), "printf '%s' \"$PYTHONPATH\"", 30, "/wt/src");
+    expect(r.code).toBe(0);
+    expect(r.output.startsWith("/wt/src")).toBe(true);
+    // and the inherited value, if any, is appended rather than replaced
+    const inherited = process.env.PYTHONPATH;
+    expect(r.output).toBe(inherited ? `/wt/src:${inherited}` : "/wt/src");
+  });
+  it("runBounded with no pin leaves the child's PYTHONPATH exactly as inherited", () => {
+    const r = runBounded(null, mkdtempSync(join(tmpdir(), "rb-nopin-")), "printf '%s' \"${PYTHONPATH-unset}\"", 30);
+    expect(r.output).toBe(process.env.PYTHONPATH ?? "unset");
   });
 });
 
