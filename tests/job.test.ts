@@ -402,6 +402,10 @@ describe("jobBrief", () => {
       expect(s).toContain("pin by hand");
       // the refusal slot's message names no path on purpose; the remedy it defers to must name the worktree
       expect(s).toContain("re-rooted under /repo/.ap/worktrees/demo");
+      // ...and BOTH variables the reader must set: PIN_BY_HAND for the pasteable probe (the slot keys on
+      // it, so a reader who only exports PYTHONPATH still gets the refusal), PYTHONPATH for the pane/gates.
+      expect(s.split("\n").filter((l) => l.includes("PIN_BY_HAND=") && !l.includes("python3 -c"))).toHaveLength(1);
+      expect(s).toContain("export it as PYTHONPATH");
       expect(s).not.toContain("export PYTHONPATH=");
       // A found-but-unpinnable shadow is NOT a clean box: the bare probe would answer about the MAIN
       // checkout on a src-layout shadow (SC6), so the slot carries a `${PIN_BY_HAND:?msg}` expansion
