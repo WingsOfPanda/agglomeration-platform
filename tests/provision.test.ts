@@ -200,10 +200,14 @@ describe("shadowHits — what on the box resolves this repo from the main checko
     writeFileSync(join(vsite, "proj.pth"), `${join(root, "src")}\n`);
     const finder = join(vsite, "__editable___pkg_finder.py");
     writeFileSync(finder, finderText(`{'pkg': '${join(root, "pkg")}'}`));
-    expect(shadowHits(root, home, env)).toEqual([
+    const real = [
       { source: `${finder}:3`, importRoot: root },
       { source: `${join(vsite, "proj.pth")}:1`, importRoot: join(root, "src") },
-    ]);
+    ];
+    expect(shadowHits(root, home, env)).toEqual(real);
+    // and the trailing-slash spelling is pinned in BOTH directions: still silent on the venv's own
+    // entries (above), still the real hits here — an over-broad normalisation would fail this one.
+    expect(shadowHits(root, home, { VIRTUAL_ENV: venv + "/" } as NodeJS.ProcessEnv)).toEqual(real);
   });
 
   it("the teardown widening scans the extra prefixes' site dirs too", () => {
