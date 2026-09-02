@@ -167,10 +167,12 @@ export function shadowHits(root: string, home: string = homedir(), env: NodeJS.P
 
 export interface PinResult { pin: string; unsafe: boolean; missing: string[]; }
 
-/** The pin is interpolated into a single-quoted shell word, and PYTHONPATH is colon-separated: an
- *  entry carrying any of these would either escape the quoting or split the pin. Input validation at a
- *  trust boundary — the entry is derived from the operator's own paths, but it is still a string
- *  ap did not write. */
+/** The pin is interpolated into a single-quoted shell word (the brief's pasteable probe slot) AND into
+ *  a double-quoted one (`pinExport`: the pane launch, the brief's export line, the hub's verify
+ *  re-run), and PYTHONPATH is colon-separated: the single quote would escape the first, `"`, `$`, a
+ *  backtick or `\` would expand or escape inside the second, a newline ends the line, and a colon
+ *  splits the pin. Input validation at a trust boundary — the entry is derived from the operator's
+ *  own paths, but it is still a string ap did not write. */
 const UNSAFE = /['"`$\\\n:]/;
 
 /** Map every pinnable hit's import root onto `target` (`<root>/src` -> `<target>/src`; the root itself
