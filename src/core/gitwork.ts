@@ -140,7 +140,7 @@ function stashList(r: Runner): RunResult {
  *  matches. A ref whose rev-parse fails carries sha "" — that entry EXISTS, it just would not
  *  resolve, and `stashPush` reports it as `failed-with-entry` rather than pretending nothing was
  *  parked. */
-function stashEntry(r: Runner, message: string): { ref: string; sha: string } | null {
+export function stashEntry(r: Runner, message: string): { ref: string; sha: string } | null {
   const ref = findStashRef(stashList(r).stdout, message);
   return ref ? { ref, sha: r.run("git", ["rev-parse", ref]).stdout.trim() } : null;
 }

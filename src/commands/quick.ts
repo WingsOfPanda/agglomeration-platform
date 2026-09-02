@@ -14,7 +14,7 @@ import { runForensics, runFlag, runReflect } from "../core/forensics.js";
 import { agentBinary } from "../core/contracts.js";
 import { haveCmd } from "../core/deps.js";
 import { pickRandomAgent } from "../core/agents.js";
-import { runnerAt, preSnapshot, createOrResumeBranch, finishWork, classifyDirty, currentBranch, hasDistinctBranch, stashPush, stashPopOnBranch, targetProblem } from "../core/gitwork.js";
+import { runnerAt, preSnapshot, createOrResumeBranch, finishWork, classifyDirty, currentBranch, hasDistinctBranch, stashPush, stashEntry, stashPopOnBranch, targetProblem } from "../core/gitwork.js";
 import type { Runner } from "../core/gitwork.js";
 import { outboxOffset, outboxPath, paneMetaReadForDir, workerBusyStateForDir } from "../core/ipc.js";
 import { livePaneNonces, ownsPane, verifiableNonce } from "../core/tmux.js";
@@ -361,14 +361,26 @@ export async function branchWith(topic: string, target: string, r: Runner, stash
   // The dirty gate reads --untracked-files=all: a repo with `status.showUntrackedFiles no` makes a
   // bare --porcelain report a clean tree that git will still refuse to leave behind.
   const dirtyTree = (): boolean => classifyDirty(r.run("git", ["status", "--porcelain", "--untracked-files=all"]).stdout);
-  if (stashWip && readStashMarker(exec, topic) && dirtyTree()) {
-    // ponytail: ONE marker per run. A park carried in from a stale predecessor (init's CARRIED_RECORDS)
-    // is the only record finish pops from, and a second push under the same topic-derived name would
-    // overwrite it — the first park would sit in the stash forever. So the current changes take the
-    // WIP snapshot commit below instead, where they stay visible on the branch. Upgrade path: a
-    // multi-entry marker that finish pops in order.
-    log.warn(`quick branch: a --stash-wip park from an earlier attempt is still recorded ('${stashWipMessage(topic)}') — the current changes go into the WIP snapshot commit instead, so that park stays restorable at finish`);
-  } else if (stashWip && dirtyTree()) {
+  // A marker carried in from a stale predecessor (init's CARRIED_RECORDS) names a park that may still
+  // be in the stash. The operator's WIP is NEVER committed anywhere: a second push under the same
+  // topic-derived name would overwrite the only record finish pops from, and letting the tree fall
+  // through to the snapshot commit below lands it on whatever branch HEAD is on — permanently on
+  // `main`, in review. So: the entry is still there and the tree is dirty again → refuse, before any
+  // git side effect; the entry is gone (popped or dropped out of band) → the marker is stale, drop it
+  // and park exactly as a first attempt would.
+  // ponytail: one park per run; a second park under a distinct name, popped in order at finish, is the upgrade path.
+  if (stashWip) {
+    const carried = readStashMarker(exec, topic);
+    if (carried && !stashEntry(r, carried.message)) {
+      rmSync(join(exec, "stash-wip.txt"), { force: true });
+      log.warn(`quick branch: the --stash-wip park recorded by an earlier attempt ('${carried.message}') is no longer in the stash — dropping the stale marker`);
+    } else if (carried && dirtyTree()) {
+      log.error(`quick branch: the tree is dirty again while the --stash-wip park from an earlier attempt ('${carried.message}') is still in the stash — nothing stashed, nothing committed, HEAD untouched`);
+      log.error(`  restore it first (git -C ${target} stash pop <ref>, then resolve), or drop it (git -C ${target} stash drop <ref>), then re-run`);
+      return 1;
+    }
+  }
+  if (stashWip && dirtyTree()) {
     const message = stashWipMessage(topic);
     const st = stashPush(r, message);
     switch (st.outcome) {

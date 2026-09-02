@@ -1744,7 +1744,7 @@ describe("quick init: a stale archive keeps the predecessor's git side effects r
     expect(head(root)).toBe("release");
   });
 
-  it("B: a dirty tree at retry does NOT overwrite the carried park — the new changes take the WIP snapshot commit, the first park is restored at finish", async () => {
+  it("B: a dirty tree at retry while the carried park is still stashed → quick branch refuses rc 1: nothing stashed or committed, HEAD and the marker untouched; popping it by hand unblocks the retry", async () => {
     const root = repo();
     const args = ["retry", "topic", "--target", root, "--stash-wip"];
     writeFileSync(join(root, "wip1.txt"), "first\n");
@@ -1752,17 +1752,64 @@ describe("quick init: a stale archive keeps the predecessor's git side effects r
     expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
     const exec = quickExecDir(TOPIC);
     const marker = readFileSync(join(exec, "stash-wip.txt"), "utf8");
+    const tip = git(root, "rev-parse", "HEAD");
     writeFileSync(join(root, "wip2.txt"), "later\n");                  // the operator kept working
     expect(await initWith(args, realDeps())).toBe(0);
-    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(1);
     expect(readFileSync(join(exec, "stash-wip.txt"), "utf8")).toBe(marker);                          // untouched
     expect(git(root, "stash", "list").split("\n").filter((l) => l.includes("ap-quick-retry-topic-wip"))).toHaveLength(1);
-    expect(git(root, "log", "--oneline", "-1")).toContain("WIP before quick retry-topic");           // wip2 rode the snapshot commit
+    expect(git(root, "rev-parse", "HEAD")).toBe(tip);                                                // no snapshot commit anywhere
+    expect(git(root, "status", "--porcelain")).toContain("wip2.txt");                                // still dirty, still the operator's
+    expect(existsSync(join(exec, "branch.txt"))).toBe(false);                                       // the refused step recorded nothing
+    // The remedy: pop it by hand and re-run — the marker is now stale and the tree parks as a first attempt would.
+    git(root, "stash", "pop");
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    expect(readFileSync(join(exec, "stash-wip.txt"), "utf8")).not.toBe(marker);
+    expect(git(root, "stash", "list").split("\n").filter((l) => l.includes("ap-quick-retry-topic-wip"))).toHaveLength(1);
     commitWork(root);
     expect(await finishWith(TOPIC, runnerAt(root), false)).toBe(0);
-    expect(readFileSync(join(root, "wip1.txt"), "utf8")).toBe("first\n");                           // the first park came back
+    expect(readFileSync(join(root, "wip1.txt"), "utf8")).toBe("first\n");
+    expect(readFileSync(join(root, "wip2.txt"), "utf8")).toBe("later\n");
     expect(git(root, "stash", "list")).not.toContain("ap-quick-retry-topic-wip");
-    expect(git(root, "show", `${BRANCH}:wip2.txt`)).toBe("later");                                   // and wip2 is on the branch
+    expect(head(root)).toBe("main");
+  });
+
+  it("B: the HEAD-on-main dirty retry commits NOTHING on any branch — main stays at its commit, the park stays in the stash, rc 1", async () => {
+    const root = repo();
+    const args = ["retry", "topic", "--target", root, "--stash-wip"];
+    writeFileSync(join(root, "wip1.txt"), "first\n");
+    expect(await initWith(args, realDeps())).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    git(root, "checkout", "-q", "main");                                // the operator went back to main ...
+    const mainTip = git(root, "rev-parse", "main");
+    writeFileSync(join(root, "wip2.txt"), "later\n");                  // ... and dirtied the tree again
+    expect(await initWith(args, realDeps())).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(1);
+    expect(git(root, "rev-parse", "main")).toBe(mainTip);
+    expect(git(root, "rev-parse", BRANCH)).toBe(mainTip);               // the feat branch did not move either
+    expect(git(root, "log", "--all", "--format=%s")).not.toContain("WIP before quick");
+    expect(git(root, "stash", "list").split("\n").filter((l) => l.includes("ap-quick-retry-topic-wip"))).toHaveLength(1);
+    expect(existsSync(join(root, "wip2.txt"))).toBe(true);
+    expect(head(root)).toBe("main");
+  });
+
+  it("B: a park popped out of band between attempts → the carried marker is stale: dropped, the tree parks normally, finish restores it", async () => {
+    const root = repo();
+    const args = ["retry", "topic", "--target", root, "--stash-wip"];
+    writeFileSync(join(root, "wip1.txt"), "first\n");
+    expect(await initWith(args, realDeps())).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    git(root, "stash", "pop");                                          // the operator took the WIP back by hand
+    expect(await initWith(args, realDeps())).toBe(0);
+    const exec = quickExecDir(TOPIC);
+    expect(existsSync(join(exec, "stash-wip.txt"))).toBe(true);        // carried, but naming an entry that is gone
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    expect(git(root, "stash", "list").split("\n").filter((l) => l.includes("ap-quick-retry-topic-wip"))).toHaveLength(1);   // parked again
+    expect(existsSync(join(root, "wip1.txt"))).toBe(false);
+    commitWork(root);
+    expect(await finishWith(TOPIC, runnerAt(root), false)).toBe(0);
+    expect(readFileSync(join(root, "wip1.txt"), "utf8")).toBe("first\n");
+    expect(git(root, "stash", "list")).not.toContain("ap-quick-retry-topic-wip");
     expect(head(root)).toBe("main");
   });
 });
