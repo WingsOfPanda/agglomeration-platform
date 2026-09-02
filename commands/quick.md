@@ -178,11 +178,17 @@ consent, never block, and cost nothing, so prefer over-recording. Review later w
    clean HEAD and the PR base carries none of your unrelated edits; `quick finish` pops the stash
    back after restoring the start branch. A tree git will not fully stash only warns and falls back
    to today's WIP snapshot commit — the run is never blocked, and nothing is dropped.
+   The one refusal: a retry whose init archived an earlier attempt of this topic carries that
+   attempt's park marker forward, and if its stash entry still exists **and** the tree is dirty
+   again, `quick branch --stash-wip` exits **rc 1** having stashed and committed nothing — pop or
+   drop that entry (`git stash pop <ref>` / `git stash drop <ref>`, resolve) and re-run. An entry
+   already popped or dropped is simply forgotten and the tree is parked as usual.
    `branch.txt` records the branch the run is **actually** on, so a checkout that failed ends in
    finish's `no-branch` refusal rather than a PR containing none of the run's work. The verb acts on
    the repo root unless you pass `--target <abs>` (as a detached run does, with the worktree from its
    brief); it is this verb that records the target for every later step.
-   On **rc 1** (target is not a git repo) → abort:
+   On **rc 1** (target is not a git repo — or, with `--stash-wip`, the carried-park refusal above;
+   stderr says which, and the gate is then `stash-wip-conflict` with the printed message) → abort:
    `$CS quick summary <SLUG> --aborted build not-a-git-repo "target is not a git repository"`,
    print the SUMMARY, and stop. No worker was spawned, so do **not** run `stop`.
    Also **rc 1** when `feat/quick-<SLUG>` already exists and has **diverged from the current HEAD** —
