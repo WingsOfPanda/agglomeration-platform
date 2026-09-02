@@ -637,8 +637,8 @@ function shadowLines(j: JobRecord): string[] {
       `the \`cd\`), and the probe refuses to run until it is set — and (b) export it as PYTHONPATH in`,
       `the worker's pane, and on every probe or gate run of your own on the SAME command line as the`,
       `command it pins (\`export PYTHONPATH='<that directory>'; cd '${j.worktree}' && <command>\`). Single`,
-      `quotes, as everywhere here: a double-quoted value lets the shell expand a \`$\` or run a backtick in`,
-      `the path, and the probe would then run green with a wrong pin.`,
+      `quotes around a value you type by hand, like the \`cd\` above: a double-quoted value lets the shell`,
+      `expand a \`$\` or run a backtick in the path, and the probe would then run green with a wrong pin.`,
     ];
   }
   return [

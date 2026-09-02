@@ -470,11 +470,18 @@ describe("jobBrief", () => {
         .replace("cd '/repo/.ap/worktrees/demo'", "true").replace("python3 -c 'from pkg.ext import sym'", "sh -c 'echo RAN:$PYTHONPATH'");
       const template = "export PIN_BY_HAND='<that directory>';";
       expect(brief).toContain(`\`${template}\``);
+      // clause (b)'s template too — the hub's own gate run — filled the same way in front of a command
+      // that prints what it received
+      const templateB = "export PYTHONPATH='<that directory>'; cd '/repo/.ap/worktrees/demo' && <command>";
+      expect(brief).toContain(`\`${templateB}\``);
       const sh = (cmd: string) => spawnSync("bash", ["-c", cmd], { encoding: "utf8", env: { PATH: process.env.PATH ?? "", USER: "bob" } });
       for (const dir of ["/wt/my src", "/wt/pay$USER/src", "/wt/x`id -u`y/src", "/wt/back\\slash/src"]) {
         const sameLine = sh(`${template.replace("<that directory>", dir)} ${line}`);
         expect(sameLine.status).toBe(0);
         expect(sameLine.stdout.trim()).toBe(`RAN:${dir}`);
+        const gateRun = sh(templateB.replace("<that directory>", dir).replace("cd '/repo/.ap/worktrees/demo'", "true").replace("<command>", "sh -c 'echo GATE:$PYTHONPATH'"));
+        expect(gateRun.status).toBe(0);
+        expect(gateRun.stdout.trim()).toBe(`GATE:${dir}`);
       }
       for (const wrong of [`bash -c 'export PIN_BY_HAND=/wt/src'; ${line}`, `PIN_BY_HAND=/wt/src ${line}`]) {
         const r = sh(wrong);
