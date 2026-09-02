@@ -85,6 +85,18 @@ function finderHits(file: string, root: string, prefix: string): ShadowHit[] | n
   return out;
 }
 
+/** Every path in an exec line that starts with `root` as a BOUNDED substring: the root, optionally
+ *  followed by `/…`, ended by a quote, `)`, `]`, `}`, `,`, `;`, whitespace or the end of the line.
+ *  Python source is not whitespace-delimited — `sys.path.append('<root>')` and
+ *  `sys.path.insert(0,'<root>')` are the common spellings of the #183 idiom, and a token split on
+ *  whitespace never sees the root in either — while `<root>-old` is a different tree, which the
+ *  boundary excludes. */
+function rootPathsIn(line: string, root: string): string[] {
+  const esc = root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`${esc}(?:/[^'"\\s,;)\\]}]*)?(?=['"\\s,;)\\]}]|$)`, "g");
+  return [...line.matchAll(re)].map((m) => m[0]);
+}
+
 /** The hits one `.pth` yields, read the way `site.addpackage` does: blank and `#` lines skipped, an
  *  `import ` / `import\t` line executed (here: accounted for by a parsed sibling finder, or — when the
  *  line itself names this checkout — a warn-only hit), anything else joined onto the site dir.
@@ -105,7 +117,7 @@ function pthHits(file: string, site: SiteDir, root: string, parsedFinders: Set<s
     if (line.startsWith("import ") || line.startsWith("import\t")) {
       const mod = line.slice("import".length).trim().split(/[;\s]/)[0] ?? "";
       if (parsedFinders.has(mod)) return;
-      if (pathTokensFrom(line).some((t) => isAbsolute(t) && shadows(root, site.prefix, t))) out.push({ source: `${file}:${i + 1}`, importRoot: null });
+      if (rootPathsIn(line, root).some((p) => shadows(root, site.prefix, p))) out.push({ source: `${file}:${i + 1}`, importRoot: null });
       return;
     }
     const p = resolve(site.dir, line);

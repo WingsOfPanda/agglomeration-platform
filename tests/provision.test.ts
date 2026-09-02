@@ -133,6 +133,24 @@ describe("shadowHits — what on the box resolves this repo from the main checko
     expect(shadowHits(root, home, ENV)).toEqual([]);
   });
 
+  // Python source is not whitespace-delimited: the commonest spellings of the #183 idiom put the root
+  // straight after a quote or a comma. The root is recognised as a BOUNDED substring, so a sibling
+  // tree whose name merely extends the root's (`<root>-old`) stays silent.
+  it("append('<root>') and insert(0,'<root>') — no whitespace around the root — are warn-only hits; <root>-old is not", () => {
+    const { home, site } = homeWithSite();
+    const { root } = repoAndWorktree();
+    writeFileSync(join(site, "a.pth"), `import sys; sys.path.append('${root}')\n`);
+    writeFileSync(join(site, "b.pth"), `import sys; sys.path.insert(0,'${root}')\n`);
+    writeFileSync(join(site, "c.pth"), `import os, sys; sys.path[:0] = ["${join(root, "src")}"]\n`);
+    writeFileSync(join(site, "d.pth"), `import sys; sys.path.insert(0,'${root}-old')\n`);
+    writeFileSync(join(site, "e.pth"), `import sys; sys.path.append('${root}-old/src')\n`);
+    expect(shadowHits(root, home, ENV)).toEqual([
+      { source: `${join(site, "a.pth")}:1`, importRoot: null },
+      { source: `${join(site, "b.pth")}:1`, importRoot: null },
+      { source: `${join(site, "c.pth")}:1`, importRoot: null },
+    ]);
+  });
+
   it("an unreadable finder leaves its exec line unaccounted for: named root -> warn-only hit", () => {
     const { home, site } = homeWithSite();
     const { root } = repoAndWorktree();
