@@ -134,8 +134,9 @@ describe("shadowHits — what on the box resolves this repo from the main checko
   });
 
   // Python source is not whitespace-delimited: the commonest spellings of the #183 idiom put the root
-  // straight after a quote or a comma. The root is recognised as a BOUNDED substring, so a sibling
-  // tree whose name merely extends the root's (`<root>-old`) stays silent.
+  // straight after a quote or a comma (a.pth, b.pth — the two a whitespace tokenizer misses; c.pth's
+  // bracketed spelling is a control the tokenizer also caught). The root is recognised as a BOUNDED
+  // substring, so a sibling tree whose name merely extends the root's (`<root>-old`) stays silent.
   it("append('<root>') and insert(0,'<root>') — no whitespace around the root — are warn-only hits; <root>-old is not", () => {
     const { home, site } = homeWithSite();
     const { root } = repoAndWorktree();
@@ -194,6 +195,7 @@ describe("shadowHits — what on the box resolves this repo from the main checko
     writeFileSync(join(vsite, "abs.pth"), `${join(vsite, "bar.egg")}\n`);
     const env = { VIRTUAL_ENV: venv } as NodeJS.ProcessEnv;
     expect(shadowHits(root, home, env)).toEqual([]);
+    expect(shadowHits(root, home, { VIRTUAL_ENV: venv + "/" } as NodeJS.ProcessEnv)).toEqual([]);   // an operator-typed trailing slash
     expect(shadowHits(root, home, ENV, [venv])).toEqual([]);          // the teardown widening, same rule
     writeFileSync(join(vsite, "proj.pth"), `${join(root, "src")}\n`);
     const finder = join(vsite, "__editable___pkg_finder.py");

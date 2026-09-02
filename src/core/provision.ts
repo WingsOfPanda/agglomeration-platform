@@ -56,7 +56,10 @@ export interface SiteDir { dir: string; prefix: string; }
 export function siteDirs(home: string, env: NodeJS.ProcessEnv, extraPrefixes: string[] = []): SiteDir[] {
   const prefixes = [env.VIRTUAL_ENV, env.CONDA_PREFIX, join(home, ".local"), ...extraPrefixes].filter((p): p is string => Boolean(p));
   const out: SiteDir[] = [];
-  for (const prefix of prefixes) for (const dir of siteDirsUnder(prefix)) if (!out.some((s) => s.dir === dir)) out.push({ dir, prefix });
+  // The prefix is normalised once here: it is an operator-set env var, and `VIRTUAL_ENV=<root>/.venv/`
+  // (trailing slash) would otherwise never satisfy the `under` test and silently re-open the
+  // venv-inside-the-repo false shadow. `join` already normalises the dir.
+  for (const prefix of prefixes) for (const dir of siteDirsUnder(prefix)) if (!out.some((s) => s.dir === dir)) out.push({ dir, prefix: resolve(prefix) });
   return out;
 }
 
