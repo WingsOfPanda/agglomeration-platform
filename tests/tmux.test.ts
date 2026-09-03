@@ -43,6 +43,17 @@ describe("tmux arg builders", () => {
     expect(T.wrapLaunch("codex --foo", true)).toBe("bash -ic 'exec codex --foo'");
     expect(T.wrapLaunch("codex --foo", false)).toBe("codex --foo");
   });
+  // The pin (src/core/provision.ts) is PREPENDED: PYTHONPATH is left-to-right, so a stale earlier
+  // entry naming the main checkout would otherwise win. It needs a shell for the ${VAR:+…} expansion,
+  // so the no-bashrc form becomes `bash -c`; an empty pin is byte-identical to the two lines above.
+  it("wrapLaunch: a PYTHONPATH pin is exported, prepended, before the exec — and an empty pin changes nothing", () => {
+    expect(T.wrapLaunch("codex --foo", true, "/wt")).toBe("bash -ic 'export PYTHONPATH=\"/wt${PYTHONPATH:+:$PYTHONPATH}\"; exec codex --foo'");
+    expect(T.wrapLaunch("codex --foo", false, "/wt")).toBe("bash -c 'export PYTHONPATH=\"/wt${PYTHONPATH:+:$PYTHONPATH}\"; exec codex --foo'");
+    expect(T.wrapLaunch("codex --foo", true, "/wt:/wt/src")).toContain('PYTHONPATH="/wt:/wt/src${PYTHONPATH:+:$PYTHONPATH}"');
+    expect(T.wrapLaunch("codex --foo", true, "")).toBe("bash -ic 'exec codex --foo'");
+    expect(T.wrapLaunch("codex --foo", false, "")).toBe("codex --foo");
+    expect(T.pinExport("/wt")).toBe('export PYTHONPATH="/wt${PYTHONPATH:+:$PYTHONPATH}"');
+  });
   it("setOptionArgs / sendKeysLiteralArgs / sendKeysEnterArgs", () => {
     expect(T.setOptionArgs("%1", "@ap_color", "colour110")).toEqual(
       ["set-option", "-p", "-t", "%1", "@ap_color", "colour110"]);

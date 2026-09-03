@@ -6,6 +6,7 @@ import { log } from "../core/log.js";
 import { inTmuxSession, tmuxVersionOk, tmuxVersionString, haveCmd } from "../core/deps.js";
 import { topicDir, workerDir, repoRoot } from "../core/paths.js";
 import { withMainCheckout } from "../core/job.js";
+import { pinReport } from "../core/provision.js";
 import { stateInit, stateArchive, isoUtc } from "../core/archive.js";
 import { readIfExists } from "../core/fsread.js";
 import { atomicWrite } from "../core/atomic.js";
@@ -258,8 +259,14 @@ async function dispatchVerb(args: string[]): Promise<number> {
   try {
     prepareWorkerState(agent, model, topic, (role || "worker") as WorkerRole);
 
-    const launch = wrapLaunch([binary, ...modeArgs].join(" "));
     const startDir = cwd || repoRoot();
+    // The worktree PYTHONPATH pin (src/core/provision.ts): "" unless startDir is a worktree ap created
+    // under this checkout AND something in the operator's site-packages resolves the repo from the
+    // main checkout. The hub pane (spawned at the root) and an attached --cwd elsewhere stay unpinned;
+    // an unsafe entry is named and the worker is launched UNPINNED, which is today's behaviour.
+    const pinned = pinReport(repoRoot(), startDir);
+    if (pinned.unsafe) log.warn(`spawn: a PYTHONPATH pin for ${startDir} would carry a quote, $, backtick, backslash, newline or colon and cannot be exported safely — the worker is UNPINNED; python in this pane may import the main checkout`);
+    const launch = wrapLaunch([binary, ...modeArgs].join(" "), undefined, pinned.pin);
     let pane: string;
     let nonce: string;
     if (targetPane) {

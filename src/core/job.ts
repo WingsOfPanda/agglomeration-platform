@@ -8,12 +8,12 @@
 // the outbox, and the hub's own state from its status.json. Four independent reads, no inference.
 
 import { existsSync, realpathSync } from "node:fs";
-import { basename, dirname, join, sep } from "node:path";
+import { basename, dirname, join, sep, resolve } from "node:path";
 import { readIfExists } from "./fsread.js";
 import { log } from "./log.js";
 import { jobDir, repoRoot, topicDir } from "./paths.js";
 import { validateSlug } from "./slug.js";
-import { ownsPane, verifiableNonce } from "./tmux.js";
+import { ownsPane, pinExport, verifiableNonce } from "./tmux.js";
 import { agentBootstrapSleep, agentReadyTimeout } from "./contracts.js";
 import { deriveTopicFromPath } from "./implement.js";
 import { parseEvent } from "./ipc.js";
@@ -52,6 +52,16 @@ export interface JobRecord {
    *  which the hub reads as "no hint to send". A HINT only: the outbox stays the record, and the
    *  origin verifies every push mechanically. */
   origin_session?: string;
+  /** What `job start` found on the box resolving this repo from the MAIN checkout (`<file>:<line>`
+   *  per hit, src/core/provision.ts), and the PYTHONPATH pin it derived for the worktree. Both are
+   *  OMITTED when empty — `formatJob` is `JSON.stringify`, so a clean-box record stays byte-identical
+   *  to one written before these existed. The brief is their only consumer. */
+  python_shadow?: string[];
+  python_pin?: string;
+  /** Repo-relative paths of the declared gitignored artifacts copied into the worktree at launch
+   *  (`.ap-provision`); omitted when nothing was provisioned. Rendered into the brief's manifest so
+   *  it never claims "no build products" over a worktree that carries some. */
+  provisioned?: string[];
 }
 
 export function jobPath(topic: string): string { return join(jobDir(topic), "job.json"); }
@@ -66,7 +76,13 @@ export function worktreePathFor(root: string, topic: string): string {
  *  follows: teardown removes only what ap can prove is its own, so a hand-edited (or carried-over)
  *  record naming some other checkout is never a path `job stop` will delete. */
 export function worktreeProvenanced(path: string, root: string): boolean {
-  return path.startsWith(join(root, ".ap", "worktrees") + sep) && path.length > join(root, ".ap", "worktrees").length + sep.length;
+  // Compare NORMALISED paths: every in-tree producer (`worktreePathFor`) is already normalised, but
+  // a hand-typed `--cwd <root>/.ap/worktrees/../../../elsewhere` would otherwise pass a raw prefix
+  // test and be pinned or torn down as ap's own. (A symlink INSIDE the worktrees dir is out of scope:
+  // ap never creates one.)
+  const base = resolve(join(root, ".ap", "worktrees"));
+  const p = resolve(path);
+  return p.startsWith(base + sep) && p.length > base.length + sep.length;
 }
 /** The MAIN checkout a `job` verb must resolve its state against, given the root git reported for
  *  wherever it was invoked. A run worktree is `<root>/.ap/worktrees/<topic>` BY CONSTRUCTION
@@ -201,6 +217,12 @@ export function parseJob(text: string): JobRecord | null {
   if (typeof o.command !== "string" || !isJobCommand(o.command)) return null;
   if (!str(o.topic) || !str(o.session) || !str(o.started)) return null;
   if (!hub || !str(hub.agent) || !str(hub.model)) return null;
+  // String-only, and SET only when non-empty: an older or torn record parses without them, and no
+  // consumer is ever handed a non-string element.
+  const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  const shadow = strs(o.python_shadow);
+  const pin = str(o.python_pin);
+  const provisioned = strs(o.provisioned);
   return {
     command: o.command,
     topic: str(o.topic),
@@ -220,6 +242,9 @@ export function parseJob(text: string): JobRecord | null {
     base_sha: str(o.base_sha),
     start_branch: str(o.start_branch),
     origin_session: str(o.origin_session),
+    ...(shadow.length ? { python_shadow: shadow } : {}),
+    ...(pin ? { python_pin: pin } : {}),
+    ...(provisioned.length ? { provisioned } : {}),
   };
 }
 
@@ -514,10 +539,128 @@ function worktreeLines(j: JobRecord): string[] {
     `a branch there. Your own state (\`.ap/state/...\`, this record, your inbox/outbox) stays keyed`,
     `to the repo ROOT and is unaffected; only the worker's target moves.`,
     ``,
+    ...manifestLines(j),
+    ``,
+    // A4: the probe rule carries the pin, the cwd and the submodule, so the probe that fooled #197
+    // (a package-level import, run where the main checkout answers) contradicts an instruction.
+    `PYTHON. An import that succeeds is not evidence. A package-level import proves nothing about its`,
+    `compiled extensions, and a probe run with cwd in the worktree but without this run's pin can still`,
+    `answer about the MAIN checkout. Probe the exact symbol a gate imports, from the worktree, with the`,
+    `pin prefixed when the launch reported one:`,
+    ``,
+    // Three slot shapes (pinSlot): the pin single-quoted (every entry passed provision.ts's UNSAFE
+    // filter, which rejects the quote itself); nothing on a clean box; and a double-quoted refusal
+    // expansion whose message interpolates NOTHING — the worktree path is not filtered, and a `}`,
+    // `"`, `$` or backtick in it would close, break or expand a double-quoted word. The `cd` target
+    // is single-quoted so a space pastes and runs; a `'` in the operator's repo root still breaks it
+    // (the topic segment is slug-validated, the root is not) — the pre-existing class every raw
+    // worktree rendering in this brief shares.
+    `    cd '${j.worktree}' && ${pinSlot(j)}python3 -c 'from pkg.ext import sym'`,
+    ``,
+    `Verify a compiled extension by its own path under the worktree, never by an import that succeeded:`,
+    `an editable-install finder silently serves a submodule the worktree lacks from the main tree.`,
+    `Never run \`pip install -e .\` (any editable install) from the worktree: it re-points the operator's`,
+    `own site-packages finder at a directory teardown deletes, and their environment breaks after the`,
+    `run. \`job stop\` keeps a worktree it can see an editable install pointing into, but that check is`,
+    `best-effort — a venv activated inside the worker's pane is invisible to it — so this prohibition is`,
+    `load-bearing, not a backstop.`,
+    ...shadowLines(j),
+  ];
+}
+
+/** The `PYTHONPATH=` slot of the probe. Three states, and the middle one is the trap: with a pin it
+ *  is the pin; on a clean box (no shadow found) it is absent, as the design's probe rule says; but a
+ *  shadow that ap could NOT pin — an exec line it cannot resolve, an unsafe entry, an import root
+ *  the worktree lacks — is not a clean box, and rendering the bare probe there is exactly the probe
+ *  SC6 says must not be satisfiable (on a src-layout shadow it answers about the MAIN checkout). So
+ *  that state gets a slot that REFUSES to run until a pin is supplied: `${PIN_BY_HAND:?msg}` makes
+ *  the shell abort the whole command with `msg` before python starts (rc 127 under `bash -c`, rc 1
+ *  in an interactive pane; verified), and creates nothing. A quoted prose placeholder would be a
+ *  valid shell word — the line would run with rc 0, python silently ignoring the missing entry,
+ *  which is the #197 replay with a green rc for the hub to write into a brief. The message is a
+ *  STATIC string: it sits inside a double-quoted word, and the worktree path (unfiltered) would
+ *  break it — `}` closes the expansion early and corrupts the pin once exported, `"` makes the line
+ *  unparseable, `$`/backtick expand. The shadow block below names the worktree. */
+function pinSlot(j: JobRecord): string {
+  if (j.python_pin) return `PYTHONPATH='${j.python_pin}' `;
+  if (j.python_shadow?.length) return `PYTHONPATH="\${PIN_BY_HAND:?this box shadows the repo and ap could not derive a pin - export PIN_BY_HAND to the shadowed directory re-rooted under the worktree first, see NOTHING is pinned below}" `;
+  return "";
+}
+
+/** What the worktree carries beyond the fork. With nothing provisioned the wording is the one shipped
+ *  since 0.5.36 plus the durable-fix clause; with declared artifacts copied in it is the honest
+ *  manifest, because "no build products" over a worktree that carries some is exactly the lie #197
+ *  parked a worker on. */
+function manifestLines(j: JobRecord): string[] {
+  const prov = j.provisioned ?? [];
+  if (!prov.length) {
+    return [
+      `That directory is a FRESH checkout of the committed HEAD the run forked from, plus a clone of`,
+      `node_modules. Nothing else came across: no build products, no untracked \`.env\` or local config,`,
+      `and none of the operator's uncommitted work. Anything the run needs that is not committed is`,
+      `simply not there — treat a file you cannot find as absent, not as a path to guess at.`,
+      `A gitignored artifact the run needs (a compiled extension, a native build product) is rebuilt`,
+      `HERE with the repo's own build command. The lasting repair is to declare it — a committed`,
+      `\`.ap-provision\` at the repo root listing that artifact's git pathspecs, one per line — so ap can`,
+      `provision it into the worktree once that support lands; name that in your handoff.`,
+    ];
+  }
+  return [
     `That directory is a FRESH checkout of the committed HEAD the run forked from, plus a clone of`,
-    `node_modules. Nothing else came across: no build products, no untracked \`.env\` or local config,`,
-    `and none of the operator's uncommitted work. Anything the run needs that is not committed is`,
-    `simply not there — treat a file you cannot find as absent, not as a path to guess at.`,
+    `node_modules and ${prov.length} declared gitignored artifact${prov.length === 1 ? "" : "s"} copied from the main checkout:`,
+    ``,
+    ...prov.map((p) => `    ${p}`),
+    ``,
+    `Those were built from MAIN sources at launch: rebuild them here if the run touches what they are`,
+    `built from. Nothing else came across: no untracked \`.env\` or local config, and none of the`,
+    `operator's uncommitted work — treat a file you cannot find as absent, not as a path to guess at.`,
+  ];
+}
+
+/** The shadow block (A6): empty on a clean box, so the clean brief is byte-identical apart from the
+ *  unconditional PYTHON paragraph above. Names every source `job start` found, prints the pasteable
+ *  export in the one spelling the worker pane and `verify-tests` were launched with, and tells the hub
+ *  the two things the pin does not do for it. */
+function shadowLines(j: JobRecord): string[] {
+  const shadow = j.python_shadow ?? [];
+  if (!shadow.length) return [];
+  const head = [
+    ``,
+    `This box resolves the repo from the MAIN checkout — python in the worktree imports the wrong tree`,
+    `unless it is pinned. What the launch found:`,
+    ``,
+    ...shadow.map((s) => `    ${s}`),
+    ``,
+  ];
+  if (!j.python_pin) {
+    return [
+      ...head,
+      `ap could not derive a pin from that (an exec line it cannot resolve textually, or a path it cannot`,
+      `export safely), so NOTHING is pinned. If it names this repo's main checkout, pin by hand before any`,
+      `python: take the same directory re-rooted under ${j.worktree} and (a) for the pasteable probe`,
+      `above, put \`export PIN_BY_HAND='<that directory>';\` in front of it on the SAME command line — a`,
+      `separate earlier shell call does not reach it, nor does a bare \`VAR=… \` prefix (that binds only to`,
+      `the \`cd\`), and the probe refuses to run until it is set — and (b) export it as PYTHONPATH in`,
+      `the worker's pane, and on every probe or gate run of your own on the SAME command line as the`,
+      `command it pins (\`export PYTHONPATH='<that directory>'; cd '${j.worktree}' && <command>\`). Single`,
+      `quotes around a value you type by hand, like the \`cd\` above: a double-quoted value lets the shell`,
+      `expand a \`$\` or run a backtick in the path, and the probe would then run green with a wrong pin.`,
+    ];
+  }
+  return [
+    ...head,
+    `The pin. ap already applied it to the worker pane's launch and to \`implement verify-tests\`' own`,
+    `re-run; YOUR pane is not pinned — it sits in the main checkout on purpose. Put this export in front`,
+    `of every python you run yourself with cwd in the worktree, a quick hub's own TEST_CMD gate run`,
+    `included, on the SAME command line (\`<the export>; cd '<worktree>' && <command>\`) — a Bash call is`,
+    `its own shell, so an export in an earlier call never reaches the next one:`,
+    ``,
+    `    ${pinExport(j.python_pin)}`,
+    ``,
+    `\`sys.path[0]\` is the SCRIPT's directory, not the cwd: a script under a worktree subdirectory can`,
+    `resolve the main checkout while \`python -c\` from the worktree root resolves correctly, so a`,
+    `passing spot-check says nothing about the real script. And the pin does not buy everything — the`,
+    `editable-finder caveat above still holds: verify a compiled extension by its path.`,
   ];
 }
 

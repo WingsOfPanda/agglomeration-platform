@@ -243,6 +243,11 @@ The unattended envelope is deliberately tighter than an attended run:
   stays behind (the launch warns when the tree is dirty). `job stop` removes the worktree — and its
   base branch — when clean, and keeps and names it when not. `--no-worktree` opts out, for a repo
   whose suite only runs in the blessed checkout.
+  - *Python repos:* if a user-site `.pth` or an editable install resolves the repo from your main
+    checkout, `job start` says so and pins `PYTHONPATH` to the worktree for the worker's pane and
+    for the hub's own test re-run, and the brief tells the hub to prefix the same pin on anything it
+    runs itself. Gitignored build products still do not come across — the brief says to rebuild
+    them in the worktree — and `job stop` keeps a worktree an editable install has been pointed at.
 - **Nothing merges or publishes while nobody is watching.** The finish action is locked to `keep` —
   mechanically, in the finish verbs, not just in prose, and with no flag to loosen it — so the run
   ends on its `feat/...` branch and *you* run the finish menu afterwards. When you do, integrate

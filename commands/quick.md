@@ -163,6 +163,13 @@ consent, never block, and cost nothing, so prefer over-recording. Review later w
      matches (`rg -c foo src/`) ``), or handed to the worker as a command to run. Never a predicted
      delta: a brief that says `158->154` when the change actually lands at `159` burns a round on
      reconciling a number nobody measured.
+   - **An environment fact is a claim like a number.** "The extension is already built here" or "the
+     import works" arrives with the probe and its output, pasted from a run with cwd in `<TARGET>`
+     and — when the launch reported a site-packages shadow of the repo — with the `PYTHONPATH=` pin
+     it printed prefixed. It probes the exact symbol the gate imports (`from pkg.ext import sym`),
+     never a package-level import: that succeeds with the extensions absent and, on a shadowed box,
+     answers about the MAIN checkout. A compiled extension is verified by its own path under
+     `<TARGET>`.
    - **Anything the run is meant to CREATE is labelled `(new — does not exist yet)`** so the worker
      never hunts for a file that was always going to be its own output.
    - **Acceptance checks must be jointly satisfiable.** Read the pair you just wrote and ask whether
@@ -317,7 +324,9 @@ HEAD is probably still on `feat/quick-<SLUG>`, not the start branch. Give the br
 ## Stage 2 — Verify + finish
 
 1. Detect the test command: `TEST_CMD=$($CS quick detect-test <TARGET>)`.
-2. If `TEST_CMD` is non-empty, run it once in `<TARGET>` via Bash, tee to
+2. If `TEST_CMD` is non-empty, run it once in `<TARGET>` via Bash — prefixed with the `PYTHONPATH=`
+   pin the launch reported, if there was one (a detached run's brief prints it verbatim; nothing
+   wraps this run for you) — tee to
    `<SLUG state>/_quick/execute/verify-1.log`; set `VERIFY` to `PASS (<cmd>)` or `FAIL (<cmd>)`.
    If empty, `VERIFY="skipped (no test command detected)"`.
    If the suite ran green but any leg of it did NOT run for an environment reason (a missing tool, an

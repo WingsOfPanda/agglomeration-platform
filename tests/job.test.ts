@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { spawnSync } from "node:child_process";
 import * as J from "../src/core/job.js";
 import type { OutboxEvent, PaneOwner } from "../src/core/ipc.js";
 
@@ -60,6 +61,28 @@ describe("job record codec", () => {
     expect(r.base_sha).toBe("");
     expect(r.start_branch).toBe("");
     expect(r.origin_session).toBe("");
+  });
+  // The environment-parity keys are OMITTED when empty, never written as [] or "": formatJob is
+  // JSON.stringify, so an always-present key would change every clean-box job.json on disk.
+  it("python_shadow / python_pin / provisioned are absent from a clean-box record, in both directions", () => {
+    const text = J.formatJob(REC);
+    expect(text).not.toContain("python_shadow");
+    expect(text).not.toContain("python_pin");
+    expect(text).not.toContain("provisioned");
+    const r = J.parseJob(JSON.stringify({ ...REC, python_shadow: [], python_pin: "", provisioned: [] }))!;
+    expect(r).toEqual(REC);
+    expect(Object.keys(r)).not.toContain("python_shadow");
+    expect(Object.keys(r)).not.toContain("python_pin");
+    expect(Object.keys(r)).not.toContain("provisioned");
+  });
+  it("round-trips them when present, and reads each as a string-only value", () => {
+    const full: J.JobRecord = { ...REC, python_shadow: ["/home/op/.local/lib/python3.12/site-packages/x.pth:1"], python_pin: "/repo/.ap/worktrees/demo/src", provisioned: ["pkg/_ext.so"] };
+    expect(J.parseJob(J.formatJob(full))).toEqual(full);
+    expect(J.parseJob(JSON.stringify({ ...REC, python_shadow: "not-an-array" }))!.python_shadow).toBeUndefined();
+    expect(J.parseJob(JSON.stringify({ ...REC, python_shadow: ["a", 3] }))!.python_shadow).toEqual(["a"]);
+    expect(J.parseJob(JSON.stringify({ ...REC, python_shadow: [3] }))!.python_shadow).toBeUndefined();
+    expect(J.parseJob(JSON.stringify({ ...REC, python_pin: 7 }))!.python_pin).toBeUndefined();
+    expect(J.parseJob(JSON.stringify({ ...REC, provisioned: [null, "pkg/_ext.so"] }))!.provisioned).toEqual(["pkg/_ext.so"]);
   });
 });
 
@@ -317,6 +340,178 @@ describe("jobBrief", () => {
     expect(none).not.toContain("WORKTREE");
     expect(none).not.toContain("--target");
     expect(none).not.toContain("FRESH checkout of the committed HEAD");
+  });
+
+  // Environment parity (2026-09-02 worktree-run-provisi design, A4/A6). #197's hub probed a
+  // package-level import in the MAIN checkout and wrote "the .so is already built here" into the
+  // brief; on a src-layout shadow the same probe with cwd in the worktree but no pin answers about
+  // the main checkout too. The rule therefore carries the submodule, the cwd and the pin.
+  describe("python environment parity", () => {
+    /** The rendered probe line of a brief. */
+    const probeOf = (brief: string) => brief.split("\n").find((l) => l.includes("python3 -c 'from pkg.ext import sym'"))!.trim();
+    it("EVERY worktree brief carries the probe rule and the pip -e prohibition, for quick and implement", () => {
+      for (const command of ["quick", "implement"] as const) {
+        const t = J.jobBrief({ ...REC, command });
+        expect(t).toContain("A package-level import proves nothing about its");
+        expect(t).toContain("cd '/repo/.ap/worktrees/demo' && python3 -c 'from pkg.ext import sym'");
+        expect(t).toContain("by its own path under the worktree");
+        expect(t).toContain("serves a submodule the worktree lacks from the main tree");
+        expect(t).toContain("Never run `pip install -e .`");
+        expect(t).toContain("re-points the operator's");
+        // A9's ceiling, in the brief: the teardown keep-check is best-effort, so the prohibition stays load-bearing.
+        expect(t).toContain("best-effort");
+        expect(t).toContain("load-bearing, not a backstop");
+      }
+    });
+    it("and none of it in a --no-worktree brief", () => {
+      const none = J.jobBrief({ ...REC, worktree: "", base_sha: "" });
+      expect(none).not.toContain("python3 -c");
+      expect(none).not.toContain("pip install -e");
+      expect(none).not.toContain("PYTHON");
+    });
+    it("a clean record contains no PYTHONPATH at all, and the probe carries no prefix", () => {
+      expect(b).not.toContain("PYTHONPATH");
+      expect(b).toContain("cd '/repo/.ap/worktrees/demo' && python3 -c 'from pkg.ext import sym'");
+    });
+    it("a shadowed record names the source, the pasteable export, the pin INSIDE the probe, and both caveats", () => {
+      const s = J.jobBrief({ ...REC, python_shadow: ["/home/op/.local/lib/python3.12/site-packages/x.pth:1"], python_pin: "/repo/.ap/worktrees/demo" });
+      expect(s).toContain("    /home/op/.local/lib/python3.12/site-packages/x.pth:1");
+      expect(s).toContain('export PYTHONPATH="/repo/.ap/worktrees/demo${PYTHONPATH:+:$PYTHONPATH}"');
+      expect(s).toContain("cd '/repo/.ap/worktrees/demo' && PYTHONPATH='/repo/.ap/worktrees/demo' python3 -c 'from pkg.ext import sym'");
+      expect(s).toContain("`sys.path[0]` is the SCRIPT's directory");
+      expect(s).toContain("the pin does not buy everything");
+      expect(s).toContain("serves a submodule the worktree lacks from the main tree");
+      // it says what ap already pinned, and what a quick hub must prefix by hand — on the SAME command
+      // line as the python it pins, because a Bash call is its own shell
+      expect(s).toContain("`implement verify-tests`");
+      expect(s).toContain("YOUR pane is not pinned");
+      expect(s).toContain("TEST_CMD");
+      expect(s).toContain("on the SAME command line (`<the export>; cd '<worktree>' && <command>`)");
+      expect(s).toContain("an export in an earlier call never reaches the next one");
+      // two sources -> two lines, each named
+      const two = J.jobBrief({ ...REC, python_shadow: ["/a/x.pth:1", "/b/__editable___y_finder.py:9"], python_pin: "/repo/.ap/worktrees/demo/src" });
+      expect(two).toContain("    /a/x.pth:1\n    /b/__editable___y_finder.py:9");
+      expect(two).toContain("PYTHONPATH='/repo/.ap/worktrees/demo/src' python3 -c");
+    });
+    // The probe is rendered for a hub to PASTE: a space in the checkout path or the import root must
+    // survive as one word (the pin filter rejects the quote itself, so single quotes are safe).
+    it("the probe line is single-quoted, so a path with a space pastes and runs", () => {
+      const wt = "/home/op/my repo/.ap/worktrees/demo";
+      const s = J.jobBrief({ ...REC, worktree: wt, python_shadow: ["/x.pth:1"], python_pin: `${wt}/my src` });
+      expect(s).toContain(`cd '${wt}' && PYTHONPATH='${wt}/my src' python3 -c 'from pkg.ext import sym'`);
+    });
+    it("a shadow ap could NOT pin (exec line, or an unsafe path) is still named, with the by-hand remedy and no export", () => {
+      const s = J.jobBrief({ ...REC, python_shadow: ["/home/op/.local/lib/python3.12/site-packages/hook.pth:1"] });
+      expect(s).toContain("    /home/op/.local/lib/python3.12/site-packages/hook.pth:1");
+      expect(s).toContain("NOTHING is pinned");
+      expect(s).toContain("pin by hand");
+      // the refusal slot's message names no path on purpose; the remedy it defers to must name the worktree
+      expect(s).toContain("re-rooted under /repo/.ap/worktrees/demo");
+      // ...and BOTH variables the reader must set: PIN_BY_HAND for the pasteable probe (the slot keys on
+      // it, so a reader who only exports PYTHONPATH still gets the refusal), PYTHONPATH for the pane/gates.
+      expect(s.split("\n").filter((l) => l.includes("PIN_BY_HAND=") && !l.includes("python3 -c"))).toHaveLength(1);
+      // ...and that the export rides the probe's OWN command line: a hub's Bash calls are separate
+      // shells, so an `export` in an earlier call never reaches the pasted line — and a bare prefix
+      // binds only to the `cd` that opens the line.
+      expect(s).toContain("put `export PIN_BY_HAND='<that directory>';` in front of it on the SAME command line");
+      // clause (b), the hub's own gate run, carries the same rule — a separate export call never reaches it
+      expect(s).toContain("on every probe or gate run of your own on the SAME command line as the");
+      expect(s).toContain("(`export PYTHONPATH='<that directory>'; cd '/repo/.ap/worktrees/demo' && <command>`)");
+      // single-quoted in both templates: a double-quoted value would let the shell expand `$` or run a
+      // backtick inside the path and the probe would run green with a wrong pin
+      expect(s).not.toContain('="<that directory>"');
+      // no pasteable export with a REAL pin: neither the pinExport spelling (which appears only when
+      // ap derived one) nor any export whose value starts with an absolute path — ap could not derive a
+      // safe pin here, so a concrete export would be a fabricated one.
+      expect(s).not.toContain("${PYTHONPATH:+:$PYTHONPATH}");
+      expect(s).not.toMatch(/export PYTHONPATH=["']\//);
+      // A found-but-unpinnable shadow is NOT a clean box: the bare probe would answer about the MAIN
+      // checkout on a src-layout shadow (SC6), so the slot carries a `${PIN_BY_HAND:?msg}` expansion
+      // that makes the shell refuse the whole line until a pin is exported, instead of the clean form.
+      expect(s).not.toContain("cd '/repo/.ap/worktrees/demo' && python3 -c 'from pkg.ext import sym'");
+      expect(probeOf(s)).toBe("cd '/repo/.ap/worktrees/demo' && PYTHONPATH=\"${PIN_BY_HAND:?this box shadows the repo and ap could not derive a pin - export PIN_BY_HAND to the shadowed directory re-rooted under the worktree first, see NOTHING is pinned below}\" python3 -c 'from pkg.ext import sym'");
+      // the same for the #183 hand-rolled shape, and the correction it points at is present
+      const h = J.jobBrief({ ...REC, python_shadow: ["/home/op/.local/lib/python3.12/site-packages/hand.pth:1"] });
+      expect(h).not.toContain("&& python3 -c");
+      expect(h).toContain('PYTHONPATH="${PIN_BY_HAND:?');
+      expect(h).toContain("NOTHING is pinned");
+    });
+    // SC6 by EXECUTION, load-bearing on its own: pasted as-is the unpinnable probe refuses to run
+    // python (the shell aborts on the unset parameter and creates nothing); with the pin exported it
+    // runs with EXACTLY that PYTHONPATH. Its own `it`, so a mutant that survives the string compare
+    // above — or a future weakening of that literal — still meets these assertions. Run for the plain
+    // worktree and for one whose path carries every character that would break a double-quoted word:
+    // the refusal message must interpolate nothing path-derived.
+    it("the unpinnable probe REFUSES to run until PIN_BY_HAND is exported, then runs with exactly that pin (executed)", () => {
+      const run = (wt: string, pin?: string) => {
+        const line = probeOf(J.jobBrief({ ...REC, worktree: wt, python_shadow: ["/x.pth:1"] }));
+        const runnable = line.replace(`cd '${wt}'`, "true").replace("python3 -c 'from pkg.ext import sym'", "sh -c 'echo RAN:$PYTHONPATH'");
+        return spawnSync("bash", ["-c", runnable], { encoding: "utf8", env: { PATH: process.env.PATH ?? "", ...(pin ? { PIN_BY_HAND: pin } : {}) } });
+      };
+      for (const wt of ["/repo/.ap/worktrees/demo", "/repo/a}b\"c$HOME`id`/.ap/worktrees/demo"]) {
+        const bare = run(wt);
+        expect(bare.status).not.toBe(0);
+        expect(bare.stdout).not.toContain("RAN");
+        expect(bare.stderr).toContain("PIN_BY_HAND");
+        expect(bare.stderr).not.toContain("uid=");          // nothing in the message is command-substituted
+        const pinned = run(wt, "/wt/src");
+        expect(pinned.status).toBe(0);
+        expect(pinned.stdout.trim()).toBe("RAN:/wt/src");
+      }
+      // The remedy's own instruction — its EXACT template, `export PIN_BY_HAND='<that directory>';`,
+      // taken from the rendered brief and filled with a directory — in front of the line on the SAME
+      // command line runs with that pin, whole: a space survives, and so do a `$…`, a backtick and a
+      // backslash, which a double-quoted value would expand, execute or eat (a wrong pin that runs
+      // green is the outcome the refusal exists to prevent). The two shapes the remedy warns against
+      // do not run: an export in a separate earlier shell (the shell-per-call hub), and a bare `VAR=… `
+      // prefix, which binds only to the `cd` that opens the line.
+      const brief = J.jobBrief({ ...REC, python_shadow: ["/x.pth:1"] });
+      const line = probeOf(brief)
+        .replace("cd '/repo/.ap/worktrees/demo'", "true").replace("python3 -c 'from pkg.ext import sym'", "sh -c 'echo RAN:$PYTHONPATH'");
+      const template = "export PIN_BY_HAND='<that directory>';";
+      expect(brief).toContain(`\`${template}\``);
+      // clause (b)'s template too — the hub's own gate run — taken from the RENDERED brief (so a
+      // quoting mutation in the source reaches the run), filled the same way in front of a command
+      // that prints what it received
+      const templateB = /\(`(export PYTHONPATH=[^`]*<command>)`\)/.exec(brief)?.[1] ?? "";
+      expect(templateB).toBe("export PYTHONPATH='<that directory>'; cd '/repo/.ap/worktrees/demo' && <command>");
+      const sh = (cmd: string) => spawnSync("bash", ["-c", cmd], { encoding: "utf8", env: { PATH: process.env.PATH ?? "", USER: "bob" } });
+      for (const dir of ["/wt/my src", "/wt/pay$USER/src", "/wt/x`id -u`y/src", "/wt/back\\slash/src"]) {
+        const sameLine = sh(`${template.replace("<that directory>", dir)} ${line}`);
+        expect(sameLine.status).toBe(0);
+        expect(sameLine.stdout.trim()).toBe(`RAN:${dir}`);
+        const gateRun = sh(templateB.replace("<that directory>", dir).replace("cd '/repo/.ap/worktrees/demo'", "true").replace("<command>", "sh -c 'echo GATE:$PYTHONPATH'"));
+        expect(gateRun.status).toBe(0);
+        expect(gateRun.stdout.trim()).toBe(`GATE:${dir}`);
+      }
+      for (const wrong of [`bash -c 'export PIN_BY_HAND=/wt/src'; ${line}`, `PIN_BY_HAND=/wt/src ${line}`]) {
+        const r = sh(wrong);
+        expect(r.status).not.toBe(0);
+        expect(r.stdout).not.toContain("RAN");
+      }
+    });
+    // A6/A13: the run that gets bitten arms the repo for the next one — the only mechanism by which
+    // `.ap-provision` ever gets written.
+    it("with nothing provisioned the manifest is unchanged AND names .ap-provision as the durable fix", () => {
+      expect(b).toContain("no build products");
+      expect(b).toContain("rebuilt\nHERE with the repo's own build command");
+      expect(b).toContain("`.ap-provision` at the repo root");
+      expect(b).toContain("name that in your handoff");
+      // PR A ships no reader for the file, so the clause must not claim one exists yet
+      expect(b).toContain("once that support lands");
+      expect(b).not.toContain("starts armed");
+      expect(b).not.toContain("declared gitignored artifact");
+    });
+    it("with provisioned artifacts the manifest lists them, drops the 'no build products' claim, and says they were built from MAIN", () => {
+      const p = J.jobBrief({ ...REC, provisioned: ["pkg/_ext.so", "pkg/_other.so"] });
+      expect(p).toContain("2 declared gitignored artifacts copied from the main checkout:");
+      expect(p).toContain("    pkg/_ext.so\n    pkg/_other.so");
+      expect(p).toContain("built from MAIN sources at launch");
+      expect(p).not.toContain("no build products");
+      expect(p).toContain("FRESH checkout of the committed HEAD");
+      expect(p).toContain("treat a file you cannot find as absent");
+      expect(J.jobBrief({ ...REC, provisioned: ["pkg/_ext.so"] })).toContain("1 declared gitignored artifact copied");
+    });
   });
   // The return address for the hub's completion hint. A run launched outside tmux has none, and the
   // line is still rendered empty — the hub reads the empty value as "send no hint", which is a

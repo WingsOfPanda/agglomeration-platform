@@ -6,6 +6,9 @@
 // does NOT sandbox a committed test-code trojan (that needs containerization — out of v1 scope).
 import { execFileSync } from "node:child_process";
 import { haveCmd } from "./deps.js";
+import { repoRoot } from "./paths.js";
+import { pinFor } from "./provision.js";
+import { pinExport } from "./tmux.js";
 
 /** Every verdict the hub verify-tests verb can emit on stdout as `VERDICT=<v>`. Runtime-enumerable
  *  (not just a type) so a test can assert commands/implement.md documents a branch for each — the
@@ -81,8 +84,8 @@ export function resolveTimeoutBin(have: (cmd: string) => boolean): string | null
  *  `status` is the command's own exit code; anything else (ENOENT and kin: status null, signal null,
  *  stdout/stderr null) means the runner never ran -> `code: null` with the spawn error as output, so
  *  the hub's log is never blank. */
-export function runBounded(bin: string | null, cwd: string, testCmd: string, timeoutS: number): TestRunResult {
-  const script = `${testCmd} 2>&1`;
+export function runBounded(bin: string | null, cwd: string, testCmd: string, timeoutS: number, pin = ""): TestRunResult {
+  const script = verifyScript(testCmd, pin);
   try {
     const output = bin !== null
       ? execFileSync(bin, ["--kill-after=5", String(timeoutS), "bash", "-c", "--", script], {
@@ -102,9 +105,27 @@ export function runBounded(bin: string | null, cwd: string, testCmd: string, tim
   }
 }
 
-/** Live runner: resolve the bounding binary, then `runBounded`. Never throws. */
+/** The bash script a re-run executes. `pin` (src/core/provision.ts) is the worktree's PYTHONPATH
+ *  entry list, exported FIRST so a site-packages shadow of the repo cannot make this in-place re-run
+ *  test the main checkout while reporting on the worktree (issue #183 landed exactly here: the hub
+ *  pane is spawned at the repo root and stays unpinned on purpose, so the pin has to ride the one
+ *  child process whose cwd ap chooses). A pinned run ANNOUNCES its pin as the first line of its own
+ *  log — `export` prints nothing, and a layer records its own verdict rather than leaving the hub to
+ *  infer which tree its re-run tested. An empty pin is byte-identical to the script shipped before
+ *  the pin existed. Pure, so the composition is testable without an exec. */
+export function verifyScript(testCmd: string, pin: string): string {
+  return pin ? `printf '%s\\n' "${PIN_MARKER}${pin}"; ${pinExport(pin)}; ${testCmd} 2>&1` : `${testCmd} 2>&1`;
+}
+/** The first-line marker a pinned re-run writes. Exported so the directive test can assert
+ *  commands/implement.md names the marker the producer actually emits — the producer<->directive
+ *  contract TEST_VERDICTS follows — rather than a literal that a rename would leave stale. */
+export const PIN_MARKER = "PYTHONPATH_PIN=";
+
+/** Live runner: resolve the bounding binary, derive the pin for THIS cwd, then `runBounded`. Never
+ *  throws. The pin is "" unless `cwd` is a worktree ap created under the main checkout AND something
+ *  in the operator's site-packages resolves the repo from that checkout. */
 export const liveTestRunner: TestRunner = {
   run(cwd, testCmd, timeoutS) {
-    return runBounded(resolveTimeoutBin(haveCmd), cwd, testCmd, timeoutS);
+    return runBounded(resolveTimeoutBin(haveCmd), cwd, testCmd, timeoutS, pinFor(repoRoot(), cwd));
   },
 };

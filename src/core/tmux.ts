@@ -178,8 +178,19 @@ export function paneBorderArgs(): string[][] {
 export function windowBorderStatusArgs(target: string): string[] {
   return ["set-option", "-w", "-t", target, "pane-border-status", "top"];
 }
-export function wrapLaunch(launch: string, hasBashrc: boolean = existsSync(join(homedir(), ".bashrc"))): string {
-  return hasBashrc ? `bash -ic 'exec ${launch}'` : launch;
+/** The pane's launch string. With `~/.bashrc` present the TUI runs under `bash -ic` so the operator's
+ *  shell setup is sourced. `pin` is a PYTHONPATH entry list (src/core/provision.ts) that is PREPENDED
+ *  — PYTHONPATH is left-to-right, so a stale earlier entry naming the main checkout would otherwise
+ *  win — and it needs a shell for the `${VAR:+…}` expansion, hence `bash -c` even without a bashrc.
+ *  An empty pin is byte-identical to the two outputs shipped before it existed. */
+export function wrapLaunch(launch: string, hasBashrc: boolean = existsSync(join(homedir(), ".bashrc")), pin = ""): string {
+  if (!pin) return hasBashrc ? `bash -ic 'exec ${launch}'` : launch;
+  return `bash ${hasBashrc ? "-ic" : "-c"} '${pinExport(pin)}; exec ${launch}'`;
+}
+/** `export PYTHONPATH="<pin>${PYTHONPATH:+:$PYTHONPATH}"` — the one spelling of the pin, shared with
+ *  the hub's verify re-run so the worker and the hub can never be pinned differently. */
+export function pinExport(pin: string): string {
+  return `export PYTHONPATH="${pin}\${PYTHONPATH:+:$PYTHONPATH}"`;
 }
 export function sentinelCommand(coloredLabel: string): string {
   // printf the colored label + reserved notice, then hold the pane open. The hold-open loop uses

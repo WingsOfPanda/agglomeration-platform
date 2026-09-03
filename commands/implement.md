@@ -483,7 +483,17 @@ worker ran only part of the suite; it is NOT a not-FAIL you may consume as PASS:
   only `~/.profile` is not, while the hub's own re-run is `bash -c`
   (`src/core/implementVerifyTests.ts`, `runBounded`) and sources **nothing** — a var exported at login
   or set non-exported in `.bashrc` is present for the worker and absent for you. On top of that a
-  fresh `.ap/worktrees/<topic>` carries no build products at all.
+  fresh `.ap/worktrees/<topic>` carries no build products at all. One thing both DO share: when
+  `job start` reported a site-packages shadow of the repo (a user-site `.pth` or editable finder
+  resolving it from the MAIN checkout), the pane's launch and the `verify-tests` re-run are both
+  prefixed with the same `export PYTHONPATH="<worktree import root>…"` pin — but YOUR pane is not.
+  So an environment fact you assert in a brief or a cross-verify comes from a probe run with cwd in
+  `TARGET_CWD`, with that pin prefixed, against the exact symbol the gate imports — never a
+  package-level import, which succeeds with the extensions absent and, on a shadowed box, answers
+  about the main checkout. A pinned `verify-tests` re-run announces itself: its
+  `hub-test-output-<ROUND>.log` opens with `PYTHONPATH_PIN=<pin>` (emitted by `verifyScript`) — on a
+  shadowed box check that first line before trusting a re-run that actually ran (`VERDICT=pass|fail`);
+  its absence there means the re-run was unpinned.
 
 **New-gate cross-check (part of the spot-checks above).** For each new test/gate hunk in the diff,
 look for a matching `MUTATION: <file:line> <break> -> <observed failure>` line in

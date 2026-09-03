@@ -10,8 +10,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
-import { finishHint, run, startWorktree, sweepWorktree } from "../src/commands/job.js";
-import { formatJob, jobPath, mainCheckoutRoot, worktreePathFor, type JobRecord } from "../src/core/job.js";
+import { finishHint, run, startRun, startWorktree, sweepWorktree, type EnvDeps } from "../src/commands/job.js";
+import { formatJob, jobPath, mainCheckoutRoot, parseJob, worktreePathFor, type JobRecord } from "../src/core/job.js";
 import { currentBranch, runnerAt, type Runner } from "../src/core/gitwork.js";
 
 const TOPIC = "demo";
@@ -549,6 +549,256 @@ describe("job stop — the sweep and the FINISH hint, through the verb", () => {
     expect(rc).toBe(0);
     expect(out).not.toContain("FINISH=pending");
     expect(existsSync(jobPath(TOPIC))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Worktree environment parity (2026-09-02 worktree-run-provisi design, A1-A3, A5, A9). A user-site
+// .pth or editable finder that resolves the repo from the MAIN checkout makes every python in the
+// worktree import the wrong tree (issues #183, #197). `job start` names it and derives the pin;
+// `job stop` refuses to delete a worktree an editable install has since been pointed at (#196).
+// Everything is scanned through an INJECTED home/env — the developer's real site-packages and the
+// shell the suite was launched from never enter these assertions.
+describe("job start — a site-packages shadow of the repo is named and pinned, never refused", () => {
+  const NOENV = {} as NodeJS.ProcessEnv;
+  /** A synthetic user site under a fresh fake HOME, with one `.pth` holding `lines`. */
+  function siteHome(lines: string, name = "src.pth"): { home: string; site: string; deps: EnvDeps } {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "ap-site-")));
+    cleanups.push(() => rmSync(home, { recursive: true, force: true }));
+    const site = join(home, ".local", "lib", "python3.12", "site-packages");
+    mkdirSync(site, { recursive: true });
+    writeFileSync(join(site, name), lines);
+    return { home, site, deps: { home, env: NOENV } };
+  }
+  /** A fake HOME with no site dir at all — the clean box. */
+  function cleanHome(): EnvDeps {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "ap-clean-")));
+    cleanups.push(() => rmSync(home, { recursive: true, force: true }));
+    return { home, env: NOENV };
+  }
+  /** Commit a `src/pkg.py` so the import root exists in the worktree the run forks. */
+  function commitSrc(root: string): void {
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "pkg.py"), "");
+    git(root, "add", "-A"); git(root, "commit", "-q", "-m", "src");
+  }
+
+  it("startWorktree WARNS naming the .pth and the PYTHONPATH export, returns the shadow and the re-rooted pin, and still starts", async () => {
+    const root = repo();
+    commitSrc(root);
+    const { site, deps } = siteHome(`${join(root, "src")}\n`);
+    let out: ReturnType<typeof startWorktree> = null;
+    const { rc, err } = await capture(() => { out = startWorktree(root, TOPIC, runnerAt(root), deps); return out ? 0 : 1; });
+    const wt = worktreePathFor(root, TOPIC);
+    expect(rc).toBe(0);                                   // a shadow must NEVER refuse a launch (A2)
+    expect(existsSync(join(wt, "src", "pkg.py"))).toBe(true);
+    expect(out!.shadows).toEqual([`${join(site, "src.pth")}:1`]);
+    expect(out!.pin).toBe(join(wt, "src"));
+    expect(err).toContain("resolves");
+    expect(err).toContain(`  ${join(site, "src.pth")}:1`);
+    expect(err).toContain(`export PYTHONPATH="${join(wt, "src")}\${PYTHONPATH:+:$PYTHONPATH}"`);
+    expect(err).toContain("verify-tests");
+  });
+
+  it("an import root with no counterpart in the worktree is dropped and NAMED, and nothing is pinned", async () => {
+    const root = repo();
+    mkdirSync(join(root, "untracked-src"));                // exists in the main checkout only
+    const { deps } = siteHome(`${join(root, "untracked-src")}\n`);
+    let out: ReturnType<typeof startWorktree> = null;
+    const { err } = await capture(() => { out = startWorktree(root, TOPIC, runnerAt(root), deps); return out ? 0 : 1; });
+    expect(out!.shadows).toHaveLength(1);
+    expect(out!.pin).toBe("");
+    expect(err).toContain(`dropped from the pin: ${join(worktreePathFor(root, TOPIC), "untracked-src")}`);
+    expect(err).toContain("NOTHING is pinned");
+    expect(err).not.toContain("export PYTHONPATH=");
+  });
+
+  it("a .pth naming <root>-old adds nothing: no new stderr line, empty shadows, empty pin", async () => {
+    const root = repo();
+    const { deps } = siteHome(`${root}-old\n${root}-old/src\n`);
+    let out: ReturnType<typeof startWorktree> = null;
+    const { err } = await capture(() => { out = startWorktree(root, TOPIC, runnerAt(root), deps); return out ? 0 : 1; });
+    expect(out!.shadows).toEqual([]);
+    expect(out!.pin).toBe("");
+    expect(err).not.toContain("PYTHONPATH");
+    expect(err).not.toContain("resolves");
+  });
+
+  // Success criterion 1: silence on a clean box, and the node_modules clone exactly as before.
+  it("silence on a clean repo: the stderr lines are the pre-existing ones and the cp argv is verbatim", async () => {
+    const root = repo();
+    mkdirSync(join(root, "node_modules"), { recursive: true });
+    const { r, calls } = cpScripted(root, [0]);
+    const { rc, err } = await capture(() => (startWorktree(root, TOPIC, r, cleanHome()) ? 0 : 1));
+    expect(rc).toBe(0);
+    expect(calls).toEqual([["-al", join(root, "node_modules"), join(worktreePathFor(root, TOPIC), "node_modules")]]);
+    expect(err.split("\n").filter(Boolean).map((l) => l.replace(/^\[[^\]]*\]\s+/, ""))).toEqual([
+      "job start: hardlink-cloned node_modules into the worktree",
+      `job start: worktree ${worktreePathFor(root, TOPIC)} on base/${TOPIC} at ${git(root, "rev-parse", "HEAD").slice(0, 8)}`,
+    ]);
+  });
+
+  describe("through the whole verb", () => {
+    // The `start` verb picks a hub agent out of `config/agents.yaml`, so the pool has to be findable
+    // from a cwd that is a throwaway repo. Captured at collection time, when the cwd is this checkout.
+    const PLUGIN_ROOT = process.cwd();
+    const savedPluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+    beforeEach(() => { process.env.CLAUDE_PLUGIN_ROOT = PLUGIN_ROOT; });
+    afterEach(() => {
+      if (savedPluginRoot === undefined) delete process.env.CLAUDE_PLUGIN_ROOT;
+      else process.env.CLAUDE_PLUGIN_ROOT = savedPluginRoot;
+    });
+    function args(text: string): string {
+      const f = join(mkdtempSync(join(tmpdir(), "ap-args-")), "args");
+      writeFileSync(f, text);
+      return f;
+    }
+    // The record is written BEFORE the spawn (which the tmux shim fails), so it is what a shadowed
+    // launch leaves behind for the job hub's brief.
+    it("the record carries python_shadow and python_pin on a shadowed box", async () => {
+      const root = repo();
+      commitSrc(root);
+      const { site, deps } = siteHome(`${join(root, "src")}\n`);
+      const { rc } = await capture(() => startRun(["--command", "quick", "--args-file", args("fix the thing"), "--topic", TOPIC], root, deps));
+      expect(rc).toBe(1);                                  // the spawn, not the launch gate
+      const rec = parseJob(readFileSync(jobPath(TOPIC), "utf8"))!;
+      expect(rec.python_shadow).toEqual([`${join(site, "src.pth")}:1`]);
+      expect(rec.python_pin).toBe(join(worktreePathFor(root, TOPIC), "src"));
+    });
+    it("and a clean launch's record has NEITHER key — the file is byte-identical in shape to before", async () => {
+      const root = repo();
+      const { rc } = await capture(() => startRun(["--command", "quick", "--args-file", args("fix the thing"), "--topic", TOPIC], root, cleanHome()));
+      expect(rc).toBe(1);
+      const text = readFileSync(jobPath(TOPIC), "utf8");
+      expect(text).not.toContain("python_shadow");
+      expect(text).not.toContain("python_pin");
+      expect(text).not.toContain("provisioned");
+      expect(parseJob(text)!.worktree).toBe(worktreePathFor(root, TOPIC));
+    });
+  });
+});
+
+describe("job stop — a worktree an editable install now points INTO is kept", () => {
+  const NOENV = {} as NodeJS.ProcessEnv;
+  function siteUnder(prefix: string, lines: string): string {
+    const site = join(prefix, "lib", "python3.12", "site-packages");
+    mkdirSync(site, { recursive: true });
+    writeFileSync(join(site, "e.pth"), lines);
+    return join(site, "e.pth");
+  }
+  function fakeHome(): string {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "ap-stop-home-")));
+    cleanups.push(() => rmSync(home, { recursive: true, force: true }));
+    return home;
+  }
+  async function started(root: string): Promise<string> {
+    await capture(() => (startWorktree(root, TOPIC, runnerAt(root), { home: fakeHome(), env: NOENV }) ? 0 : 1));
+    return worktreePathFor(root, TOPIC);
+  }
+
+  it("a user-site .pth resolving INTO the worktree keeps it, names the source, and prints the repair", async () => {
+    const root = repo();
+    const wt = await started(root);
+    const home = fakeHome();
+    const pth = siteUnder(join(home, ".local"), `${wt}\n`);
+    const { rc, err } = await capture(() => (sweepWorktree(record(root), root, runnerAt(root), { home, env: NOENV }) ? 0 : 1));
+    expect(rc).toBe(1);
+    expect(existsSync(wt)).toBe(true);
+    expect(err).toContain("resolves INTO the worktree");
+    expect(err).toContain(`  ${pth}:1`);
+    // a plain path entry has two shapes, and the remedy names both: reinstall for an editable
+    // install's .pth, edit the file for a hand-written one (pip install -e never touches that).
+    expect(err).toContain("for an entry above that is not an exec line (a path entry or an editable finder):");
+    expect(err).toContain(`if an editable install wrote it, reinstall from the main checkout first (cd ${root} && pip install -e .)`);
+    expect(err).toContain("if it is a hand-written path file, edit it so it points at the main checkout");
+  });
+
+  // The other pinnable shape: a setuptools editable finder whose MAPPING now names the worktree —
+  // `pip install -e .` run from it. Kept, the finder named, and the same two-shape remedy printed.
+  it("an editable finder whose MAPPING names the worktree keeps it too, names the finder, and prints the reinstall remedy", async () => {
+    const root = repo();
+    const wt = await started(root);
+    const home = fakeHome();
+    const site = join(home, ".local", "lib", "python3.12", "site-packages");
+    mkdirSync(site, { recursive: true });
+    const finder = join(site, "__editable___p_finder.py");
+    writeFileSync(finder, `MAPPING: dict[str, str] = {'pkg': '${join(wt, "pkg")}'}\n`);
+    const { rc, err } = await capture(() => (sweepWorktree(record(root), root, runnerAt(root), { home, env: NOENV }) ? 0 : 1));
+    expect(rc).toBe(1);
+    expect(existsSync(wt)).toBe(true);
+    expect(err).toContain(`  ${finder}:1`);
+    expect(err).toContain("(a path entry or an editable finder)");
+    expect(err).toContain(`cd ${root} && pip install -e .`);
+  });
+
+  // The #183 hand-rolled shape pointed at the WORKTREE: an exec line ap cannot resolve to an import
+  // root, but which names the worktree textually. A9 says keep and NAME; the repair is the file itself.
+  it("an exec .pth line naming the worktree keeps it too, names the file, and says to edit it", async () => {
+    const root = repo();
+    const wt = await started(root);
+    const home = fakeHome();
+    const pth = siteUnder(join(home, ".local"), `import sys; sys.path.insert(0,'${wt}')\n`);
+    const { rc, err } = await capture(() => (sweepWorktree(record(root), root, runnerAt(root), { home, env: NOENV }) ? 0 : 1));
+    expect(rc).toBe(1);
+    expect(existsSync(wt)).toBe(true);
+    expect(err).toContain("resolves INTO the worktree");
+    expect(err).toContain(`  ${pth}:1`);
+    expect(err).toContain("edit that file");
+    expect(err).not.toContain("pip install -e .");     // no editable install to repair here
+    expect(err).toContain(`re-run 'ap job stop ${TOPIC}'`);
+  });
+
+  // `python -m venv .` puts the venv AT the repo root: VIRTUAL_ENV === <root>, site dir under
+  // <root>/lib. That prefix is an ANCESTOR of the worktree and must exclude nothing at teardown.
+  it("with the venv at the repo root (VIRTUAL_ENV === <root>) a .pth there naming the worktree still keeps it", async () => {
+    const root = repo();
+    const wt = await started(root);
+    const pth = siteUnder(root, `${join(wt, "src")}\n`);                 // <root>/lib/python3.12/site-packages/e.pth
+    const { rc, err } = await capture(() => (sweepWorktree(record(root), root, runnerAt(root), { home: fakeHome(), env: { VIRTUAL_ENV: root } as NodeJS.ProcessEnv }) ? 0 : 1));
+    expect(rc).toBe(1);
+    expect(existsSync(wt)).toBe(true);
+    expect(err).toContain("resolves INTO the worktree");
+    expect(err).toContain(`  ${pth}:1`);
+  });
+
+  // The scan is WIDENED at teardown to the conventional venv locations beside the checkout.
+  it("the widened scan sees <root>/.venv and <root>/venv", async () => {
+    for (const venv of [".venv", "venv"]) {
+      const root = repo();
+      const wt = await started(root);
+      siteUnder(join(root, venv), `${join(wt, "src")}\n`);   // a subdirectory of the worktree counts too
+      const { rc, err } = await capture(() => (sweepWorktree(record(root), root, runnerAt(root), { home: fakeHome(), env: NOENV }) ? 0 : 1));
+      expect(rc).toBe(1);
+      expect(existsSync(wt)).toBe(true);
+      expect(err).toContain("resolves INTO the worktree");
+    }
+  });
+
+  it("a .pth pointing at the MAIN checkout (the standing shadow) removes the worktree exactly as today", async () => {
+    const root = repo();
+    const wt = await started(root);
+    const home = fakeHome();
+    siteUnder(join(home, ".local"), `${root}\n`);
+    const { rc, err } = await capture(() => (sweepWorktree(record(root), root, runnerAt(root), { home, env: NOENV }) ? 0 : 1));
+    expect(rc).toBe(0);
+    expect(existsSync(wt)).toBe(false);
+    expect(err).not.toContain("resolves INTO");
+    expect(err).toContain(`job stop: removed the run's worktree ${wt}`);
+  });
+
+  // The deliberately REJECTED keep-condition: `setup.py build_ext --inplace` leaves an egg-info as a
+  // normal byproduct; keeping on it would keep every python worktree forever.
+  it("a worktree carrying only an ignored *.egg-info is still REMOVED", async () => {
+    const root = repo();
+    writeFileSync(join(root, ".gitignore"), "*.egg-info\n");
+    git(root, "add", "-A"); git(root, "commit", "-q", "-m", "ignore egg-info");
+    const wt = await started(root);
+    mkdirSync(join(wt, "pkg.egg-info"));
+    writeFileSync(join(wt, "pkg.egg-info", "PKG-INFO"), "Name: pkg\n");
+    expect(git(wt, "status", "--porcelain")).toBe("");     // ignored, so not dirty
+    const { rc } = await capture(() => (sweepWorktree(record(root), root, runnerAt(root), { home: fakeHome(), env: NOENV }) ? 0 : 1));
+    expect(rc).toBe(0);
+    expect(existsSync(wt)).toBe(false);
   });
 });
 
