@@ -113,7 +113,7 @@ status to `idle`, and wait for your inbox. Resume from exactly where you parked.
 
 | Stage | Attached | Detached |
 |---|---|---|
-| 0 — `init` | `$CS implement init --args-file <args-path>` | add `--target <WORKTREE>`, taking the path **verbatim from the WORKTREE paragraph of your inbox task**. The run then works in its own worktree instead of the operator's checkout. No worktree paragraph (a `--no-worktree` run) means no flag: init as written. Every later verb reads `target_cwd.txt`, so this is the only place it is passed. |
+| 0 — `init` | `$CS implement init --args-file <args-path>` | add `--target <WORKTREE>` **after** the `--args-file <args-path>` pair — `$CS implement init --args-file <args-path> --target <WORKTREE>` — taking the path **verbatim from the WORKTREE paragraph of your inbox task**. The run then works in its own worktree instead of the operator's checkout. No worktree paragraph (a `--no-worktree` run) means no flag: init as written. Every later verb reads `target_cwd.txt`, so this is the only place it is passed. |
 | 0 — `INVISIBLE_IN_TARGET` | (not printed — no `--target`) | init also prints `INVISIBLE_IN_TARGET=<n>` and one `INVISIBLE_PATH=<p>` per path (rc stays 0; also written to `$ART/path-lint.txt`). `0` — proceed. **Non-zero — PARK**, naming every `INVISIBLE_PATH=` line verbatim: those files exist in the operator's checkout and NOT in this worktree, because the fork took committed HEAD. Nothing but a commit in the main checkout can make them visible, so guessing at their contents, or working around a design doc you cannot read, is the failure this catches. |
 | 0 — claude-confirm gate | AskUserQuestion codex-vs-claude | use `provider` from `job.json`; if it names none, keep the auto-detected one. No question. When it differs from init's `PROVIDER=` output, run `$CS implement set-provider <TOPIC> <provider>` BEFORE the Stage 1.1 spawn — never edit `$ART/provider.txt` by hand. |
 | 1 — `turn-send` "not idle" | AskUserQuestion wait/force/abort | wait 60s and retry once, then `reset-status` and retry once, then PARK. Never a third silent force. |
@@ -208,7 +208,9 @@ consent, never block, and cost nothing, so prefer over-recording. Review later w
    - **rc 1** — the doc/topic/target was unreadable/unresolvable (the audit was already cleared
      above). Surface the message and stop.
    - **rc 2** — usage error, or the topic is already in flight (run `/ap:stop <TOPIC>` to clear it
-     first). Stop.
+     first) — or, when stderr says `args file not found`, the one-shot args file was already
+     consumed by an earlier init: that topic is NOT in flight, so never `/ap:stop` it — redo steps
+     2–3 (re-mint, re-write) and retry. Otherwise stop.
 5. **Pre-snapshot + branch.** `$CS implement pre-snapshot <TOPIC>` (commits any dirty tree so the
    implement branch forks clean; rc 2 = the target is not a git repo → surface and stop). Then, unless
    the user passed `--no-branch`, `$CS implement branch <TOPIC>` (creates/resumes `feat/implement-<TOPIC>`

@@ -132,7 +132,7 @@ export function findStashRef(list: string, message: string): string {
 /** The stash list, in the `<ref>\t<subject>` form `findStashRef` parses — the one place that
  *  format string is spelled. Callers that need the exit code read `.code` (an unreadable list is
  *  never an absence). */
-function stashList(r: Runner): RunResult {
+export function stashList(r: Runner): RunResult {
   return r.run("git", ["stash", "list", "--format=%gd%x09%gs"]);
 }
 
@@ -140,7 +140,7 @@ function stashList(r: Runner): RunResult {
  *  matches. A ref whose rev-parse fails carries sha "" — that entry EXISTS, it just would not
  *  resolve, and `stashPush` reports it as `failed-with-entry` rather than pretending nothing was
  *  parked. */
-function stashEntry(r: Runner, message: string): { ref: string; sha: string } | null {
+export function stashEntry(r: Runner, message: string): { ref: string; sha: string } | null {
   const ref = findStashRef(stashList(r).stdout, message);
   return ref ? { ref, sha: r.run("git", ["rev-parse", ref]).stdout.trim() } : null;
 }

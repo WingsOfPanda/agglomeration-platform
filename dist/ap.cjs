@@ -73,13 +73,16 @@ function tokenizeArgsLine(line) {
   if (started) out2.push(cur);
   return out2;
 }
+function missingArgsFile(path) {
+  return new ArgsFileError(`args file not found: ${path} (a one-shot args file is consumed by the first init that reads it; re-mint with --mint-args-file)`);
+}
 function loadArgsFile(path) {
-  if (!(0, import_node_fs.existsSync)(path)) return [];
+  if (!(0, import_node_fs.existsSync)(path)) throw missingArgsFile(path);
   const raw = (0, import_node_fs.readFileSync)(path, "utf8").replace(/\r?\n/g, " ");
   return tokenizeArgsLine(raw);
 }
 function loadArgsFileVerbatim(path, valueFlags) {
-  if (!(0, import_node_fs.existsSync)(path)) return [];
+  if (!(0, import_node_fs.existsSync)(path)) throw missingArgsFile(path);
   const raw = (0, import_node_fs.readFileSync)(path, "utf8");
   const isWs = (c) => c === " " || c === "	" || c === "\n" || c === "\r";
   const flags = [];
@@ -120,6 +123,12 @@ function applyArgsFile(argv, opts) {
   } catch {
   }
   return [...tokens, ...argv.slice(2)];
+}
+function expandArgsFile(argv) {
+  const i = argv.indexOf("--args-file");
+  if (i < 0) return [...argv];
+  if (argv.indexOf("--args-file", i + 1) >= 0) throw new ArgsFileError("--args-file may be given once");
+  return [...argv.slice(0, i), ...applyArgsFile(argv.slice(i))];
 }
 function kvParse(flag, next) {
   if (flag.includes("=")) return { value: flag.slice(flag.indexOf("=") + 1), shift: 1 };
@@ -8373,10 +8382,12 @@ function moveToArchive(src, base) {
   return dest;
 }
 function stateArchive(agent, model, topic, suffix, opts) {
-  const src = workerDir(agent, model, topic);
+  return archiveWorkerDir(workerDir(agent, model, topic), topic, suffix, opts);
+}
+function archiveWorkerDir(src, topic, suffix, opts) {
   if (!(0, import_node_fs8.existsSync)(src)) return null;
   const ts = archiveTs(opts?.now);
-  let base = (0, import_node_path5.join)(globalRoot(), "archive", repoHash(), topic, `${agent}-${model}-${ts}`);
+  let base = (0, import_node_path5.join)(globalRoot(), "archive", repoHash(), assertSlug("topic", topic), `${(0, import_node_path5.basename)(src)}-${ts}`);
   if (suffix) base += `-${suffix}`;
   return moveToArchive(src, base);
 }
@@ -8420,6 +8431,7 @@ var init_archive = __esm({
     import_node_path5 = require("node:path");
     init_paths();
     init_atomic();
+    init_slug();
     STALE = ["identity.md", "inbox.md", "outbox.jsonl", "status.json", "pane.json", ".session_id"];
   }
 });
@@ -8441,7 +8453,10 @@ function paneMetaPath(i, m, t) {
   return (0, import_node_path6.join)(workerDir(i, m, t), "pane.json");
 }
 function workerBusyState(i, m, t) {
-  const sp = statusPath(i, m, t);
+  return workerBusyStateForDir(workerDir(i, m, t));
+}
+function workerBusyStateForDir(dir) {
+  const sp = (0, import_node_path6.join)(dir, "status.json");
   if (!(0, import_node_fs9.existsSync)(sp)) return null;
   let text;
   try {
@@ -12191,6 +12206,7 @@ var init_implementScope = __esm({
 // src/commands/quick.ts
 var quick_exports = {};
 __export(quick_exports, {
+  branchShaAt: () => branchShaAt,
   branchWith: () => branchWith,
   finishWith: () => finishWith,
   forensicsRun: () => forensicsRun,
@@ -12202,6 +12218,10 @@ __export(quick_exports, {
 function usage() {
   log.error("usage: quick <init|branch|set-provider|turn-send|turn-wait|detect-test|finish|forensics|summary> ...");
   return 2;
+}
+function branchShaAt(cwd, branch) {
+  const r = runnerAt(cwd).run("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]);
+  return r.code === 0 ? r.stdout.trim() : "";
 }
 async function run9(args) {
   return withMainCheckout(() => dispatchVerb7(args));
@@ -12271,7 +12291,9 @@ async function initWith(tokens, d) {
     return 3;
   }
   const art = quickArtDir(slug);
-  if ((0, import_node_fs29.existsSync)(art)) {
+  const prior = STATE_FILE_BASENAMES.some((f) => (0, import_node_fs29.existsSync)((0, import_node_path23.join)(art, f)));
+  const stale = prior ? await stalePredecessor(art, slug, d) : null;
+  if (prior && !stale) {
     log.error(`quick init: topic already in flight: ${art}`);
     log.error("  run /ap:stop or pick a different topic");
     return 2;
@@ -12280,6 +12302,31 @@ async function initWith(tokens, d) {
   if (!agent) {
     log.error(`quick init: no available agent in the pool for '${slug}'`);
     return 1;
+  }
+  if (stale) {
+    const wdests = [];
+    try {
+      for (const w of stale.workers) {
+        const wdest = archiveWorkerDir(w, slug, "stale");
+        if (wdest) wdests.push(wdest);
+      }
+    } catch (e) {
+      log.error(`quick init: could not archive a dead worker dir of the earlier attempt (${e.message}) \u2014 ${art} is intact; clear it by hand or with /ap:stop`);
+      return 1;
+    }
+    const dest = moveToArchive(art, `${art}.stale-${stale.agent}-${archiveTs()}`);
+    log.warn(`quick init: archived a predecessor that never reached a worker turn: ${dest}`);
+    process.stdout.write(`ARCHIVED_STALE=${dest}
+`);
+    for (const wdest of wdests) process.stdout.write(`ARCHIVED_STALE_WORKER=${wdest}
+`);
+    (0, import_node_fs29.mkdirSync)(art, { recursive: true });
+    for (const f of CARRIED_RECORDS) {
+      const src = (0, import_node_path23.join)(dest, f);
+      if (!(0, import_node_fs29.existsSync)(src)) continue;
+      (0, import_node_fs29.mkdirSync)((0, import_node_path23.dirname)((0, import_node_path23.join)(art, f)), { recursive: true });
+      (0, import_node_fs29.copyFileSync)(src, (0, import_node_path23.join)(art, f));
+    }
   }
   const exec = quickExecDir(slug);
   (0, import_node_fs29.mkdirSync)(exec, { recursive: true });
@@ -12302,6 +12349,46 @@ TARGET=${target}
 STASH_WIP=${stashWip ? "yes" : "no"}
 `);
   return 0;
+}
+async function stalePredecessor(art, topic, d) {
+  const exec = quickExecDir(topic);
+  if ((0, import_node_fs29.existsSync)((0, import_node_path23.join)(exec, "turn-1.txt"))) return null;
+  const base = readField((0, import_node_path23.join)(exec, "branch-base.sha"));
+  if (base) {
+    const head = d.branchSha(readField((0, import_node_path23.join)(exec, "target_cwd.txt")) || repoRoot(), branchNameFor("quick", topic));
+    if (head && head !== base) return null;
+  }
+  const agent = readField((0, import_node_path23.join)(art, "agent.txt"));
+  if (!validateSlug(agent) || !readField((0, import_node_path23.join)(art, "selected-provider.txt"))) return null;
+  const workers = await deadWorkers(topic, d);
+  if (workers === null) return null;
+  return { agent, workers };
+}
+async function deadWorkers(topic, d) {
+  if ((0, import_node_fs29.existsSync)(jobPath(topic))) {
+    log.error(`quick init: a detached job owns this topic (${jobPath(topic)}); tear it down with: ap job stop ${topic}`);
+    return null;
+  }
+  const td = topicDir(topic);
+  let names = [];
+  try {
+    names = (0, import_node_fs29.readdirSync)(td, { withFileTypes: true }).filter((e) => e.isDirectory() && !isArtifactDir(e.name)).map((e) => e.name).sort();
+  } catch {
+  }
+  const dead = [];
+  let snap = null;
+  for (const name of names) {
+    const wd = (0, import_node_path23.join)(td, name);
+    if (readWorkerStatusRec(wd)?.lastEvent === "spawn") return null;
+    if (workerBusyStateForDir(wd)) return null;
+    const pane = paneMetaReadForDir(wd);
+    if (!pane.paneId) return null;
+    snap ??= await d.livePanes();
+    if (ownsPane(snap, pane.paneId, pane.nonce)) return null;
+    if (snap.size === 0 || snap.has(pane.paneId) && !verifiableNonce(pane.nonce)) return null;
+    dead.push(wd);
+  }
+  return dead;
 }
 async function setProviderRun(rest) {
   const { pos, reason, badReason } = parseSetProviderArgs(rest);
@@ -12408,7 +12495,22 @@ INVISIBLE_IN_TARGET=${invisible.length}
 async function branchWith(topic, target, r, stashWip = false) {
   const exec = quickExecDir(topic);
   (0, import_node_fs29.mkdirSync)(exec, { recursive: true });
-  if (stashWip && classifyDirty(r.run("git", ["status", "--porcelain", "--untracked-files=all"]).stdout)) {
+  const dirtyTree = () => classifyDirty(r.run("git", ["status", "--porcelain", "--untracked-files=all"]).stdout);
+  if (stashWip) {
+    const carried2 = readStashMarker(exec, topic);
+    const listOk = carried2 ? stashList(r).code === 0 : true;
+    const entry2 = carried2 && listOk ? stashEntry(r, carried2.message) : null;
+    if (carried2 && listOk && !entry2) {
+      (0, import_node_fs29.rmSync)((0, import_node_path23.join)(exec, "stash-wip.txt"), { force: true });
+      log.warn(`quick branch: the --stash-wip park recorded for this topic ('${carried2.message}') is no longer in the stash \u2014 dropping the stale marker`);
+    } else if (carried2 && dirtyTree()) {
+      const ref = entry2?.ref ?? "<ref>";
+      log.error(`quick branch: the tree is dirty again while the --stash-wip park recorded for this topic ('${carried2.message}', ${ref}) is still in the stash${listOk ? "" : " (the stash list could not be read)"} \u2014 nothing stashed, nothing committed, HEAD untouched`);
+      log.error(`  restore it first (git -C ${target} stash pop ${ref}, then resolve), or drop it (git -C ${target} stash drop ${ref}), then re-run`);
+      return 1;
+    }
+  }
+  if (stashWip && dirtyTree()) {
     const message = stashWipMessage(topic);
     const st = stashPush(r, message);
     switch (st.outcome) {
@@ -12450,7 +12552,9 @@ async function branchWith(topic, target, r, stashWip = false) {
   const onBranch = outcome !== "failed";
   atomicWrite((0, import_node_path23.join)(exec, "target_cwd.txt"), target + "\n");
   lintBrief(topic, target, exec);
-  atomicWrite((0, import_node_path23.join)(exec, "start-branch.txt"), snap.branch + "\n");
+  const carried = readField((0, import_node_path23.join)(exec, "start-branch.txt"));
+  const startBranch = carried && snap.branch === branch ? carried : snap.branch;
+  atomicWrite((0, import_node_path23.join)(exec, "start-branch.txt"), startBranch + "\n");
   atomicWrite((0, import_node_path23.join)(exec, "branch-base.sha"), snap.baseSha + "\n");
   atomicWrite((0, import_node_path23.join)(exec, "branch.txt"), (onBranch ? branch : snap.branch) + "\n");
   if (!onBranch) {
@@ -12661,7 +12765,7 @@ duration=${duration}
   log.ok(`quick summary: wrote ${(0, import_node_path23.join)(art, "SUMMARY.md")}`);
   return 0;
 }
-var import_node_fs29, import_node_path23, liveInitDeps, STATE_RELATIVE_PREFIXES, STATE_FILE_BASENAMES, PROHIBITION_LINE, QUICK_TURN_TIMEOUT, QUICK_ROUND;
+var import_node_fs29, import_node_path23, liveInitDeps, STATE_RELATIVE_PREFIXES, STATE_FILE_BASENAMES, CARRIED_RECORDS, PROHIBITION_LINE, QUICK_TURN_TIMEOUT, QUICK_ROUND;
 var init_quick2 = __esm({
   "src/commands/quick.ts"() {
     "use strict";
@@ -12682,6 +12786,8 @@ var init_quick2 = __esm({
     init_agents();
     init_gitwork();
     init_ipc();
+    init_tmux();
+    init_workerLiveness();
     init_turn();
     init_roundProtocol();
     init_env();
@@ -12689,9 +12795,10 @@ var init_quick2 = __esm({
     init_fsread();
     init_branchRecord();
     init_implementScope();
-    liveInitDeps = { haveCmd, agentBinary, pickRandomAgent };
+    liveInitDeps = { haveCmd, agentBinary, pickRandomAgent, livePanes: livePaneNonces, branchSha: branchShaAt };
     STATE_RELATIVE_PREFIXES = ["_quick/", "_implement/", ".ap/"];
     STATE_FILE_BASENAMES = ["topic-text.txt", "task-brief.md"];
+    CARRIED_RECORDS = ["findings.log", "issue.txt", "execute/start-branch.txt", "execute/stash-wip.txt"];
     PROHIBITION_LINE = /\b(never|do not|don't|must not)\s+(touch|modify|edit|write|create|delete|read)\b/i;
     QUICK_TURN_TIMEOUT = envNum("AP_QUICK_TURN_TIMEOUT", DEFAULT_TURN_BUDGET_S);
     QUICK_ROUND = {
@@ -12804,11 +12911,11 @@ function exportDocTo(topic, destRoot, opts) {
   if (!(0, import_node_fs31.existsSync)(ddir)) return null;
   const hits = (0, import_node_fs31.readdirSync)(ddir).filter((f) => f.endsWith(`-${topic}-design.md`)).sort();
   if (hits.length === 0) return null;
-  const basename6 = hits[hits.length - 1];
+  const basename7 = hits[hits.length - 1];
   const dir = (0, import_node_path25.join)(destRoot, "docs", "ap", "specs");
   (0, import_node_fs31.mkdirSync)(dir, { recursive: true });
-  const dest = (0, import_node_path25.join)(dir, basename6);
-  atomicWrite(dest, (0, import_node_fs31.readFileSync)((0, import_node_path25.join)(ddir, basename6), "utf8"));
+  const dest = (0, import_node_path25.join)(dir, basename7);
+  atomicWrite(dest, (0, import_node_fs31.readFileSync)((0, import_node_path25.join)(ddir, basename7), "utf8"));
   return dest;
 }
 var import_node_path25, import_node_fs31;
@@ -14743,7 +14850,7 @@ async function dispatchVerb9(args) {
   const rest = args.slice(1);
   switch (verb) {
     case "init":
-      return initRun3(applyArgsFile(rest));
+      return initRun3(expandArgsFile(rest));
     case "audit":
       return auditRun(rest);
     case "set-provider":
@@ -14757,7 +14864,7 @@ async function dispatchVerb9(args) {
     case "pre-snapshot":
       return preSnapshotRun(rest);
     case "branch":
-      return branchRun2(applyArgsFile(rest));
+      return branchRun2(expandArgsFile(rest));
     case "scope-check":
       return scopeCheckRun(rest);
     case "verify-tests":
