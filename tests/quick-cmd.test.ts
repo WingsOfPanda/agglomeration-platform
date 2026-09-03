@@ -10,7 +10,7 @@ describe("quick dispatcher", () => {
   });
 });
 
-import { existsSync, readFileSync, writeFileSync, mkdtempSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdtempSync, mkdirSync, readdirSync, rmSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { freshHome } from "./helpers/tmpHome.js";
@@ -19,6 +19,7 @@ import { quickArtDir, quickExecDir } from "../src/core/quick.js";
 import { forensicsQueueDir, workerDir } from "../src/core/paths.js";
 import { outboxPath } from "../src/core/ipc.js";
 import { formatJob, jobPath } from "../src/core/job.js";
+import { runFlag } from "../src/core/forensics.js";
 
 // Build an --args-file the way the dispatcher expects (first line tokenized).
 function argsFile(home: string, line: string): string {
@@ -34,7 +35,7 @@ describe("quick init", () => {
   afterEach(() => { outSpy.restore(); h.cleanup(); });
 
   // Deterministic deps: provider present + on PATH, agent fixed — no env dependency.
-  const okDeps: InitDeps = { haveCmd: () => true, agentBinary: () => "codex", pickRandomAgent: () => "bravo" };
+  const okDeps: InitDeps = { haveCmd: () => true, agentBinary: () => "codex", pickRandomAgent: () => "bravo", livePanes: async () => new Map(), branchSha: () => "" };
 
   it("scaffolds _quick, validates provider, prints KV; rc 0", async () => {
     const rc = await initWith(["add", "oauth", "login", "--provider", "codex"], okDeps);
@@ -82,12 +83,51 @@ describe("quick init", () => {
   });
 
   it("provider known but binary not on PATH → rc 3", async () => {
-    const rc = await initWith(["do", "thing"], { haveCmd: () => false, agentBinary: () => "codex", pickRandomAgent: () => "bravo" });
+    const rc = await initWith(["do", "thing"], { ...okDeps, haveCmd: () => false });
     expect(rc).toBe(3);
   });
 
-  it("in-flight (art dir exists) → rc 2", async () => {
+  it("a flag-only _quick (findings.log + issue.txt from a pre-init `quick flag`) never blocks init, and both records carry forward", async () => {
+    expect(runFlag("quick", "flagged-topic", "spawn died before init")).toBe(0);
+    const art = quickArtDir("flagged-topic");
+    const log0 = readFileSync(join(art, "findings.log"), "utf8");
+    const issue0 = readFileSync(join(art, "issue.txt"), "utf8");
+    expect(log0).toMatch(/ flag\n$/);
+    expect(issue0).toMatch(/^run_id=/m);
+    expect(existsSync(join(art, "topic-text.txt"))).toBe(false); // nothing init writes is there yet
+    expect(await initWith(["flagged", "topic", "--provider", "codex"], okDeps)).toBe(0);
+    expect(readFileSync(join(art, "findings.log"), "utf8")).toBe(log0);
+    expect(readFileSync(join(art, "issue.txt"), "utf8")).toBe(issue0);
+    expect(readFileSync(join(art, "topic-text.txt"), "utf8")).toBe("flagged topic");
+  });
+
+  it("only the hub's task-brief.md present → in flight, rc 2 (the second init-written key)", async () => {
+    const art = quickArtDir("briefed-topic");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "task-brief.md"), "# brief\n");
+    expect(await initWith(["briefed", "topic", "--provider", "codex"], okDeps)).toBe(2);
+  });
+
+  it("a bare `quick branch` before init (execute/ only) does not block init", async () => {
+    const exec = quickExecDir("branched-first");
+    mkdirSync(exec, { recursive: true });
+    writeFileSync(join(exec, "target_cwd.txt"), "/proj\n");
+    writeFileSync(join(exec, "branch-base.sha"), "base000\n");
+    expect(await initWith(["branched", "first", "--provider", "codex"], okDeps)).toBe(0);
+    expect(readFileSync(join(exec, "target_cwd.txt"), "utf8")).toBe("/proj\n"); // untouched
+  });
+
+  it("a torn init that wrote only topic.txt does not block (nothing of a run exists yet)", async () => {
+    const art = quickArtDir("torn-topic");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "topic.txt"), "torn-topic\n");
+    expect(await initWith(["torn", "topic", "--provider", "codex"], okDeps)).toBe(0);
+    expect(existsSync(join(art, "topic-text.txt"))).toBe(true);
+  });
+
+  it("in-flight (a predecessor that reached a worker turn) → rc 2", async () => {
     expect(await initWith(["dup", "topic", "--provider", "codex"], okDeps)).toBe(0);
+    writeFileSync(join(quickExecDir("dup-topic"), "turn-1.txt"), "OFFSET=0\n");
     expect(await initWith(["dup", "topic", "--provider", "codex"], okDeps)).toBe(2);
   });
 });
@@ -1271,5 +1311,582 @@ describe("quick branch: brief lint", () => {
     expect(await branchWith("auth", target, okRepo())).toBe(0);
     expect(existsSync(lintFile())).toBe(false);
     expect(flags()).toHaveLength(0);
+  });
+});
+
+import { dispatch } from "../src/core/dispatch.js";
+
+describe("quick init: a consumed args file", () => {
+  let h: { home: string; cleanup: () => void };
+  beforeEach(() => { h = freshHome(); });
+  afterEach(() => { h.cleanup(); });
+
+  it("names the missing path and the re-mint hint on stderr, rc 2 — never 'topic text is empty'", async () => {
+    const gone = join(h.home, "consumed-args");
+    const errs: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    (process.stderr as any).write = (s: string) => { errs.push(String(s)); return true; };
+    let rc = -1;
+    try { rc = await dispatch(quickRun, ["init", "--args-file", gone]); }
+    finally { (process.stderr as any).write = orig; }
+    expect(rc).toBe(2);
+    // toContain, not toBe: outside a git repo, repoRoot()'s child `git` echoes its own `fatal:` line
+    // onto stderr first; the claim here is the message, not that nothing else was said.
+    expect(errs.join("")).toContain(`args file not found: ${gone} (a one-shot args file is consumed by the first init that reads it; re-mint with --mint-args-file)\n`);
+  });
+});
+
+import { randomUUID } from "node:crypto";
+import { paneMetaWrite } from "../src/core/ipc.js";
+import { topicDir, repoHash } from "../src/core/paths.js";
+import { prepareWorkerState } from "../src/commands/spawn.js";
+import { runnerAt } from "../src/core/gitwork.js";
+import { execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
+
+describe("quick init: a predecessor that initialised but never reached a worker turn", () => {
+  let h: { home: string; cleanup: () => void };
+  let outSpy: ReturnType<typeof captureStdout>;
+  beforeEach(() => { h = freshHome(); outSpy = captureStdout(); });
+  afterEach(() => { outSpy.restore(); h.cleanup(); });
+
+  const TOPIC = "stale-topic";
+  const ARGS = ["stale", "topic", "--provider", "codex"];
+  /** tmux answered: the hub's own pane is in the snapshot. */
+  const ANSWERED = () => new Map([["%0", randomUUID()]]);
+  function deps(o: { panes?: Map<string, string>; sha?: string } = {}): InitDeps {
+    return {
+      haveCmd: () => true, agentBinary: () => "codex", pickRandomAgent: () => "charlie",
+      livePanes: async () => o.panes ?? ANSWERED(), branchSha: () => o.sha ?? "base000",
+    };
+  }
+  /** What init + branch leave behind before any turn: the init records plus the branch snapshot. */
+  function seedPredecessor(opts: { branched: boolean } = { branched: true }): string {
+    const art = quickArtDir(TOPIC); const exec = quickExecDir(TOPIC);
+    mkdirSync(exec, { recursive: true });
+    writeFileSync(join(art, "topic.txt"), TOPIC + "\n");
+    writeFileSync(join(art, "topic-text.txt"), "stale topic (first attempt)");
+    writeFileSync(join(art, "agent.txt"), "bravo\n");
+    writeFileSync(join(art, "selected-provider.txt"), "codex\n");
+    if (opts.branched) {
+      writeFileSync(join(exec, "branch-base.sha"), "base000\n");
+      writeFileSync(join(exec, "target_cwd.txt"), "/proj\n");
+      writeFileSync(join(exec, "branch.txt"), "feat/quick-stale-topic\n");
+    }
+    return art;
+  }
+  /** A worker that REPORTED (last_event is an outbox event, not the platform's `spawn` seed). */
+  function seedWorker(status: string, paneId = "%9", nonce: string = randomUUID(), lastEvent = "progress"): string {
+    const wd = workerDir("bravo", "codex", TOPIC);
+    mkdirSync(wd, { recursive: true });
+    if (paneId) paneMetaWrite("bravo", "codex", TOPIC, paneId, nonce);
+    writeFileSync(join(wd, "status.json"), `{"state":"${status}","last_event":"${lastEvent}"}`);
+    return nonce;
+  }
+  const staleDirs = () => readdirSync(topicDir(TOPIC)).filter((n) => n.startsWith("_quick.stale-"));
+  const archivedWorkers = () => { const d = join(h.home, "archive", repoHash(), TOPIC); return existsSync(d) ? readdirSync(d) : []; };
+
+  it("no turn record, feat branch at its base, worker never spawned → archived to _quick.stale-<agent>-<utc-ts>, named on stdout, init proceeds", async () => {
+    const art = seedPredecessor();
+    expect(await initWith(ARGS, deps({ panes: new Map() }))).toBe(0); // no worker dir: the snapshot is not even consulted
+    const [dir, ...more] = staleDirs();
+    expect(more).toEqual([]);
+    expect(dir).toMatch(/^_quick\.stale-bravo-\d{8}T\d{6}Z$/);
+    expect(readFileSync(join(topicDir(TOPIC), dir, "topic-text.txt"), "utf8")).toBe("stale topic (first attempt)");
+    expect(readFileSync(join(topicDir(TOPIC), dir, "execute", "branch-base.sha"), "utf8").trim()).toBe("base000");
+    expect(readFileSync(join(art, "topic-text.txt"), "utf8")).toBe("stale topic");
+    expect(readFileSync(join(art, "agent.txt"), "utf8").trim()).toBe("charlie");
+    expect(existsSync(join(art, "execute", "branch-base.sha"))).toBe(false); // a fresh run, not a resumed one
+    expect(outSpy.text()).toContain(`ARCHIVED_STALE=${join(topicDir(TOPIC), dir)}\n`);
+    expect(outSpy.text()).not.toContain("ARCHIVED_STALE_WORKER=");
+    expect(outSpy.text()).toMatch(/^SLUG=stale-topic$/m);
+  });
+
+  it("tmux answered and the recorded pane is gone, status idle → not live: _quick AND the worker dir are archived, the agent is free again", async () => {
+    seedPredecessor();
+    seedWorker("idle");
+    expect(await initWith(ARGS, deps())).toBe(0);
+    expect(staleDirs()).toHaveLength(1);
+    expect(existsSync(workerDir("bravo", "codex", TOPIC))).toBe(false);
+    const [w, ...more] = archivedWorkers();
+    expect(more).toEqual([]);
+    expect(w).toMatch(/^bravo-codex-\d{8}T\d{6}Z-stale$/);
+    expect(outSpy.text()).toContain(`ARCHIVED_STALE_WORKER=${join(h.home, "archive", repoHash(), TOPIC, w)}\n`);
+  });
+
+  it("the recorded pane id is live under a DIFFERENT nonce (tmux recycled it) → gone → archived", async () => {
+    seedPredecessor();
+    seedWorker("idle", "%9");
+    expect(await initWith(ARGS, deps({ panes: new Map([["%9", randomUUID()]]) }))).toBe(0);
+    expect(staleDirs()).toHaveLength(1);
+  });
+
+  it("a spawn that died leaves status error (bootstrap-failed) with its pane gone → not live → archived", async () => {
+    seedPredecessor();
+    seedWorker("error", "%9", randomUUID(), "bootstrap-failed");
+    expect(await initWith(ARGS, deps())).toBe(0);
+    expect(staleDirs()).toHaveLength(1);
+  });
+
+  it("the branch step never ran (no branch-base.sha) → untouched, archived", async () => {
+    seedPredecessor({ branched: false });
+    expect(await initWith(ARGS, deps({ sha: "" }))).toBe(0);
+    expect(staleDirs()).toHaveLength(1);
+  });
+
+  it("the feat branch ref is gone (probe answers \"\") → untouched, archived", async () => {
+    seedPredecessor();
+    expect(await initWith(ARGS, deps({ sha: "" }))).toBe(0);
+    expect(staleDirs()).toHaveLength(1);
+  });
+
+  it("the branch probe is asked about the predecessor's own target and branch", async () => {
+    seedPredecessor();
+    let seen: string[] = [];
+    expect(await initWith(ARGS, { ...deps(), branchSha: (cwd, branch) => { seen = [cwd, branch]; return "base000"; } })).toBe(0);
+    expect(seen).toEqual(["/proj", "feat/quick-stale-topic"]);
+  });
+
+  it("a pre-init flag AND a stale predecessor: findings.log + issue.txt carry into the new run and stay in the archive", async () => {
+    expect(runFlag("quick", TOPIC, "spawn died")).toBe(0);
+    const art = seedPredecessor();
+    const log0 = readFileSync(join(art, "findings.log"), "utf8");
+    const issue0 = readFileSync(join(art, "issue.txt"), "utf8");
+    expect(await initWith(ARGS, deps())).toBe(0);
+    const [dir] = staleDirs();
+    expect(readFileSync(join(art, "findings.log"), "utf8")).toBe(log0);
+    expect(readFileSync(join(art, "issue.txt"), "utf8")).toBe(issue0);
+    expect(readFileSync(join(topicDir(TOPIC), dir, "findings.log"), "utf8")).toBe(log0);
+    expect(readFileSync(join(topicDir(TOPIC), dir, "issue.txt"), "utf8")).toBe(issue0);
+    expect(readFileSync(join(art, "topic-text.txt"), "utf8")).toBe("stale topic");
+  });
+
+  it("ANY turn record keeps the refusal: rc 2, nothing archived, the predecessor untouched", async () => {
+    const art = seedPredecessor();
+    writeFileSync(join(quickExecDir(TOPIC), "turn-1.txt"), "OFFSET=0\n");
+    expect(await initWith(ARGS, deps())).toBe(2);
+    expect(staleDirs()).toEqual([]);
+    expect(readFileSync(join(art, "topic-text.txt"), "utf8")).toBe("stale topic (first attempt)");
+    expect(outSpy.text()).not.toContain("ARCHIVED_STALE");
+  });
+
+  it("the feat branch moved past its base keeps the refusal", async () => {
+    seedPredecessor();
+    expect(await initWith(ARGS, deps({ sha: "moved01" }))).toBe(2);
+    expect(staleDirs()).toEqual([]);
+  });
+
+  it("a worker whose status is `working` (any case) keeps the refusal, pane or no pane", async () => {
+    for (const state of ["working", "Working"]) {
+      seedPredecessor();
+      seedWorker(state);
+      expect(await initWith(ARGS, deps())).toBe(2);
+      expect(staleDirs()).toEqual([]);
+      expect(existsSync(workerDir("bravo", "codex", TOPIC))).toBe(true);
+      rmSync(workerDir("bravo", "codex", TOPIC), { recursive: true, force: true });
+    }
+  });
+
+  it("a worker that still owns its pane keeps the refusal even with an idle status", async () => {
+    seedPredecessor();
+    const nonce = seedWorker("idle", "%9");
+    expect(await initWith(ARGS, deps({ panes: new Map([["%9", nonce]]) }))).toBe(2);
+    expect(staleDirs()).toEqual([]);
+  });
+
+  it("tmux gave no answer (empty snapshot) while a pane is recorded → cannot prove it gone → refusal", async () => {
+    seedPredecessor();
+    seedWorker("idle", "%9");
+    expect(await initWith(ARGS, deps({ panes: new Map() }))).toBe(2);
+    expect(staleDirs()).toEqual([]);
+    expect(existsSync(workerDir("bravo", "codex", TOPIC))).toBe(true);
+  });
+
+  it("a pre-nonce pane.json whose id is live → cannot say whose → refusal", async () => {
+    seedPredecessor();
+    seedWorker("idle", "%9", "");
+    expect(await initWith(ARGS, deps({ panes: new Map([["%9", randomUUID()]]) }))).toBe(2);
+    expect(staleDirs()).toEqual([]);
+  });
+
+  it("a record that cannot name its agent, or its provider, is not this case: the refusal stands", async () => {
+    for (const f of ["agent.txt", "selected-provider.txt"]) {
+      const art = seedPredecessor();
+      rmSync(join(art, f));
+      expect(await initWith(ARGS, deps())).toBe(2);
+      expect(staleDirs()).toEqual([]);
+      rmSync(art, { recursive: true, force: true });
+    }
+  });
+
+  it("A1: a detached job record for the topic (Stage 0: no worker dir yet) holds the refusal, record intact", async () => {
+    const art = seedPredecessor();
+    const p = jobPath(TOPIC);
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, formatJob({
+      command: "quick", topic: TOPIC, session: "ap-stale-topic", hub: { agent: "november", model: "claude" },
+      provider: "codex", finish: "keep", budget_hours: 6, max_rounds: 5, args_file: "/tmp/args", started: "2026-09-02T00:00:00Z",
+    }));
+    const errs: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    (process.stderr as any).write = (s: string) => { errs.push(String(s)); return true; };
+    try { expect(await initWith(ARGS, deps())).toBe(2); }
+    finally { (process.stderr as any).write = orig; }
+    expect(staleDirs()).toEqual([]);
+    expect(existsSync(p)).toBe(true);
+    expect(readFileSync(join(art, "topic-text.txt"), "utf8")).toBe("stale topic (first attempt)");
+    expect(outSpy.text()).not.toContain("ARCHIVED_STALE");
+    expect(errs.join("")).toContain(`ap job stop ${TOPIC}`);   // `/ap:stop <topic>` refuses while the record exists
+  });
+
+  it("A2: a SIBLING worker dir (a job hub, not the recorded pair) with a live nonce-verified pane holds, busy or idle", async () => {
+    for (const state of ["working", "idle"]) {
+      seedPredecessor();
+      const wd = workerDir("november", "claude", TOPIC);
+      mkdirSync(wd, { recursive: true });
+      const nonce = randomUUID();
+      paneMetaWrite("november", "claude", TOPIC, "%4", nonce);
+      writeFileSync(join(wd, "status.json"), `{"state":"${state}","last_event":"ack"}`);
+      expect(await initWith(ARGS, deps({ panes: new Map([["%4", nonce]]) }))).toBe(2);
+      expect(staleDirs()).toEqual([]);
+      expect(existsSync(join(wd, "pane.json"))).toBe(true);
+      rmSync(wd, { recursive: true, force: true });
+    }
+  });
+
+  it("A3: a worker dir the REAL prepareWorkerState just seeded (idle/spawn, no pane.json: the spawn window) holds, dir intact", async () => {
+    seedPredecessor();
+    prepareWorkerState("bravo", "codex", TOPIC);
+    const wd = workerDir("bravo", "codex", TOPIC);
+    expect(existsSync(join(wd, "pane.json"))).toBe(false);
+    expect(await initWith(ARGS, deps())).toBe(2);
+    expect(staleDirs()).toEqual([]);
+    expect(existsSync(join(wd, "identity.md"))).toBe(true);
+    expect(readFileSync(join(wd, "status.json"), "utf8")).toMatch(/"last_event":"spawn"/);
+    expect(archivedWorkers()).toEqual([]);
+  });
+
+  it("A4: a busy status (blocked / question) holds with no pane record, and holds even when its pane is proven gone", async () => {
+    for (const state of ["blocked", "question"]) {
+      seedPredecessor();
+      seedWorker(state, "");           // no pane.json
+      expect(await initWith(ARGS, deps())).toBe(2);
+      expect(staleDirs()).toEqual([]);
+      rmSync(workerDir("bravo", "codex", TOPIC), { recursive: true, force: true });
+    }
+    seedPredecessor();
+    seedWorker("blocked", "%9");       // pane recorded; the snapshot answers without it
+    expect(await initWith(ARGS, deps())).toBe(2);
+    expect(staleDirs()).toEqual([]);
+    expect(existsSync(workerDir("bravo", "codex", TOPIC))).toBe(true);
+  });
+
+  it("A: a reported worker with no pane record (never split) holds too — absence of a record is not death", async () => {
+    seedPredecessor();
+    seedWorker("idle", "");
+    expect(await initWith(ARGS, deps())).toBe(2);
+    expect(staleDirs()).toEqual([]);
+  });
+
+  it("C: the pool refusal (rc 1) precedes the archive — a non-zero init changes nothing", async () => {
+    const art = seedPredecessor();
+    expect(await initWith(ARGS, { ...deps(), pickRandomAgent: () => null })).toBe(1);
+    expect(readFileSync(join(art, "topic-text.txt"), "utf8")).toBe("stale topic (first attempt)");
+    expect(staleDirs()).toEqual([]);
+    expect(outSpy.text()).not.toContain("ARCHIVED_STALE");
+  });
+
+  it("A: a dead worker is archived BY ITS DIR NAME, whatever its pane.json claims (even a traversal model): the topic dir stays put", async () => {
+    seedPredecessor();
+    const wd = join(topicDir(TOPIC), "weirdname");
+    mkdirSync(wd, { recursive: true });
+    writeFileSync(join(wd, "pane.json"), JSON.stringify({ pane_id: "%9", pane_nonce: randomUUID(), agent: "bravo", model: "../..", spawned_at: "2026-09-02T00:00:00Z" }) + "\n");
+    writeFileSync(join(wd, "status.json"), '{"state":"idle","last_event":"done"}');
+    expect(await initWith(ARGS, deps())).toBe(0);
+    expect(existsSync(wd)).toBe(false);
+    expect(archivedWorkers()).toEqual([expect.stringMatching(/^weirdname-\d{8}T\d{6}Z-stale$/)]);
+    expect(existsSync(join(quickArtDir(TOPIC), "topic-text.txt"))).toBe(true);   // the topic dir and the new run are where they were
+    expect(staleDirs()).toHaveLength(1);
+  });
+
+  it("A: EVERY proven-dead worker dir is archived, not just the recorded pair", async () => {
+    seedPredecessor();
+    seedWorker("idle", "%9", randomUUID(), "done");
+    const wd2 = workerDir("november", "claude", TOPIC);
+    mkdirSync(wd2, { recursive: true });
+    paneMetaWrite("november", "claude", TOPIC, "%8", randomUUID());
+    writeFileSync(join(wd2, "status.json"), '{"state":"done","last_event":"done"}');
+    expect(await initWith(ARGS, deps())).toBe(0);
+    expect(archivedWorkers().sort()).toEqual([expect.stringMatching(/^bravo-codex-\d{8}T\d{6}Z-stale$/), expect.stringMatching(/^november-claude-\d{8}T\d{6}Z-stale$/)]);
+    expect(outSpy.text().match(/ARCHIVED_STALE_WORKER=/g)).toHaveLength(2);
+    expect(existsSync(wd2)).toBe(false);
+  });
+
+  it("A: the platform's spawn seed (last_event spawn) holds even when its pane is proven gone — a spawn killed mid-way is not a death verdict", async () => {
+    seedPredecessor();
+    seedWorker("idle", "%9", randomUUID(), "spawn");
+    expect(await initWith(ARGS, deps())).toBe(2);
+    expect(staleDirs()).toEqual([]);
+  });
+
+  it("A: a zero-length status.json (the O_TRUNC crash remnant) reads as busy → hold", async () => {
+    seedPredecessor();
+    seedWorker("idle");
+    writeFileSync(join(workerDir("bravo", "codex", TOPIC), "status.json"), "");
+    expect(await initWith(ARGS, deps())).toBe(2);
+    expect(staleDirs()).toEqual([]);
+  });
+
+  it("A: an empty worker dir (prepareWorkerState's first instant: no status, no pane) holds", async () => {
+    seedPredecessor();
+    mkdirSync(workerDir("bravo", "codex", TOPIC), { recursive: true });
+    expect(await initWith(ARGS, deps())).toBe(2);
+    expect(staleDirs()).toEqual([]);
+  });
+
+  it.skipIf(process.getuid?.() === 0)("2: a worker-dir archive whose RENAME throws leaves the predecessor intact — `_quick` still there, no `_quick.stale-*`, rc 1", async () => {
+    seedPredecessor();
+    seedWorker("idle");
+    // The per-topic archive dir exists but is read-only: every parent mkdir succeeds and the
+    // renameSync itself is what throws (EACCES) — a pre-flight on the archive root cannot see it.
+    const arch = join(h.home, "archive", repoHash(), TOPIC);
+    mkdirSync(arch, { recursive: true });
+    chmodSync(arch, 0o555);
+    expect(await initWith(ARGS, deps())).toBe(1);
+    expect(readFileSync(join(quickArtDir(TOPIC), "topic-text.txt"), "utf8")).toBe("stale topic (first attempt)");
+    expect(staleDirs()).toEqual([]);
+    expect(existsSync(workerDir("bravo", "codex", TOPIC))).toBe(true);
+    expect(outSpy.text()).not.toContain("ARCHIVED_STALE");
+  });
+
+  it("agent.txt naming a traversal segment is not an agent: the refusal stands, nothing renamed", async () => {
+    const art = seedPredecessor();
+    writeFileSync(join(art, "agent.txt"), "../../x\n");
+    expect(await initWith(ARGS, deps())).toBe(2);
+    expect(staleDirs()).toEqual([]);
+    expect(existsSync(join(art, "topic-text.txt"))).toBe(true);
+  });
+});
+
+describe("quick init: a stale archive keeps the predecessor's git side effects recoverable (real git)", () => {
+  let h: { home: string; cleanup: () => void };
+  let outSpy: ReturnType<typeof captureStdout>;
+  const roots: string[] = [];
+  beforeEach(() => { h = freshHome(); outSpy = captureStdout(); });
+  afterEach(() => { outSpy.restore(); h.cleanup(); while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true }); });
+
+  const TOPIC = "retry-topic";
+  const BRANCH = "feat/quick-retry-topic";
+  function git(cwd: string, ...args: string[]): string {
+    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  }
+  function repo(): string {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ap-retry-")));
+    roots.push(root);
+    git(root, "init", "-q");
+    git(root, "symbolic-ref", "HEAD", "refs/heads/main");
+    git(root, "config", "user.email", "t@example.com");
+    git(root, "config", "user.name", "ap tests");
+    git(root, "config", "commit.gpgsign", "false");
+    writeFileSync(join(root, "README.md"), "hello\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "init");
+    return root;
+  }
+  const realDeps = (): InitDeps => ({
+    haveCmd: () => true, agentBinary: () => "codex", pickRandomAgent: () => "bravo",
+    livePanes: async () => new Map([["%0", randomUUID()]]),
+    branchSha: (cwd, b) => { try { return git(cwd, "rev-parse", "--verify", "--quiet", `refs/heads/${b}`); } catch { return ""; } },
+  });
+  const head = (root: string) => git(root, "symbolic-ref", "--short", "HEAD");
+  function commitWork(root: string): void { writeFileSync(join(root, "work.txt"), "done\n"); git(root, "add", "-A"); git(root, "commit", "-q", "-m", "work"); }
+
+  it("B1: init → branch → spawn failed (no worker) → init → branch → commit → finish: `main` stays the start branch, finish ends on it, never `no-branch`", async () => {
+    const root = repo();
+    const args = ["retry", "topic", "--target", root];
+    expect(await initWith(args, realDeps())).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root))).toBe(0);
+    expect(head(root)).toBe(BRANCH);                                   // the predecessor's checkout stands
+    expect(await initWith(args, realDeps())).toBe(0);                  // spawn failed twice, hub aborted without stop: retry
+    expect(outSpy.text()).toContain("ARCHIVED_STALE=");
+    const exec = quickExecDir(TOPIC);
+    expect(readFileSync(join(exec, "start-branch.txt"), "utf8").trim()).toBe("main");   // carried
+    expect(await branchWith(TOPIC, root, runnerAt(root))).toBe(0);
+    expect(readFileSync(join(exec, "start-branch.txt"), "utf8").trim()).toBe("main");   // honoured, not re-snapshotted from HEAD
+    expect(readFileSync(join(exec, "branch.txt"), "utf8").trim()).toBe(BRANCH);
+    expect(head(root)).toBe(BRANCH);
+    commitWork(root);
+    expect(await finishWith(TOPIC, runnerAt(root), false)).toBe(0);
+    const result = readFileSync(join(exec, "finish-result.txt"), "utf8");
+    expect(result).not.toContain("no-branch");
+    expect(result).toMatch(/^keep\t/);
+    expect(head(root)).toBe("main");
+  });
+
+  it("B2: with --stash-wip, the carried marker lets the retry's finish pop the park: WIP file back, stash entry gone", async () => {
+    const root = repo();
+    const args = ["retry", "topic", "--target", root, "--stash-wip"];
+    writeFileSync(join(root, "wip.txt"), "unfinished\n");
+    expect(await initWith(args, realDeps())).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    expect(existsSync(join(root, "wip.txt"))).toBe(false);
+    expect(git(root, "stash", "list")).toContain("ap-quick-retry-topic-wip");
+    expect(await initWith(args, realDeps())).toBe(0);
+    const exec = quickExecDir(TOPIC);
+    expect(existsSync(join(exec, "stash-wip.txt"))).toBe(true);        // carried
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0); // clean tree: parks nothing, keeps the marker
+    expect(existsSync(join(exec, "stash-wip.txt"))).toBe(true);
+    commitWork(root);
+    expect(await finishWith(TOPIC, runnerAt(root), false)).toBe(0);
+    expect(git(root, "stash", "list")).not.toContain("ap-quick-retry-topic-wip");
+    expect(readFileSync(join(root, "wip.txt"), "utf8")).toBe("unfinished\n");
+    expect(head(root)).toBe("main");
+  });
+
+  it("B: HEAD on a foreign branch at retry → the start branch is re-snapshotted from HEAD; the carried value is NOT preferred", async () => {
+    const root = repo();
+    const args = ["retry", "topic", "--target", root];
+    expect(await initWith(args, realDeps())).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root))).toBe(0);
+    git(root, "checkout", "-q", "-b", "release");                     // the operator moved on before the retry
+    expect(await initWith(args, realDeps())).toBe(0);
+    const exec = quickExecDir(TOPIC);
+    expect(readFileSync(join(exec, "start-branch.txt"), "utf8").trim()).toBe("main");      // carried ...
+    expect(await branchWith(TOPIC, root, runnerAt(root))).toBe(0);
+    expect(readFileSync(join(exec, "start-branch.txt"), "utf8").trim()).toBe("release");   // ... but HEAD was not on the run's branch
+    commitWork(root);
+    expect(await finishWith(TOPIC, runnerAt(root), false)).toBe(0);
+    expect(head(root)).toBe("release");
+  });
+
+  it("B: a dirty tree at retry while the carried park is still stashed → quick branch refuses rc 1: nothing stashed or committed, HEAD and the marker untouched; popping it by hand unblocks the retry", async () => {
+    const root = repo();
+    const args = ["retry", "topic", "--target", root, "--stash-wip"];
+    writeFileSync(join(root, "wip1.txt"), "first\n");
+    expect(await initWith(args, realDeps())).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    const exec = quickExecDir(TOPIC);
+    const marker = readFileSync(join(exec, "stash-wip.txt"), "utf8");
+    const tip = git(root, "rev-parse", "HEAD");
+    writeFileSync(join(root, "wip2.txt"), "later\n");                  // the operator kept working
+    expect(await initWith(args, realDeps())).toBe(0);
+    const errs: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    (process.stderr as any).write = (s: string) => { errs.push(String(s)); return true; };
+    try { expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(1); }
+    finally { (process.stderr as any).write = orig; }
+    expect(errs.join("")).toContain("nothing stashed, nothing committed");
+    expect(errs.join("")).toContain("git -C " + root + " stash pop stash@{0}");                    // the real ref, not a placeholder
+    expect(readFileSync(join(exec, "stash-wip.txt"), "utf8")).toBe(marker);                          // untouched
+    expect(git(root, "stash", "list").split("\n").filter((l) => l.includes("ap-quick-retry-topic-wip"))).toHaveLength(1);
+    expect(git(root, "rev-parse", "HEAD")).toBe(tip);                                                // no snapshot commit anywhere
+    expect(git(root, "status", "--porcelain")).toContain("wip2.txt");                                // still dirty, still the operator's
+    expect(existsSync(join(exec, "branch.txt"))).toBe(false);                                       // the refused step recorded nothing
+    // The remedy: pop it by hand and re-run — the marker is now stale and the tree parks as a first attempt would.
+    git(root, "stash", "pop");
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    expect(readFileSync(join(exec, "stash-wip.txt"), "utf8")).not.toBe(marker);
+    expect(git(root, "stash", "list").split("\n").filter((l) => l.includes("ap-quick-retry-topic-wip"))).toHaveLength(1);
+    commitWork(root);
+    expect(await finishWith(TOPIC, runnerAt(root), false)).toBe(0);
+    expect(readFileSync(join(root, "wip1.txt"), "utf8")).toBe("first\n");
+    expect(readFileSync(join(root, "wip2.txt"), "utf8")).toBe("later\n");
+    expect(git(root, "stash", "list")).not.toContain("ap-quick-retry-topic-wip");
+    expect(head(root)).toBe("main");
+  });
+
+  it("B: the HEAD-on-main dirty retry commits NOTHING on any branch — main stays at its commit, the park stays in the stash, rc 1", async () => {
+    const root = repo();
+    const args = ["retry", "topic", "--target", root, "--stash-wip"];
+    writeFileSync(join(root, "wip1.txt"), "first\n");
+    expect(await initWith(args, realDeps())).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    git(root, "checkout", "-q", "main");                                // the operator went back to main ...
+    const mainTip = git(root, "rev-parse", "main");
+    writeFileSync(join(root, "wip2.txt"), "later\n");                  // ... and dirtied the tree again
+    expect(await initWith(args, realDeps())).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(1);
+    expect(git(root, "rev-parse", "main")).toBe(mainTip);
+    expect(git(root, "rev-parse", BRANCH)).toBe(mainTip);               // the feat branch did not move either
+    expect(git(root, "log", "--all", "--format=%s")).not.toContain("WIP before quick");
+    expect(git(root, "stash", "list").split("\n").filter((l) => l.includes("ap-quick-retry-topic-wip"))).toHaveLength(1);
+    expect(existsSync(join(root, "wip2.txt"))).toBe(true);
+    expect(head(root)).toBe("main");
+  });
+
+  it("B: a park popped out of band between attempts → the carried marker is stale: dropped, the tree parks normally, finish restores it (an unrelated stash entry is neither mistaken for it nor touched)", async () => {
+    const root = repo();
+    const args = ["retry", "topic", "--target", root, "--stash-wip"];
+    writeFileSync(join(root, "wip1.txt"), "first\n");
+    expect(await initWith(args, realDeps())).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    git(root, "stash", "pop");                                          // the operator took the WIP back by hand ...
+    writeFileSync(join(root, "other.txt"), "theirs\n");
+    git(root, "stash", "push", "-u", "-m", "unrelated", "--", "other.txt");   // ... and parked something else of their own
+    expect(git(root, "stash", "list")).toContain("unrelated");
+    expect(git(root, "stash", "list")).not.toContain("ap-quick-retry-topic-wip");
+    expect(await initWith(args, realDeps())).toBe(0);
+    const exec = quickExecDir(TOPIC);
+    expect(existsSync(join(exec, "stash-wip.txt"))).toBe(true);        // carried, but naming an entry that is gone
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    expect(git(root, "stash", "list").split("\n").filter((l) => l.includes("ap-quick-retry-topic-wip"))).toHaveLength(1);   // parked again
+    expect(existsSync(join(root, "wip1.txt"))).toBe(false);
+    commitWork(root);
+    expect(await finishWith(TOPIC, runnerAt(root), false)).toBe(0);
+    expect(readFileSync(join(root, "wip1.txt"), "utf8")).toBe("first\n");
+    expect(git(root, "stash", "list")).not.toContain("ap-quick-retry-topic-wip");
+    expect(git(root, "stash", "list")).toContain("unrelated");         // theirs is still theirs
+    expect(head(root)).toBe("main");
+  });
+
+  it("B: an UNREADABLE stash list keeps the carried marker: the dirty retry is refused, nothing dropped, nothing re-parked", async () => {
+    const root = repo();
+    const args = ["retry", "topic", "--target", root, "--stash-wip"];
+    writeFileSync(join(root, "wip1.txt"), "first\n");
+    expect(await initWith(args, realDeps())).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    const exec = quickExecDir(TOPIC);
+    const marker = readFileSync(join(exec, "stash-wip.txt"), "utf8");
+    writeFileSync(join(root, "wip2.txt"), "later\n");
+    expect(await initWith(args, realDeps())).toBe(0);
+    const real = runnerAt(root);
+    const blind: Runner = { run: (cmd, a) => (cmd === "git" && a[0] === "stash" && a[1] === "list") ? { code: 128, stdout: "" } : real.run(cmd, a) };
+    expect(await branchWith(TOPIC, root, blind, true)).toBe(1);
+    expect(readFileSync(join(exec, "stash-wip.txt"), "utf8")).toBe(marker);
+    expect(git(root, "stash", "list").split("\n").filter((l) => l.includes("ap-quick-retry-topic-wip"))).toHaveLength(1);
+    expect(git(root, "status", "--porcelain")).toContain("wip2.txt");
+  });
+
+  it("B: a stash list that fails ONLY on the formatted read (the one stashEntry parses) still keeps the marker — the guard probes that read, not a bare `git stash list`", async () => {
+    const root = repo();
+    const args = ["retry", "topic", "--target", root, "--stash-wip"];
+    writeFileSync(join(root, "wip1.txt"), "first\n");
+    expect(await initWith(args, realDeps())).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    const exec = quickExecDir(TOPIC);
+    const marker = readFileSync(join(exec, "stash-wip.txt"), "utf8");
+    writeFileSync(join(root, "wip2.txt"), "later\n");
+    expect(await initWith(args, realDeps())).toBe(0);
+    const real = runnerAt(root);
+    const formattedBlind: Runner = { run: (cmd, a) => (cmd === "git" && a[0] === "stash" && a[1] === "list" && a.length > 2) ? { code: 128, stdout: "" } : real.run(cmd, a) };
+    expect(await branchWith(TOPIC, root, formattedBlind, true)).toBe(1);
+    expect(readFileSync(join(exec, "stash-wip.txt"), "utf8")).toBe(marker);   // not dropped: the entry is still there
+    expect(git(root, "stash", "list").split("\n").filter((l) => l.includes("ap-quick-retry-topic-wip"))).toHaveLength(1);   // not re-parked on top
+    expect(git(root, "status", "--porcelain")).toContain("wip2.txt");
+  });
+
+  it("B: a park dropped out of band with a clean tree → the stale marker is dropped too, nothing to park", async () => {
+    const root = repo();
+    const args = ["retry", "topic", "--target", root, "--stash-wip"];
+    writeFileSync(join(root, "wip1.txt"), "first\n");
+    expect(await initWith(args, realDeps())).toBe(0);
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    git(root, "stash", "drop");                                         // the operator threw the WIP away
+    expect(await initWith(args, realDeps())).toBe(0);
+    const exec = quickExecDir(TOPIC);
+    expect(existsSync(join(exec, "stash-wip.txt"))).toBe(true);
+    expect(await branchWith(TOPIC, root, runnerAt(root), true)).toBe(0);
+    expect(existsSync(join(exec, "stash-wip.txt"))).toBe(false);
+    expect(git(root, "stash", "list")).toBe("");
   });
 });

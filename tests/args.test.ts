@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { tokenizeArgsLine, applyArgsFile, kvParse, ArgsFileError, KvError } from "../src/args.js";
+import { tokenizeArgsLine, applyArgsFile, expandArgsFile, kvParse, ArgsFileError, KvError } from "../src/args.js";
 import { dispatch } from "../src/core/dispatch.js";
 
 describe("args", () => {
@@ -23,8 +24,14 @@ describe("args", () => {
   it("applyArgsFile: no path throws code 2", () => {
     expect(() => applyArgsFile(["--args-file"])).toThrow(ArgsFileError);
   });
-  it("applyArgsFile: missing file → silent fallback", () => {
-    expect(applyArgsFile(["--args-file", "/nope/x", "extra"])).toEqual(["extra"]);
+  it("applyArgsFile: missing file fails closed — rc 2 and the re-mint hint, no-opts and verbatim alike", () => {
+    const msg = "args file not found: /nope/x (a one-shot args file is consumed by the first init that reads it; re-mint with --mint-args-file)";
+    expect(() => applyArgsFile(["--args-file", "/nope/x", "extra"])).toThrow(ArgsFileError);
+    expect(() => applyArgsFile(["--args-file", "/nope/x", "extra"])).toThrow(msg);
+    expect(() => applyArgsFile(["--args-file", "/nope/x"], { valueFlags: new Set<string>() })).toThrow(msg);
+    let code = -1;
+    try { applyArgsFile(["--args-file", "/nope/x"]); } catch (e) { code = (e as ArgsFileError).code; }
+    expect(code).toBe(2);
   });
   it("applyArgsFile preserves content after the first newline (multi-line $ARGUMENTS)", () => {
     const f = join(mkdtempSync(join(tmpdir(), "af-")), "args");
@@ -136,5 +143,88 @@ describe("applyArgsFile position refusal", () => {
     finally { (process.stderr as any).write = orig; }
     expect(rc).toBe(2);
     expect(errs.join("")).toBe("--args-file must be the first argument\n"); // message, not a stack
+  });
+});
+
+describe("expandArgsFile (the verb-level no-opts loader)", () => {
+  function af(content: string): string {
+    const f = join(mkdtempSync(join(tmpdir(), "afh-")), "args");
+    writeFileSync(f, content);
+    return f;
+  }
+
+  it("a non-first --args-file pair is expanded IN PLACE: tokens on both sides keep their order, file consumed", () => {
+    const f = af("docs/design.md --topic add-oauth");
+    expect(expandArgsFile(["--no-worktree", "--args-file", f, "--target", "/wt"]))
+      .toEqual(["--no-worktree", "docs/design.md", "--topic", "add-oauth", "--target", "/wt"]);
+    expect(existsSync(f)).toBe(false);
+  });
+
+  it("any position: index 1, index 3, and last", () => {
+    expect(expandArgsFile(["a", "--args-file", af("X Y")])).toEqual(["a", "X", "Y"]);
+    expect(expandArgsFile(["a", "b", "c", "--args-file", af("X")])).toEqual(["a", "b", "c", "X"]);
+    expect(expandArgsFile(["a", "b", "c", "--args-file", af("X"), "d"])).toEqual(["a", "b", "c", "X", "d"]);
+  });
+
+  it("a positional-first verb keeps its positional first: `<topic> --args-file <reason>` never swaps them", () => {
+    expect(expandArgsFile(["realtopic", "--args-file", af("budget blown")])).toEqual(["realtopic", "budget", "blown"]);
+  });
+
+  it("argv[0] pair is exactly applyArgsFile's shape (tokens, then the tail)", () => {
+    const f = af("docs/design.md");
+    expect(expandArgsFile(["--args-file", f, "--target", "/wt"])).toEqual(["docs/design.md", "--target", "/wt"]);
+    expect(existsSync(f)).toBe(false);
+  });
+
+  it("no --args-file at all is a passthrough", () => {
+    expect(expandArgsFile(["--target", "/wt", "docs/design.md"])).toEqual(["--target", "/wt", "docs/design.md"]);
+  });
+
+  it("a trailing --args-file with no path is rc 2, never a neighbour token read as the path", () => {
+    expect(() => expandArgsFile(["--target", "/wt", "--args-file"])).toThrow(ArgsFileError);
+    expect(() => expandArgsFile(["--target", "/wt", "--args-file"])).toThrow("--args-file requires a path");
+  });
+
+  it("a second --args-file pair is refused BEFORE either file is consumed", () => {
+    const a = af("AAA"), b = af("BBB");
+    expect(() => expandArgsFile(["--target", "/wt", "--args-file", a, "--args-file", b])).toThrow("--args-file may be given once");
+    expect(existsSync(a)).toBe(true);
+    expect(existsSync(b)).toBe(true);
+  });
+
+  it("the top-level dispatch shape [verb, ..., --args-file, p] passes through applyArgsFile untouched, file kept (ap.ts never expands)", () => {
+    for (const argv of [["quick", "init", "--args-file", af("topic body")], ["job", "start", "--command", "quick", "--args-file", af("topic body")]]) {
+      expect(applyArgsFile(argv)).toEqual(argv);
+      expect(existsSync(argv[argv.length - 1])).toBe(true);
+    }
+    // The site itself: src/ap.ts calls the plain loader and never the expanding one.
+    const ap = readFileSync(join(process.cwd(), "src", "ap.ts"), "utf8");
+    expect(ap).toMatch(/applyArgsFile\(rest\)/);
+    expect(ap).not.toMatch(/expandArgsFile/);
+  });
+});
+
+describe("src/ap.ts top-level dispatch, built and executed", () => {
+  // A source-text pin cannot see an inline expansion, so the real site is exercised: build src/ap.ts
+  // with package.json's own esbuild flags (as dist-fresh does) and run the bundle.
+  it.skipIf(process.platform === "win32")("a non-first pair reaches the verb UNCONSUMED; an argv[0] pair is consumed (today's list/stop/check contract)", () => {
+    const ROOT = process.cwd();
+    const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+    const out = join(mkdtempSync(join(tmpdir(), "aptop-")), "ap.cjs");
+    const args = String(pkg.scripts.build).split(/\s+/).slice(1).map((a) => (a.startsWith("--outfile=") ? `--outfile=${out}` : a));
+    execFileSync(join(ROOT, "node_modules", ".bin", "esbuild"), args, { cwd: ROOT });
+    const home = mkdtempSync(join(tmpdir(), "aptop-home-"));
+    const run = (argv: string[]) => spawnSync(process.execPath, [out, ...argv], { cwd: home, env: { ...process.env, AP_HOME: home }, encoding: "utf8" });
+
+    const kept = join(home, "kept"); writeFileSync(kept, "topic body\n");
+    const r1 = run(["quick", "frob", "--args-file", kept]);   // rest = [frob, --args-file, p]: not rest[0]
+    expect(r1.status).toBe(2);
+    expect(r1.stderr).toMatch(/usage: quick/);                // the verb's usage, never an args-file error
+    expect(existsSync(kept)).toBe(true);
+
+    const eaten = join(home, "eaten"); writeFileSync(eaten, "");
+    const r2 = run(["list", "--args-file", eaten]);           // rest[0] IS --args-file: consumed here
+    expect(r2.status).toBe(0);
+    expect(existsSync(eaten)).toBe(false);
   });
 });

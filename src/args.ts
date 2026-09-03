@@ -19,8 +19,16 @@ export function tokenizeArgsLine(line: string): string[] {
   return out;
 }
 
+/** The fail-closed answer for a path that is not there — thrown by BOTH loaders. The file is
+ *  one-shot (consumed by the first init that reads it), so a retry after a failed init used to load
+ *  `[]` and die one verb later on "topic text is empty" / "exactly one design-doc path is required":
+ *  the symptom, never the cause. `ArgsFileError` carries rc 2. */
+function missingArgsFile(path: string): ArgsFileError {
+  return new ArgsFileError(`args file not found: ${path} (a one-shot args file is consumed by the first init that reads it; re-mint with --mint-args-file)`);
+}
+
 function loadArgsFile(path: string): string[] {
-  if (!existsSync(path)) return [];
+  if (!existsSync(path)) throw missingArgsFile(path);
   // The conductor writes $ARGUMENTS verbatim, which may span multiple lines (a
   // multi-paragraph topic). Read the WHOLE file; collapse newlines to spaces so line
   // breaks act as token separators without gluing words across the seam. Reading only
@@ -36,7 +44,7 @@ export interface ArgsFileOpts { valueFlags: Set<string>; }
  *  file as ONE verbatim body token — internal whitespace, newlines, apostrophes, and quotes intact.
  *  Mirrors the legacy plugin's verbatim-cat delivery; does NOT shell-tokenize the body. */
 function loadArgsFileVerbatim(path: string, valueFlags: Set<string>): string[] {
-  if (!existsSync(path)) return [];
+  if (!existsSync(path)) throw missingArgsFile(path);
   const raw = readFileSync(path, "utf8");
   const isWs = (c: string): boolean => c === " " || c === "\t" || c === "\n" || c === "\r";
   const flags: string[] = [];
@@ -77,6 +85,23 @@ export function applyArgsFile(argv: string[], opts?: ArgsFileOpts): string[] {
   const tokens = opts ? loadArgsFileVerbatim(path, opts.valueFlags) : loadArgsFile(path);
   try { rmSync(path, { force: true }); } catch { /* ignore */ }   // consume the one-shot args file
   return [...tokens, ...argv.slice(2)];
+}
+
+/** The no-opts loader for a verb whose OWN flag parser refuses unknown flags (`implement init`,
+ *  `implement branch`): an `--args-file <path>` pair is accepted at ANY position and its tokens are
+ *  spliced IN PLACE of the pair, so the command reads exactly as if the file's content had been typed
+ *  there — a positional-first parser still sees its positionals in the order the caller wrote them.
+ *  `implement init --target <w> --args-file <p>` was rc 2 "unknown flag '--args-file'" because
+ *  init's own parser saw the pair. A second pair is refused BEFORE either file is consumed (the
+ *  verb's unknown-flag branch would refuse it anyway, but only after the first file was deleted).
+ *  NOT for the top-level dispatch site (src/ap.ts): that one must pass a non-first pair through
+ *  untouched, because `job start --args-file <p>` parses the path itself and the prose-body inits
+ *  read theirs verbatim at their own verb site. */
+export function expandArgsFile(argv: string[]): string[] {
+  const i = argv.indexOf("--args-file");
+  if (i < 0) return [...argv];
+  if (argv.indexOf("--args-file", i + 1) >= 0) throw new ArgsFileError("--args-file may be given once");
+  return [...argv.slice(0, i), ...applyArgsFile(argv.slice(i))];
 }
 
 export interface KvParseResult { value: string; shift: 1 | 2; }

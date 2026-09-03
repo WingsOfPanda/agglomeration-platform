@@ -41,7 +41,13 @@ export const STATUS_UNREADABLE = "unreadable";
  *  tightens `workerSendGate` (implement's existing gate) the same way — same bug, same fix; the
  *  terminal-state set above loosens both the same way, for the same reason. */
 export function workerBusyState(i: string, m: string, t: string): string | null {
-  const sp = statusPath(i, m, t);
+  return workerBusyStateForDir(workerDir(i, m, t));
+}
+/** The same predicate over a worker DIR the caller already holds (a topic scan): `<agent>-<model>`
+ *  is the dir name, and re-splitting a hyphenated model to rebuild the path is how two readers of
+ *  one file start disagreeing. */
+export function workerBusyStateForDir(dir: string): string | null {
+  const sp = join(dir, "status.json");
   if (!existsSync(sp)) return null;
   let text: string;
   try { text = readFileSync(sp, "utf8"); } catch { return STATUS_UNREADABLE; }
