@@ -21,7 +21,9 @@ import { runForensics, runFlag, recordHubFlag, runReflect } from "../core/forens
 import { haveCmd } from "../core/deps.js";
 import { implementState, composeRound1Prompt, composeFixPrompt } from "../core/implementTurn.js";
 import { extractQuestionPayload, parseQuestionPayload } from "../core/questionCodec.js";
-import { outboxOffset, outboxPath, statusPath, workerSendGate, resolveModel, type Clock } from "../core/ipc.js";
+import { outboxOffset, outboxPath, paneMetaRead, realClock, statusPath, workerSendGate, resolveModel, type Clock } from "../core/ipc.js";
+import { holdPrematureDone, liveRearm, paneIdleProbe, prematureDoneS, type RearmFn } from "../core/implementHold.js";
+import { capturePane } from "../core/tmux.js";
 import { kvField, readField, readIfExists, readIfExistsOrNull } from "../core/fsread.js";
 import { branchNameFor, readBranchRecord } from "../core/branchRecord.js";
 import { agentBinary, agentTimeoutMultiplier, listAgents } from "../core/contracts.js";
@@ -263,7 +265,13 @@ export async function turnSendWith(topic: string, round: number, d: ImplementSen
 // ---- turn-wait (deploy-turn-wait.sh) — rc 0 ALWAYS; TS= carries outcome ----
 /** `now` is NOT a clock: it stamps the question payload's ASKED_AT in epoch SECONDS. The wait's
  *  own time source is `clock`. */
-export interface ImplementWaitDeps { wait?: WaitFn; clock?: Clock; multiplier(model: string): string; now(): number; }
+export interface ImplementWaitDeps {
+  wait?: WaitFn; clock?: Clock; multiplier(model: string): string; now(): number;
+  /** The premature-`done` hold's re-armed wait (J). Left unset by the live verb — the default IS
+   *  `liveRearm`, i.e. `awaitTurn` again on the pane-probed wait (src/core/implementHold.ts).
+   *  Tests script it the way they script `wait`. */
+  rearm?: RearmFn;
+}
 const liveWaitDeps: ImplementWaitDeps = { multiplier: agentTimeoutMultiplier, now: () => Math.floor(Date.now() / 1000) };
 async function turnWaitRun(rest: string[]): Promise<number> {
   const [topic, roundStr] = rest;
@@ -278,6 +286,8 @@ export async function turnWaitWith(topic: string, round: number, d: ImplementWai
   const stateFile = join(art, `turn-${WORKER}-${round}.txt`);
   if (!existsSync(stateFile)) { log.error(`implement turn-wait: ${stateFile} missing — run implement turn-send first`); return 1; }
   const timeout = scaledTimeout(IMPLEMENT_TURN_TIMEOUT(), d.multiplier(model));
+  const clock = d.clock ?? realClock;
+  const startMs = clock.now();
   const r = await awaitTurn({
     agent: WORKER, model, topic, stateFile, timeoutS: timeout,
     label: "[turn-wait]", policy: { confirm: true },
@@ -287,8 +297,23 @@ export async function turnWaitWith(topic: string, round: number, d: ImplementWai
     onFlag: (note) => { recordHubFlag({ command: "implement", topic, note }); },
   });
   if ("missingOffset" in r) { log.error(`implement turn-wait: OFFSET not set in ${stateFile}`); return 1; }
-  const ev = r.event;
   const verifyPath = join(art, `verify-report-${round}.md`);
+  // J: a `done` whose verify report is absent is HELD, not failed — the worker that emits `done`
+  // per task is still working. The hold needs a pane to watch: an unverifiable pane record
+  // (paneMetaRead null, or no ownership nonce) is not evidence to act on, so it takes today's
+  // `failed` at once, as does `AP_IMPLEMENT_PREMATURE_DONE_S=0`.
+  const idleS = prematureDoneS();
+  const pane = paneMetaRead(WORKER, model, topic);
+  let ev = r.event;
+  if (idleS > 0 && pane?.nonce) {
+    const probe = paneIdleProbe({ capture: () => capturePane(pane.paneId), now: clock.now, idleS });
+    const ctx = { agent: WORKER, model, topic, stateFile, round };
+    const onFlag = (note: string): void => { recordHubFlag({ command: "implement", topic, note }); };
+    ev = await holdPrematureDone(ev, ctx, {
+      evidencePath: verifyPath, deadlineMs: startMs + timeout * 1000, now: clock.now,
+      rearm: d.rearm ?? liveRearm(ctx, { pane, probe, clock, onFlag }), onFlag,
+    });
+  }
   const verifyText = readIfExistsOrNull(verifyPath);
   let ts = implementState(ev, verifyText);
   let question: { file: string; body: string; extraLines?: string } | undefined;

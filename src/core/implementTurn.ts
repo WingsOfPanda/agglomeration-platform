@@ -42,6 +42,15 @@ const REPORT_CONTRACT = [
   "  value — never the implementation's own output read back at itself.",
 ];
 
+/** The single-`done` contract both turn composers carry (2026-09-04-parallel-slices-design.md, J).
+ *  A worker that emits `done` after every task ended its turn at the FIRST one; `progress` is
+ *  terminal for no wait, so the habit is harmless the moment the worker follows this line. The
+ *  premature-`done` hold covers the worker that does not. */
+const SINGLE_DONE =
+  "Emit `done` exactly ONCE, after the verify report is written. Per-task\n" +
+  'completions are `progress` events ({"event":"progress","note":"task N committed: ..."}),\n' +
+  "never `done`.";
+
 const BRANCH_DISCIPLINE =
   "BRANCH DISCIPLINE (hard rule):\n" +
   "- You are operating on the conductor's current branch in the target\n" +
@@ -93,6 +102,7 @@ export function composeRound1Prompt(args: { designPath: string; planPath: string
     "This is a single-turn workflow: you will write the implementation plan,",
     "implement it, run the test suite, and write the verify report — all in",
     "one autonomous run. The conductor will only re-engage when you emit done.",
+    SINGLE_DONE,
     "",
     "RESUME CHECK (do this BEFORE starting):",
     `- If ${planPath} already exists, skip the planning phase — read the`,
@@ -154,6 +164,7 @@ export function composeFixPrompt(round: number, bundleText: string, verifyPath: 
     "",
     "This is a single-turn workflow: address each issue below, re-run the test",
     "suite, and write the verify report — all in one autonomous run.",
+    SINGLE_DONE,
     "",
     "RESUME CHECK (do this BEFORE starting):",
     "- Check `git log --oneline` for commits since the previous round's",
