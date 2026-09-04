@@ -86,7 +86,8 @@ This command has two entry paths. Which one you are on is decided **once**, befo
      nothing will change that. **Do not re-arm.** Run `$CS job stop <TOPIC>` to tear the job down
      (the killed spawn already killed its own pane; `stop` clears the rest), then relaunch the same
      brief as a NEW job — or attach to `<SESSION>` first if you want to see what the pane showed.
-     Never respawn a worker into a running job: a second worker under one hub corrupts the run.
+     Never respawn a worker into a running job:
+     a second worker on the SAME agent under one hub corrupts the run.
    - `JS=standdown` — there is no record left: the job was torn down (by you, or by the operator).
      Nothing to watch and nothing to report from it; do not re-arm.
    - `JS=unreachable` — the WATCH infrastructure failed, which says nothing about the run: ap
@@ -116,6 +117,7 @@ status to `idle`, and wait for your inbox. Resume from exactly where you parked.
 | 0 — `init` | `$CS implement init --args-file <args-path>` | add `--target <WORKTREE>` **after** the `--args-file <args-path>` pair — `$CS implement init --args-file <args-path> --target <WORKTREE>` — taking the path **verbatim from the WORKTREE paragraph of your inbox task**. The run then works in its own worktree instead of the operator's checkout. No worktree paragraph (a `--no-worktree` run) means no flag: init as written. Every later verb reads `target_cwd.txt`, so this is the only place it is passed. |
 | 0 — `INVISIBLE_IN_TARGET` | (not printed — no `--target`) | init also prints `INVISIBLE_IN_TARGET=<n>` and one `INVISIBLE_PATH=<p>` per path (rc stays 0; also written to `$ART/path-lint.txt`). `0` — proceed. **Non-zero — PARK**, naming every `INVISIBLE_PATH=` line verbatim: those files exist in the operator's checkout and NOT in this worktree, because the fork took committed HEAD. Nothing but a commit in the main checkout can make them visible, so guessing at their contents, or working around a design doc you cannot read, is the failure this catches. |
 | 0 — claude-confirm gate | AskUserQuestion codex-vs-claude | use `provider` from `job.json`; if it names none, keep the auto-detected one. No question. When it differs from init's `PROVIDER=` output, run `$CS implement set-provider <TOPIC> <provider>` BEFORE the Stage 1.1 spawn — never edit `$ART/provider.txt` by hand. |
+| 1P — parallel slices | (never — Stage 1P is a job-hub stage) | Run **Stage 1P** between Stage 1.1 and Stage 1: the lead writes `plan.md`, you group its tasks, and the groups run concurrently as slice workers. It is part of EVERY job-hub run — the `DETACHED=1` that put you on this path is its only signal, and there is no flag and no operator choice. A plan that does not split falls back to the serial Stage 1 and costs one plan turn. |
 | 1 — `turn-send` "not idle" | AskUserQuestion wait/force/abort | wait 60s and retry once, then `reset-status` and retry once, then PARK. Never a third silent force. |
 | 1 — `ROUTE=escalate` | AskUserQuestion | PARK, carrying the worker's decoded text verbatim as your `message`. |
 | 4 — scope check `OOS_COUNT > 0` | AskUserQuestion amend/send-back/force-keep | PARK. Never auto-force-keep, never auto-amend. (`SCOPE_DECLARED=0` is still the documented no-op — say so in the parked message.) |
@@ -147,7 +149,9 @@ Maintain a **TodoWrite** list so the user can see where the run is. Seed it righ
 `init` succeeds, mark each item `in_progress` when you enter that stage and `completed` when you
 leave it, and use **one rolling todo** for the dynamic fix-rounds rather than one todo per round.
 
-- Seed: `spawn worker`, `build+verify loop`, `scope+finish`, `teardown+archive`.
+- Seed: `spawn worker`, `parallel slices`, `build+verify loop`, `scope+finish`, `teardown+archive`.
+  `parallel slices` is one rolling item for the whole of Stage 1P — nine steps, not nine todos — and
+  an attached run marks it completed at once, because Stage 1P is a job-hub stage.
 
 ## Flagging suspicions
 
@@ -317,6 +321,301 @@ order:
 Your Stage 4 final report names the switch whenever `$ART/provider-fallback.txt` exists — read the
 file and quote its line.
 
+## Stage 1P — parallel slices (every job-hub run)
+
+You are here because `$CS job mode <TOPIC>` printed `DETACHED=1`. That is the only signal this stage
+has: there is no flag, no env var, and no operator choice about how the work splits. The lead writes
+the plan, YOU decide the grouping, a verb checks it, and the plan's slices run concurrently — each
+slice worker in its own worktree at `<repo>/.ap/worktrees/<TOPIC>.<agent>` on
+`feat/implement-<TOPIC>-<agent>`, in its own window of the run's session. A plan that does not split
+falls back to the serial Stage 1 and costs one plan turn, nothing else.
+
+Initialize once, exactly as Stage 1 does — `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`
+— because a fanned-out run reaches Stage 2 without ever entering Stage 1, and Stage 2 and Stage 3
+both branch on `ROUND` and `MAX_ROUNDS`. Each named turn below carries its OWN retry counter
+(`RETRY_PLAN`, `RETRY_GRILL`, `RETRY_PRELUDE`, `RETRY_ABSORB`, all `0`), and so does each slice — one
+`RETRY_<agent>`, also `0`, set to `1` the moment you re-send that slice's round 1, because nothing on
+disk remembers a slice's spent retry for you (`$ART/slices.tsv` carries no such column). Stage 1's
+`RETRY` belongs to the numbered fix rounds alone. "Stage 1's retry arm" below means that arm with the
+named counter in place of `RETRY`.
+
+**1P.0 Plan turn.** `$CS implement turn-send <TOPIC> plan` sends the plan-only prompt: read the
+design, write `$ART/plan.md` as machine-readable tasks (`### T<n>: <title>` + one `files:` line + one
+`depends:` line each) ending in a `## Slices` proposal, implement nothing. Wait under Stage 1's
+Monitor block with `turn-wait "$TOPIC" plan`, `F="$ART/turn-lead-plan.txt"` and description
+`implement plan <TOPIC>`. This turn and the grill turn run on their own budget
+(`AP_IMPLEMENT_PLAN_TURN_TIMEOUT_S`, default 3600s), not the 4h implement-turn budget: a lead that
+never plans must not spend the run's budget before the fan-out starts. Read the last `TS=` line of
+`$ART/turn-lead-plan.txt`:
+
+- **`TS=ok`** — the verb read a usable plan (it parses, with at least two tasks) → 1P.1.
+- **`TS=failed` / `TS=timeout`** — Stage 1's retry arm with `RETRY_PLAN`: `rm -f
+  $ART/turn-lead-plan.txt $ART/turn-lead-plan.done $ART/lead_turn_prompt_plan.md` and re-send once. A
+  `PLAN=unparseable` line written ahead of the `TS=` distinguishes "a plan the verb cannot read" from
+  "no plan at all"; it also covers a plan of fewer than two tasks, which is a design that does not
+  split, and the one key says both. So on `PLAN=unparseable`, read `$ART/plan.md` yourself before
+  spending `RETRY_PLAN`: a file that parses and simply names fewer than two tasks is that design —
+  `$CS implement flag <TOPIC> "parallel-degraded: the plan does not split"` and the serial path at
+  once. Only a plan you cannot read takes the retry. A second failure → `$CS implement flag <TOPIC>
+  "parallel-degraded: the plan turn failed twice"` and the serial path (Stage 1 with `ROUND=1`; the
+  round-1 prompt's RESUME CHECK reuses any `plan.md` that exists, so nothing is wasted).
+- **`TS=question`** and **`TS=unreachable`** take Stage 1's arms unchanged, re-arming this same
+  Monitor.
+
+**1P.1 Slice plan.** Read `$ART/plan.md`'s `## Slices` proposal against the design and DECIDE the
+grouping — you may merge slices you judge too small or too coupled, move a task into the prelude, or
+keep the proposal as it is; you never invent a task or a path. **Write** `$ART/slice-plan.md`:
+
+```markdown
+# Slice plan
+## prelude
+tasks: T1, T2
+## slice wp3
+tasks: T3, T5
+## slice wp4
+tasks: T4
+```
+
+The rules the check enforces: every plan task assigned exactly once; a task other tasks depend on
+goes in the prelude, or in the same slice as every task that depends on it; tasks whose `files:`
+overlap go in one slice; the prelude may be empty (`tasks: none`); at most 6 slices (`MAX_SLICES`, a
+code constant — not a flag, not an env var); each label a unique slug of at most 16 characters. Add
+no paths and no prose: the tasks carry their own.
+
+Then `$CS implement slice-check <TOPIC>`.
+
+- **rc 0** — it printed `SLICES=<n>`, `PRELUDE=<0|1>` and `AGENTS=<a,b,...>`, and wrote
+  `$ART/slices.tsv` (`<agent>\t<model>\t<label>\t<status>\t<tasks>\t<files>`), one
+  `$ART/slice-<agent>.md` mandate per slice, and `$ART/prelude.txt` when the prelude is non-empty.
+  Capture `AGENTS=` and `PRELUDE=`. Warn-only `MISSING=<Tn>:<path>` lines mean a declared file is not
+  in the run worktree yet — the task may create it; they never change the rc. **`SLICES` < 2** →
+  `$CS implement flag <TOPIC> "parallel-degraded: SLICES=<n>"` and the serial path.
+- **rc 1 with refusal lines** — the grouping was refused. The verb printed the lines AND wrote them
+  to `$ART/slice-refusals.txt`. They are: `SLICES_EXIST`, `PLAN_UNPARSEABLE=<line>`,
+  `BADFILE=<Tn>:<tok>`, `UNASSIGNED=<Tn>`, `DUPLICATE=<Tn>`, `UNKNOWN=<Tn>`, `DEP=<Tn>-><Tm>`,
+  `OVERLAP=<a>:<b>:<path>`, `EMPTY_SLICE=<label>`, `BADLABEL=<label>`, `DUPLICATE_LABEL=<label>`,
+  `TOO_MANY=<n>`, `AGENTS_SHORT=<k>`. Two kinds, and they are answered differently:
+  - A refusal about YOUR grouping — `UNASSIGNED=`, `DUPLICATE=`, `UNKNOWN=`, `EMPTY_SLICE=`,
+    `BADLABEL=`, `DUPLICATE_LABEL=`, `TOO_MANY=`, `AGENTS_SHORT=` — you can answer alone: rewrite
+    `$ART/slice-plan.md` and re-run `slice-check`. It costs no turn, so do that first.
+  - A refusal about the PLAN's own cut — `OVERLAP=`, `DEP=`, `BADFILE=`, `PLAN_UNPARSEABLE=` — you
+    cannot answer by regrouping: only the lead can split a task so a shared file moves into the
+    prelude, fold two coupled tasks into one, or declare a dependency it left implicit. Take the
+    grill turn below.
+  - `SLICES_EXIST` is neither: this check already ran and its rows are live. Do not re-run it and do
+    not grill — pick the run up wherever it actually stands.
+- **rc 1 with no refusal lines** (stderr names a missing `plan.md`, `slice-plan.md` or art dir) is
+  your own mistake, not the lead's: write the missing file and re-run. **rc 2** is usage.
+
+**The grill turn — ONE per run.** Write a file holding YOUR text only: what you were trying to group
+and why. Do **not** paste the refusal lines into it — `$CS implement turn-send <TOPIC> grill @<file>`
+interpolates them itself, verbatim, from `$ART/slice-refusals.txt`, and refuses (rc 1) when no
+refusal is recorded there. Wait under Stage 1's Monitor block with `turn-wait "$TOPIC" grill`,
+`F="$ART/turn-lead-grill.txt"` and description `implement grill <TOPIC>`. `TS=ok` means only that
+`plan.md` still parses with two or more tasks — the verb compares nothing against the pre-grill file,
+so a lead that answered without touching it also lands here. Re-read its `## Slices` proposal,
+rewrite `$ART/slice-plan.md`, and re-run `slice-check`; an unchanged plan simply refuses again, which
+ends the fan-out by the rule below. `TS=failed` / `TS=timeout` → Stage 1's retry arm with
+`RETRY_GRILL` (`rm -f $ART/turn-lead-grill.txt $ART/turn-lead-grill.done
+$ART/lead_turn_prompt_grill.md`). A second
+`slice-check` refusal after the grill, or a grill turn that fails twice, ends the fan-out: `$CS
+implement flag <TOPIC> "parallel-degraded: <the refusal lines>"` and the serial path. There is no
+second grill.
+
+**1P.2 Prelude.** `PRELUDE=1` → `$CS implement turn-send <TOPIC> prelude`. The lead implements ONLY
+the task ids in `$ART/prelude.txt`, in the run worktree, and reports to
+`$ART/verify-report-prelude.md`. Wait under Stage 1's Monitor block with `turn-wait "$TOPIC" prelude`,
+`F="$ART/turn-lead-prelude.txt"` and description `implement prelude <TOPIC>`. `TS=ok` → 1P.3.
+`TS=failed` / `TS=timeout` → Stage 1's retry arm with `RETRY_PRELUDE` (`rm -f
+$ART/turn-lead-prelude.txt $ART/turn-lead-prelude.done $ART/lead_turn_prompt_prelude.md`); a second
+failure → **PARK**. Never fan out over a prelude that was not implemented: it is the prerequisite
+every slice would be missing. `PRELUDE=0` → skip this step; the lead idles until 1P.8.
+
+**1P.3 Spawn.** `$CS implement spawn-slices <TOPIC>` — per planned row a worktree and branch forked
+at the run branch's HEAD (recorded once, for the whole run, in `$ART/slice-fork.txt`), provisioned
+like the run worktree, then one `spawn` into its own window with `--role slice`. Spawns are
+**sequential** by design. **The Bash call MUST carry `timeout: 600000`**: six bootstraps at the 170s
+floor is 17 minutes, and the tool's 120s default would SIGTERM the whole fan-out. On a completed pass
+it prints `SPAWNED=<n>`, `FALLBACK=<agent,...>` (rows whose codex spawn died twice and CAME UP under
+claude — a row that fell back and still died is named by `FAILED=` instead, with its roster model
+already rewritten; `$ART/provider.txt` is NOT touched and still names the lead's provider, and each
+slice's own model is column 2 of `$ART/slices.tsv`) and `FAILED=<agent,...>`.
+
+- **rc 0** — every targeted row is up → 1P.4.
+- **rc 1 with no `SPAWNED=` line** — a precondition refused the verb and NOTHING was spawned. Read
+  the printed lines:
+  - `DIRTY=<path>` — the run worktree has modified tracked files (a prelude that did not commit
+    everything), and a worktree cannot be forked from a dirty index. Commit them on the run branch
+    ONCE: `git -C "$TARGET_CWD" add -u && git -C "$TARGET_CWD" commit -m "chore: prelude leftovers for
+    <TOPIC>"`, then re-run `spawn-slices`. A second `DIRTY=` → **PARK**, naming the paths verbatim.
+  - `SLICE_TREE_EXISTS=<agent>`, `SLICE_BRANCH_EXISTS=<agent>`, `SLICE_TREE_MOVED=<agent>` or
+    `HEAD_UNREADABLE=1` — leftovers from an earlier run of this topic, or a reused branch that has
+    moved off the recorded fork sha. ap removes neither a tree nor a branch, and this refusal prints
+    no remedy of its own — the only stderr line is "refused, nothing spawned". **PARK**, naming the
+    lines verbatim and, per agent they name, the by-hand remedy: `git -C <repo> worktree remove
+    --force <repo>/.ap/worktrees/<TOPIC>.<agent>` then `git -C <repo> branch -D
+    feat/implement-<TOPIC>-<agent>`.
+- **rc 1 with a `SPAWNED=` line** — a partial wave: some rows are up, `FAILED=` names the rest.
+- **rc 2** — no slice is up, and the pass printed one of two things. **With** a `FAILED=` line, rows
+  were attempted and none came up: take the retry below once first. **Without** one, the verb
+  refused the job outright before it attempted anything (no job record, a `--no-worktree` run, or no
+  `target_cwd.txt`) and there is nothing to retry. Once the retry is spent, or there was none to
+  spend: `$CS implement flag <TOPIC> "parallel-degraded: no slice spawned"` and the serial path
+  (Stage 1 with `ROUND=1`; `plan.md` exists and the round-1 prompt's RESUME CHECK reuses it) — the
+  same fallback 1P.1 takes for `SLICES` < 2, never the absorb turn over a whole plan.
+
+`FAILED=` non-empty → `$CS implement spawn-slices <TOPIC> --retry` **ONCE**, same `timeout: 600000`;
+it reuses each failed row's existing tree and branch at the recorded fork sha rather than forking a
+moved HEAD. Rows still named by `FAILED=` after that retry → `$CS implement abandon-slice <TOPIC>
+<agent> spawn-failed`, one call per row.
+
+**1P.4 Dispatch.** For every row of `$ART/slices.tsv` whose status is `spawned` (`$CS job status
+<TOPIC>` prints the same rows as `SLICE=<agent> <model> <label> <status>`), run `$CS implement
+turn-send <TOPIC> 1 --agent <agent>` — all N of them **in one message**, so the slices start within a
+minute of each other. A `--agent` dispatch is round 1 only; rounds ≥ 2 are the lead's serial fix
+loop. A "not idle" refusal follows the run-path table, per slice: wait 60s and retry, then `$CS
+implement reset-status <TOPIC> <agent>` and retry, then `$CS implement abandon-slice <TOPIC> <agent>
+turn-failed`. Never a third silent force, and never PARK the run for one slice.
+
+Then arm **one persistent Monitor per slice** — Stage 1's block, per agent, never one watcher over N
+slices (the block reads a single state file, and a shared watcher cannot tell you which slice ended):
+
+```
+Monitor(persistent: true, description: "implement slice <agent> <TOPIC>", command: '
+  $CS implement turn-wait "$TOPIC" 1 --agent <agent> >/dev/null 2>&1
+  F="$ART/turn-<agent>-1.txt"; TS=
+  if [ -f "$F" ]; then while IFS= read -r L; do case "$L" in TS=*) TS=${L#TS=};; esac; done < "$F"; fi
+  case "$TS" in
+    ok|failed|timeout|question) printf "TS=%s\n" "$TS"; exit 0;;
+    *) printf "TS=unreachable\n"; exit 1;;
+  esac')
+```
+
+Substitute `$CS`, the absolute `$ART`, the topic and the agent's call-sign before arming — the
+Monitor's shell has none of your variables.
+
+**1P.5 Outcomes.** As each Monitor fires, read the last `TS=` line of that slice's
+`$ART/turn-<agent>-1.txt` and take its arm. The slices are independent: one slice's outcome never
+stops the others, and every arm below leaves the run carrying the remaining N−1.
+
+- **`TS=ok`** — nothing to do; 1P.6's gate counts it.
+- **`TS=question`** — Stage 1's ROUTE handling, with six amendments.
+  - **The two files it names are agent-keyed here.** The payload is `$ART/question-<agent>-1.txt`
+    and the `OBJECTIONS=` count is the latest such line of `$ART/turn-<agent>-1.txt` — never the
+    `question-lead-<ROUND>.txt` / `turn-lead-<ROUND>.txt` Stage 1 spells, which a fanned-out round 1
+    never writes at all.
+  - `ROUTE=verify` claims are checked against **that slice's** worktree
+    (`<repo>/.ap/worktrees/<TOPIC>.<agent>`), not `TARGET_CWD`.
+  - The reply goes to the slice: `$CS send --from hub <agent> "$TOPIC" @<reply-file>`, and then you
+    re-arm **that** slice's Monitor.
+  - The `ROUTE=objection` *Revise* arm edits ONLY `$ART/slice-<agent>.md` while slices are live —
+    `$ART/design.md` and `$ART/plan.md` are read by N workers at once and are not edited until after
+    1P.7 — and the reply carries the amended mandate ITSELF: `From: hub`, then "Your slice mandate
+    was amended; it now reads:" and the new text of `$ART/slice-<agent>.md` verbatim. Never Stage
+    1's "re-read `<ART>/design.md`": that names a file this arm may not edit, and the slice was
+    given its mandate's TEXT (interpolated into its round-1 prompt), never its path.
+  - A slice objecting that its tasks are not implementable standalone is the designed check on a bad
+    grouping: `$CS implement abandon-slice <TOPIC> <agent> objection` (1P.8 absorbs its tasks),
+    never an override.
+  - **You have no operator on this stage** — it is reached only on `DETACHED=1`. Settle a
+    `ROUTE=objection` yourself, Revise or Override; never call AskUserQuestion, and never take the
+    attached path's *Abort* (`$CS stop <TOPIC>` refuses rc 1 while the job record exists, and would
+    tear YOU down). An objection you cannot settle is a PARK, not a teardown.
+- **`TS=failed` / `TS=timeout`** — retry that slice ONCE: `rm -f $ART/turn-<agent>-1.txt
+  $ART/turn-<agent>-1.done $ART/<agent>_turn_prompt_1.md`, `$CS implement reset-status <TOPIC>
+  <agent>` (a timed-out worker is left non-idle, so the send gate would refuse), `$CS implement
+  turn-send <TOPIC> 1 --agent <agent>`, and re-arm that Monitor. A second failure → `$CS implement
+  abandon-slice <TOPIC> <agent> turn-failed`.
+- **`PANE=died`** written ahead of the `TS=failed` — the slice's pane is gone; there is nothing to
+  retry into. `$CS implement abandon-slice <TOPIC> <agent> pane-died`, no retry.
+- **`TS=unreachable`, or a Monitor that died with no output** — Stage 1's watcher-failure arm, per
+  slice: probe `<state>/<agent>-<model>/status.json` (the model is that slice's own, column 2 of
+  `$ART/slices.tsv`, which a provider fallback may have moved to claude) and `$CS list <TOPIC>`'s
+  LIVENESS for that agent, and re-arm the same Monitor if it is alive. Never spend a slice's one
+  retry, and never abandon it, on watcher evidence.
+- A state file whose **last line is `PD=`** is a premature-`done` hold in progress, exactly as
+  Stage 1 describes it: that Monitor is still running — leave it.
+
+`abandon-slice` takes a closed reason (`spawn-failed`, `turn-failed`, `pane-died`, `objection`),
+prints `ABANDONED=<agent>` and `REASON=<reason>`, files a flag, and tears that worker down. Its
+worktree and branch are left alone, so anything it committed still reaches 1P.7.
+
+**Parking with N Monitors armed.** A park is a wait on your inbox. A slice Monitor that fires while
+you are parked is handled by its arm above, and then you go back to waiting: the park is ended by the
+relay, never by a Monitor. And `slice-gate` is the ground truth of what the slices did — never your
+memory of which notifications you saw.
+
+**1P.6 Gate.** `$CS implement slice-gate <TOPIC> 1` prints one line per roster row,
+`<agent>\t<label>\t<ok|failed|timeout|question|held|pending|abandoned>`. It blocks nothing — the
+Monitors do the waiting. **rc 0** means every non-abandoned row is `ok` and at least one such row
+exists (a gate over zero live slices is rc 1, never vacuously green). On **rc 1**:
+
+- a `held` or `pending` row whose Monitor is still armed is expected, not a failure: wait for that
+  Monitor and re-run the gate;
+- a `pending` row whose Monitor is gone is the `TS=unreachable` arm for that slice;
+- a `failed`, `timeout` or `question` row is that slice's arm above — and a row at `RETRY_<agent>=1`
+  takes `abandon-slice`;
+- every row `abandoned` — run 1P.7 anyway (an abandoned slice may still have commits) and let 1P.8
+  absorb what is left. This is NOT 1P.3's no-spawn case, because 1P.7's `MERGED=` bounds what the
+  absorb turn still owes; but if that comes back `MERGED=0`, nothing landed at all — `$CS implement
+  flag <TOPIC> "parallel-degraded: no slice landed"` and the serial path instead.
+
+On **every** exit from this step — the rc-0 path and each rc-1 bullet alike — and again immediately
+before 1P.8's `turn-send`, which spends a full implement-turn budget: as its **own** command and
+never chained onto anything that dispatches, `$CS job budget-check <TOPIC>`. Exit 1 means exhausted:
+write `$ART/RESUME.md` pasting the gate's lines and the verb's raw `BUDGET=` / `ELAPSED_H=` /
+`BUDGET_H=` lines verbatim, PARK, and stop.
+
+**1P.7 Integrate.** `$CS implement integrate <TOPIC> 1` merges every slice branch that has commits
+into `feat/implement-<TOPIC>` in `TARGET_CWD`, `--no-ff`, in roster order. It RECORDS conflicts and
+never resolves them — resolution is model judgment and belongs to 1P.8. It writes
+`$ART/integrate-1.tsv` (`<agent>\t<label>\t<merged|conflict|empty|skipped:<why>>`) and prints:
+
+```
+MERGED=<n>
+CONFLICT=<agent,...>
+EMPTY=<agent,...>
+SKIPPED=<agent,...>
+```
+
+- **rc 0** — it ran to the end, whatever the per-slice outcomes: a report, not a gate. Paste those
+  four lines **verbatim** into `$ART/cross-verify-1.md`; Stage 2 reasons from them.
+- **rc 1 with `BRANCH=<current>` + `EXPECTED=<branch>` or `DIRTY=<path>` lines and nothing merged** —
+  a precondition refused: the run worktree must be on `feat/implement-<TOPIC>` with clean tracked
+  files. Apply 1P.3's commit remedy once for `DIRTY=`; for `BRANCH=`, put the run worktree back on
+  the branch the verb named — `git -C "$TARGET_CWD" checkout <the EXPECTED= value>` — never `$CS
+  implement branch`, which is Stage 0's create-and-record verb. Re-run `integrate` once; on a second
+  refusal, **PARK**.
+- **rc 1 on a pass that still printed the four keys** — a conflicting merge's abort could not
+  restore the tree, so the rows after it were not attempted. `$ART/integrate-1.tsv` records those as
+  `skipped:tree-dirty`, and a conflict in the LAST row leaves none at all — which is why the rc is
+  the signal here and the rows are not. **PARK**, naming the run worktree: nothing may run a suite or
+  a sweep in a tree in that state.
+
+Then `$CS stop <agent> <TOPIC>` for every row that was spawned — the per-agent form only (rows
+`abandon-slice` retired are already stopped). The slice workers are finished: rounds ≥ 2 are the
+lead's serial fix loop in the run worktree.
+
+**1P.8 Absorb.** Take this turn when `$ART/slices.tsv` has an `abandoned:` row, or
+`$ART/integrate-1.tsv` has a `conflict`, `empty` or `skipped:` row, or ANY spawned slice's
+`$ART/verify-report-<agent>-1.md` carries a non-empty `## Out-of-slice changes needed` section.
+`$CS implement turn-send <TOPIC> absorb` assembles the ISSUES block itself from exactly those three
+sources — `- [slice] tasks ... were not implemented (<reason>)`, `- [integration]
+feat/implement-<TOPIC>-<agent> ... conflicts with this branch`, and `- [spec-gap] <file:line> —
+out-of-slice change requested by slice <label>: <text>` — and refuses (rc 1, "nothing to absorb")
+when all three are clean. That refusal IS the mechanical form of the condition above: it means skip
+the turn, not that something went wrong. Wait under Stage 1's Monitor block with `turn-wait "$TOPIC"
+absorb`, `F="$ART/turn-lead-absorb.txt"` and description `implement absorb <TOPIC>`; the lead
+implements the abandoned tasks, merges the conflicting branches by hand, applies the out-of-slice
+changes, self-verifies, and reports to `$ART/verify-report-absorb.md`. `TS=failed` / `TS=timeout` →
+Stage 1's retry arm with `RETRY_ABSORB` (`rm -f $ART/turn-lead-absorb.txt $ART/turn-lead-absorb.done
+$ART/lead_turn_prompt_absorb.md`), then **PARK** on a second failure — the merged slices are already
+on the branch and survive the park.
+
+Then go to **Stage 2 with `ROUND=1`**. Skip Stage 1 entirely: round 1 is what the prelude, the slices
+and the absorb turn just did, and Stage 2's Step B reads their reports in place of
+`verify-report-1.md`.
+
 ## Stage 1 — run the worker turn (round-aware, auto-retry-once)
 
 Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. Then per round:
@@ -368,7 +667,9 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
    A `done` with no `verify-report-<ROUND>.md` is HELD rather than failed while the worker's pane
    keeps changing — the worker that emits `done` after every task is still implementing, and the
    old `TS=failed` retry re-sent the round into it. A held turn shows `PD=` lines in
-   `$ART/turn-lead-<ROUND>.txt` and no `TS=` yet, so its Monitor is still running: leave it. It
+   `$ART/turn-lead-<ROUND>.txt` and no `TS=` yet, so its Monitor is still running: leave it. (A
+   slice's state file is `$ART/turn-<agent>-<ROUND>.txt`, and its hold reads exactly the same
+   there.) It
    ends `TS=ok` on the final `done` with the report present, `TS=failed` once the pane has been
    unchanged for `AP_IMPLEMENT_PREMATURE_DONE_S`, and `TS=timeout` at the turn deadline; a worker
    whose pane record is missing or unverifiable is never held. The first hold of a turn records one
@@ -478,6 +779,27 @@ observed this round, never the worker's say-so. Read enough to decide, not the w
   `git -C "$TARGET_CWD" diff --stat "$(cat "$ART/branch-base.sha")"..HEAD`,
 - spot-checks: Read the highest-stakes diff hunk per critical requirement (paths from
   `git diff` are relative to `TARGET_CWD`; prefix them).
+
+**After a fan-out** (Stage 1P ran and integrated slices), the per-agent and stage-named reports
+**replace** `$ART/verify-report-<ROUND>.md` everywhere this step names it, for round 1: no turn of a
+fanned-out run writes that file. Read `$ART/verify-report-<agent>-1.md` for every slice
+`$ART/integrate-1.tsv` records as `merged` **or `conflict`** — the absorb turn merged the conflicting
+branches by hand, so their work is in the tree and their `MUTATION:` lines are this round's evidence
+too — plus `$ART/verify-report-prelude.md` and `$ART/verify-report-absorb.md` when those turns ran,
+and read `$ART/slices.tsv` and `$ART/integrate-1.tsv` alongside them. A row `$ART/slices.tsv` marks
+`abandoned:` wrote no report even where `integrate-1.tsv` records its branch `merged` — an abandoned
+slice's commits are merged all the same — so read what it landed from the diff and record it from
+those two files; that missing report is not a gap in the evidence.
+**The new-gate cross-check below iterates that same set** —
+pointed at the absent round file it would count zero `MUTATION:` lines over exactly the slices' work
+and report a clean tally for gates nobody watched fail. The worker-claim log is likewise per agent
+(`$ART/test-output-<agent>-1.log`). Step A is unaffected and stays authoritative — it runs the suite
+in `TARGET_CWD`, the integrated tree — and its `skipped` arm cannot fire on this path: the skip rule
+reads `worker-test-duration-1.txt`, and a fanned-out run writes only
+`worker-test-duration-<agent>-1.txt` and the stage-named ones. The verdict is judgment as always: the
+absorb turn has already made the tree complete, so there is no FAIL by rule — paste the `integrate`
+lines and each slice's own verdict verbatim into `$ART/cross-verify-1.md` and reason from your own
+suite run.
 
 **Worker `VERDICT: PARTIAL` — never promote it silently.** The worker's report opens with
 `VERDICT: PASS|PARTIAL|FAIL` and carries an `ENV:` line as line 2. A `VERDICT: PARTIAL` means the
