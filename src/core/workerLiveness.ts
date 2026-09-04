@@ -20,7 +20,7 @@ import {
 
 /** One printed row: the worker's `<agent>-<model>` identity (its dir name, which is the identity
  *  every state path is built from), the verdict token, and whether that verdict is a death. */
-export interface WorkerRow { worker: string; verdict: string; dead: boolean; }
+export interface WorkerRow { worker: string; verdict: string; dead: boolean; role?: string; }
 
 /** `spawned_at` from a worker dir's pane.json, or "" for an absent, torn, or pre-`spawned_at`
  *  record. Read here rather than through `paneMetaReadForDir` so PaneMeta's shape — which four
@@ -29,6 +29,17 @@ function spawnedAtOf(dir: string): string {
   try {
     const o = JSON.parse(readFileSync(join(dir, "pane.json"), "utf8")) as { spawned_at?: unknown };
     return typeof o?.spawned_at === "string" ? o.spawned_at : "";
+  } catch { return ""; }
+}
+
+/** `role` from a worker dir's pane.json — only a SLICE worker has one (src/core/ipc.ts,
+ *  `paneMetaWrite`), so "" is the answer for every record written today. Read here beside
+ *  `spawnedAtOf`, and for the same reason: `PaneMeta`'s shape is pinned by four other callers and
+ *  their tests, and this field has exactly one consumer. */
+function roleOf(dir: string): string {
+  try {
+    const o = JSON.parse(readFileSync(join(dir, "pane.json"), "utf8")) as { role?: unknown };
+    return typeof o?.role === "string" ? o.role : "";
   } catch { return ""; }
 }
 
@@ -91,7 +102,9 @@ export function scanTopicWorkers(
     const seen = prior[name];
     const v = classifyWorkerLiveness(readWorkerRec(dir), readWorkerStatusRec(dir), events, snapshot, seen?.misses ?? 0, now);
     next[name] = { misses: v.misses, last_seen: v.kind === "alive" ? isoUtc(new Date(now)) : (seen?.last_seen ?? "") };
-    rows.push({ worker: name, verdict: v.verdict, dead: v.dead });
+    // The role is spread in only when there IS one, so a non-slice row is the object it always was.
+    const role = roleOf(dir);
+    rows.push({ worker: name, verdict: v.verdict, dead: v.dead, ...(role ? { role } : {}) });
   }
   if (opts?.persist && rows.length > 0) {
     try {

@@ -27,8 +27,9 @@ import { scanTopicWorkers } from "../core/workerLiveness.js";
 import { percentEncode } from "../core/questionCodec.js";
 import { readProviderFallback } from "../core/implement.js";
 import { commandArtDir } from "../core/forensics.js";
-import { runnerAt, classifyDirty, currentBranch, type Runner } from "../core/gitwork.js";
-import { branchNameFor } from "../core/branchRecord.js";
+import { readSlices } from "../core/implementSlices.js";
+import { runnerAt, classifyDirty, currentBranch, dirtyPaths, type Runner } from "../core/gitwork.js";
+import { branchNameFor, sliceBranchFor } from "../core/branchRecord.js";
 import * as J from "../core/job.js";
 import { run as spawnRun } from "./spawn.js";
 import { run as sendRun } from "./send.js";
@@ -148,26 +149,6 @@ function jobProgressNow(rec: J.JobRecord) {
 
 // ---------- the isolated worktree a detached run works in ----------
 
-/** The paths in a `git status --porcelain -z` (v1) listing — BOTH callers must pass `-z`.
- *  Fields are NUL-terminated `XY <path>` and are never quoted, which is the point of
- *  `-z`: without it `core.quotePath` (on by default) shows an operator with a `désign.md` in their
- *  tree the C-escaped `"d\303\251sign.md"`, a name that matches nothing they can type. A rename or
- *  copy is two fields, DESTINATION first then source — the destination is the name that matters,
- *  since that is what the operator now has on disk, so the source field is consumed and dropped. */
-function dirtyPaths(porcelain: string): string[] {
-  const fields = porcelain.split("\0");
-  const out: string[] = [];
-  for (let i = 0; i < fields.length; i++) {
-    const f = fields[i];
-    if (f.length < 4) continue;
-    const xy = f.slice(0, 2);
-    if (xy.includes("R") || xy.includes("C")) i++;   // consume the source field of a rename/copy
-    out.push(f.slice(3));
-  }
-  return out;
-}
-
-
 /** The operator's home and environment, as the site-packages scan (src/core/provision.ts) sees them.
  *  Injected for the same reason `WaitDeps` is: a test must be able to point the scan at a synthetic
  *  site tree without mutating `process.env`, which would also flip `wrapLaunch`'s bashrc default. The
@@ -196,6 +177,34 @@ function reportShadows(root: string, worktree: string, deps: EnvDeps): { shadows
     log.warn(`  no usable import root under the worktree, so NOTHING is pinned; if a file above names this checkout, pin by hand: export PYTHONPATH to the same directory under ${worktree}`);
   }
   return { shadows: rep.hits.map((h) => h.source), pin: rep.pin };
+}
+
+/** Everything a freshly `git worktree add`ed tree gets before a worker is pointed at it: the
+ *  node_modules clone and the shadow/pin report. One helper because a SLICE worktree
+ *  (`implement spawn-slices`) must be provisioned exactly as the run worktree is — a second
+ *  implementation is how the two start differing on the box where it matters. `root` is always the
+ *  MAIN checkout: `pinReport` is provenance-gated on it. */
+export function provisionWorktree(root: string, worktree: string, r: Runner, envDeps: EnvDeps = realEnvDeps()): { shadows: string[]; pin: string } {
+  // node_modules is the one dependency tree worth carrying: a hardlink clone is seconds and costs no
+  // disk, and without it the worker's first act is a multi-minute install. Any other ecosystem is
+  // the worker's own problem (D3), and a failure here is never fatal — the worker can still install.
+  const deps = join(root, "node_modules");
+  if (existsSync(deps)) {
+    const dest = join(worktree, "node_modules");
+    // First success wins, cheapest first. `cp -al` is GNU's hardlink clone and stays the ONLY call
+    // made on Linux; BSD cp (stock macOS) has no -l at all, so it falls through to `-c` (APFS
+    // clonefile: copy-on-write, as cheap as the hardlink) and then to a plain recursive copy. A
+    // failed attempt can leave a partial tree behind, which would make the next one copy INTO it.
+    const modes: Array<[string, string]> = [["-al", "hardlink-cloned"], ["-cR", "clone-copied"], ["-R", "copied"]];
+    let mode = "";
+    for (const [flag, label] of modes) {
+      if (r.run("cp", [flag, deps, dest]).code === 0) { mode = label; break; }
+      rmSync(dest, { recursive: true, force: true });
+    }
+    if (mode) log.ok(`job start: ${mode} node_modules into the worktree`);
+    else log.warn(`job start: could not clone node_modules into ${worktree} (cp -al, -cR and -R all failed) — the worker will have to install dependencies itself`);
+  }
+  return reportShadows(root, worktree, envDeps);
 }
 
 /** Create the worktree the WORKER will run in, and return what the record must carry.
@@ -248,26 +257,7 @@ export function startWorktree(root: string, topic: string, r: Runner, envDeps: E
     log.error(`job start: 'git worktree add -b ${baseBranch} ${worktree} ${baseSha.slice(0, 8)}' failed (rc ${add.code}) — nothing was launched. Check 'git -C ${root} worktree list' for a stale entry ('git worktree prune' clears those), or pass --no-worktree.`);
     return null;
   }
-  // node_modules is the one dependency tree worth carrying: a hardlink clone is seconds and costs no
-  // disk, and without it the worker's first act is a multi-minute install. Any other ecosystem is
-  // the worker's own problem (D3), and a failure here is never fatal — the worker can still install.
-  const deps = join(root, "node_modules");
-  if (existsSync(deps)) {
-    const dest = join(worktree, "node_modules");
-    // First success wins, cheapest first. `cp -al` is GNU's hardlink clone and stays the ONLY call
-    // made on Linux; BSD cp (stock macOS) has no -l at all, so it falls through to `-c` (APFS
-    // clonefile: copy-on-write, as cheap as the hardlink) and then to a plain recursive copy. A
-    // failed attempt can leave a partial tree behind, which would make the next one copy INTO it.
-    const modes: Array<[string, string]> = [["-al", "hardlink-cloned"], ["-cR", "clone-copied"], ["-R", "copied"]];
-    let mode = "";
-    for (const [flag, label] of modes) {
-      if (r.run("cp", [flag, deps, dest]).code === 0) { mode = label; break; }
-      rmSync(dest, { recursive: true, force: true });
-    }
-    if (mode) log.ok(`job start: ${mode} node_modules into the worktree`);
-    else log.warn(`job start: could not clone node_modules into ${worktree} (cp -al, -cR and -R all failed) — the worker will have to install dependencies itself`);
-  }
-  const shadow = reportShadows(root, worktree, envDeps);
+  const shadow = provisionWorktree(root, worktree, r, envDeps);
   const porcelain = r.run("git", ["status", "--porcelain", "-z"]).stdout;
   if (classifyDirty(porcelain)) {
     // WHICH files, not just "the tree is dirty". Twice now the invisible file was the design doc the
@@ -301,6 +291,69 @@ function sweepBaseBranch(rec: J.JobRecord, root: string, r: Runner): void {
   const del = r.run("git", ["branch", "-D", branch]);
   if (del.code !== 0) log.warn(`job stop: could not delete the run's base branch ${branch} (rc ${del.code}) — remove it by hand: git -C ${root} branch -D ${branch}`);
   else log.ok(`job stop: deleted the run's base branch ${branch}`);
+}
+
+/** Sweep the SLICE worktrees and branches of a fanned-out implement run (design I). Trees are
+ *  enumerated from DISK — every `<root>/.ap/worktrees/<topic>.*` entry, provenanced by construction —
+ *  and branches from the ref store, never from `$ART/slices.tsv`, which Stage 4's archive may
+ *  already have moved.
+ *
+ *  Clean tree: removed. Dirty tree: KEPT, named, and its branch left alone — the tree still has that
+ *  branch checked out, so git would refuse the delete anyway. Then every remaining slice branch that
+ *  is an ANCESTOR of the run branch is deleted (its commits are in the run branch); one that is not
+ *  is somebody's commits and is kept and named, warn-only — the posture `sweepBaseBranch` takes,
+ *  because re-running `job stop` can never make an unmerged branch merged and a keep on it would
+ *  strand the record forever.
+ *
+ *  `swept` is false only when a TREE was kept: that is the state a re-run can still finish. Every
+ *  git call goes through the root-bound runner (`git -C <tree>` for the in-tree probe), so the whole
+ *  sweep is one runner and testable as one. */
+export function sweepSliceWorktrees(rec: J.JobRecord, root: string, r: Runner): { swept: boolean; kept: string[] } {
+  const dir = join(root, ".ap", "worktrees");
+  const prefix = `${rec.topic}.`;
+  let names: string[] = [];
+  try {
+    names = readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && e.name.startsWith(prefix) && e.name.length > prefix.length)
+      .map((e) => e.name).sort();
+  } catch { /* no worktrees dir at all: nothing was fanned out */ }
+
+  const kept: string[] = [];
+  const keptAgents = new Set<string>();
+  let removed = false;
+  for (const name of names) {
+    const wt = join(dir, name);
+    const agent = name.slice(prefix.length);
+    const keep = (why: string): void => { kept.push(wt); keptAgents.add(agent); log.warn(why); };
+    if (classifyDirty(r.run("git", ["-C", wt, "status", "--porcelain"]).stdout)) {
+      keep(`job stop: the slice worktree ${wt} has UNCOMMITTED work in it and is being KEPT — inspect: git -C ${wt} status, then commit it on ${sliceBranchFor(rec.topic, agent)} or discard: git -C ${root} worktree remove --force ${wt}`);
+      continue;
+    }
+    const rm = r.run("git", ["worktree", "remove", wt]);
+    if (rm.code !== 0 || existsSync(wt)) {
+      keep(`job stop: 'git worktree remove ${wt}' did not complete (rc ${rm.code}) — the slice worktree is still there. Remove it by hand: git -C ${root} worktree remove --force ${wt}`);
+      continue;
+    }
+    removed = true;
+    log.ok(`job stop: removed the slice worktree ${wt}`);
+  }
+  if (removed) r.run("git", ["worktree", "prune"]);
+
+  const runBranch = branchNameFor(rec.command, rec.topic);
+  // The trailing `*` is load-bearing: a for-each-ref pattern matches whole path components, so
+  // `refs/heads/feat/implement-<topic>-` on its own would match nothing at all.
+  const refs = r.run("git", ["for-each-ref", "--format=%(refname:short)", `refs/heads/${sliceBranchFor(rec.topic, "")}*`]);
+  for (const branch of refs.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) {
+    if (keptAgents.has(branch.slice(sliceBranchFor(rec.topic, "").length))) continue;   // its tree still has it checked out
+    if (r.run("git", ["merge-base", "--is-ancestor", branch, runBranch]).code !== 0) {
+      log.warn(`job stop: the slice branch ${branch} is NOT merged into ${runBranch} and is being KEPT — those commits exist nowhere else. Inspect: git -C ${root} log ${runBranch}..${branch}`);
+      continue;
+    }
+    const del = r.run("git", ["branch", "-D", branch]);
+    if (del.code !== 0) log.warn(`job stop: could not delete the merged slice branch ${branch} (rc ${del.code}) — remove it by hand: git -C ${root} branch -D ${branch}`);
+    else log.ok(`job stop: deleted the merged slice branch ${branch}`);
+  }
+  return { swept: kept.length === 0, kept };
 }
 
 /** Remove the run's worktree, or say why it is being kept. `true` means the sweep is COMPLETE (the
@@ -529,7 +582,10 @@ export async function startRun(rest: string[], origCwd: string, deps: EnvDeps = 
   const rc = await spawnRun([agent, "claude", topic, "--session", session, "--role", "job-hub", "--cwd", root, J.jobBrief(rec)]);
   if (rc !== 0) {
     log.error(`job start: the job hub failed to spawn (rc ${rc}); the record is left at ${J.jobPath(topic)} — clear it with 'ap job stop ${topic}'${wt ? ` (which also removes the worktree ${wt.worktree})` : ""}`);
-    return rc;
+    // 1, not `rc`: `spawn`'s cold-start rc 3 exists for `implement spawn-slices`, which branches on
+    // it (D2). `job start` has always answered zero-vs-non-zero, and its exit code is a contract
+    // with the operator's shell, not with that retry.
+    return 1;
   }
   process.stdout.write(
     `TOPIC=${topic}\nSESSION=${session}\nHUB=${agent}-claude\nJOB=${J.jobPath(topic)}\n` +
@@ -554,7 +610,9 @@ function workerRows(rec: J.JobRecord, snapshot: Map<string, string>, now: number
  *  returned event is IN-PROCESS ONLY — it is never appended to any outbox. */
 function workerDeathProbe(rec: J.JobRecord, deps: WaitDeps): () => Promise<OutboxEvent | null> {
   return async () => {
-    const dead = workerRows(rec, await deps.snapshot(), deps.now()).find((w) => w.dead);
+    // A dead SLICE is not a job death (design D9/I): the fan-out abandons that slice and the run
+    // carries on, so only the lead — and any other non-slice worker — ends the wait here.
+    const dead = workerRows(rec, await deps.snapshot(), deps.now()).find((w) => w.dead && w.role !== "slice");
     return dead ? { event: J.WORKER_DEAD_EVENT, worker: dead.worker, verdict: dead.verdict, ts: isoUtc() } : null;
   };
 }
@@ -613,7 +671,15 @@ async function statusRun(rest: string[]): Promise<number> {
   // LIVENESS=alive HUB_STATE=working for ten hours with a worker that had never bootstrapped. One
   // line per worker dir, from the records the platform already holds — and the same scan advances
   // the miss counter `job wait`'s mid-wait poll reads, so a status run is a rescan, not a peek.
-  for (const w of workerRows(rec, live, now)) process.stdout.write(`WORKER=${w.worker} ${w.verdict}\n`);
+  // The role suffix is printed only where there is one (a slice), so every other row is the line it
+  // has always been — and a `role=slice` row explains why a dead worker did not end the job.
+  for (const w of workerRows(rec, live, now)) process.stdout.write(`WORKER=${w.worker} ${w.verdict}${w.role ? ` role=${w.role}` : ""}\n`);
+  // A fanned-out implement run's slice roster, read-only and absence-tolerant (the shape
+  // `providerFallbackLine` already uses): the WORKER rows above say which panes are alive, these say
+  // what each slice was FOR and how it ended — including the rows that never got a pane at all.
+  for (const s of readSlices(join(commandArtDir(rec.command, rec.topic), "slices.tsv"))) {
+    process.stdout.write(`SLICE=${s.agent} ${s.model} ${s.label} ${s.status}\n`);
+  }
   const tail = events.slice(-10);
   if (tail.length) {
     process.stdout.write("--- recent events ---\n");
@@ -777,7 +843,12 @@ async function stopJobRun(rest: string[]): Promise<number> {
   const root = repoRoot();
   const r = runnerAt(root);
   finishHint(rec, r);
-  if (!sweepWorktree(rec, root, r)) return keepRecord(rec, "the worktree was not swept");
+  // The SLICE trees are swept first, and unconditionally: the run-worktree sweep is an
+  // early-returning guard, and a KEPT run tree is exactly when the slice trees also need going —
+  // six worktrees per topic are reclaimed by nothing else. Both results then join ONE keep decision.
+  const slices = sweepSliceWorktrees(rec, root, r);
+  const runSwept = sweepWorktree(rec, root, r);
+  if (!runSwept || !slices.swept) return keepRecord(rec, sweepReason(runSwept, slices.kept.length));
   rmSync(jobDir(rec.topic), { recursive: true, force: true });
   try { rmdirSync(topicDir(rec.topic)); } catch { /* tolerate non-empty */ }
   log.ok(`job stop: ${rec.topic} torn down`);
@@ -791,6 +862,14 @@ function readPaneEvidence(topic: string): Record<string, string> {
     if (!o || typeof o !== "object") return {};
     return Object.fromEntries(Object.entries(o).filter((e): e is [string, string] => typeof e[1] === "string"));
   } catch { return {}; }
+}
+
+/** The one reason string a partial sweep hands `keepRecord`, naming BOTH halves when both failed.
+ *  The run-worktree-only wording is the one this verb has always printed. */
+function sweepReason(runSwept: boolean, keptSlices: number): string {
+  const slices = `${keptSlices} slice worktree${keptSlices === 1 ? " was" : "s were"} not swept`;
+  if (runSwept) return slices;
+  return keptSlices === 0 ? "the worktree was not swept" : `the worktree and ${slices}`;
 }
 
 /** An incomplete teardown KEEPS the job record and says so. The workers are already archived, so a

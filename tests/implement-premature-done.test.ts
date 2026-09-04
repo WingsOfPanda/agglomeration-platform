@@ -232,6 +232,36 @@ describe("implement turn-wait: the premature-done hold (spec J)", () => {
   });
 });
 
+describe("the hold on a NAMED turn: one evidence path feeds both the hold and the classification", () => {
+  let h: { home: string; cleanup: () => void };
+  beforeEach(() => { h = freshHome(); });
+  afterEach(() => { h.cleanup(); delete process.env.AP_IMPLEMENT_PREMATURE_DONE_S; });
+
+  /** A plan the `plan` turn's own classifier accepts: two parseable tasks (spec B). */
+  const twoTasks = "### T1: one\nfiles: src/a.ts\ndepends: none\n\n### T2: two\nfiles: src/b.ts\ndepends: none\n";
+  const planState = (art: string): string => readFileSync(join(art, "turn-lead-plan.txt"), "utf8");
+
+  it("the plan turn's `done` with plan.md PRESENT is ok and is never held (spec J)", async () => {
+    const art = seed();
+    writeFileSync(join(art, "turn-lead-plan.txt"), "OFFSET=0\n");
+    writeFileSync(join(art, "plan.md"), twoTasks);
+    const rearm: RearmFn = async () => { throw new Error("must not hold: plan.md IS this turn's completion evidence"); };
+    expect(await turnWaitWith(TOPIC, "plan", waitDeps({ rearm }))).toBe(0);
+    expect(planState(art)).toBe("OFFSET=0\nTS=ok\n");
+  });
+
+  it("the plan turn's `done` with plan.md ABSENT is HELD, and ends ok once the plan lands", async () => {
+    const art = seed();
+    writeFileSync(join(art, "turn-lead-plan.txt"), "OFFSET=0\n");
+    const rearm: RearmFn = async () => { writeFileSync(join(art, "plan.md"), twoTasks); return done("real"); };
+    expect(await turnWaitWith(TOPIC, "plan", waitDeps({ rearm }))).toBe(0);
+    const txt = planState(art);
+    expect(txt).toContain("PD=1\n");
+    expect(txt).toContain("TS=ok\n");
+    expect(txt.indexOf("PD=1")).toBeLessThan(txt.indexOf("TS=ok"));
+  });
+});
+
 describe("holdPrematureDone (the loop, over injected deps)", () => {
   let h: { home: string; cleanup: () => void };
   beforeEach(() => { h = freshHome(); });

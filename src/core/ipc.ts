@@ -102,10 +102,21 @@ export function inboxWrite(i: string, m: string, t: string, task: string, opts?:
   atomicWrite(inboxPath(i, m, t), body);
 }
 
-/** A spawned pane is either an ordinary worker or the job hub of a detached run. The role picks the
- *  three IDENTITY_BLOCKS below, and nothing else: the two differ only in the authority they grant,
- *  never in the wire protocol. */
-export type WorkerRole = "worker" | "job-hub";
+/** A spawned pane is an ordinary worker, one SLICE worker of a fanned-out implement run, or the job
+ *  hub of a detached run. The role picks the IDENTITY_BLOCKS below, and nothing else: they differ
+ *  only in the authority they grant and the scope they are told to keep, never in the wire protocol. */
+export type WorkerRole = "worker" | "job-hub" | "slice";
+
+/** The one paragraph a SLICE worker's identity carries beyond an ordinary worker's
+ *  (2026-09-04-parallel-slices-design.md, D). Its subject is the ONE thing N concurrent worktrees
+ *  make newly possible to get wrong: editing a path another slice owns. */
+const SLICE_SCOPE_BLOCK = `You are one of several slice workers on this topic. Each of you works in your own git worktree on your own branch; your inbox task names the plan tasks and the files you own. Never create, edit, or delete a file outside those paths — if your tasks genuinely need a change elsewhere, record it under \`## Out-of-slice changes needed\` in your verify report (file, line, the exact change) and continue; the Hub carries it to the worker that owns that path.`;
+
+const WORKER_BLOCKS = {
+  intro: `You are **{{agent}}**, a {{model}}-class voice playing the **{{agent}}** worker in this ap, assigned to the piece **{{topic}}**.`,
+  role_block: `**Foreground tool-use only:** Run all your shell / tool calls in the **foreground** of your own TUI session. Do NOT background your own work (do NOT pass \`run_in_background: true\` to your Bash tool, do NOT spawn detached processes for your investigation). The Hub backgrounds the wait-on-you script so the conductor pane stays interactive — that is the Hub's concern, not yours. Do the work in your pane, in order, and emit outbox events as you go. If a command is genuinely long, emit periodic \`{"event":"progress"}\` events rather than backgrounding it.`,
+  signoff: `*Tuned and ready, Hub.*`,
+};
 
 /** The only role-varying text in config/prompt-templates/identity.md: its {{intro}},
  *  {{role_block}} and {{signoff}} placeholders. The job hub used to get a SECOND template that
@@ -114,11 +125,10 @@ export type WorkerRole = "worker" | "job-hub";
  *  impossible instead. Substituted BEFORE {{agent}}/{{model}}/{{topic}}/{{state_dir}}, so a block
  *  may carry those placeholders too (the hub's completion hint does). */
 export const IDENTITY_BLOCKS: Record<WorkerRole, { intro: string; role_block: string; signoff: string }> = {
-  worker: {
-    intro: `You are **{{agent}}**, a {{model}}-class voice playing the **{{agent}}** worker in this ap, assigned to the piece **{{topic}}**.`,
-    role_block: `**Foreground tool-use only:** Run all your shell / tool calls in the **foreground** of your own TUI session. Do NOT background your own work (do NOT pass \`run_in_background: true\` to your Bash tool, do NOT spawn detached processes for your investigation). The Hub backgrounds the wait-on-you script so the conductor pane stays interactive — that is the Hub's concern, not yours. Do the work in your pane, in order, and emit outbox events as you go. If a command is genuinely long, emit periodic \`{"event":"progress"}\` events rather than backgrounding it.`,
-    signoff: `*Tuned and ready, Hub.*`,
-  },
+  worker: WORKER_BLOCKS,
+  // A slice worker IS an ordinary worker — same intro, same signoff, same foreground rule — with one
+  // paragraph appended. Composed from WORKER_BLOCKS rather than restated, so the two can never drift.
+  slice: { ...WORKER_BLOCKS, role_block: `${WORKER_BLOCKS.role_block}\n\n${SLICE_SCOPE_BLOCK}` },
   "job-hub": {
     intro: `You are **{{agent}}**, a {{model}}-class voice playing the **job hub** of a DETACHED run on the
 piece **{{topic}}**.
@@ -379,9 +389,16 @@ export function outboxDump(i: string, m: string, t: string): string {
 /** `nonce` is the pane's ownership proof (its live `@ap_nonce`), recorded beside the id because the
  *  id alone is not evidence: tmux restarts %N from 0 on a fresh server, so a pane.json that outlived
  *  its pane can name a stranger's pane. Every reader that acts on the pane re-checks the two
- *  together. Required, so no spawn path can persist an unverifiable id by omission. */
-export function paneMetaWrite(i: string, m: string, t: string, paneId: string, nonce: string): void {
-  atomicWrite(paneMetaPath(i, m, t), JSON.stringify({ pane_id: paneId, pane_nonce: nonce, agent: i, model: m, spawned_at: isoUtc() }) + "\n");
+ *  together. Required, so no spawn path can persist an unverifiable id by omission.
+ *
+ *  `role` is recorded ONLY for a slice worker: it exists so `job wait`'s death probe can ignore a
+ *  slice (design I), and every other record — the job hub's included — stays byte-identical to the
+ *  one written before the field existed, which is what keeps every existing reader unchanged. */
+export function paneMetaWrite(i: string, m: string, t: string, paneId: string, nonce: string, role?: WorkerRole): void {
+  atomicWrite(paneMetaPath(i, m, t), JSON.stringify({
+    pane_id: paneId, pane_nonce: nonce, agent: i, model: m, spawned_at: isoUtc(),
+    ...(role === "slice" ? { role } : {}),
+  }) + "\n");
 }
 
 export interface PaneMeta { agent: string; model: string; paneId: string; nonce: string; }

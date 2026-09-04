@@ -10,9 +10,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
-import { finishHint, run, startRun, startWorktree, sweepWorktree, type EnvDeps } from "../src/commands/job.js";
-import { formatJob, jobPath, mainCheckoutRoot, parseJob, worktreePathFor, type JobRecord } from "../src/core/job.js";
-import { currentBranch, runnerAt, type Runner } from "../src/core/gitwork.js";
+import { finishHint, provisionWorktree, run, startRun, startWorktree, sweepSliceWorktrees, sweepWorktree, type EnvDeps } from "../src/commands/job.js";
+import { formatJob, jobPath, mainCheckoutRoot, parseJob, sliceWorktreePathFor, worktreePathFor, type JobRecord } from "../src/core/job.js";
+import { currentBranch, dirtyPaths, runnerAt, type Runner } from "../src/core/gitwork.js";
+import { sliceBranchFor } from "../src/core/branchRecord.js";
 
 const TOPIC = "demo";
 
@@ -934,5 +935,226 @@ describe("job start — an invisible design doc is refused before anything is cr
     expect(rc).toBe(1);
     expect(err).not.toContain("exists only as uncommitted work");
     expect(err).toContain(`branch base/${TOPIC} already exists`);
+  });
+});
+
+// ---------------------------------------------------------------- the slice layer (design C / I)
+
+describe("provisionWorktree — the run tree and a slice tree are provisioned by ONE helper", () => {
+  it("clones node_modules and reports the shadow, exactly as startWorktree's inline steps did", async () => {
+    const root = repo();
+    mkdirSync(join(root, "node_modules"), { recursive: true });
+    const slice = sliceWorktreePathFor(root, TOPIC, "bravo");
+    mkdirSync(slice, { recursive: true });
+    const { r, calls } = cpScripted(root, [0]);
+    const out = { shadows: [] as string[], pin: "" };
+    const { err } = await capture(() => { Object.assign(out, provisionWorktree(root, slice, r)); return 0; });
+    expect(calls).toEqual([["-al", join(root, "node_modules"), join(slice, "node_modules")]]);
+    expect(err).toContain("hardlink-cloned node_modules into the worktree");
+    // a clean box pins nothing, and the shape is the one startWorktree spreads into the record
+    expect(out).toEqual({ shadows: [], pin: "" });
+  });
+
+  // The byte-identity guard for the RUN tree: startWorktree now calls the helper, and every
+  // assertion above in this file — the cp argv, the three fallback modes, the shadow warnings — is
+  // made through startWorktree and stays green untouched. This one pins that it is the same code.
+  it("startWorktree's node_modules chain IS this helper (same argv, same message)", async () => {
+    const root = repo();
+    mkdirSync(join(root, "node_modules"), { recursive: true });
+    const { r, calls } = cpScripted(root, [64, 0]);
+    const { err } = await capture(() => (startWorktree(root, TOPIC, r) ? 0 : 1));
+    expect(calls.map((a) => a[0])).toEqual(["-al", "-cR"]);
+    expect(err).toContain("job start: clone-copied node_modules into the worktree");
+  });
+});
+
+/** A Runner scripted for the slice sweep: `git -C <wt> status`, `worktree remove` (which really
+ *  removes the directory, so the verb's own existsSync re-check sees the truth), `for-each-ref`,
+ *  `merge-base --is-ancestor` and `branch -D`. Everything else answers rc 0 with no output. */
+function sliceRunner(opts: {
+  dirty?: string[]; removeFails?: string[]; branches?: string[]; merged?: string[]; deleteFails?: string[];
+} = {}): { r: Runner; calls: string[][] } {
+  const calls: string[][] = [];
+  const has = (xs: string[] | undefined, v: string): boolean => (xs ?? []).includes(v);
+  const r: Runner = {
+    run(cmd, args) {
+      calls.push([cmd, ...args]);
+      if (args[0] === "-C" && args[2] === "status") return { code: 0, stdout: has(opts.dirty, args[1]) ? " M half-done.txt\n" : "" };
+      if (args[0] === "worktree" && args[1] === "remove") {
+        if (has(opts.removeFails, args[2])) return { code: 128, stdout: "" };
+        rmSync(args[2], { recursive: true, force: true });
+        return { code: 0, stdout: "" };
+      }
+      if (args[0] === "for-each-ref") return { code: 0, stdout: (opts.branches ?? []).join("\n") + "\n" };
+      if (args[0] === "merge-base") return { code: has(opts.merged, args[2]) ? 0 : 1, stdout: "" };
+      if (args[0] === "branch" && args[1] === "-D") return { code: has(opts.deleteFails, args[2]) ? 1 : 0, stdout: "" };
+      return { code: 0, stdout: "" };
+    },
+  };
+  return { r, calls };
+}
+/** `<root>/.ap/worktrees/<topic>.<agent>` on disk, as `spawn-slices` leaves it. */
+function seedSliceTree(root: string, agent: string): string {
+  const p = sliceWorktreePathFor(root, TOPIC, agent);
+  mkdirSync(p, { recursive: true });
+  return p;
+}
+
+describe("sweepSliceWorktrees — every tree from disk, every branch from the ref store", () => {
+  it("removes a clean tree, prunes once, and deletes its MERGED branch", async () => {
+    const root = repo();
+    const wt = seedSliceTree(root, "bravo");
+    const branch = sliceBranchFor(TOPIC, "bravo");
+    const { r, calls } = sliceRunner({ branches: [branch], merged: [branch] });
+    const out = { swept: false, kept: [] as string[] };
+    const { err } = await capture(() => { Object.assign(out, sweepSliceWorktrees(record(root), root, r)); return 0; });
+    expect(out).toEqual({ swept: true, kept: [] });
+    expect(existsSync(wt)).toBe(false);
+    expect(calls).toContainEqual(["git", "worktree", "remove", wt]);
+    expect(calls).toContainEqual(["git", "worktree", "prune"]);
+    expect(calls).toContainEqual(["git", "merge-base", "--is-ancestor", branch, "feat/implement-demo"]);
+    expect(calls).toContainEqual(["git", "branch", "-D", branch]);
+    expect(err).toContain(`deleted the merged slice branch ${branch}`);
+  });
+
+  // The ref pattern is a glob for a reason: for-each-ref matches whole path components, so the
+  // trailing-hyphen prefix on its own would list nothing at all.
+  it("asks for the branches with a trailing-* pattern under refs/heads", async () => {
+    const root = repo();
+    const { r, calls } = sliceRunner();
+    await capture(() => { sweepSliceWorktrees(record(root), root, r); return 0; });
+    expect(calls).toContainEqual(["git", "for-each-ref", "--format=%(refname:short)", "refs/heads/feat/implement-demo-*"]);
+  });
+
+  it("KEEPS a dirty tree, names it, and SKIPS its branch — the tree still has it checked out", async () => {
+    const root = repo();
+    const wt = seedSliceTree(root, "bravo");
+    const branch = sliceBranchFor(TOPIC, "bravo");
+    const { r, calls } = sliceRunner({ dirty: [wt], branches: [branch], merged: [branch] });
+    const out = { swept: true, kept: [] as string[] };
+    const { err } = await capture(() => { Object.assign(out, sweepSliceWorktrees(record(root), root, r)); return 0; });
+    expect(out).toEqual({ swept: false, kept: [wt] });
+    expect(existsSync(wt)).toBe(true);
+    expect(calls).not.toContainEqual(["git", "worktree", "remove", wt]);
+    expect(calls).not.toContainEqual(["git", "branch", "-D", branch]);
+    expect(err).toContain(`the slice worktree ${wt} has UNCOMMITTED work in it and is being KEPT`);
+  });
+
+  it("KEEPS an UNMERGED branch and names it — those commits exist nowhere else", async () => {
+    const root = repo();
+    seedSliceTree(root, "bravo");
+    const branch = sliceBranchFor(TOPIC, "bravo");
+    const { r, calls } = sliceRunner({ branches: [branch] });     // not in `merged`
+    const out = { swept: false, kept: ["x"] as string[] };
+    const { err } = await capture(() => { Object.assign(out, sweepSliceWorktrees(record(root), root, r)); return 0; });
+    expect(calls).not.toContainEqual(["git", "branch", "-D", branch]);
+    expect(err).toContain(`the slice branch ${branch} is NOT merged into feat/implement-demo and is being KEPT`);
+    // an unmerged branch is warn-only: re-running the stop can never make it merged, so the record
+    // must not be kept over it (the posture sweepBaseBranch takes for a MOVED base branch)
+    expect(out).toEqual({ swept: true, kept: [] });
+  });
+
+  it("names a `branch -D` that FAILED, with the by-hand line", async () => {
+    const root = repo();
+    seedSliceTree(root, "bravo");
+    const branch = sliceBranchFor(TOPIC, "bravo");
+    const { r } = sliceRunner({ branches: [branch], merged: [branch], deleteFails: [branch] });
+    const { err } = await capture(() => { sweepSliceWorktrees(record(root), root, r); return 0; });
+    expect(err).toContain(`could not delete the merged slice branch ${branch}`);
+    expect(err).toContain(`git -C ${root} branch -D ${branch}`);
+  });
+
+  it("a `worktree remove` that did not complete KEEPS the tree and its branch", async () => {
+    const root = repo();
+    const wt = seedSliceTree(root, "bravo");
+    const branch = sliceBranchFor(TOPIC, "bravo");
+    const { r, calls } = sliceRunner({ removeFails: [wt], branches: [branch], merged: [branch] });
+    const out = { swept: true, kept: [] as string[] };
+    const { err } = await capture(() => { Object.assign(out, sweepSliceWorktrees(record(root), root, r)); return 0; });
+    expect(out).toEqual({ swept: false, kept: [wt] });
+    expect(calls).not.toContainEqual(["git", "branch", "-D", branch]);
+    expect(err).toContain("did not complete");
+  });
+
+  it("takes every <topic>.<agent> tree and nothing else — not the run tree, not another topic's", async () => {
+    const root = repo();
+    const mine = [seedSliceTree(root, "bravo"), seedSliceTree(root, "delta")];
+    mkdirSync(worktreePathFor(root, TOPIC), { recursive: true });          // the RUN worktree
+    mkdirSync(sliceWorktreePathFor(root, "other", "bravo"), { recursive: true });
+    const { r, calls } = sliceRunner();
+    await capture(() => { sweepSliceWorktrees(record(root), root, r); return 0; });
+    const removed = calls.filter((c) => c[1] === "worktree" && c[2] === "remove").map((c) => c[3]);
+    expect(removed).toEqual(mine);
+  });
+
+  it("is a silent no-op when nothing was fanned out (no worktrees dir at all)", async () => {
+    const root = repo();
+    const { r, calls } = sliceRunner();
+    const out = { swept: false, kept: ["x"] as string[] };
+    const { err } = await capture(() => { Object.assign(out, sweepSliceWorktrees(record(root), root, r)); return 0; });
+    expect(out).toEqual({ swept: true, kept: [] });
+    expect(calls.some((c) => c[1] === "worktree" && c[2] === "remove")).toBe(false);
+    expect(err).toBe("");
+  });
+});
+
+// The ORDER is the property: the run-worktree sweep is an early-returning guard, and a KEPT run tree
+// is exactly when the slice trees also need going — six worktrees per topic are reclaimed by nothing
+// else. MUTATION: run sweepWorktree first and return on its `false`, and the first test goes red.
+describe("job stop — the slice sweep runs on every ending that reaches the sweep", () => {
+  /** A run worktree on `feat/implement-<topic>` plus one slice worktree branched from its HEAD. */
+  async function fannedOutRun(root: string): Promise<JobRecord> {
+    const rec = record(root);
+    await capture(() => (startWorktree(root, TOPIC, runnerAt(root)) ? 0 : 1));
+    const wt = worktreePathFor(root, TOPIC);
+    git(wt, "checkout", "-q", "-b", "feat/implement-demo");
+    writeFileSync(join(wt, "run.txt"), "run\n");
+    git(wt, "add", "-A"); git(wt, "commit", "-q", "-m", "run commit");
+    git(root, "worktree", "add", "-q", "-b", sliceBranchFor(TOPIC, "bravo"), sliceWorktreePathFor(root, TOPIC, "bravo"), "feat/implement-demo");
+    seedJob(rec);
+    return rec;
+  }
+
+  it("a KEPT (dirty) run worktree still has its slice trees swept and their merged branches deleted", async () => {
+    const root = repo();
+    await fannedOutRun(root);
+    writeFileSync(join(worktreePathFor(root, TOPIC), "scratch.txt"), "uncommitted\n");
+    const { rc, err } = await capture(() => run(["stop", TOPIC]));
+    expect(rc).toBe(1);
+    expect(existsSync(worktreePathFor(root, TOPIC))).toBe(true);            // kept, as today
+    expect(existsSync(sliceWorktreePathFor(root, TOPIC, "bravo"))).toBe(false);
+    expect(runnerAt(root).run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${sliceBranchFor(TOPIC, "bravo")}`]).code).not.toBe(0);
+    expect(err).toContain("the worktree was not swept");
+    expect(existsSync(jobPath(TOPIC))).toBe(true);
+  });
+
+  it("a KEPT SLICE tree keeps the record too, and the reason names BOTH halves when both failed", async () => {
+    const root = repo();
+    await fannedOutRun(root);
+    writeFileSync(join(worktreePathFor(root, TOPIC), "scratch.txt"), "uncommitted\n");
+    writeFileSync(join(sliceWorktreePathFor(root, TOPIC, "bravo"), "half.txt"), "uncommitted\n");
+    const { rc, err } = await capture(() => run(["stop", TOPIC]));
+    expect(rc).toBe(1);
+    expect(err).toContain("the worktree and 1 slice worktree was not swept");
+    expect(existsSync(sliceWorktreePathFor(root, TOPIC, "bravo"))).toBe(true);
+    expect(runnerAt(root).run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${sliceBranchFor(TOPIC, "bravo")}`]).code).toBe(0);
+  });
+
+  it("a clean fanned-out run sweeps both and clears the record", async () => {
+    const root = repo();
+    await fannedOutRun(root);
+    const { rc } = await capture(() => run(["stop", TOPIC]));
+    expect(rc).toBe(0);
+    expect(existsSync(worktreePathFor(root, TOPIC))).toBe(false);
+    expect(existsSync(sliceWorktreePathFor(root, TOPIC, "bravo"))).toBe(false);
+    expect(existsSync(jobPath(TOPIC))).toBe(false);
+  });
+});
+
+describe("dirtyPaths — moved to gitwork.ts, where both tracked-dirty preconditions read it", () => {
+  it("parses NUL-terminated fields and consumes a rename's source", () => {
+    expect(dirtyPaths(" M src/a.ts\0?? docs/\0")).toEqual(["src/a.ts", "docs/"]);
+    expect(dirtyPaths("R  new.md\0old.md\0 M x.ts\0")).toEqual(["new.md", "x.ts"]);
+    expect(dirtyPaths("")).toEqual([]);
   });
 });

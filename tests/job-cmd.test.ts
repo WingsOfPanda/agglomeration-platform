@@ -23,6 +23,21 @@ function seedJob(rec: JobRecord = REC): void {
   writeFileSync(p, formatJob(rec));
 }
 
+/** A worker dir under the job's topic, exactly as spawn leaves one that never reported: the
+ *  platform-written status seed, an empty outbox, and a pane record. `role` is written the way
+ *  `paneMetaWrite` writes it — only for a slice. */
+function seedWorker(name: string, spawnedAt: string, role?: string): void {
+  const dir = join(dirname(dirname(jobPath(REC.topic))), name);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "pane.json"), JSON.stringify({
+    pane_id: "%89", pane_nonce: "ace6b021-d592-48aa-8a59-ba5860417a78",
+    agent: name.replace(/-[^-]*$/, ""), model: name.replace(/^.*-/, ""), spawned_at: spawnedAt,
+    ...(role ? { role } : {}),
+  }) + "\n");
+  writeFileSync(join(dir, "status.json"), JSON.stringify({ state: "idle", updated: spawnedAt, last_event: "spawn" }) + "\n");
+  writeFileSync(join(dir, "outbox.jsonl"), "");
+}
+
 const cleanups: Array<() => void> = [];
 afterEach(() => { while (cleanups.length) cleanups.pop()!(); });
 function home() { const h = freshHome(); cleanups.push(h.cleanup); return h.home; }
@@ -131,18 +146,6 @@ describe("job wait always speaks — exactly one JS= line per invocation", () =>
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, lines.map((o) => JSON.stringify(o)).join("\n") + "\n");
   }
-  /** A worker dir under the job's topic, exactly as spawn leaves one that never reported: the
-   *  platform-written status seed, an empty outbox, and a pane record. */
-  function seedWorker(name: string, spawnedAt: string): void {
-    const dir = join(dirname(dirname(jobPath(REC.topic))), name);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "pane.json"), JSON.stringify({
-      pane_id: "%89", pane_nonce: "ace6b021-d592-48aa-8a59-ba5860417a78",
-      agent: name.replace(/-[^-]*$/, ""), model: name.replace(/^.*-/, ""), spawned_at: spawnedAt,
-    }) + "\n");
-    writeFileSync(join(dir, "status.json"), JSON.stringify({ state: "idle", updated: spawnedAt, last_event: "spawn" }) + "\n");
-    writeFileSync(join(dir, "outbox.jsonl"), "");
-  }
   const JS = (out: string): string[] => out.split("\n").filter((l) => l.startsWith("JS="));
 
   it("no record: JS=standdown and rc 0 — from a watcher's seat the run is over", async () => {
@@ -229,6 +232,60 @@ describe("job wait always speaks — exactly one JS= line per invocation", () =>
 // Producer<->consumer contract: the watcher loop lives in prose, in two files, and the tokens it
 // branches on are printed by the verb above. Both must move together, and the loop itself must stay
 // one text — a fix applied to one directive and not the other is how the pair silently diverges.
+// D9/I: the fan-out's whole failure posture rests on this one predicate. A slice that dies is
+// abandoned by `implement` and the run carries on with the other N-1; only a non-slice death — the
+// lead — is a job death worth ending the origin's wait for.
+describe("job wait — a dead SLICE is not a job death", () => {
+  const SPAWNED = "2026-08-25T15:03:33Z";
+  const T_LATER = Date.parse("2026-08-25T15:10:00Z");
+  const JS = (out: string): string[] => out.split("\n").filter((l) => l.startsWith("JS="));
+  const deps = () => {
+    const v = virtualClock(T_LATER);
+    return { snapshot: async () => new Map<string, string>(), now: () => v.clock.now(), clock: v.clock };
+  };
+
+  it("a dead slice alone lets the wait run to its budget — no JS=worker-dead", async () => {
+    home();
+    seedJob();
+    seedWorker("bravo-codex", SPAWNED, "slice");
+    const { rc, out } = await capture(() => waitRun(["demo"], deps()));
+    expect(rc).toBe(1);
+    expect(JS(out)).toEqual(["JS=timeout"]);
+  });
+
+  it("the same dead worker WITHOUT the role ends the wait — the guard is the only difference", async () => {
+    home();
+    seedJob();
+    seedWorker("bravo-codex", SPAWNED);
+    const { rc, out } = await capture(() => waitRun(["demo"], deps()));
+    expect(rc).toBe(0);
+    expect(JS(out)).toEqual(["JS=worker-dead WORKER=bravo-codex VERDICT=bootstrap-dead"]);
+  });
+
+  it("a dead LEAD is still a job death while slices are live beside it", async () => {
+    home();
+    seedJob();
+    seedWorker("bravo-codex", SPAWNED, "slice");
+    seedWorker("lead-codex", SPAWNED);
+    const { rc, out } = await capture(() => waitRun(["demo"], deps()));
+    expect(rc).toBe(0);
+    expect(JS(out)).toEqual(["JS=worker-dead WORKER=lead-codex VERDICT=bootstrap-dead"]);
+  });
+});
+
+describe("job status — the slice rows say why they are not deaths", () => {
+  it("prints ` role=slice` after the verdict, and nothing extra on every other row", async () => {
+    home();
+    seedJob();
+    seedWorker("bravo-codex", "2026-08-25T15:03:33Z", "slice");
+    seedWorker("lead-codex", "2026-08-25T15:03:33Z");
+    const { out } = await capture(() => run(["status", "demo"]));
+    expect(out).toContain("WORKER=bravo-codex ");
+    expect(out.split("\n").find((l) => l.startsWith("WORKER=bravo-codex"))).toMatch(/ role=slice$/);
+    expect(out.split("\n").find((l) => l.startsWith("WORKER=lead-codex"))).not.toContain("role=");
+  });
+});
+
 describe("job wait tokens <-> the directives' canonical loop", () => {
   const md = (p: string) => readFileSync(join(process.cwd(), "commands", p), "utf8");
   const implement = md("implement.md");
@@ -435,5 +492,34 @@ describe("job status / attach — shared parked verdict", () => {
       expect(status).toContain("--- recent events ---\n");
       expect(status).toContain(`?\t${lastEvent}\t\n`);
     }
+  });
+});
+
+// The slice roster, echoed by `job status` (2026-09-04-parallel-slices-design.md, I). Read-only and
+// absence-tolerant: the WORKER rows say which panes are alive, these say what each slice was FOR —
+// including the rows that never got a pane, which no WORKER row can show.
+describe("job status — the SLICE= rows", () => {
+  it("prints one line per slices.tsv row, and nothing at all when there is no roster", async () => {
+    home();
+    seedJob();
+    const plain = (await capture(() => run(["status", "demo"]))).out;
+    expect(plain).not.toContain("SLICE=");
+    const art = commandArtDir("implement", "demo");
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "slices.tsv"),
+      "bravo\tcodex\twp3\tspawned\tT3,T5\tsrc/a.ts;src/b.ts\n" +
+      "delta\tclaude\twp4\tabandoned:pane-died\tT4\tsrc/c.ts\n");
+    const out = (await capture(() => run(["status", "demo"]))).out;
+    expect(out).toContain("SLICE=bravo codex wp3 spawned\n");
+    expect(out).toContain("SLICE=delta claude wp4 abandoned:pane-died\n");
+  });
+
+  it("reads THIS record's command dir: a quick job never prints a stale implement roster", async () => {
+    home();
+    seedJob({ ...REC, command: "quick" });
+    const art = commandArtDir("implement", REC.topic);
+    mkdirSync(art, { recursive: true });
+    writeFileSync(join(art, "slices.tsv"), "bravo\tcodex\twp3\tspawned\tT3\tsrc/a.ts\n");
+    expect((await capture(() => run(["status", REC.topic]))).out).not.toContain("SLICE=");
   });
 });
