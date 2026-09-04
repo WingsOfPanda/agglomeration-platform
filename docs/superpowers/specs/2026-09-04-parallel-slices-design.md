@@ -5,16 +5,18 @@
 **Scope:** `commands/implement.md` (a new Stage 1P between Stage 1.1 and Stage 2, one Stage 0 strip,
 one dispatch refusal, Stage 2/3 reading rules), six new `implement` verbs plus named lead turns and
 an `--agent` extension of `turn-send` / `turn-wait`, a third worker role `slice`, one optional
-`pane.json` field, `job start --workers N`, one `job mode` line, one brief line, per-slice `job status`
-rows, a slice sweep in `job stop`, and — as its own PR — a premature-`done` hold in implement's turn
-wait. **Wire protocol untouched.**
+`pane.json` field, per-slice `job status` rows, a slice sweep in `job stop`, and — as its own PR — a
+premature-`done` hold in implement's turn wait. **No new operator flag; the job layer's launch surface
+is unchanged. Wire protocol untouched.**
 **Provenance:** issue #217 (2026-09-03) and its follow-up comment, filed from a 22-hour single-worker
 detached run of a 7-work-package design doc. Derived from a read of the shipped code at `363f9d2`
 (0.5.68), then challenged by two rounds of adversarial review against that code (2026-09-04: four
 lenses, then two on the revised text; 3 blockers, 28 defects and 11 risks upheld and folded in —
-the revision notes below say where). Every decision in
-the table is a RECOMMENDATION for the operator to confirm or flip before PR 1 starts; none has been
-settled by them yet.
+the revision notes below say where). One operator direction is settled (2026-09-04): **the operator
+does not choose the worker count** — the first draft's `--workers N` flag is gone; the orchestrator
+decides the split from the plan, grilling the lead when the check refuses its grouping (D11). Every
+other decision in the table is a RECOMMENDATION for the operator to confirm or flip before PR 1
+starts.
 
 ## Problem
 
@@ -62,13 +64,16 @@ ends the whole job on the FIRST dead worker (src/commands/job.ts:555).
 
 ## Goal
 
-1. `/ap:implement <doc> --detached --workers N` runs up to N slice workers concurrently, each in its
-   own worktree and branch on a file-disjoint set of the plan's tasks, then integrates the slices
-   into the run's `feat/implement-<topic>` branch, absorbs whatever the slices left in one lead turn,
-   and runs the existing Stage 2 verify → Stage 3 fix loop on the integrated tree exactly as today.
-   A slice that fails, dies, or conflicts never ends the job.
-2. The serial path (no `--workers`, or a plan that does not split) is byte-identical to 0.5.68 in
-   every verb, file name, prompt and directive step it takes — test-asserted.
+1. `/ap:implement <doc> --detached` plans first and, when the plan splits, runs the slices
+   concurrently — each slice worker in its own worktree and branch on a file-disjoint set of the
+   plan's tasks — then integrates the slices into the run's `feat/implement-<topic>` branch, absorbs
+   whatever the slices left in one lead turn, and runs the existing Stage 2 verify → Stage 3 fix
+   loop on the integrated tree exactly as today. The operator picks nothing: the lead proposes the
+   split in its plan, the job hub decides it, a verb checks it, and a bounded grill turn resolves
+   what the check refuses. A slice that fails, dies, or conflicts never ends the job.
+2. The attached path is byte-identical to 0.5.68 in every verb, file name, prompt and directive
+   step — test-asserted. A detached run whose plan does not split is 0.5.68 plus one plan turn,
+   whose `plan.md` the serial round 1 then reuses.
 3. A per-task `done` no longer parks a run: implement's turn wait HOLDS a report-less `done` while
    the worker's pane is still active, and the round-1 / fix prompts say in one line where the single
    `done` belongs. No new event name.
@@ -78,8 +83,8 @@ ends the whole job on the FIRST dead worker (src/commands/job.ts:555).
 | # | Decision | Alternative rejected | Why |
 |---|---|---|---|
 | D1 | **`implement` only.** `quick` is a non-goal for this program. | #217 names both. | `quick` has no plan to slice on; its brief is hub-authored prose and its turn is typically minutes. A parallel `quick` is a second file layout (`roundProtocol` descriptor keyed by round only, src/core/roundProtocol.ts) for a fraction of the benefit. Revisit after a dogfood shows demand. |
-| D2 | **Detached only.** `--workers` without `--detached` is refused before Stage 0. | Attached fan-out with split panes. | The detached session already gives each worker its own window (src/commands/spawn.ts:300); attached placement splits the operator's window and `preflight` caps splits at 4. The unattended run is where the wall-clock matters. |
-| D3 | **The lead plans, the hub groups, a verb checks.** A short plan-only lead turn writes `plan.md` with machine-readable tasks (files, dependencies). The hub assigns task ids to a prelude and to slices in `slice-plan.md`; `implement slice-check` refuses an unassigned task, a cross-slice dependency, a shared file, or too many slices. | The hub partitions the design's `## Components` directly; the operator writes `--slices`; `/ap:design` emits a Slices section. | `/ap:design` docs carry a FLAT per-file Components list and no package structure (commands/design.md), so a hub partition of Components is hub-invented grouping — the class of input memory records as the top falsified one. The plan is worker-authored, names files per task and dependencies between tasks, and the serial pipeline already pays for it in round 1; the plan-only turn just moves it before the fan-out. *(Revision: replaces the Components-based partition the first draft had; the draft's "no shared directory prefix" rule would have left almost every real doc with one slice.)* |
+| D2 | **Detached only.** Stage 1P is part of every job-hub run; attached runs are untouched. | Attached fan-out with split panes. | The detached session already gives each worker its own window (src/commands/spawn.ts:300); attached placement splits the operator's window and `preflight` caps splits at 4. The unattended run is where the wall-clock matters. |
+| D3 | **The lead plans and proposes the split, the hub decides it, a verb checks it, one grill turn resolves refusals.** A short plan-only lead turn writes `plan.md` with machine-readable tasks (files, dependencies) and a `## Slices` proposal. The hub writes the decided grouping to `slice-plan.md`; `implement slice-check` refuses an unassigned task, a cross-slice dependency, a shared file, or too many slices; a refusal earns ONE grill turn in which the lead re-cuts its tasks against the refusal lines. | The hub partitions the design's `## Components` directly; the operator writes `--slices` or `--workers`; `/ap:design` emits a Slices section. | `/ap:design` docs carry a FLAT per-file Components list and no package structure (commands/design.md), so a hub partition of Components is hub-invented grouping — the class of input memory records as the top falsified one. The plan is worker-authored, names files per task and dependencies between tasks, and the serial pipeline already pays for it in round 1; the plan-only turn just moves it before the fan-out. *(Revision: replaces the Components-based partition the first draft had; the draft's "no shared directory prefix" rule would have left almost every real doc with one slice.)* |
 | D4 | **One fan-out wave, with an optional serial PRELUDE.** Tasks that other tasks depend on go in the prelude; `lead` implements it first in the run worktree; slices branch from its result. | A dependency DAG / waves. | The evidence run had exactly one prerequisite package; two waves cover it. More is YAGNI until a dogfood shows a plan that needs it. |
 | D5 | **One worktree and one branch per slice**, `<root>/.ap/worktrees/<topic>.<agent>` on `feat/implement-<topic>-<agent>`, born at the run branch's HEAD. | N workers in the run worktree with path mandates. | Two `git add -A` sites sweep the whole tree (`preSnapshot`, src/core/gitwork.ts; `postSweep`, src/commands/implement.ts): N agents in one index would commit each other's half-written files. Per-slice trees keep every commit attributable. |
 | D6 | **Integration is N merges into `feat/implement-<topic>` by a verb; conflicts are recorded, never resolved by the verb.** | Rebase slices; the hub resolves conflicts itself. | Merges never rewrite worker commits. Resolution is model judgment and belongs in a worker turn (the absorb turn, D8), not in a verb and not in the hub pane. |
@@ -87,7 +92,7 @@ ends the whole job on the FIRST dead worker (src/commands/job.ts:555).
 | D8 | **What the slices leave is absorbed in ONE named lead turn before Stage 2**, never in a fix round and never by a park at abandon time. Abandoned tasks, conflicting branches, and out-of-slice changes are that turn's brief. | Absorb into the fix loop; park on any slice failure. | A fix round has no planning phase and a 4 h base budget; a whole package in it overruns and then parks anyway, with the fix budget spent. A park at abandon time throws away N−1 finished slices. One build-shaped turn on the integrated tree, with the plan in hand, is the shape round 1 already has. *(Revision: the draft absorbed into the fix loop.)* |
 | D9 | **A dead slice worker is not a job death.** `pane.json` gains an optional `role`; `job wait`'s death probe ignores `role: "slice"`. | Teach `job` about `slices.tsv`. | The probe is per-agent already (src/core/workerLiveness.ts:65); a per-agent field on the record it already reads keeps `job` ignorant of `implement`'s files. |
 | D10 | **Premature `done` is held on pane activity, not on outbox silence.** A `done` without the turn's verify report re-arms the wait; the hold ends `failed` only after the worker's pane content has been unchanged for `AP_IMPLEMENT_PREMATURE_DONE_S` (default 1800 s), or on a later terminal event, or at the turn deadline. | Raise `AP_TURN_CONFIRM_S`; a 30-min outbox-quiet window; a plain hold to the deadline; a new `task_done` event. | A 30-min sleep after EVERY `done` slows every turn; outbox silence is normal for a codex worker mid-task (the 32-min single-file change in #217 was silent). A plain hold cannot end early on a stopped worker, because the engine extends a wait 3× while the pane is alive (src/core/ipc.ts, `extendMult`): a worker idling at its prompt would hold 12 h. Pane content is independent of worker discipline, which is what failed. `task_done` is a wire-vocabulary change the frozen protocol exists to avoid; the report IS the completion evidence. |
-| D11 | **N is a cap, 2..6, opt-in.** `--workers N` bounds the slice count; the hub may produce fewer; absent flag = serial. | Auto-parallel by default. | #217 asks for opt-in. Six concurrent codex TUIs is already a box-load question the operator should be making. |
+| D11 | **No operator knob.** The slice count is whatever grouping the hub decides and the check accepts, bounded by a code constant `MAX_SLICES = 6` (src/core/implementSlices.ts); fewer than two slices is the serial path. No flag, no env var, no brief line. | `--workers N` at launch (the first draft); an env ceiling per box. | Operator direction, 2026-09-04: the operator should not be choosing N — the plan knows how the work splits and the orchestrator is the one reading it. The ceiling is a constant because a per-box env var is still the operator choosing; six is where a detached session's windows, the box's codex processes and the disk for seven worktrees stop being free, and it moves by a code change with a dogfood behind it. |
 | D12 | **Slices are spawned one at a time, and a slice whose codex spawn dies twice is respawned with claude.** | `Promise.all` over N spawns; abandon on a second spawn death. | `config/contracts.yaml` records the failure mode: many codex workers spawning at once on a loaded box never emit `ready` in time. Sequential spawns are ≤ 170 s each — 17 min worst case for six, against a multi-hour run. The per-slice fallback is the platform's own doctrine (docs/superpowers/specs/2026-08-30-provider-fallback-design.md) applied per worker; `resolveModel` (src/core/ipc.ts:427) already finds a worker's model from its dir, so mixed providers cost the turn verbs nothing. *(Revision: the draft spawned in parallel and abandoned.)* |
 
 ## Architecture
@@ -95,17 +100,20 @@ ends the whole job on the FIRST dead worker (src/commands/job.ts:555).
 ### A. Shape of a parallel run
 
 ```
-job start --command implement --workers 3 ...        (origin hub; as today plus one flag)
+job start --command implement ...                     (origin hub; exactly as today)
   worktree  <root>/.ap/worktrees/<topic>              on base/<topic>          (as today)
   session   ap-<topic>: window 0 job hub              (as today)
 
 job hub runs commands/implement.md:
   Stage 0     init --target <worktree>, pre-snapshot, branch feat/implement-<topic>   (as today)
   Stage 1.1   spawn lead in the run worktree                                          (as today)
-  Stage 1P    -- new, taken only when `ap job mode` prints WORKERS>=2 --
-    1P.0  plan turn:      `turn-send <topic> plan` -> lead writes plan.md (tasks, files, deps)
-    1P.1  slice plan:     hub writes $ART/slice-plan.md (task ids -> prelude / slices);
-                          `implement slice-check` -> slices.tsv, slice-<agent>.md
+  Stage 1P    -- new, part of EVERY job-hub run (`ap job mode` prints DETACHED=1) --
+    1P.0  plan turn:      `turn-send <topic> plan` -> lead writes plan.md (tasks, files, deps,
+                          and a ## Slices proposal)
+    1P.1  slice plan:     hub decides the grouping from the proposal, writes $ART/slice-plan.md;
+                          `implement slice-check` -> slices.tsv, slice-<agent>.md; a refusal ->
+                          ONE grill turn (`turn-send <topic> grill`), lead re-cuts plan.md, re-check;
+                          fewer than two slices -> serial round 1 as written
     1P.2  prelude turn:   `turn-send <topic> prelude` -> lead implements the prelude tasks
     1P.3  spawn-slices:   per slice a worktree <root>/.ap/worktrees/<topic>.<agent> on
                           feat/implement-<topic>-<agent> at the run branch's HEAD, a window in
@@ -128,16 +136,18 @@ job hub runs commands/implement.md:
 job stop    sweeps the slice worktrees and merged slice branches, before the run worktree (new arm)
 ```
 
-The lead's parallel-phase turns are NAMED (`plan`, `prelude`, `absorb`), not numbered: their state
-files are `turn-lead-plan.txt` etc., their reports `verify-report-<name>.md`, and they are outside
-`MAX_ROUNDS`, which keeps counting the numbered fix rounds exactly as today. `turn-send` /
-`turn-wait` accept `<round>` as `[1-9][0-9]*|plan|prelude|absorb` (the named forms lead-only).
+The lead's parallel-phase turns are NAMED (`plan`, `grill`, `prelude`, `absorb`), not numbered:
+their state files are `turn-lead-plan.txt` etc., their reports `verify-report-<name>.md` (the plan
+and grill turns write `plan.md` instead), and they are outside `MAX_ROUNDS`, which keeps counting
+the numbered fix rounds exactly as today. `turn-send` / `turn-wait` accept `<round>` as
+`[1-9][0-9]*|plan|grill|prelude|absorb` (the named forms lead-only).
 
 ### B. The plan turn, the slice plan, and `slice-check`
 
 **1P.0 — the plan turn.** `turn-send <topic> plan` sends `composePlanPrompt` (new, in
 src/core/implementTurn.ts): PHASE 1 of the round-1 prompt alone — read the design, write
-`plan.md`, emit `done`, implement nothing — with one contract added so a verb can read the plan:
+`plan.md`, emit `done`, implement nothing — with two contracts added so a verb can read the plan
+and the hub can decide the split:
 
 ```markdown
 ### T1: <title>
@@ -147,7 +157,18 @@ depends: none
 ### T2: <title>
 files: ...
 depends: T1
+
+## Slices
+prelude: T1, T2
+slice: T3, T5
+slice: T4
 ```
+
+The `## Slices` proposal is the LEAD's view of what can run concurrently: the worker that cut the
+tasks knows their coupling best. The prompt says what a good split is — tasks that other tasks
+depend on go first, tasks sharing a file go together, a slice is at least a real hour of work (a
+ten-minute slice is not worth a worktree and a bootstrap), `prelude: none` when nothing is a
+prerequisite, one `slice:` line when nothing splits — and that the hub decides, not the lead.
 
 `turn-wait <topic> plan` classifies `TS=ok` when `plan.md` parses to at least two tasks
 (`parsePlanTasks`, new in `src/core/implementSlices.ts`: `^### T(\d+):` headings, one `files:` line
@@ -168,7 +189,10 @@ would never overlap anything and two slices would edit the same files with the c
 `files:` path absent from the run worktree is reported warn-only as `MISSING=<Tn>:<path>`, the way
 `lintComponentsPaths` reports an unfound Components path: the task may create it.
 
-**1P.1 — the slice plan.** The hub Writes `$ART/slice-plan.md`, assigning every task id once:
+**1P.1 — the slice plan.** The hub reads the proposal against the design and DECIDES: it may
+merge slices it judges too small or too coupled, move a task into the prelude, or keep the
+proposal as is; it never invents tasks or paths. It Writes `$ART/slice-plan.md`, assigning every
+task id once:
 
 ```markdown
 # Slice plan
@@ -182,10 +206,10 @@ tasks: T4
 
 Rules the directive gives the hub: a task that other tasks depend on goes in the prelude, or in the
 same slice as every task that depends on it; tasks whose files overlap go in one slice; the prelude
-may be empty (`tasks: none`); at most `WORKERS` slices; the hub adds no paths and no prose — the
-tasks carry their own.
+may be empty (`tasks: none`); at most `MAX_SLICES` (6, a constant) slices; the hub adds no paths and
+no prose — the tasks carry their own.
 
-`implement slice-check <topic> --max <N>` parses both files and prints `KEY=value` lines:
+`implement slice-check <topic>` parses both files and prints `KEY=value` lines:
 
 - Refusals (rc 1, nothing written): `SLICES_EXIST` when `$ART/slices.tsv` already holds any row
   whose status is not `planned` — `pickAgents` is random per call, so a re-entered check would
@@ -206,6 +230,19 @@ tasks carry their own.
   absent for an empty prelude).
 - `SLICES` < 2 → the directive skips the rest of Stage 1P: serial round 1 as written (its RESUME
   CHECK finds `plan.md`), with one hub flag `parallel-degraded: SLICES=<n>` for `/ap:review`.
+
+**The grill turn.** A refusal is usually about the PLAN's cut, not the hub's grouping: two tasks the
+hub wants apart share a file, or a task depends on one the hub put in another slice. The hub alone
+can only regroup; the lead can re-cut — split a task so the shared file moves to the prelude, fold
+two coupled tasks into one, declare a dependency it had left implicit. So on rc 1 the hub composes a
+grill: the refusal lines verbatim, what it was trying to group and why, and the instruction to
+rewrite `plan.md` (tasks and proposal) so the check can pass; `turn-send <topic> grill @<file>`
+sends it (`composeGrillPrompt`, new — the plan prompt's contract plus the hub's text, ending with
+"emit done after rewriting plan.md"). `turn-wait <topic> grill` classifies `ok` when `plan.md`
+re-parses. The hub then regroups and re-runs `slice-check`. ONE grill per run: a second refusal
+takes the serial path with the flag. The grill is a task dispatch to an idle worker over its own
+inbox (the one-writer rule holds), the explore precedent being Phase 8c's one drill turn per worker
+(commands/explore.md).
 
 `slices.tsv` is the roster every later slice verb reads, the way `list.txt` is for explore
 (src/core/roster.ts). Its `status` and `model` columns are the fields that change over the run:
@@ -459,22 +496,10 @@ teardown as written. Slice workers are already stopped; `job stop` sweeps their 
 
 ### I. The job layer
 
-- `job start --workers N` (src/commands/job.ts:445): integer 2..6 else rc 2; recorded as an optional
-  `workers` field of `JobRecord` (omitted when absent, so a serial record is byte-identical;
-  `parseJob`, src/core/job.ts:210, is soft in both directions already). Refused (rc 2) with
-  `--command quick` (D1) and with `--no-worktree` (slices branch from a run worktree, never from the
-  operator's live checkout).
-- `job mode <topic>` (src/commands/job.ts:806): `DETACHED=` stays keyed on `existsSync(jobPath)`
-  exactly as today — a torn record must keep printing `DETACHED=1`, the failure the file's own
-  comment guards. With a record present, a second line `WORKERS=<n>` follows, from `parseJob`: `1`
-  when the field is absent OR the record is unreadable (fail toward serial, never toward a fan-out
-  the operator did not ask for); with no record, `DETACHED=0` alone and rc 1. The usage text at the
-  top of the file names the second line. Every existing reader is prose that stays true with a
-  second line.
-- `jobBrief` (src/core/job.ts:669) adds one settled-parameter line, `workers <N> — parallel slices;
-  the directive's Stage 1P applies`, only when the field is present; the serial brief is
-  byte-identical (pinned by the new test, not by an existing one — tests/job.test.ts pins the brief
-  with `toContain` only).
+- `job start`, `job mode`, the job record and the brief are UNCHANGED: there is no flag to
+  record, and `DETACHED=1` is the only signal Stage 1P needs (D11). A `--no-worktree` job still
+  reaches Stage 1P; `spawn-slices` refuses it (D step 1), so such a run plans and then takes the
+  serial path — the plan turn is its only cost.
 - `job status` (src/commands/job.ts:570): every worker row already prints from `scanTopicWorkers`
   (src/core/workerLiveness.ts:65); with `WorkerRow.role` the row reads `WORKER=<name> <verdict>
   role=slice`. When `$ART/slices.tsv` exists the status also prints one `SLICE=<agent> <model>
@@ -508,11 +533,11 @@ teardown as written. Slice workers are already stopped; `job stop` sweeps their 
 
 In `turnWaitWith` (src/commands/implement.ts:274), after `awaitTurn` returns: when the event is
 `done` and the turn's COMPLETION EVIDENCE is absent or empty (today's `failed`), the verb instead
-holds. The evidence is per turn, not per round token: `plan.md` for the `plan` turn (which writes
-no report — keying the hold on `verify-report-plan.md` would hold every healthy plan turn for 30
-min and then fail it, the blocker both second-pass reviews found), `verify-report-<name>.md` for
-`prelude` / `absorb` and the numbered rounds, the per-agent report for a slice; the same resolver
-`turn-wait` uses for `TS=ok`. Then:
+holds. The evidence is per turn, not per round token: `plan.md` for the `plan` and `grill` turns
+(which write no report — keying the hold on `verify-report-plan.md` would hold every healthy plan
+turn for 30 min and then fail it, the blocker both second-pass reviews found),
+`verify-report-<name>.md` for `prelude` / `absorb` and the numbered rounds, the per-agent report
+for a slice; the same resolver `turn-wait` uses for `TS=ok`. Then:
 
 1. flags `premature-done: <agent> <round> — holding` ONCE per turn (later holds only append
    lines; a 12-task worker must not file 12 issues), appends `OFFSET=<outbox size now>\nPD=<n>\n`
@@ -566,33 +591,32 @@ end (D1).
 
 ### K. The directive (commands/implement.md)
 
-**Dispatch (`## DETACHED MODE`, :20).** The "Neither" bullet gains: *"`--workers` in `$ARGUMENTS`
-without `--detached` — stop and say it needs `--detached`."* Stage 0 step 1 (the strip both paths
-run, :164) strips `--workers N` / `--workers=N` alongside `--max-rounds` and `--detached`, capturing
-N as `WORKERS_OVERRIDE`, AND step 3's Write-tool parenthetical — the sentence that enumerates what
-the filtered string drops, which tests/implement-directive-args.test.ts pins in both places —
-lists the two `--workers` forms too; the launch path's step 2 passes `--workers <N>` to `job
-start`. *(Revision: the draft put the strip in the launch path, which a
-`--workers`-without-`--detached` run never enters, and amended only one of the two steps.)*
+**Dispatch (`## DETACHED MODE`, :20), the launch path (:30) and Stage 0 (:164) are untouched**:
+there is no flag to strip, pass, or refuse. *(Revision: the first draft carried a `--workers`
+flag through all three; the operator's direction removed it.)*
 
-**Run path (:108).** The table gains one row: Stage 1P applies when `$CS job mode <TOPIC>` prints
-`WORKERS=<n>` with n ≥ 2; otherwise the pipeline is as written.
+**Run path (:108).** The table gains one row: Stage 1P is part of every job-hub run — the
+`DETACHED=1` that put you on this path is its only signal.
 
-**`## Stage 1P — parallel slices (detached, WORKERS >= 2)`**, inserted after Stage 1.1 (:255):
+**`## Stage 1P — parallel slices (every job-hub run)`**, inserted after Stage 1.1 (:255):
 
 Stage 1P opens with Stage 1's `Initialize once` line (`ROUND=1`, `RETRY=0`,
 `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`), because a fanned-out run reaches Stage 2 without ever
 entering Stage 1, and Stage 2/3 branch on `ROUND` and `MAX_ROUNDS`. Each named turn carries its OWN
-retry counter (`RETRY_PLAN`, `RETRY_PRELUDE`, `RETRY_ABSORB`); Stage 1's `RETRY` is the numbered
-rounds' alone. "Stage 1's retry arm" below means that arm with the named counter.
+retry counter (`RETRY_PLAN`, `RETRY_GRILL`, `RETRY_PRELUDE`, `RETRY_ABSORB`); Stage 1's `RETRY` is
+the numbered rounds' alone. "Stage 1's retry arm" below means that arm with the named counter.
 
 - **1P.0 Plan turn.** `$CS implement turn-send <TOPIC> plan`, Stage 1's Monitor block with
   `turn-wait "$TOPIC" plan` and `F="$ART/turn-lead-plan.txt"`. `TS=ok` → 1P.1. `failed`/`timeout` →
   Stage 1's retry once; a second failure → `flag` and the serial path (rm the round files; the
   round-1 prompt's RESUME CHECK reuses any `plan.md` that exists).
-- **1P.1 Slice plan.** Write `$ART/slice-plan.md` under B's rules; `$CS implement slice-check
-  <TOPIC> --max <WORKERS>`. rc 1 → revise ONCE and re-run; rc 1 again → `flag` and the serial path.
-  `SLICES` < 2 → the serial path. Read `PRELUDE=` and `AGENTS=`.
+- **1P.1 Slice plan.** Read `plan.md`'s `## Slices` proposal against the design, decide the
+  grouping, Write `$ART/slice-plan.md` under B's rules; `$CS implement slice-check <TOPIC>`. rc 1 →
+  ONE grill turn: Write the grill text (the refusal lines verbatim, the grouping you wanted and why,
+  "rewrite plan.md so the check passes"), `turn-send <TOPIC> grill @<file>`, Stage 1's Monitor on
+  `turn-lead-grill.txt`, `TS=ok` → regroup from the new proposal, re-run `slice-check`; rc 1 again,
+  or a grill turn that fails twice → `flag` and the serial path. `SLICES` < 2 → the serial path.
+  Read `PRELUDE=` and `AGENTS=`.
 - **1P.2 Prelude.** `PRELUDE=1` → `turn-send <TOPIC> prelude`, Stage 1's Monitor on
   `turn-lead-prelude.txt`; `TS=ok` continues; the failed/timeout arm is Stage 1's (retry once, then
   PARK). `PRELUDE=0` → skip; the lead idles.
@@ -630,42 +654,39 @@ one rolling item. The `JS=worker-dead` arm's "second worker under one hub" sente
 
 | Path | Change |
 |---|---|
-| `src/core/implementSlices.ts` | new: `parsePlanTasks`, `parseSlicePlan`, `checkSlicePlan` (assignment / dependency / overlap / cap / agents), `readSlices` / `writeSlices` (`slices.tsv`), `sliceWorktreePathFor`, `sliceBranchFor`, `ABANDON_REASONS`, `absorbIssues` (the ISSUES block from slices.tsv + integrate tsv + reports) |
+| `src/core/implementSlices.ts` | new: `MAX_SLICES = 6`, `parsePlanTasks` (tasks + the `## Slices` proposal), `parseSlicePlan`, `checkSlicePlan` (assignment / dependency / overlap / cap / agents), `readSlices` / `writeSlices` (`slices.tsv`), `sliceWorktreePathFor`, `sliceBranchFor`, `ABANDON_REASONS`, `absorbIssues` (the ISSUES block from slices.tsv + integrate tsv + reports) |
 | `src/core/implementHold.ts` | new (PR 1): the premature-`done` hold loop, the pane-idle probe closure, the `OFFSET=`/`PD=` writer |
-| `src/commands/implement.ts` | `WORKER` → default of an `agent` parameter in `turnSendWith` / `turnWaitWith` (`--agent`); named rounds `plan|prelude|absorb` with the plan turn's own budget; per-turn completion-evidence resolver; `PANE=died` lead line; the hold call (PR 1); new verbs `slice-check`, `spawn-slices`, `abandon-slice`, `slice-gate`, `integrate` |
+| `src/commands/implement.ts` | `WORKER` → default of an `agent` parameter in `turnSendWith` / `turnWaitWith` (`--agent`); named rounds `plan|grill|prelude|absorb` with the plan and grill turns' own budget; per-turn completion-evidence resolver; `PANE=died` lead line; the hold call (PR 1); new verbs `slice-check`, `spawn-slices`, `abandon-slice`, `slice-gate`, `integrate` |
 | `src/commands/spawn.ts` | `--role slice` admitted; `role` passed to `paneMetaWrite` for slices only; the bootstrap arm returns rc 3 for `pane_dead` / `timeout` |
 | `src/core/gitwork.ts` | `dirtyPaths` moved here beside `classifyDirty` (from src/commands/job.ts) for the two tracked-dirty preconditions |
-| `src/core/implementTurn.ts` | `composePlanPrompt`, `composeSliceRound1Prompt` (explicit log paths), `composePreludePrompt`, `composeAbsorbPrompt`; the single-`done` line in `composeRound1Prompt` and `composeFixPrompt` (PR 1) |
+| `src/core/implementTurn.ts` | `composePlanPrompt` (task contract + `## Slices` proposal), `composeGrillPrompt`, `composeSliceRound1Prompt` (explicit log paths), `composePreludePrompt`, `composeAbsorbPrompt`; the single-`done` line in `composeRound1Prompt` and `composeFixPrompt` (PR 1) |
 | `src/core/ipc.ts` | `WorkerRole` + `"slice"`; `IDENTITY_BLOCKS.slice`; `paneMetaWrite` optional `role` |
 | `src/core/workerLiveness.ts` | `WorkerRow.role`, read by a local helper beside `spawnedAtOf` |
-| `src/commands/job.ts` | `--workers` on `startRun` (refused with `quick` and `--no-worktree`); `WORKERS=` in `modeRun` and its usage line; `workerDeathProbe` skips slices; `statusRun` role suffix + `SLICE=` lines; `sweepSliceWorktrees` before `sweepWorktree` in `stopJobRun`, joined keep reason; `provisionWorktree` extracted from `startWorktree` |
-| `src/core/job.ts` | `JobRecord.workers?`; the brief's conditional `workers` line |
+| `src/commands/job.ts` | `workerDeathProbe` skips slices; `statusRun` role suffix + `SLICE=` lines; `sweepSliceWorktrees` before `sweepWorktree` in `stopJobRun`, joined keep reason; `provisionWorktree` extracted from `startWorktree`. `startRun`, `modeRun`, the record and the brief untouched |
 | `commands/implement.md` | dispatch refusal; Stage 0 strip; launch-path flag; run-path row; Stage 1P; Stage 2 paragraph; the amended "second worker" sentence; the amended `AP_TURN_CONFIRM_S=0` sentence (PR 1) |
 | `commands/job.md` | `status` / `stop` documentation; the pinned-branches paragraph; the amended "second worker" sentence |
 | `package.json` | version bump per PR |
 | `.claude-plugin/plugin.json` | version bump per PR |
 | `.claude-plugin/marketplace.json` | version bump per PR |
-| `tests/implement-slices.test.ts` | new: plan parsing (incl. `PLAN_UNPARSEABLE`, `BADFILE`, `MISSING`), `SLICES_EXIST` re-entry refusal, assignment / duplicate / unknown / dependency refusals, overlap (equals / under / contains; same-directory siblings pass), cap, `AGENTS_SHORT`, `slices.tsv` round-trip, `absorbIssues` over every spawned row |
+| `tests/implement-slices.test.ts` | new: plan parsing (tasks and the `## Slices` proposal; `PLAN_UNPARSEABLE`, `BADFILE`, `MISSING`), `SLICES_EXIST` re-entry refusal, assignment / duplicate / unknown / dependency refusals, overlap (equals / under / contains; same-directory siblings pass), the `MAX_SLICES` cap, `AGENTS_SHORT`, `slices.tsv` round-trip, `absorbIssues` over every spawned row |
 | `tests/implement-integrate.test.ts` | new: branch precondition, tracked-dirty precondition (`-z`), `no-branch` / `empty` / `merged` / `conflict` / `tree-dirty` stop arms over a fake `Runner` |
 | `tests/implement-spawn-slices.test.ts` | new: worktree+branch arg arrays with the root-bound runner, refusal on existing path/branch for `planned` rows, reuse and worker-dir teardown under `--retry`, sequential order, a throwing spawn recorded and skipped, rc 3 retry then codex→claude fallback and its flag, status and model transitions, tally incl. rc 2 |
 | `tests/spawn.test.ts` | `--role slice` accepted; `pane.json` `role` present only for slices; bootstrap `pane_dead` / `timeout` return rc 3, `error_event` rc 1 |
-| `tests/implement-turn-agent.test.ts` | new: `--agent` keys every state file and the per-agent report/log paths; `plan|prelude|absorb` state files and the plan turn's budget; the prelude prompt's PHASE 1 and PHASE 2 scoping; the lead's paths and prompt text byte-identical without `--agent` (fixture captured at 0.5.68); `PANE=died` line; slice-gate `held` and its zero-row rc 1 |
+| `tests/implement-turn-agent.test.ts` | new: `--agent` keys every state file and the per-agent report/log paths; `plan|grill|prelude|absorb` state files, the plan/grill budget, and `plan.md` as the plan and grill turns' evidence; the grill prompt carries the refusal lines verbatim; the prelude prompt's PHASE 1 and PHASE 2 scoping; the lead's paths and prompt text byte-identical without `--agent` (fixture captured at 0.5.68); `PANE=died` line; slice-gate `held` and its zero-row rc 1 |
 | `tests/implement-premature-done.test.ts` | new (PR 1): held `done` → later `done`+report = `ok`; the `plan` turn's `done` with `plan.md` present is `ok` and never held; pane-idle → `failed`; deadline → `timeout`; `AP_IMPLEMENT_PREMATURE_DONE_S=0` restores today's `failed`; one flag per turn; `OFFSET=`/`PD=` lines and no `TS=` while held; unverifiable pane → `failed` at once (tests/implement-turn-cmd.test.ts's existing gate stays green) |
-| `tests/job-cmd.test.ts` | `--workers` validation and record field; `WORKERS=` line (and its absence with no record); dead slice ignored by the probe, dead lead not; `SLICE=` rows; slice sweep arms incl. the KEPT-tree branch skip and the failed `-D` |
-| `tests/job.test.ts` | `jobBrief` byte-identical for a record without `workers`; the line present with it |
+| `tests/job-cmd.test.ts` | dead slice ignored by the probe, dead lead not; `SLICE=` rows; slice sweep arms incl. the KEPT-tree branch skip and the failed `-D`; `job start` / `job mode` / the brief unchanged (`toEqual` against the 0.5.68 shapes) |
 | `tests/job-hub-template.test.ts` | the slice identity block rendered |
-| `tests/implement-directive-args.test.ts` | Stage 0 strips `--workers` in both forms |
-| `tests/implement-parallel-directive.test.ts` | new: Stage 1P present with its nine steps; the per-slice Monitor block; the dispatch refusal; the amended sentences in both directives |
+| `tests/implement-parallel-directive.test.ts` | new: Stage 1P present with its nine steps and the one-grill rule; the per-slice Monitor block; no `--workers` token anywhere in either directive; the amended sentences in both directives |
 
 ## Testing
 
 - Every new verb is a pure function over injected deps plus a thin CLI adapter, tested with
   `freshHome()` (tests/helpers/tmpHome.ts) and a fake `Runner`; tmux only as arg arrays; no pane is
   ever spawned. Directive text is pinned the way tests/job-cmd.test.ts pins the Monitor loop.
-- **Serial byte-identity**: `turn-send` / `turn-wait` without `--agent` produce the 0.5.68 file
-  names and prompt text (fixture); `jobBrief` of a record without `workers` is byte-identical to a
-  0.5.68 fixture; a `job start` record without `--workers` has the 0.5.68 key SET (the record itself
-  carries a random agent and timestamps, so it is compared by keys, not bytes).
+- **Attached byte-identity**: `turn-send` / `turn-wait` without `--agent` and with a numbered
+  round produce the 0.5.68 file names and prompt text (fixture); the job layer's launch surface is
+  asserted unchanged by the existing `job-cmd` / `job` tests plus a `toEqual` on the record's key set
+  (the record itself carries a random agent and timestamps, so it is compared by keys, not bytes).
 - **Mutation evidence per gate** (memory: verify gates by mutation): each new test's PR body carries
   a `MUTATION:` line — remove the `role !== "slice"` guard and show the probe test go red; swap
   `--no-ff` for `--ff` and show the integrate arg test go red; drop the containment clause of the
@@ -675,18 +696,23 @@ one rolling item. The `JS=worker-dead` arm's "second worker under one hub" sente
   `dist/ap.cjs` rebuilt and committed, versions equal in the three manifests, the logging `gh` shim
   on PATH showing zero calls.
 - **Dogfood** (before PR 3 merges): one detached implement of a design doc whose plan yields a
-  prelude and ≥ 3 file-disjoint slices, `--workers 3`, on a box with codex. Recorded: the plan
-  turn's duration, per-slice wall time, `integrate-1.tsv`, whether the absorb turn ran and why,
+  prelude and ≥ 3 file-disjoint slices, on a box with codex. Recorded: the plan turn's duration,
+  the lead's `## Slices` proposal against the hub's decided grouping, whether a grill turn ran and
+  what it changed, per-slice wall time, `integrate-1.tsv`, whether the absorb turn ran and why,
   whether Stage 2 ran on the integrated tree, the sweep's result, one held `done` if any occurred,
-  and every flag.
+  and every flag. A second, smaller detached run on a doc that does NOT split, recording only the
+  plan turn's cost.
 
 ## Success Criteria
 
-1. A detached implement launched with `--workers 3` on a doc whose plan splits into a prelude and
-   3 slices runs the 3 slices concurrently (three windows in `ap-<topic>`, three `turn-<agent>-1.txt`
-   files armed within one minute of each other), integrates them into `feat/implement-<topic>`, and
-   reaches Stage 2 on the integrated tree; wall-clock is below the sum of the slice turns.
-2. Without `--workers`, every verb, file, prompt and directive step is as in 0.5.68 (test-asserted).
+1. A detached implement on a doc whose plan splits into a prelude and 3 slices runs the 3 slices
+   concurrently with no operator input beyond `--detached` (three windows in `ap-<topic>`, three
+   `turn-<agent>-1.txt` files armed within one minute of each other), integrates them into
+   `feat/implement-<topic>`, and reaches Stage 2 on the integrated tree; wall-clock is below the sum
+   of the slice turns.
+2. Attached: every verb, file, prompt and directive step is as in 0.5.68 (test-asserted). Detached
+   on a plan that does not split: 0.5.68 plus one plan turn, and the serial round 1 reuses its
+   `plan.md` (no second planning phase in the worker's transcript).
 3. A slice whose spawn or turn fails twice, whose pane dies, or whose merge conflicts never ends the
    job; the run reaches Stage 2 with that slice recorded, its `[slice]` / `[integration]` item
    carried by the absorb turn; `job wait` at the origin never reports `JS=worker-dead` for a slice.
@@ -701,7 +727,7 @@ one rolling item. The `JS=worker-dead` arm's "second worker under one hub" sente
 ## Non-goals
 
 - `quick` (D1); attached fan-out (D2); dependency waves beyond one prelude (D4); per-slice fix
-  rounds (D7); N > 6 (D11).
+  rounds (D7); an operator-chosen worker count, or more than `MAX_SLICES` (D11).
 - A `task_done` wire event and a raised `AP_TURN_CONFIRM_S` default (D10). The `job report` verb
   #217 mentions in passing is a separate, unrelated ask.
 - Automatic grouping without a hub (a pure-verb partition of the plan by file overlap): the verb
@@ -746,20 +772,28 @@ stale-token gate (tests/stale-tokens.test.ts) matches none of the new names.
   hold then ends at the remaining turn deadline — bounded, with `extendMult: 1`); a TUI static during
   a long silent compile could read idle before `AP_IMPLEMENT_PREMATURE_DONE_S` (a codex pane shows an
   elapsed counter while a command runs, so this is expected to be rare; the env var is the knob).
-- **Box load.** N concurrent codex TUIs plus N slice suites. `--workers` is the operator's cap; the
-  spec sets no automatic scaling. Sequential spawns (D12) keep bootstrap off the loaded path.
+- **Box load.** N concurrent codex TUIs plus N slice suites, with N decided by the hub up to
+  `MAX_SLICES`. The hub's "a slice is at least a real hour of work" rule and the constant are the
+  only bounds; sequential spawns (D12) keep bootstrap off the loaded path. If a dogfood shows six
+  is too many for a box, the constant moves.
+- **Every detached run pays a plan turn** (the plan-only turn plus the hub's grouping), even one
+  whose plan does not split. The `plan.md` is reused by the serial round 1, so the cost is the
+  turn's overhead, expected at 15–30 min; the second dogfood run measures it. If it proves too high
+  for small docs, the knob is a hub judgment step before 1P.0 ("does this design have more than one
+  package at all?"), not an operator flag.
 - **Slice suites are partial.** A slice worktree lacks the other slices, so a design-level test that
   spans packages cannot pass there; the prompt says to list, not fix, such failures. The hub's
   Stage 2 run on the integrated tree is the only complete run.
-- **Disk.** `--workers 6` is seven worktrees and seven hardlink clones of `node_modules` per topic
+- **Disk.** Six slices is seven worktrees and seven hardlink clones of `node_modules` per topic
   until `job stop`; the sweep is the only reclaimer, which is why I orders it to run on every ending.
 - **Forensics volume.** The wind-down scrape walks every worker dir under the topic
   (src/core/forensics.ts), so a 6-slice run files every slice's `error` / `question` lines and
   `FLAG:` notes as comments on the ONE run issue. That is the intended shape — one issue per run,
   the slices are its workers — and no per-agent cap is set; if a dogfood shows it drowning the
   issue, a cap is a `scrapeArtDir` change, not a slice change.
-- **Open to the operator:** D1 (`quick` out), D3 (plan turn vs. a Components partition), D7
-  (lead-only fix loop), D10 (pane probe vs. a plain hold — the review upheld the probe), D12
-  (sequential spawns), and whether the lead should be spawned lazily when `PRELUDE=0` (this spec
-  spawns it at Stage 1.1 as today: an idle pane is free, and the provider-fallback canary is worth
-  more than the window).
+- **Open to the operator:** D1 (`quick` out), D3 (plan turn with the lead's proposal and one
+  grill, vs. a Components partition), D7 (lead-only fix loop), D10 (pane probe vs. a plain hold —
+  the review upheld the probe), D12 (sequential spawns), the value of `MAX_SLICES` (six), and whether
+  the lead should be spawned lazily when `PRELUDE=0` (this spec spawns it at Stage 1.1 as today: an
+  idle pane is free, and the provider-fallback canary is worth more than the window). D11 itself —
+  no operator knob — is settled.
