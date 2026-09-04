@@ -93,6 +93,17 @@ describe("worktree location + provenance", () => {
   it("a path this platform could have created under the root is provenanced", () => {
     expect(J.worktreeProvenanced("/repo/.ap/worktrees/demo", "/repo")).toBe(true);
   });
+  // parallel-slices C: a slice worktree is a SIBLING of the run worktree — provenanced (job stop may
+  // remove it; pinReport pins it), re-rooted by mainCheckoutRoot, yet never read as a run worktree:
+  // the dot fails the slug rule, so worktreeTopic answers "" and no topic can collide with it.
+  it("a slice worktree is <root>/.ap/worktrees/<topic>.<agent>: provenanced, re-rooted, never a topic", () => {
+    const p = J.sliceWorktreePathFor("/repo", "demo", "alpha");
+    expect(p).toBe("/repo/.ap/worktrees/demo.alpha");
+    expect(J.worktreeProvenanced(p, "/repo")).toBe(true);
+    expect(J.mainCheckoutRoot(p)).toBe("/repo");
+    expect(J.worktreeTopic(p)).toBe("");
+    expect(p).not.toBe(J.worktreePathFor("/repo", "demo"));
+  });
   // The pane-ownership rule, applied to directories: `job stop` removes only what it can PROVE it
   // created. A hand-edited or carried-over record naming any other checkout is a defect to surface,
   // never a path to rm.

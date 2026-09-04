@@ -3,13 +3,20 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
-import { branchNameFor, readBranchRecord } from "../src/core/branchRecord.js";
+import { branchNameFor, readBranchRecord, sliceBranchFor } from "../src/core/branchRecord.js";
 
 describe("branchNameFor", () => {
   it("spells each command's branch exactly as its call sites did", () => {
     expect(branchNameFor("quick", "auth")).toBe("feat/quick-auth");
     expect(branchNameFor("implement", "add-oauth")).toBe("feat/implement-add-oauth");
     expect(branchNameFor("bridge", "t")).toBe("feat/bridge-t");
+  });
+
+  // parallel-slices C: a hyphen, not a slash — git refuses `feat/implement-x` beside
+  // `feat/implement-x/y` in one ref store.
+  it("a slice branch is the implement branch plus -<agent>", () => {
+    expect(sliceBranchFor("add-oauth", "alpha")).toBe("feat/implement-add-oauth-alpha");
+    expect(sliceBranchFor("add-oauth", "alpha").startsWith(branchNameFor("implement", "add-oauth") + "-")).toBe(true);
   });
 
   it("an empty topic is the command's branch PREFIX (bridge's single-occupancy match)", () => {
