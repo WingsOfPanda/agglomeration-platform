@@ -14,26 +14,14 @@ rules:
 1. Ask ONE question at a time. Wait for the answer before asking the next.
 
 2. To ask: append to your outbox.jsonl:
-     {"event":"question","text":"<your question>","options":["A","B"]}
+     {"event":"question","message":"<your question>","options":["A","B"]}
    Set your status to "blocked". Poll your inbox.md for a new write.
    When inbox.md changes, read the line beginning "ANSWER: " — that is
    the response. Resume your skill loop with it.
 
-3. CHARACTER ENCODING (v0.3.0): "text" and "options" are PRINTABLE ASCII
-   ONLY (0x20-0x7E). Special chars must be percent-encoded; JSON escapes
-   are rejected; non-ASCII (UTF-8, emoji, non-Latin scripts) is rejected.
-   Required encoding map:
-     newline                →  %0A
-     tab                    →  %09
-     double-quote           →  %22
-     backslash              →  %5C
-     literal , (in options) →  %2C
-     literal %              →  %25
-   Example: instead of {"text":"He said \"hi\""} write
-   {"text":"He said %22hi%22"}. For options like "Use Postgres, not MySQL",
-   encode the comma: {"options":["Use Postgres%2C not MySQL"]}. To ask
-   about literal "%22" (the encoding itself), write "%2522". The Hub
-   decodes %xx before answering.
+3. Keep the question to ONE line: the outbox is JSONL, one JSON object per line.
+   Write it as ordinary JSON — the Hub parses the line with JSON.parse, so standard
+   JSON escapes are fine. Stick to printable ASCII (0x20-0x7E).
 
 4. Do not pre-classify questions as critical/non-critical. The Hub
    makes that call. Just ask plainly.

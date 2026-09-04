@@ -21,7 +21,7 @@ Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
 
 Maintain a **TodoWrite** list so the user can see where the run is. Seed it after Stage 0 `init`
 with a single `route` item; once Stage 1 decides the path, replace it with the path-appropriate
-high-level stages, marking each `in_progress` on entry and `completed` on exit:
+high-level stages:
 
 - **fast-path:** `draft sections`, `assemble+audit`, `export+present`.
 - **escalation:** `spawn ensemble`, `research`, `diff`, `cross-verify`, `adjudicate`,
@@ -59,8 +59,7 @@ Decide fast-path vs escalation, in order:
 
 1. `ENSEMBLE=yes` → **escalate**. Path label = `escalated-from-flag`.
 2. Otherwise, run a **time-boxed quick research pass** on the topic (Read/Grep/Bash for repo code;
-   WebSearch + any `mcp__tavily`/`mcp__anysearch` per the user's triple-search rule; `mcp__context7`
-   for library docs; `mcp__codegraph` for code intelligence), then
+   WebSearch, plus whatever library-docs and code-intelligence tools this session has), then
    run the **4-signal complexity check** — escalate if **any one** fires (favor rigor):
    - **Conflicting evidence** — sources disagreed on a key claim.
    - **Significant assumptions** — you had to assume facts not in evidence.
@@ -80,8 +79,8 @@ You have already researched the topic in Stage 1 (or research it now if you arri
 Draft the **6 deploy-schema sections** to `$ART/design-doc/.draft/<section>.md` using the **Write
 tool** (atomic single-shot writes), one file per section:
 
-- `.draft/problem.md` → `## Problem` + 1-3 sentences on the current state.
-- `.draft/goal.md` → `## Goal` + 1 paragraph on the end state. *(audit-required — never empty)*
+- `.draft/problem.md` → `## Problem` + the current state: what is broken or missing today.
+- `.draft/goal.md` → `## Goal` + the end state this work is aiming at. *(audit-required — never empty)*
 - `.draft/architecture.md` → `## Architecture` + the recommended approach (the bulk). *(required)*
 - `.draft/components.md` → `## Components` + bullets of files/functions/classes touched. **Lead each
   bullet with the file path** (`` - `src/x/foo.ts` — <what changes> ``) so `implement`'s scope-check

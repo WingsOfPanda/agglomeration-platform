@@ -29,8 +29,8 @@ This command has two entry paths. Which one you are on is decided **once**, befo
 
 ### Launch path (origin hub)
 
-1. Mint the args file exactly as Stage 0 does, but **strip `--detached`** from the argument string
-   the same way you strip `--max-rounds`. It must never reach `implement init`.
+1. Mint the args file exactly as Stage 0 does — its step 1 already drops
+   `--detached`.
 2. Launch:
    ```bash
    $CS job start --command implement --args-file <args-path> \
@@ -163,12 +163,14 @@ consent, never block, and cost nothing, so prefer over-recording. Review later w
 
 ## Stage 0 — args-file + init + branch
 
-1. **Strip `--max-rounds` first.** Scan `$ARGUMENTS` token-by-token: if you see `--max-rounds`,
-   capture the NEXT token into `MAX_ROUNDS_OVERRIDE` and drop both tokens. (The init verb rejects
-   `--max-rounds`, so it must never reach the args file.) If absent, leave `MAX_ROUNDS_OVERRIDE` unset.
+1. **Strip the round override and the detached flag first.** Scan `$ARGUMENTS` token-by-token. A
+   token that is `--max-rounds` (take the NEXT token) or starts with `--max-rounds=` (take the part
+   after `=`) sets `MAX_ROUNDS_OVERRIDE` and is dropped, both tokens where there are two; a
+   `--detached` token is dropped. `init` rejects both, so neither may reach the args file. If no
+   round override is present, leave `MAX_ROUNDS_OVERRIDE` unset.
 2. Mint an args path: `$CS implement --mint-args-file` → prints `<args-path>`.
 3. **Write tool:** `file_path` = `<args-path>`, `content` = the **filtered** argument string from
-   step 1 (`$ARGUMENTS` minus the `--max-rounds <N>` pair), verbatim and unquoted.
+   step 1 (`$ARGUMENTS` minus `--detached` and the `--max-rounds <N>` / `--max-rounds=<N>` override), verbatim and unquoted.
    1. **Source default (no positional doc).** If the filtered argument string contains no `.md`
       positional path, run `$CS implement find-latest-doc`. On rc 0 it prints `DOC=<abs path>` (the
       newest `*-design.md` across the design art dirs); on rc 1 no doc exists. On a `DOC=<path>` line
@@ -330,8 +332,8 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
 2. Wait under a persistent **Monitor**, never a plain background shell, so your pane stays
    interactive. The Monitor runs the SAME bounded `turn-wait` verb and then derives the round's
    outcome from the file that verb wrote, so every ending is LOUD. Why not a background `Bash`: it
-   dies with this session, it has no park/re-arm story, and — seen in the field on ap 0.5.54, twice
-   in one 11h run — it can be killed from outside while the worker is perfectly healthy. A killed
+   dies with this session, it has no park/re-arm story, and — seen in the field, twice in one 11h
+   run — it can be killed from outside while the worker is perfectly healthy. A killed
    wait that says nothing is indistinguishable from a dead worker, which is exactly the confusion
    the `TS=` read-back below removes. There is no `grep` in it: the watch must not depend on one
    more binary than it has to. Substitute `$CS`, the absolute `$ART`, the topic and the round before
@@ -347,10 +349,10 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
      esac')
    ```
    The default turn budget is 4 hours (`AP_IMPLEMENT_TURN_TIMEOUT_S=14400`); override the env var
-   for unusually large or small tasks. Since 0.5.5 the budget is liveness-extended: while the
+   for unusually large or small tasks. The budget is liveness-extended: while the
    worker's pane stays alive the wait runs up to `AP_WAIT_EXTEND_MULT`× the budget (default 3,
    so worst case 12h; set `AP_WAIT_EXTEND_MULT=1` for a hard cap) — a pane death still fails
-   fast regardless. Since 0.5.15 the wait also CONFIRMS a terminal event against continued outbox
+   fast regardless. The wait also CONFIRMS a terminal event against continued outbox
    activity (quiet window `AP_TURN_CONFIRM_S`, default 20s; `0` disables): a worker that emits `done`
    mid-turn and keeps working is vetoed, the wait re-arms for the turn's real end, and each veto
    records a `turn-confirm-veto` flag for `/ap:review`. It is bounded — at most 2 vetoes (3 windows),
@@ -458,13 +460,13 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
 > be a sandboxed check.
 
 **Step B — read-based cross-verify.** Verify with fresh evidence — claim only what you ran and
-observed this round, never the worker's say-so. Read (capped):
+observed this round, never the worker's say-so. Read enough to decide, not the whole diff:
 - `$ART/verify-report-<ROUND>.md` (the worker's self-verify),
 - `$ART/hub-test-output-<ROUND>.log` (the HUB's own run — authoritative) and, only as the worker's
   claim, `$ART/test-output-<ROUND>.log`,
 - `git -C "$TARGET_CWD" log --oneline "$(cat "$ART/branch-base.sha")"..HEAD` and
   `git -C "$TARGET_CWD" diff --stat "$(cat "$ART/branch-base.sha")"..HEAD`,
-- up to 3 spot-checks: Read the highest-stakes diff hunk per critical requirement (paths from
+- spot-checks: Read the highest-stakes diff hunk per critical requirement (paths from
   `git diff` are relative to `TARGET_CWD`; prefix them).
 
 **Worker `VERDICT: PARTIAL` — never promote it silently.** The worker's report opens with

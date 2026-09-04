@@ -26,8 +26,10 @@ attributed. State the single variable you changed in `notes`.
 
 ## Operators (the move your approach brief encodes)
 
-The Hub frames each dispatch as exactly ONE of these operators; the
-approach brief names which. Whichever it is, change exactly ONE
+The Hub dispatches exactly ONE of four operators -- `draft`, `improve`,
+`ablate`, `replicate` -- and the approach brief names which. `debug`,
+`crossover` and `literature-refresh` are listed because they are lesson
+categories you may record; they never arrive as a dispatch. Whichever it is, change exactly ONE
 measurable variable for this experiment and name it in `notes` so the
 metric delta stays attributable — one experiment is one config, never a
 sweep:
@@ -37,16 +39,16 @@ sweep:
                      variable IS the family choice vs the avoid-set.
   - **improve**    — a single-variable refinement on a named `--parent`
                      (one hyperparameter / one component swap).
-  - **debug**      — fix the ONE thing that made a prior attempt
+  - **debug**      — (lesson-only, never dispatched) fix the ONE thing that made a prior attempt
                      INFEASIBLE (e.g. restore a mandated knob, fix a
                      leak) and re-run; the variable is that fix.
   - **ablate**     — remove/disable exactly ONE component of a parent to
                      measure its contribution.
   - **replicate**  — re-run a parent's config unchanged to test
                      run-to-run stability; the "variable" is the seed.
-  - **crossover**  — combine the ONE decisive ingredient of one family
+  - **crossover**  — (lesson-only, never dispatched) combine the ONE decisive ingredient of one family
                      into another; name the single transplanted element.
-  - **literature-refresh** — apply ONE specific technique surfaced from
+  - **literature-refresh** — (lesson-only, never dispatched) apply ONE specific technique surfaced from
                      the SOTA/docs to a parent; the variable is that
                      technique.
 
@@ -131,10 +133,7 @@ the metric range) that adds a lot of code or hard-to-explain machinery
 is usually not worth it; equal-or-better results from less code is a
 clean win. If you find yourself adding scaffolding just to make a
 marginal number look better, document the trade-off in `notes` so the
-Hub can weigh it. **Early experiments should be the simplest thing
-that could work** — establish a baseline before adding machinery; go
-deeper only once a baseline exists (over-engineering on turn one is the
-most common failure).
+Hub can weigh it. Establish a baseline before adding machinery.
 
 In ONE turn, do all of the following:
 
@@ -241,9 +240,9 @@ In ONE turn, do all of the following:
 5. **THIS IS THE TERMINAL STEP.** Immediately after `result.json` is on
    disk (via tmp+rename), emit ONE outbox event and STOP. Do not explore,
    do not summarize, do not verify, do not re-read your own logs — emit
-   done as the very last action of this turn. The Hub's wait shim is
-   actively polling; every second of post-result analysis blocks the next
-   experiment.
+   done as the very last action of this turn. The Hub's monitor is
+   tailing your outbox; every second of post-result analysis blocks the
+   next experiment.
 
    Use safe printf — single-quote the format string to avoid format-string
    failures:
@@ -257,7 +256,7 @@ In ONE turn, do all of the following:
 If a step fails:
   - status="fail" with metric_value=null
   - notes describing the failure cause (one line, citing what broke)
-  - still emit the done event so the wait shim can collect
+  - still emit the done event so the Hub's monitor sees the run end
 
 Wall-clock discipline: the Hub may SIGKILL your pane at the hard cap.
 Write result.json BEFORE that happens — intermediate writes are fine if

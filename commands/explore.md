@@ -240,7 +240,7 @@ default 60s, floored at 10s; 0 disables the check entirely). It then records its
 the file stopped growing — accepted anyway and flagged for `/ap:review`), or `AC=expired` (still
 empty or still changing at the cap — flagged, and the validators discard that artifact). `AC=` is
 about the FILE; the `FS=`/`VS=`/`AS=` value beside it stays a content classification and an expiry
-never rewrites it, so one slow artifact can no longer cascade-skip that worker's later phases.
+never rewrites it, so a slow artifact never cascade-skips that worker's later phases.
 
 If `survivors`, `synth-preliminary`, `diff`, `openq-collate`, `rebuttal-send`, `verdict-tally` or
 `synth-final` exits 1 printing `STILL_WRITING=<agent>` on stderr, that phase's wait never ran for
@@ -254,15 +254,16 @@ re-run that phase's `*-send` (which also clears that artifact's refusal strikes)
 self-bounds — three refusals with no growth in between (or six refusals however much it grew) and
 it drops that worker as empty.
 
-**Send-guards self-heal on EVIDENCE.** Every later `*-send` still consults the earlier phases' tags,
-and a `timeout`/`failed` still skips by default — but the skip is overridden when the worker is
-*verifiably* free, all four of: it wrote its own `status.json` (the platform spawn seed does not
-count) and it is idle, a terminal event landed in its outbox past the failing phase's `OFFSET=`, that
-phase's artifact is settled (`END_OF_ARTIFACT`, an `AC=` verdict, empty, or absent), and its pane is
-alive. Then the phase dispatches (`guard override — ... verifiably free` on stderr, one
-`guard-override-idle` flag for `/ap:review`), so a single expired wait no longer ends that worker's
-run. Miss any leg — silent worker, turn still running, half-written artifact, dead pane — and you get
-today's `<KEY>=skipped` with the reason named. rc semantics are unchanged.
+**Send-guards self-heal on EVIDENCE.** Every later `*-send` consults the earlier phases' tags, and
+a `timeout`/`failed` skips by default — the skip is overridden when the worker is *verifiably*
+free, all four of: it wrote its own `status.json` (the platform spawn seed does not count) and it is
+idle, a terminal event landed in its outbox past the failing phase's `OFFSET=`, that phase's
+artifact is settled (`END_OF_ARTIFACT`, an `AC=` verdict, empty, or absent), and its pane is alive.
+Then the phase dispatches (`guard override — ... verifiably free` on stderr, one
+`guard-override-idle` flag for `/ap:review`), so one expired wait does not end that worker's run.
+Miss any leg — silent worker, turn still running, half-written artifact, dead pane — and the phase
+records `<KEY>=skipped` with the reason named and exits 0: a skip is a no-op for that worker, not a
+failure.
 
 **Budgets are per-box tunable.** `AP_CONSULT_TIMEOUT_<KIND>` (seconds, positive integer) outranks
 `config/contracts.yaml`'s `consult.<kind>_timeout_s`, so it survives plugin updates — the yaml ships
@@ -458,7 +459,7 @@ Set task `5.5` → `in_progress`.
 
 `$CS explore confidence <TOPIC>` → evaluates the 5 signals against `landscape-draft.md` + findings,
 logs `S1`–`S5` to stderr, and prints one `S<n>=<bool>` line per signal followed by `ALL_HOLD=<bool>`
-(always the LAST stdout line — the `sed -n 's/^ALL_HOLD=//p'` parse is unchanged). The per-signal
+(always the LAST stdout line — parse it with `sed -n 's/^ALL_HOLD=//p'`). The per-signal
 lines tell you WHICH signal failed — e.g. `S2=false` means at least one draft citation is
 corroborated by fewer than 2 workers; those exact citations reach the Phase 6 adversary prompts as
 Priority targets via `annotations.json`. The signals are report-only: never re-run, repair, or loop
@@ -552,7 +553,7 @@ never open-ended:
    `needs-attention` critiques (parsed from each `adversary-<agent>.md` verdict), attributes
    each Material finding to its originating worker via diff-bucket citation overlap (a finding
    whose tokens match zero buckets or tie across two stays unattributed — you weigh it alone in
-   Phase 8, as today), and soft-skips (`RS=skipped`, no send) a worker with nothing attributed
+   Phase 8), and soft-skips (`RS=skipped`, no send) a worker with nothing attributed
    to it or whose earlier phases ended `timeout`/`failed` (the verb decides which phases count; the
    Hub only reads the resulting tag). A second `rebuttal-send` for the same worker returns rc 1 —
    the one-turn cap is state-file existence; NEVER `rm` a rebuttal state file to force a second
@@ -594,8 +595,7 @@ it. The verbs read the recorded signals themselves; you never re-run `confidence
    informational; `GS=question` → **Intervention Pattern 1** (state key `GS`, marker
    `gap-<agent>.done`).
 
-**HARD anti-goals** (rejected non-goals of the 2026-06-22 annotations spec — they stay
-rejected): gap answers feed ONLY the Phase 8 final landscape doc and the Phase 9c design-handoff
+**Anti-goals.** Gap answers feed ONLY the Phase 8 final landscape doc and the Phase 9c design-handoff
 `## Evidence`. The draft is NEVER re-synthesized, `$CS explore confidence` is NEVER re-run after
 Phase 5.5, no signal is retroactively flipped, and `adversary-skip.txt` is never rewritten. This
 round enriches the OUTPUT, not the gate.
@@ -630,8 +630,8 @@ loop or re-dispatch:
   `adversary-<agent>.md` explicitly in `## Adversary critiques` and carry the surviving caveats
   into `## Conclusion`.
 - `TALLY=accept` → a fast final synthesis is permitted — summarize the critiques normally.
-- `TALLY=minor-revisions` or `TALLY=unavailable` → today's behavior: summarize each critique and
-  incorporate what your judgment says matters.
+- `TALLY=minor-revisions` or `TALLY=unavailable` → summarize each critique and incorporate what
+  your judgment says matters.
 
 When Phase 7b produced `$ART/rebuttal-<agent>.md` files, weigh each critique WITH its author's
 response in `## Adversary critiques`: a CONCEDED critique stands as-is (note the concession); a
@@ -868,7 +868,7 @@ constraint the design is built against) and `## Left open` (it is an unconfirmed
   end of Phase 8b to teardown. Grill output is NEW files only (`grill.md`,
   `grill-facts-<agent>.txt`, `drill-<agent>.md`).
 - Phase 8c **never rewrites `$ART/topic.txt`** — as in Phase 0.5, the user's verbatim topic stands.
-- The confidence gate is **NEVER re-run** and no drill answer re-gates anything (Phase 7c's HARD
+- The confidence gate is **NEVER re-run** and no drill answer re-gates anything (Phase 7c's
   anti-goals hold here too).
 - Drill dispatch honours the phase guard: a worker whose latest phase ended `timeout`/`failed` is
   skipped, never clobbered.
@@ -946,8 +946,7 @@ Source: explore session at $ART
 Generated: <generated_ts from the KV>
 
 ## Recommendation
-<1-3 paragraphs of English prose (no bullets). Names the convergent approach. Past tense for
-evidence, active voice.>
+<English prose (no bullets). Names the convergent approach. Past tense for evidence, active voice.>
 
 ## Recipe
 <Prescriptive distillation — the technique to adopt, key parameters, the differentiator from

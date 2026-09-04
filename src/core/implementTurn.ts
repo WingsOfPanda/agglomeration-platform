@@ -48,7 +48,7 @@ const BRANCH_DISCIPLINE =
   "  repository. Do NOT run 'git checkout', 'git switch',\n" +
   "  'git branch -m', or create new branches.\n" +
   "- Commit per task with Conventional Commits prefixes on the current\n" +
-  "  branch (rule already stated above).\n" +
+  "  branch.\n" +
   "- If your work genuinely needs a fresh branch, abort with\n" +
   '  {"event":"error","reason":"branch-discipline: needed new branch"}\n' +
   "  and let the conductor decide.\n";
@@ -58,7 +58,7 @@ function blockers(testCmd: string): string {
     ? `  is NOT for running your test suite. Running '${testCmd}' is your job.\n  Banned values fail with rc=2.\n`
     : "  is NOT for running your test suite. Running your repository's test suite is your job.\n  Banned values fail with rc=2.\n";
   return (
-    "BLOCKERS / QUESTIONS (read carefully):\n" +
+    "BLOCKERS / QUESTIONS:\n" +
     "- If a referenced path, file, checkpoint, git ref, env var, or\n" +
     "  command is NOT where the notes say it is, DO NOT search the\n" +
     "  filesystem yourself, DO NOT invent a workaround. Halt and ask by\n" +
