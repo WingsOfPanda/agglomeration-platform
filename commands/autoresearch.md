@@ -9,8 +9,8 @@ allowed-tools: Bash, Write, Read, Edit, AskUserQuestion, WebSearch, Skill, TaskC
 Run an executable research session: you (the Hub, the conductor) lock a metric with the user, sweep
 the SOTA, spawn 2-3 persistent **codex workers** (PhD-student executors) once, then adaptively dispatch
 single-config **experiments** until a stop condition fires. **Explore-only** — never touch the user's real
-source. This directive covers Phases 0-4 (setup + spawn + the adaptive experiment loop) plus the wind-down
-(Phases 5-7: synthesis + teardown + handoff), now shipped.
+source. This directive covers Phases 0-7: setup, spawn, the adaptive experiment loop, and the wind-down
+(synthesis + teardown + handoff).
 
 > **DANGER — read first.** Spawns codex **workers** under
 > `--dangerously-bypass-approvals-and-sandbox`; workers write + execute arbitrary
@@ -30,16 +30,13 @@ Let `CS="node ${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs"`.
 
 The **interactive path documented in the rest of this directive is the default.** When the session is
 launched with `--autonomous` (or `AP_AUTORESEARCH_AUTONOMOUS=1` in the environment), `init` machine-seeds
-the setup files so the run can proceed without the Hub stopping for the user. Nothing below changes the
-interactive flow — autonomous mode only adds branches gated on it.
+the setup files so the run can proceed without the Hub stopping for the user.
 
-**Wired automatically (no directive logic change beyond what is noted):**
+**Automatic, no Hub action:**
 - **Setup questions auto-skip.** `--autonomous` seeds `$ART/metric.md`, `$ART/time-budget.txt`,
-  `$ART/session-start.txt`, and an `$ART/autonomous.txt` marker at `init`. The directive's **existing**
-  skip-guards then fire on their own: Phase 1 "Metric discussion" skips the whole phase because
-  `metric.md` already exists (Phase 1, opening sentence), and Phase 2's time-budget AskUserQuestion skips
-  because `time-budget.txt` already exists (Phase 2 step 2). No new logic — those AskUserQuestions simply
-  do not fire when the files are pre-seeded.
+  `$ART/session-start.txt`, and an `$ART/autonomous.txt` marker at `init`. Phase 1 "Metric discussion"
+  then skips whole on its `metric.md` guard (Phase 1, opening sentence), and Phase 2's time-budget
+  AskUserQuestion skips on its `time-budget.txt` guard (Phase 2 step 2).
 - **Data-leakage gate (A3).** The data-leakage sanity check is automatic in the score pass and routes a
   leaking result to the `x<rank>` (INFEASIBLE) group. This depends on each `result.json` carrying the
   `data_spec` + `integrity` blocks (see the experiment template).
@@ -228,7 +225,7 @@ round. This phase runs **once**; its last step ENTERS THE LOOP (do NOT end the t
    $CS autoresearch experiment-send <TOPIC> <agent> exp-001 "<approach-label>" "<direction>"
    ```
    **Diversity:** assign a different pipeline / approach family per worker (e.g. single-pass / typed-routing
-   / hybrid) — identical pipelines produce no triangulation signal. (B1 now backs this mechanically — see
+   / hybrid) — identical pipelines produce no triangulation signal. (B1 backs this mechanically — see
    the `Coverage:` line in the status brief and the `min_families` plateau gate.) The verb creates
    `workers/<agent>/experiments/exp-001/`, writes `prompt.md` from the experiment template, writes the
    inbox, sets `phase=working, current_exp_id=exp-001, exp_counter=1`, and nudges the pane.
@@ -241,9 +238,8 @@ round. This phase runs **once**; its last step ENTERS THE LOOP (do NOT end the t
 
 ## The inline loop (Steps 1-8 — repeat until Step 2 or Step 4 stops)
 
-You are the Hub mid-session. Unlike the bash predecessor (which ended the turn at Step 8 and waited
-for a hook to re-enter), ap runs this loop **inline** — the same idiom `score`/`implement` use for
-their wait barriers, but **UNBOUNDED**. **Step 8 is the LOOP TAIL → go to Step 1; it is NOT a turn end.**
+You are the Hub mid-session. This loop runs **inline** and **UNBOUNDED** — the same wait-barrier idiom
+`/ap:design` and `/ap:implement` use. **Step 8 is the LOOP TAIL → go to Step 1; it is NOT a turn end.**
 The loop BLOCKS in-process for the next worker-completion notification (the persistent Monitor tasks surface
 `done`/`error`/`question`/`heartbeat`/`stale`/`stuck`), then continues.
 
@@ -456,9 +452,8 @@ For **each** worker with `phase=idle` and no `$ART/halt.flag`:
      `--operator replicate` and `--parent <exp-id>`. Distinct from A1 verification: A1 re-executes
      to VERIFY a reported number; Replicate samples run-to-run variance of a config.
 
-   (`literature-refresh` stays reserved and unwired pending a literature gate. Scheduler-owned
-   short-cycle re-entry — every loop iteration entering through `resume` — is a documented
-   successor spec, not part of this phase.)
+   (`literature-refresh` is listed in the worker's experiment template but is not dispatchable:
+   `experiment-send` accepts only the four operators above and refuses any other with rc 2.)
    Do NOT pre-rank un-run ideas: dispatch the diverse angles and let the real (verified) metric rank
    them post-hoc.
    Read `exp_counter` from the worker's `state.txt`, increment, format `exp-NNN`, then dispatch (add
@@ -532,7 +527,7 @@ Then the sections, IN ORDER:
   **Step 1** — `/ap:design <abs-art-dir>/score-handoff.md` (produce a deploy-schema design doc).
   **Step 2** — `/ap:implement <abs path to design's design-doc>` (implement it).
   (Skip Step 1 ONLY if the winner is drop-in trivial; the `score-handoff.md` lists carry-forward
-  constraints and open questions `score` should answer first.)
+  constraints and open questions `/ap:design` should answer first.)
 
 ## Phase 6 — Teardown + archive
 
@@ -599,7 +594,7 @@ Hub, **Write** `$ART/score-handoff.md` with the Write tool. Begin with a `# <top
   `$ART/<mandates_block_path>`) verbatim; append any numeric guards / at-risk violations from
   `winner_notes`.
 - `## Open questions` — **CONDITIONAL.** Emit ONLY when research surfaced unresolved planning decisions
-  that `score`'s drilldown will not naturally close (inspect the landscape doc + `winner_notes`). If
+  that `/ap:design`'s drilldown will not naturally close (inspect the landscape doc + `winner_notes`). If
   research closed everything, **OMIT the WHOLE section** — no header, no `_(none)_` stub.
 - `## Evidence` — a table `| Rank | Agent/Exp | Metric | Approach | Status |` (winner + runner-ups
   from the KV), then a one-line `Winner emergence:` (rounds run, key delta vs the top runner-up, stop

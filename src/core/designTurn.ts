@@ -166,7 +166,7 @@ export function composeVerifyPrompt(itemsText: string, verifyPath: string): stri
     "",
     "Where <TAG> is one of: AGREE / DISPUTE / UNCERTAIN.",
     "",
-    "Verification methods: use any tool in your environment. WebSearch / fetch are authorized when an",
+    "Verification methods: use any tool in your environment. Web search / fetch are authorized when an",
     "item cites a URL, references external standards/docs, or makes a claim local repo evidence cannot",
     "resolve. For URL-cited items, fetching the source is the default. For file-cited items prefer the",
     "local file. If a tool is unavailable, mark the item UNCERTAIN and note the gap — never fabricate.",

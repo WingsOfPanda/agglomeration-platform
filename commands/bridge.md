@@ -62,7 +62,7 @@ consent, never block, and cost nothing, so prefer over-recording. Review later w
    ```
    Bash(command='$CS bridge round-wait <SLUG> 1', run_in_background: true, description='bridge await round 1')
    ```
-   Since 0.5.15 the wait CONFIRMS a terminal event against continued outbox activity (quiet window
+   The wait CONFIRMS a terminal event against continued outbox activity (quiet window
    `AP_TURN_CONFIRM_S`, default 20s; `0` disables): a worker that emits `done` mid-round and keeps
    working is vetoed, the wait re-arms for the round's real end, and each veto records a
    `turn-confirm-veto` flag for `/ap:review`. It is bounded — at most 2 vetoes (3 windows), and the
@@ -160,7 +160,6 @@ continue.
 
 ## Notes
 
-- One worker, one repo (repo B), open-ended rounds. This is NOT the retired multi-repo subsystem — no
-  discovery, no `--targets`, no DAG.
+- One worker, one repo (repo B), open-ended rounds.
 - State lives under YOUR (conductor) repo hash; the worker just works in repo B via `--cwd`.
 - `<SLUG state>` = `<repo-A>/.ap/state/<hash>/<SLUG>` (the conductor's state tree).

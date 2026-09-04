@@ -10,8 +10,8 @@ The light, autonomous path for a small, clearly-specified single-repo change. On
 non-conductor model, default **codex**) implements the change on its own `feat/quick-<topic>`
 branch in this repository. The conductor writes a short brief, spawns the worker, runs one
 implementation turn, does one light verify pass, then finishes and tears down. **Finishing is
-the default** (restoring the predecessor `strike` parity): a local repo keeps the branch and
-restores the start-branch checkout; a repo **with a remote** pushes the branch and opens a PR.
+the default**: a local repo keeps the branch and restores the start-branch checkout; a repo
+**with a remote** pushes the branch and opens a PR.
 Pass `--no-finish` to keep the branch local only (no push, no PR). There are **NO interactive
 gates**.
 
@@ -77,11 +77,9 @@ Two entry paths, decided once before Stage 0 — the same shape `/ap:implement` 
     `--args-file <args-path>` pair — `$CS quick init --args-file <args-path> --target <WORKTREE>` —
     because init reads its args file verbatim and refuses a pair that is not first. No WORKTREE paragraph — a `--no-worktree` run —
     means no flag anywhere. Never check a branch out in the operator's own checkout.
-  - **Finishing is forced to keep.** The default finish — push the branch and open a PR when a
-    remote exists — is exactly what an unattended run must not do. Behave as if `--no-finish` were
-    passed: leave the branch local, push nothing, open no PR. The operator finishes it. This gate is
-    **mechanical**: `quick finish` itself disables publication while a `_job` record exists for the
-    topic, so a wrong instruction here cannot push anything.
+  - **Finishing is forced to keep.** Leave the branch local: push nothing, open no PR — the operator
+    finishes it. `quick finish` also disables publication mechanically while a `_job` record exists
+    for the topic, but that gate does not cover a push you run yourself.
   - **Budget.** Run `$CS job budget-check <SLUG>` before the verify pass and again before finishing.
     Exit 1 means write `RESUME.md`, PARK a question, and stop. Run it as its **own** command and
     branch on its rc before any `quick turn-send` or `send`: chained into one compound command that
@@ -131,11 +129,10 @@ consent, never block, and cost nothing, so prefer over-recording. Review later w
    step 1 and retry; rc 3 = provider not installed. No SUMMARY is written (state dir was never
    created).
 3. **Brief.** Read the cleaned topic from `<SLUG state>/_quick/topic-text.txt` if needed, then
-   **Write** `<SLUG state>/_quick/task-brief.md` using exactly this shape (keep it short — a brief,
-   not a design doc). To find the state path, the directive does not need it: every later step
-   takes `<SLUG>` as `<topic>` and resolves paths internally. Author the brief content from the
-   topic and Write it to the path `quick init` logged (`quick init` logs `topic=<slug>`; the brief
-   path is `<repo>/.ap/state/<hash>/<SLUG>/_quick/task-brief.md`). Shape:
+   **Write** the brief to `<SLUG state>/_quick/task-brief.md` — that is
+   `<repo>/.ap/state/<hash>/<SLUG>/_quick/task-brief.md`. Every `$CS` verb below takes `<SLUG>` as
+   `<topic>` and resolves its own paths. Use exactly this shape (keep it short — a brief, not a
+   design doc):
    ```markdown
    ## Goal
    <1-2 sentences restating the change>
@@ -261,7 +258,7 @@ consent, never block, and cost nothing, so prefer over-recording. Review later w
 4. Await it under a persistent **Monitor**, never a plain background shell. The Monitor runs the
    SAME bounded `turn-wait` verb and then derives the turn's outcome from the file that verb wrote,
    so every ending is LOUD. Why not a background `Bash`: it dies with this session, it has no
-   park/re-arm story, and — seen in the field on ap 0.5.54, twice in one 11h run — it can be killed
+   park/re-arm story, and it can be killed
    from outside while the worker is perfectly healthy. A killed wait that says nothing is
    indistinguishable from a dead worker, which is exactly the confusion the `TS=` read-back below
    removes. There is no `grep` in it: the watch must not depend on one more binary than it has to.
@@ -277,7 +274,7 @@ consent, never block, and cost nothing, so prefer over-recording. Review later w
        *) printf "TS=unreachable\n"; exit 1;;
      esac')
    ```
-   Since 0.5.15 the wait CONFIRMS a terminal event against continued outbox activity (quiet window
+   The wait CONFIRMS a terminal event against continued outbox activity (quiet window
    `AP_TURN_CONFIRM_S`, default 20s; `0` disables): a worker that emits `done` mid-turn and keeps
    working is vetoed, the wait re-arms for the turn's real end, and each veto records a
    `turn-confirm-veto` flag for `/ap:review`. It is bounded — at most 2 vetoes (3 windows), and the
@@ -311,7 +308,7 @@ consent, never block, and cost nothing, so prefer over-recording. Review later w
      the `TS=failed`/`TS=timeout` branch on it, and never abort on it: two killed watchers would
      otherwise tear a healthy run down unattended. Verify the worker mechanically first — read
      `<SLUG state>/<AGENT>-<PROVIDER>/status.json` and run `$CS list <SLUG>`, whose `LIVENESS`
-     column carries the 0.5.54 worker-liveness verdict (the same one `job wait` reports as
+     column carries the worker-liveness verdict (the same one `job wait` reports as
      `WORKER=`). A live/working worker means re-arm the same Monitor and keep waiting; only a
      terminal or dead verdict takes the matching TS branch.
 
@@ -404,10 +401,9 @@ HEAD is probably still on `feat/quick-<SLUG>`, not the start branch. Give the br
 
 - One worker, one branch, one implementation turn, one light verify pass, autonomous finish by default.
   No research, no design doc, no interactive gates.
-- Autonomous finish is the **default** here (matching the predecessor `strike` command): the
-  branch is always pushed + a PR opened when the repo has a remote, otherwise kept local with the
-  start branch restored. Use `--no-finish` to opt out. (This parity is intentional — do not
-  re-flag it.)
+- Autonomous finish is the **default** here: the branch is always pushed + a PR opened when the
+  repo has a remote, otherwise kept local with the start branch restored. Use `--no-finish` to
+  opt out.
 - On abort, `SUMMARY.md` + `RESUME.md` point at the partial state under `_quick/`; re-run
   `/ap:quick` with revised framing to retry. A stash outlives any abort or crash by construction, so
   if the run died after a `--stash-wip` branch, the WIP is still there: `git stash list` shows it

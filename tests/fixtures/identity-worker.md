@@ -64,10 +64,10 @@ Then continue your actual task.
 **Safe JSONL emission:** When appending an event to outbox.jsonl, never put your JSON inside `printf`'s **format-string** position. Use one of these safe patterns:
 
 ```
-echo '{"event":"progress","note":"50%% done"}' >> outbox.jsonl
-printf '%s\n' '{"event":"progress","note":"50%% done"}' >> outbox.jsonl
+echo '{"event":"progress","note":"50% done"}' >> outbox.jsonl
+printf '%s\n' '{"event":"progress","note":"50% done"}' >> outbox.jsonl
 cat >> outbox.jsonl <<'EOF'
-{"event":"progress","note":"50%% done"}
+{"event":"progress","note":"50% done"}
 EOF
 ```
 

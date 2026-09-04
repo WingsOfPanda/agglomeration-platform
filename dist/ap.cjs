@@ -13505,7 +13505,7 @@ function composeVerifyPrompt(itemsText, verifyPath) {
     "",
     "Where <TAG> is one of: AGREE / DISPUTE / UNCERTAIN.",
     "",
-    "Verification methods: use any tool in your environment. WebSearch / fetch are authorized when an",
+    "Verification methods: use any tool in your environment. Web search / fetch are authorized when an",
     "item cites a URL, references external standards/docs, or makes a claim local repo evidence cannot",
     "resolve. For URL-cited items, fetching the source is the default. For file-cited items prefer the",
     "local file. If a tool is unavailable, mark the item UNCERTAIN and note the gap \u2014 never fabricate.",
@@ -14698,7 +14698,7 @@ function blockers(testCmd) {
   const suiteLine = testCmd ? `  is NOT for running your test suite. Running '${testCmd}' is your job.
   Banned values fail with rc=2.
 ` : "  is NOT for running your test suite. Running your repository's test suite is your job.\n  Banned values fail with rc=2.\n";
-  return `BLOCKERS / QUESTIONS (read carefully):
+  return `BLOCKERS / QUESTIONS:
 - If a referenced path, file, checkpoint, git ref, env var, or
   command is NOT where the notes say it is, DO NOT search the
   filesystem yourself, DO NOT invent a workaround. Halt and ask by
@@ -14852,7 +14852,7 @@ var init_implementTurn = __esm({
   repository. Do NOT run 'git checkout', 'git switch',
   'git branch -m', or create new branches.
 - Commit per task with Conventional Commits prefixes on the current
-  branch (rule already stated above).
+  branch.
 - If your work genuinely needs a fresh branch, abort with
   {"event":"error","reason":"branch-discipline: needed new branch"}
   and let the conductor decide.
@@ -20563,13 +20563,14 @@ function composeExploreResearchPrompt(topic, writeTo, lit, lens, selfassessTo, f
     "  - runtime: <command>          e.g. runtime: pytest tests/test_x.py",
     "",
     "Every Approach AND every Tradeoff bullet MUST have a citation in [brackets].",
-    "Bullets without citations will be silently dropped by the Hub's synthesis \u2014",
-    "and if NO approach has a citation, your findings will be flagged as malformed.",
+    "An Approach line without one is not parsed into the peer buckets: no peer",
+    "cross-verifies it and it counts zero on the Hub's contribution table. Uncited",
+    "tradeoff rows are marked [no citation] in the landscape doc /ap:design reads.",
     "",
     "Research methods: use any tool available in your environment. When local",
     "evidence is insufficient or the topic references external knowledge (papers,",
-    "RFCs, library docs, vendor APIs, benchmarks), you SHOULD use WebSearch /",
-    "WebFetch (or the equivalent in your TUI) to find authoritative sources. Prefer",
+    "RFCs, library docs, vendor APIs, benchmarks), you SHOULD use web search / fetch",
+    "(whatever your TUI provides) to find authoritative sources. Prefer",
     "primary sources over blog posts. If a tool is not available, fall back to",
     "local-only investigation and note the gap as an [unverified] claim.",
     "",
@@ -20611,13 +20612,13 @@ function composeAdversaryPrompt(landscapeDraft, agent, outPath, opts) {
     "",
     ...opts.priorityTargets?.length ? [
       "Priority targets \u2014 these citations are corroborated by only ONE worker; open each",
-      "and verify the claim it anchors FIRST:",
+      "and verify the claim it anchors:",
       ...opts.priorityTargets.map((t) => `- ${t}`),
       ""
     ] : [],
     ...opts.lowConfidenceClaims?.length ? [
       "Self-flagged low-confidence claims \u2014 the workers themselves are least sure of",
-      "these; verify them first:",
+      "these; verify each one:",
       ...opts.lowConfidenceClaims.map((c) => `- ${c}`),
       ""
     ] : [],
@@ -20734,8 +20735,8 @@ function composeSignoffPrompt(conclusion, soloBucketLines, agreedText, outPath) 
     "  (one ### Flag: block per issue; none when the VERDICT is fair)",
     "",
     "Rules: no new claims, no re-litigation of peer claims or adversary critiques, no",
-    "style nits \u2014 flag only concrete misrepresentation of YOUR findings. An honest",
-    "'fair' is the common case; do not invent flags.",
+    "style nits \u2014 flag only concrete misrepresentation of YOUR findings. Return",
+    "'fair' only when you find no concrete misrepresentation; do not invent flags.",
     "",
     artifactContract(outPath)
   ].join("\n");
