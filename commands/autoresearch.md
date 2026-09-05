@@ -52,7 +52,8 @@ the setup files so the run can proceed without the Hub stopping for the user.
 **Autonomous-mode branches the Hub APPLIES (gated on `$ART/autonomous.txt`):**
 - **Worker questions auto-triage** — in autonomous mode a `question` event must NOT set `phase=blocked`
   (that would idle the lane waiting on a user who is not watching). Instead the Hub applies an
-  answer-or-fail-closed policy: answer the worker from session context via `$CS send`, or — if the
+  answer-or-fail-closed policy: answer the worker from session context via `$CS send --no-done-instruction`
+  (every mid-experiment message keeps the generic done contract out; the experiment brief owns it), or — if the
   question cannot be answered safely from context — fail closed by routing that experiment to the
   INFEASIBLE/abandon path. See the autonomous branch on the Step 3 `question` handler.
 - **Degraded-spawn auto-policy** — in autonomous mode the post-retry degraded-spawn decision is made
@@ -271,13 +272,17 @@ Initialize `RAN_SCORE=0`, `LAST_AGENT=`, `LAST_EXP=`. Route each queued notifica
     watching). Apply the answer-or-fail-closed policy instead: if the question is grounded
     by the locked run context (a multiple-choice pick, or a closed factual question the
     objective/metric/budget already answers), **answer the worker from context** —
-    `$CS send --from hub <agent> <TOPIC> "<answer>"`, then set `phase=working` and continue. If the
+    `$CS send --from hub --no-done-instruction <agent> <TOPIC> "<answer>"`, then set `phase=working` and continue. If the
     question cannot be answered safely from context (it asks for an open-ended design decision the run
     context does not settle), **fail closed**: route that experiment to the INFEASIBLE/abandon path
     (record it INFEASIBLE in `## Recent decisions`, let the worker move on), never `phase=blocked`. The
     decision is deterministic — same question + context yields the same routing.
-- **`stale`** → send a probe: `$CS send --from hub <agent> <TOPIC> "status? brief update on the
-  current experiment please"`; set that worker's `phase=stale, probe_sent_ts=<now UTC ISO>`. **Debounce:**
+- **`stale`** → send a probe: `$CS send --from hub --no-done-instruction <agent> <TOPIC> "status? brief
+  update on the current experiment please"` (the flag keeps the generic done-event contract out of the
+  probe: the experiment brief states its own, and a second one made a mid-experiment worker answer the
+  probe with a generic `done` that the loop scored as the experiment's completion); set that worker's
+  `phase=stale, probe_sent_ts=<now UTC ISO>`. The monitor keeps counting outbox silence while the lane
+  is `stale`, so the `stuck` notification below still fires for a probed lane. **Debounce:**
   skip the probe if `probe_sent_ts` was already set within the stuck window.
 - **`stuck`** → Hub judgment: either **abort** the pane (Ctrl-C via tmux, set `phase=failed`) OR
   **extend** (clear `probe_sent_ts` to give more time).
@@ -622,7 +627,8 @@ Show the user:
 
 If you observe a worker hanging, producing a garbage `result.json`, or exceeding cost
 without a `cost_blown` status, you can send a clarifying prompt mid-loop via
-`$CS send --from hub <agent> <TOPIC> "<prompt>"`. Worker panes remain
+`$CS send --from hub --no-done-instruction <agent> <TOPIC> "<prompt>"` (the flag keeps the generic
+done-event contract out of a mid-experiment inbox; the experiment brief states its own). Worker panes remain
 attached; the Hub regains control between every sub-step.
 
 ## Budget overrides

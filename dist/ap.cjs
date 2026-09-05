@@ -10429,17 +10429,27 @@ async function run2(args, deps = liveSendCmdDeps) {
 }
 async function dispatchVerb(args, deps) {
   let from;
+  let noDone = false;
   let a = [...args];
-  if (a[0] === "--from") {
-    if (!a[1]) {
-      log.error("--from requires a sender name");
-      return 2;
+  for (; ; ) {
+    if (a[0] === "--from") {
+      if (!a[1]) {
+        log.error("--from requires a sender name");
+        return 2;
+      }
+      from = a[1];
+      a = a.slice(2);
+      continue;
     }
-    from = a[1];
-    a = a.slice(2);
+    if (a[0] === "--no-done-instruction") {
+      noDone = true;
+      a = a.slice(1);
+      continue;
+    }
+    break;
   }
   if (a.length < 3) {
-    log.error("usage: send [--from s] <agent> <topic> <message|@file>");
+    log.error("usage: send [--from s] [--no-done-instruction] <agent> <topic> <message|@file>");
     return 2;
   }
   const [agent, topic] = a;
@@ -10481,7 +10491,7 @@ async function dispatchVerb(args, deps) {
     }
     msg = (0, import_node_fs16.readFileSync)(f, "utf8");
   }
-  inboxWrite(agent, model, topic, msg, from ? { from } : void 0);
+  inboxWrite(agent, model, topic, msg, { ...from ? { from } : {}, ...noDone ? { noDoneInstruction: true } : {} });
   const inbox = inboxPath(agent, model, topic);
   log.info(`wrote inbox at ${inbox}; nudging pane ${pane}`);
   await deps.paneSend(pane, taskNudge(inbox, model));
@@ -19770,7 +19780,7 @@ function monitorScan(_outboxPath, worker, prev, d) {
     }
     state.offset = d.outboxSize;
   }
-  if (d.phase === "working" && d.outboxMtime > 0) {
+  if ((d.phase === "working" || d.phase === "stale") && d.outboxMtime > 0) {
     const delta = d.now - d.outboxMtime;
     if (delta >= d.thresholds.stuckS && d.now - state.lastStuckTs >= d.thresholds.stuckS) {
       emit("stuck", `outbox mtime ${delta}s old (>= ${d.thresholds.stuckS}s threshold)`);

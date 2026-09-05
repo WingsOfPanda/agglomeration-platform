@@ -44,9 +44,19 @@ export async function run(args: string[], deps: SendCmdDeps = liveSendCmdDeps): 
 
 async function dispatchVerb(args: string[], deps: SendCmdDeps): Promise<number> {
   let from: string | undefined;
+  // --no-done-instruction: the inbox carries the message WITHOUT the generic done-event contract.
+  // For a mid-turn message to a worker whose task states its own done contract (the autoresearch
+  // experiment brief), the generic line would be a second, conflicting `done` instruction: the
+  // worker answered the hub's staleness probe with a generic-summary `done` that the loop then
+  // scored as the experiment's completion (2026-09-05-worker-delegation-reminder-design.md, exposure 4).
+  let noDone = false;
   let a = [...args];
-  if (a[0] === "--from") { if (!a[1]) { log.error("--from requires a sender name"); return 2; } from = a[1]; a = a.slice(2); }
-  if (a.length < 3) { log.error("usage: send [--from s] <agent> <topic> <message|@file>"); return 2; }
+  for (;;) {
+    if (a[0] === "--from") { if (!a[1]) { log.error("--from requires a sender name"); return 2; } from = a[1]; a = a.slice(2); continue; }
+    if (a[0] === "--no-done-instruction") { noDone = true; a = a.slice(1); continue; }
+    break;
+  }
+  if (a.length < 3) { log.error("usage: send [--from s] [--no-done-instruction] <agent> <topic> <message|@file>"); return 2; }
   const [agent, topic] = a;
   if (!validateSlug(agent) || !validateSlug(topic)) { log.error(`agent/topic must match [a-z0-9-]+ and be <= 32 chars; got agent='${agent}' topic='${topic}'`); return 2; }
   let msg = a.slice(2).join(" ");
@@ -83,7 +93,7 @@ async function dispatchVerb(args: string[], deps: SendCmdDeps): Promise<number> 
     if (!existsSync(f)) { log.error(`file not found: ${f}`); return 1; }
     msg = readFileSync(f, "utf8");
   }
-  inboxWrite(agent, model, topic, msg, from ? { from } : undefined);
+  inboxWrite(agent, model, topic, msg, { ...(from ? { from } : {}), ...(noDone ? { noDoneInstruction: true } : {}) });
   const inbox = inboxPath(agent, model, topic);
   log.info(`wrote inbox at ${inbox}; nudging pane ${pane}`);
   await deps.paneSend(pane, taskNudge(inbox, model));

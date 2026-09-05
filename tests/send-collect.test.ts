@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { run as collect } from "../src/commands/collect.js";
@@ -107,5 +107,43 @@ describe("send/collect reject unsafe agent/topic slugs (path-segment gate)", () 
   it("collect rejects a traversal topic or agent (rc 2)", async () => {
     expect(await collect(["alpha", "../evil"])).toBe(2);
     expect(await collect(["../x", "demo"])).toBe(2);
+  });
+});
+
+// --no-done-instruction: a mid-turn message to a worker whose task states its own done contract (the
+// autoresearch experiment brief) must not carry the generic done-event line, or the worker answers the
+// hub's staleness probe with a generic `done` the loop scores as the experiment's completion
+// (2026-09-05-worker-delegation-reminder-design.md, exposure 4).
+describe("send --no-done-instruction", () => {
+  function seedWorker() {
+    home();
+    const d = workerDir("bravo", "codex", "demo"); mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, "pane.json"), JSON.stringify({ pane_id: "%1", pane_nonce: "n1", agent: "bravo", model: "codex", spawned_at: "t" }));
+    writeFileSync(join(d, "outbox.jsonl"), "");
+    return d;
+  }
+  const deps = { paneOwned: async () => true, paneSend: async () => {} };
+  const inboxOf = (d: string) => readFileSync(join(d, "inbox.md"), "utf8");
+
+  it("omits the generic done contract, keeps From: and END_OF_INSTRUCTION, in either flag order", async () => {
+    for (const args of [
+      ["--from", "hub", "--no-done-instruction", "bravo", "demo", "status? brief update"],
+      ["--no-done-instruction", "--from", "hub", "bravo", "demo", "status? brief update"],
+    ]) {
+      const d = seedWorker();
+      expect(await send(args, deps)).toBe(0);
+      const inbox = inboxOf(d);
+      expect(inbox.startsWith("From: hub\n\n")).toBe(true);
+      expect(inbox).toContain("status? brief update");
+      expect(inbox).not.toContain("When done, append a single JSONL line");
+      expect(inbox).not.toContain('"event":"done"');
+      expect(inbox.endsWith("END_OF_INSTRUCTION\n")).toBe(true);
+    }
+  });
+
+  it("without the flag the generic done contract is still written (the default is unchanged)", async () => {
+    const d = seedWorker();
+    expect(await send(["--from", "hub", "bravo", "demo", "hello"], deps)).toBe(0);
+    expect(inboxOf(d)).toContain("When done, append a single JSONL line");
   });
 });

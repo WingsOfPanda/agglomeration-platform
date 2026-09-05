@@ -73,8 +73,13 @@ export function monitorScan(
     state.offset = d.outboxSize;
   }
 
-  // (B) phase-gate stale/stuck (only when working; stuck before stale; mutually exclusive)
-  if (d.phase === "working" && d.outboxMtime > 0) {
+  // (B) phase-gate stale/stuck (stuck before stale; mutually exclusive). The gate admits BOTH
+  // `working` and `stale`: the hub answers a stale notification by setting the lane's phase to
+  // `stale` (commands/autoresearch.md, Step 3), and a gate on `working` alone then never emitted
+  // `stuck` for that lane again -- one probe, and a worker that had really died inside a long
+  // subagent dispatch was carried dark to the hard cap (2026-09-05-worker-delegation-reminder-design.md,
+  // exposure 4). The probe debounce lives in the directive (probe_sent_ts); this gate only counts.
+  if ((d.phase === "working" || d.phase === "stale") && d.outboxMtime > 0) {
     const delta = d.now - d.outboxMtime;
     if (delta >= d.thresholds.stuckS && d.now - state.lastStuckTs >= d.thresholds.stuckS) {
       emit("stuck", `outbox mtime ${delta}s old (>= ${d.thresholds.stuckS}s threshold)`);

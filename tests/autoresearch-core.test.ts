@@ -1159,6 +1159,22 @@ describe("autoresearchMonitor", () => {
     expect(r.notifications).toHaveLength(0);
   });
 
+  // The hub answers a stale notification by setting the lane's phase to `stale`; a gate on `working`
+  // alone then never emitted `stuck` for that lane again (2026-09-05-worker-delegation-reminder-design.md,
+  // exposure 4). Both counters keep running for a probed lane.
+  it("stuck still fires while the lane is phase=stale (the hub's probe response must not disarm escalation)", () => {
+    const s: MonitorScanState = { offset: 0, rescanEmitted: new Set(), lastStaleTs: 0, lastStuckTs: 0, lastRescan: 0 };
+    const r = monitorScan("/o", "alpha", s, mkDeps({ now: 100000, outboxMtime: 100000 - 2000, phase: "stale" }));
+    expect(r.notifications.map((n) => n.event)).toContain("stuck");
+    expect(r.state.lastStuckTs).toBe(100000);
+  });
+
+  it("stale re-fires while phase=stale (the directive's probe_sent_ts debounce owns the probe, not this gate)", () => {
+    const s: MonitorScanState = { offset: 0, rescanEmitted: new Set(), lastStaleTs: 0, lastStuckTs: 0, lastRescan: 0 };
+    const r = monitorScan("/o", "alpha", s, mkDeps({ now: 100000, outboxMtime: 100000 - 1000, phase: "stale" }));
+    expect(r.notifications.map((n) => n.event)).toContain("stale");
+  });
+
   it("stale is rate-limited by probeS across scans", () => {
     let s: MonitorScanState = { offset: 0, rescanEmitted: new Set(), lastStaleTs: 0, lastStuckTs: 0, lastRescan: 0 };
     s = monitorScan("/o", "v", s, mkDeps({ now: 100000, outboxMtime: 99000 })).state;
