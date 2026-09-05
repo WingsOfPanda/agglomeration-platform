@@ -128,6 +128,17 @@ describe("identityWrite role selection", () => {
     expect(/\p{Extended_Pictographic}/u.test(body)).toBe(false);
   });
 
+  // 2026-09-05-worker-delegation-reminder-design.md: the delegation paragraph reaches every worker
+  // and, by composition, every slice; never the hub, whose executors are ap workers, not subagents.
+  it("worker and slice carry the delegation paragraph; the hub does not", () => {
+    for (const body of [render(), render("slice")]) {
+      expect(body).toContain("**Delegate the grind:**");
+      expect(body).toContain("Subagents run inside your session and count as foreground work");
+      expect(body).toContain("you emit `done` once, after reviewing their diff.");
+    }
+    expect(render("job-hub")).not.toContain("**Delegate the grind:**");
+  });
+
   it("the slice block is COMPOSED from the worker's, so the two cannot drift", () => {
     expect(IDENTITY_BLOCKS.slice.intro).toBe(IDENTITY_BLOCKS.worker.intro);
     expect(IDENTITY_BLOCKS.slice.signoff).toBe(IDENTITY_BLOCKS.worker.signoff);

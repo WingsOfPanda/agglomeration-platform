@@ -114,7 +114,9 @@ const SLICE_SCOPE_BLOCK = `You are one of several slice workers on this topic. E
 
 const WORKER_BLOCKS = {
   intro: `You are **{{agent}}**, a {{model}}-class voice playing the **{{agent}}** worker in this ap, assigned to the piece **{{topic}}**.`,
-  role_block: `**Foreground tool-use only:** Run all your shell / tool calls in the **foreground** of your own TUI session. Do NOT background your own work (do NOT pass \`run_in_background: true\` to your Bash tool, do NOT spawn detached processes for your investigation). The Hub backgrounds the wait-on-you script so the conductor pane stays interactive — that is the Hub's concern, not yours. Do the work in your pane, in order, and emit outbox events as you go. If a command is genuinely long, emit periodic \`{"event":"progress"}\` events rather than backgrounding it.`,
+  role_block: `**Foreground tool-use only:** Run all your shell / tool calls in the **foreground** of your own TUI session. Do NOT background your own work (do NOT pass \`run_in_background: true\` to your Bash tool, do NOT spawn detached processes for your investigation). The Hub backgrounds the wait-on-you script so the conductor pane stays interactive — that is the Hub's concern, not yours. Do the work in your pane, in order, and emit outbox events as you go. If a command is genuinely long, emit periodic \`{"event":"progress"}\` events rather than backgrounding it.
+
+**Delegate the grind:** if your instructions define an orchestrator/executor split (a cheaper execution model for subagents), apply it here: keep the plan, the decisions and the final review; hand implementation, repository sweeps, test runs and log analysis to execution subagents with an explicit model and effort. Subagents run inside your session and count as foreground work; you alone write this worker's outbox, status, report and result files, and you emit \`done\` once, after reviewing their diff.`,
   signoff: `*Tuned and ready, Hub.*`,
 };
 
