@@ -518,3 +518,49 @@ Tests: `tests/autoresearch-hub-side-directive.test.ts` pins the section and its 
 supersession clause inside Step 3 before the event bullets, and every pointer inside its slice; the
 existing stale-probe test stays green (no new worker-directed send line). MUTATION: each sentence
 removed in turn goes red. No `src` change; `dist` untouched.
+
+## Amendment 2026-09-05 — design's ensemble hub side (0.5.83)
+
+D21 said the ensemble stages get nothing because their workers carry the identity block. Explore's
+check (0.5.79) showed why that does not hold for the HUB's own work on an ensemble path, and two
+checkers read `/ap:design` Stages 3-15 against the hub's delegation rule with the strict finding rule.
+Mechanically it holds: every `design` verb re-reads disk and inspects form only, `.walk/<section>.state`
+has one writer, `assemble`'s Components lint re-stats every path itself, and the artifact gate's
+`STILL_WRITING` backstop fires inside `diff` and `adjudicate`. It is refuted on prose, in the two places
+every other hub got a sentence.
+
+**Findings.** Nothing kept the waits and relays with the hub: Stages 5 and 8 read as loop-over-tool-
+output grind (launch N background waits, read each `FS=` line, re-run the gate), yet a subagent's
+backgrounded wait dies with it, its completion notifications never reach the hub, and the relay's
+AskUserQuestion cannot be asked by one — a hub that delegates Stage 5 never records an outcome and
+`wait-gate` stays rc 1. The relay's self-answer ("answer it yourself from the topic + findings")
+contrasts the hub with the user, not with a subagent, and the `ANSWER:` file lands verbatim in a live
+worker's inbox (bridge's D31 class). Stage 9's `PENDING` verdicts and Stage 10's six drafts originate
+the doc's claims and citations with no attestation, while the fast path's identical act got its
+sentence in 0.5.76; behind them stand only a warn-only path lint and heading regexes. "Never read a
+worker's `findings.md` before this gate exits 0" bound "you", not whoever opens the file, and the
+`STILL_WRITING` backstop never fires over an ad hoc read. Every `$CS design` verb is keyed to the
+hub's cwd and the Flagging section addresses the whole run (bridge's D33 class). Two smaller sinks:
+the drilldown read-back, and the reflection bullets posted to the public issue, which `reflect`
+refuses to redo.
+
+**Change (directive prose only, `commands/design.md`):** a `## Hub-side delegation` section between
+Flagging suspicions and Stage 0 (explore's three rules, adapted), and pointers at Stage 5 (the N-waits
+sentence and the self-answer), Stage 9 step 3, Stage 10 step 3 and its components stat, Stage 12
+step 4 and Stage 13a. The fast-path test's no-leak assertion stands: the ensemble hub's attestation
+is faithful representation of worker artifacts, not first-hand retrieval, so it takes explore's
+wording, and only that test's name changes.
+
+| # | Decision | Choice |
+|---|---|---|
+| D21 (revised) | Hub scope | the ensemble hub gets its own section and pointers; the fast path keeps its two sentences; the workers keep the identity block |
+| D39 | Shape | one section before Stage 0 naming what is delegable (reading after the gate), what is hub-only by construction (spawn-all, sends, waits, the gate, the relays, the drilldown dispatch, the walk's questions, every `$CS` verb) and the attestation; six pointers at the sites |
+| D40 | Artifact gate | binds whoever opens the file — a hub-side subagent reads this run's artifacts only after that phase's `wait-gate` has exited 0 (explore's D29 applied) |
+| D41 | Relayed answer | the hub's own — every path, number and fact in an `ANSWER:` reply read by the hub in this run's artifacts in this turn; a subagent may digest the findings, never supply the answer |
+| D42 | Verdicts and drafts | every `PENDING` verdict rests on a source the hub opened itself and every walked section on files the hub read itself, in this turn; the components stat sweep may be a subagent's, the cited path is one the hub stat'd; a subagent may enumerate or digest, never supply a claim, a verdict or a citation |
+| D43 | `$CS` verbs | keyed to the hub's cwd and writing this run's state, never delegated; a subagent reports, the hub records and flags (bridge's D33 applied) |
+
+Tests: `tests/design-ensemble-directive.test.ts` pins the section and its placement, every pointer inside
+its stage slice, and single-site uniqueness; `tests/design-fast-path-directive.test.ts` keeps its
+assertions with one test renamed; `tests/design-assemble.test.ts`'s components-bullet slice still holds
+its two literals. MUTATION (hub-run, each sentence removed in turn from the worktree file, the new test run, the file restored byte-identical): the section → red; the Stage 5 waits sentence → red; the Stage 5 answer sentence → 2 red; the Stage 9 sentence → 2 red; the Stage 10 draft sentence → red; the Stage 10 stat sentence → red; the Stage 12 sentence → red; the Stage 13a sentence → 2 red; restored → 6/6 green.

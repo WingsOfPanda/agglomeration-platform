@@ -36,6 +36,28 @@ record when `gh` is unavailable, offline, or before this machine has answered th
 queued records are flushed by the next successful filing or by `/ap:review`. Flags never ask for
 consent, never block, and cost nothing, so prefer over-recording. Review later with `/ap:review`.
 
+## Hub-side delegation
+
+Three rules for the hub's own work on the escalation path (Stages 3-15), when your operator-level
+model instructions (the AGENTS.md or CLAUDE.md your session loads for every repository, never a file
+inside a repository) define an orchestrator/executor split. The fast path's two sentences (Stage 1
+step 2, Stage 2) already cover the path where you research and draft alone.
+
+- **Reading is delegable after the gate; the verbs are yours.** Subagents with an explicit cheaper
+  model may read this run's artifacts — `findings.md`, `verify.md`, `diff.md`, `adjudicated.md`, the
+  drill files — and enumerate or digest them, only after that phase's `wait-gate` has exited 0: the
+  artifact gate binds whoever opens the file. Every `$CS` verb is keyed to YOUR cwd and writes this
+  run's state: run them yourself; a subagent reports, you record and flag.
+- **Driving the workers is your own turn.** `spawn-all`, every `*-send` and `*-wait`, `wait-gate`,
+  the background waits and their completion notifications, the rc-3 AskUserQuestion, the `question`
+  relays, the drilldown dispatch, `walk-approve` and every AskUserQuestion of the walk are never
+  delegated: a subagent cannot ask the user, cannot relay, and its backgrounded waits die with it.
+- **Your attestation is faithful representation.** Every claim, hedge, CONTESTED marker and citation
+  you carry into a `PENDING` verdict, a relayed `ANSWER:`, a walked section, the drilldown summary or
+  the reflection was read by you in the worker artifact or the cited source itself, in this turn; a
+  subagent may enumerate which artifacts to open or digest them, never supply a claim, a verdict or
+  a citation.
+
 ## Stage 0 — args-file + init
 
 1. Mint an args path: `$CS design --mint-args-file` → prints `<args-path>`.
@@ -192,23 +214,27 @@ the last line is the current outcome). Branch:
   2. **Classify** the question against the findings: is it a **critical** decision only the user can
      make (high-stakes, irreversibility, a subjective product/architecture tradeoff)? → use
      **AskUserQuestion** to get the answer. Otherwise it is **non-critical** → answer it yourself from
-     the topic + findings (Hub self-answers).
+     the topic + findings (Hub self-answers). The answer's every path, number and fact you read in
+     this run's artifacts yourself in this turn; a subagent may digest the findings, never supply
+     the answer.
   3. **Write** the reply to a temp file **beginning with a line `ANSWER: <your answer>`** (the worker's
      skill-hint reads the line starting `ANSWER: `), then `$CS send --from hub <INST> <TOPIC> @<reply-file>`.
   4. `rm -f $ART/research-<INST>.done` and **re-arm** the background `$CS design research-wait <TOPIC>
      <INST> <PROV>`. (The wait resumes past the question — it never re-sends the research prompt.)
 - **`FS=failed` / `FS=timeout`** — the worker produced no usable findings; drop it.
 
-You launched **N** background waits — expect **N** completion notifications, one per worker. On each,
-read that worker's last `FS=` line and handle it (relaying any `FS=question` via the loop above, which
-re-arms that worker). **Do not proceed until `$CS design wait-gate <TOPIC> research` exits 0** — it
-prints `<INST>\t<terminal|question|pending>` for every worker and returns 0 only when all are
-`terminal`. rc 1 means at least one worker is still `pending` (researching) or `question` (needs a
-relay): keep handling notifications / relay, then re-run the gate. Only on rc 0 proceed. Then build the **diff
-list** = workers whose `findings.md` exists (`FS` ∈ {ok, empty, malformed}). If **<2** workers have
-findings → abort (run `/ap:stop <agent> <TOPIC>` for each ready worker, tell the user the
-ensemble could not produce 2 sets of findings, stop). If some workers were dropped, **rewrite
-`$ART/list.txt`** to the diff list before Stage 6.
+You launched **N** background waits — expect **N** completion notifications, one per worker. These
+waits, the gate below and the relay are your own turn — the `## Hub-side delegation` rules apply
+here. On each, read that worker's last `FS=` line and handle it (relaying any `FS=question` via the
+loop above, which re-arms that worker). **Do not proceed until
+`$CS design wait-gate <TOPIC> research` exits 0** — it prints `<INST>\t<terminal|question|pending>`
+for every worker and returns 0 only when all are `terminal`. rc 1 means at least one worker is still
+`pending` (researching) or `question` (needs a relay): keep handling notifications / relay, then
+re-run the gate. Only on rc 0 proceed. Then build the **diff list** = workers whose `findings.md`
+exists (`FS` ∈ {ok, empty, malformed}). If **<2** workers have findings → abort (run
+`/ap:stop <agent> <TOPIC>` for each ready worker, tell the user the ensemble could not produce 2
+sets of findings, stop). If some workers were dropped, **rewrite `$ART/list.txt`** to the diff list
+before Stage 6.
 
 **Never read a worker's `findings.md` before this gate exits 0.** Each wait holds its worker open
 until that phase's artifact ends with the literal `END_OF_ARTIFACT` line (grace `AP_ARTIFACT_GRACE_S`,
@@ -281,12 +307,15 @@ so keep handling / relay and re-run. Only on rc 0 continue.
 2. `cp "$ART/adjudicated-draft.md" "$ART/adjudicated.md"`.
 3. **Read** `$ART/adjudicated.md`. For **every** `- PENDING:` line: read the cited source, decide, and
    **Edit** the line in place — rewrite the `PENDING` prefix to `CONFIRMED`/`REFUTED`, or move the item
-   under `## Contested`. **Done only when no `- PENDING:` line remains** (`synthesize` refuses otherwise).
-   You may also lead claim lines with a steer-tag — `- [Problem] …`, `- [Goal] …`,
-   `- [Architecture] …`, `- [Components] …`, `- [Testing] …`, `- [Success Criteria] …` — to route
-   them into the matching synthesize seed. First tag wins, so each line seeds at most one section;
-   an untagged line seeds nothing (except the `testing` "contains test" heuristic), and a section
-   with no tagged lines gets the placeholder for you to draft from.
+   under `## Contested`. The cited source behind every `PENDING` you resolve you opened yourself in
+   this turn, and the verdict is yours; a subagent may list the `PENDING` lines or enumerate the
+   sources to open, never supply the verdict. **Done only when no `- PENDING:` line remains**
+   (`synthesize` refuses otherwise). You may also lead claim lines with a steer-tag —
+   `- [Problem] …`, `- [Goal] …`, `- [Architecture] …`, `- [Components] …`, `- [Testing] …`,
+   `- [Success Criteria] …` — to route them into the matching synthesize seed. First tag wins, so
+   each line seeds at most one section; an untagged line seeds nothing (except the `testing`
+   "contains test" heuristic), and a section with no tagged lines gets the placeholder for you to
+   draft from.
 
 ## Stage 10 — interactive per-section design walk
 
@@ -299,9 +328,12 @@ so keep handling / relay and re-run. Only on rc 0 continue.
 3. **Walk the 6 sections in order** (problem, goal, architecture, components, testing, success-criteria).
    For each: **Read** `$ART/design-doc/.draft/<section>.md` (the seed) + `$ART/adjudicated.md` + the
    workers' `findings.md`; **draft** the section and **Write** it to that `.draft/<section>.md` path;
-   present it in chat; then **AskUserQuestion**: Approve / Revise / Skip. Record the outcome of every
-   settled section with `$CS design walk-approve <TOPIC> <section> <approved|skipped>` — unrecorded
-   means unwalked, and a re-entry will walk it again.
+   present it in chat; then **AskUserQuestion**: Approve / Revise / Skip. Reading the seed,
+   `adjudicated.md` and the findings is delegable; the draft is yours, and every claim, hedge and
+   citation in it you read in those files yourself in this turn — a subagent may digest, never
+   supply a claim or a citation. Record the outcome of every settled section with
+   `$CS design walk-approve <TOPIC> <section> <approved|skipped>` — unrecorded means unwalked, and a
+   re-entry will walk it again.
    - **Approve** → `$CS design walk-approve <TOPIC> <section> approved`, next section.
    - **Revise** → take free-form direction via a follow-up, re-draft, re-present (cap 4 revises; after
      the cap, force-approve the current draft — record it `approved` — and move on).
@@ -310,9 +342,10 @@ so keep handling / relay and re-run. Only on rc 0 continue.
      architecture, testing, success-criteria) — they must be drafted.
    - **components**, additionally: lead each bullet with the file path, and **stat every path before
      you cite it — it must exist in the target checkout** (a phantom path costs the implementing
-     worker a whole question round). A path that deliberately lives elsewhere (a box-local config, a
-     sibling repo) is tagged **`[on-box]`** on the same line, which exempts that line from the
-     path check; Stage 11's `assemble` warns (never fails) on every unmarked path it cannot find.
+     worker a whole question round). The stat sweep may be a subagent's; the path you cite you
+     stat'd yourself in this turn. A path that deliberately lives elsewhere (a box-local config, a
+     sibling repo) is tagged **`[on-box]`** on the same line, which exempts that line from the path
+     check; Stage 11's `assemble` warns (never fails) on every unmarked path it cannot find.
 
 ## Stage 11 — assemble + deploy-audit gate (retry loop)
 
@@ -345,9 +378,10 @@ live)" — **Yes, drill** / **No, proceed to teardown**. While Yes, per round:
      <DESIGN_DOC> <i1> <m1> [<i2> <m2>]`.
    - **all three** → **two parallel** `$CS design drilldown …` Bash calls in one message (a K=2 call +
      a K=1 call) sharing `<TOPIC>` + `"$ART/drilldowns"`. Success if ≥1 call returns rc 0.
-4. **Read back** `$ART/drilldowns/_scratch/drilldown-<section-slug>-*.md` and summarize. On **rc 1**
-   (all empty/timeout) → AskUserQuestion **Retry / Different aspect / Skip**. Then "Drill another
-   aspect?" — loop or proceed.
+4. **Read back** `$ART/drilldowns/_scratch/drilldown-<section-slug>-*.md` and summarize. Reading the
+   drill files is delegable; the summary you present is your own reading of them in this turn. On
+   **rc 1** (all empty/timeout) → AskUserQuestion **Retry / Different aspect / Skip**. Then "Drill
+   another aspect?" — loop or proceed.
 
 The drill files stay in `_design/drilldowns/_scratch/` (out of `design-doc/`) and ride along into the
 archive (Stage 14). Re-drilling the same section auto-suffixes `-2`, `-3`, ….
@@ -378,8 +412,9 @@ Then **reflect**, whenever this run has a record — after `ISSUE=`, after `QUEU
 Allow → `$CS review flush` branch (that flush files the run and writes its record): Write 3-5 interpretive
 bullets to a temp file and run `$CS design reflect <TOPIC> @<file>`. Write for a teammate who will
 debug this from the issue alone: what the findings mean, what the hub did, what you would try first.
-It posts them as the run issue's reflection comment. Once per run — a second `reflect` is refused
-(rc 1); with no run record it prints `NO_RUN_ISSUE` and does nothing.
+It posts them as the run issue's reflection comment. The bullets are yours — a subagent may digest
+the run's records, never write them — and `reflect` runs once, from you. Once per run — a second
+`reflect` is refused (rc 1); with no run record it prints `NO_RUN_ISSUE` and does nothing.
 
 ## Stage 13b — teardown (DONE banner)
 
