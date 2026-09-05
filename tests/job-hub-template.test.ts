@@ -36,6 +36,19 @@ describe("job-hub identity", () => {
     expect(hub).toContain("run_in_background: true");
   });
 
+  // 0.5.77 (spec D24, reversing D1): the job hub is a claude TUI on the expensive model doing real
+  // hub-side grind, and it carried unanswered the two sentences that stopped workers delegating.
+  it("carries the hub-shaped delegation block: subagents are foreground evidence, grind delegable, attestation and the gate run its own", () => {
+    expect(hub).toContain("**Delegate the grind:**");
+    expect(hub).toContain("a subagent is foreground work of yours, inside your session, and its return is evidence, never a task and never a verdict");
+    expect(hub).toContain("hub-side grind");
+    expect(hub).toContain("the gate run you attest you run in your own shell with its pin");
+    expect(hub).toContain("binds every subagent you dispatch, named in its brief; cancel subagents still in flight before you park.");
+    // the block sits after the backgrounding rule it reconciles and before the spawn floor
+    expect(hub.indexOf("Backgrounding is expected of you")).toBeLessThan(hub.indexOf("**Delegate the grind:**"));
+    expect(hub.indexOf("**Delegate the grind:**")).toBeLessThan(hub.indexOf("The spawn call is the one foreground call"));
+  });
+
   it("grants exactly one extra authority, and bounds it", () => {
     expect(hub).toContain("you may write your OWN workers' inboxes");
     expect(hub).toContain("may not write their outboxes");
@@ -145,7 +158,9 @@ describe("identityWrite role selection", () => {
       expect(body).toContain("Emit `done` only after every output path your task named is written, in place and non-empty");
       expect(body).toContain("A `question` or `error` that halts the turn goes out at once");
     }
-    expect(render("job-hub")).not.toContain("**Delegate the grind:**");
+    // the hub carries its own, hub-shaped block (0.5.77, spec D24), never the worker's six rules
+    expect(render("job-hub")).not.toContain("A subagent is foreground work of yours, inside your session");
+    expect(render("job-hub")).not.toContain("With no such split in those instructions, do the work yourself.");
   });
 
   it("the slice block is COMPOSED from the worker's, so the two cannot drift", () => {
