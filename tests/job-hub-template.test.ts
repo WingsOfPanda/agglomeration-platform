@@ -111,6 +111,31 @@ describe("identityWrite role selection", () => {
     expect(body).toContain("job hub");
   });
 
+  // The third role (design D). A slice IS a worker — same intro, same signoff, same foreground rule —
+  // plus the one paragraph that names what N concurrent worktrees make newly possible to get wrong.
+  it("role 'slice' is the worker identity plus the out-of-slice paragraph", () => {
+    const body = render("slice");
+    expect(body).toContain("**Foreground tool-use only:**");
+    expect(body).not.toContain("Backgrounding is expected of you");
+    expect(body).toContain("You are one of several slice workers on this topic.");
+    expect(body).toContain("your own git worktree on your own branch");
+    expect(body).toContain("Never create, edit, or delete a file outside those paths");
+    expect(body).toContain("`## Out-of-slice changes needed`");
+    expect(body).toContain("the Hub carries it to the worker that owns that path.");
+    expect(body).toContain("*Tuned and ready, Hub.*");
+    // and it grants nothing the hub has
+    expect(body).not.toContain("you may write your OWN workers' inboxes");
+    expect(/\p{Extended_Pictographic}/u.test(body)).toBe(false);
+  });
+
+  it("the slice block is COMPOSED from the worker's, so the two cannot drift", () => {
+    expect(IDENTITY_BLOCKS.slice.intro).toBe(IDENTITY_BLOCKS.worker.intro);
+    expect(IDENTITY_BLOCKS.slice.signoff).toBe(IDENTITY_BLOCKS.worker.signoff);
+    expect(IDENTITY_BLOCKS.slice.role_block.startsWith(IDENTITY_BLOCKS.worker.role_block + "\n\n")).toBe(true);
+    // an ordinary worker is never told about slices
+    expect(IDENTITY_BLOCKS.worker.role_block).not.toContain("slice workers");
+  });
+
   it("both roles still get the ready-emission tail spawn hard-waits on", () => {
     const body = render("job-hub");
     expect(body).toContain('{"event":"ready"');

@@ -72,6 +72,14 @@ export function jobPath(topic: string): string { return join(jobDir(topic), "job
 export function worktreePathFor(root: string, topic: string): string {
   return join(root, ".ap", "worktrees", topic);
 }
+/** A SLICE worktree of a fanned-out implement run (2026-09-04-parallel-slices-design.md, C):
+ *  `<root>/.ap/worktrees/<topic>.<agent>`. A sibling of the run worktree, so `worktreeProvenanced`
+ *  admits it (`job stop` may remove it, `pinReport` pins it) and `mainCheckoutRoot` re-roots from
+ *  it — but the dot fails the slug rule, so `worktreeTopic` never reads it as a run worktree and no
+ *  topic can collide with it. */
+export function sliceWorktreePathFor(root: string, topic: string, agent: string): string {
+  return join(root, ".ap", "worktrees", `${topic}.${agent}`);
+}
 /** Is `path` a worktree THIS platform could have created under `root`? The same rule pane ownership
  *  follows: teardown removes only what ap can prove is its own, so a hand-edited (or carried-over)
  *  record naming some other checkout is never a path `job stop` will delete. */

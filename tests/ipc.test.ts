@@ -229,6 +229,29 @@ describe("ipc pane meta", () => {
     expect(JSON.parse(readFileSync(join(d, "pane.json"), "utf8")).pane_nonce).toBe("nonce-abc");
     expect(IPC.paneMetaRead("bravo", "codex", "demo")).toEqual({ paneId: "%3", nonce: "nonce-abc" });
   });
+  // The one OPTIONAL key pane.json has. It is written for a slice worker and for nothing else, so
+  // every record ap writes today — the job hub's included — is byte-identical to the pre-field one,
+  // which is what keeps every existing reader unchanged (design D9, success criterion 6).
+  it("records `role` for a slice, and for no other role", () => {
+    home(); const d = seedPart("bravo", "codex", "demo");
+    IPC.paneMetaWrite("bravo", "codex", "demo", "%3", "n", "slice");
+    expect(JSON.parse(readFileSync(join(d, "pane.json"), "utf8")).role).toBe("slice");
+
+    for (const role of [undefined, "worker", "job-hub"] as const) {
+      IPC.paneMetaWrite("bravo", "codex", "demo", "%3", "n", role);
+      const o = JSON.parse(readFileSync(join(d, "pane.json"), "utf8"));
+      expect(Object.keys(o), `role=${role}`).toEqual(["pane_id", "pane_nonce", "agent", "model", "spawned_at"]);
+    }
+  });
+
+  it("a slice's pane.json still reads as an ordinary pane record everywhere else", () => {
+    home(); seedPart("bravo", "codex", "demo");
+    IPC.paneMetaWrite("bravo", "codex", "demo", "%3", "nonce-abc", "slice");
+    expect(IPC.paneMetaRead("bravo", "codex", "demo")).toEqual({ paneId: "%3", nonce: "nonce-abc" });
+    expect(IPC.paneMetaReadForDir(workerDir("bravo", "codex", "demo")))
+      .toEqual({ agent: "bravo", model: "codex", paneId: "%3", nonce: "nonce-abc" });
+  });
+
   it("a pane.json from a pre-nonce ap reads as recorded-but-unverifiable (nonce '')", () => {
     home(); const d = seedPart("bravo", "codex", "demo");
     writeFileSync(join(d, "pane.json"), JSON.stringify({ pane_id: "%3", agent: "bravo", model: "codex", spawned_at: "t" }));

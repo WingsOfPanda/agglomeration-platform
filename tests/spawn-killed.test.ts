@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import { freshHome } from "./helpers/tmpHome.js";
 import { virtualClock } from "./helpers/clock.js";
 import {
-  spawnKilled, withSigtermGuard, readyWait, bootstrapFailureReason, bootstrapFailureDetail, realSpawnKilledDeps,
+  spawnKilled, withSigtermGuard, readyWait, bootstrapFailed, bootstrapFailureReason, bootstrapFailureDetail, realSpawnKilledDeps,
   READY_EVENTS, SPAWN_KILLED_EXIT, type SpawnKilledDeps,
 } from "../src/commands/spawn.js";
 import { captureFailure, captureSpawnFailure, FAILURE_FILENAME } from "../src/core/forensics.js";
@@ -290,5 +290,33 @@ describe("bootstrapFailureReason (pure)", () => {
   });
   it("an error the worker itself wrote -> error_event", () => {
     expect(bootstrapFailureReason({ event: "error", message: "codex bootstrap failed" })).toBe("error_event");
+  });
+});
+
+describe("bootstrapFailed — the ARM, not just the pure reason/rc split (spec D2)", () => {
+  /** Run the arm over a fresh worker dir; the pane tail it writes to stderr is the shipped behaviour. */
+  async function arm(ev: Parameters<typeof bootstrapFailed>[1]): Promise<{ rc: number; rec: string[] }> {
+    home(); mkWorker(CTX.agent, CTX.model, CTX.topic);
+    const rec: string[] = [];
+    return { rc: await bootstrapFailed(CTX, ev, recordingDeps(rec)), rec };
+  }
+
+  it("a ready-wait that timed out returns rc 3 — the cold start `implement spawn-slices` retries", async () => {
+    const { rc, rec } = await arm(null);
+    expect(rc).toBe(3);
+    // The same ordering contract `spawnKilled` carries: the pane dies before the archive moves its record.
+    expect(rec).toEqual(["capture:timeout", "forensics:timeout", "kill:%89", "status:error/bootstrap-failed", "archive:FAILED"]);
+  });
+
+  it("a pane that died during bootstrap returns rc 3 too", async () => {
+    const { rc, rec } = await arm({ event: "error", note: PANE_DIED_NOTE });
+    expect(rc).toBe(3);
+    expect(rec).toContain("forensics:pane_dead");
+  });
+
+  it("the worker's OWN error event stays rc 1 — a second attempt would fail the same way", async () => {
+    const { rc, rec } = await arm({ event: "error", message: "codex bootstrap failed" });
+    expect(rc).toBe(1);
+    expect(rec).toContain("forensics:error_event");
   });
 });

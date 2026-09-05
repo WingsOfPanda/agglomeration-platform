@@ -36,6 +36,25 @@ export function targetProblem(p: string): string {
 }
 
 export function classifyDirty(porcelain: string): boolean { return porcelain.trim().length > 0; }
+
+/** The paths in a `git status --porcelain -z` (v1) listing — EVERY caller must pass `-z`.
+ *  Fields are NUL-terminated `XY <path>` and are never quoted, which is the point of
+ *  `-z`: without it `core.quotePath` (on by default) shows an operator with a `désign.md` in their
+ *  tree the C-escaped `"d\303\251sign.md"`, a name that matches nothing they can type. A rename or
+ *  copy is two fields, DESTINATION first then source — the destination is the name that matters,
+ *  since that is what the operator now has on disk, so the source field is consumed and dropped. */
+export function dirtyPaths(porcelain: string): string[] {
+  const fields = porcelain.split("\0");
+  const out: string[] = [];
+  for (let i = 0; i < fields.length; i++) {
+    const f = fields[i];
+    if (f.length < 4) continue;
+    const xy = f.slice(0, 2);
+    if (xy.includes("R") || xy.includes("C")) i++;   // consume the source field of a rename/copy
+    out.push(f.slice(3));
+  }
+  return out;
+}
 export function finishAutoAction(remotes: string): "pr" | "keep" { return remotes.trim().length > 0 ? "pr" : "keep"; }
 
 export interface SnapshotResult {

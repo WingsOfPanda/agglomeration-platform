@@ -11,7 +11,7 @@ import { stateInit, stateArchive, isoUtc } from "../core/archive.js";
 import { readIfExists } from "../core/fsread.js";
 import { atomicWrite } from "../core/atomic.js";
 import { validateSlug } from "../core/slug.js";
-import { identityWrite, identityPath, seedWorkerStatus, writeWorkerStatus, inboxWrite, inboxPath, paneMetaWrite, outboxWaitSince, outboxDump, parseLastPane, formatLastPane, PANE_DIED_NOTE, type WorkerRole, type OutboxEvent, type Clock } from "../core/ipc.js";
+import { identityWrite, identityPath, seedWorkerStatus, writeWorkerStatus, inboxWrite, inboxPath, paneMetaWrite, outboxWaitSince, outboxDump, parseLastPane, formatLastPane, IDENTITY_BLOCKS, PANE_DIED_NOTE, type WorkerRole, type OutboxEvent, type Clock } from "../core/ipc.js";
 import { paneNonceFor } from "../core/roster.js";
 import { pickRandomAgent, agentInUse, formatCollisionError } from "../core/agents.js";
 import { agentBinary, agentDefaultMode, agentModeArgs, agentReadyTimeout, agentBootstrapSleep } from "../core/contracts.js";
@@ -122,6 +122,23 @@ export function bootstrapFailureReason(ev: OutboxEvent | null): FailureReason {
   return ev.note === PANE_DIED_NOTE ? "pane_dead" : "error_event";
 }
 
+/** The exit code the bootstrap-failure arm returns for a reason: **3** for the two COLD-START
+ *  reasons (the pane died, or `ready` never came) and 1 for the worker's own `error` event. The
+ *  split exists for `implement spawn-slices`, which branches on the RETURN CODE — the
+ *  `SPAWN_FAILED reason=` line is a directive contract a Bash step greps, invisible to an
+ *  in-process caller — and retries only the cold-start pair. Every existing caller tests
+ *  zero-vs-non-zero only, so nothing else moves. */
+export function bootstrapFailureRc(reason: FailureReason): number {
+  return reason === "pane_dead" || reason === "timeout" ? 3 : 1;
+}
+
+/** Roles `--role` admits: exactly the identity blocks, so a role can never be spelled in the gate
+ *  and missing from the table (or the reverse). `hasOwn`, not `in`: `--role constructor` would walk
+ *  the prototype chain and pass. Exported so the gate is testable without creating a pane. */
+export function isWorkerRole(role: string): role is WorkerRole {
+  return Object.hasOwn(IDENTITY_BLOCKS, role);
+}
+
 /** Injected so the killed-spawn ORDER is unit-testable without a pane, a real signal, or a real exit. */
 export interface SpawnKilledDeps {
   writeWorkerStatus: typeof writeWorkerStatus;
@@ -190,6 +207,42 @@ export async function spawnKilled(
  *  Node suppresses the default SIGTERM action while any listener exists, so `onTerm` MUST end the
  *  process itself (spawnKilled does, in a finally). Fires at most once — a second signal must not
  *  restart a sequence that is already archiving. */
+/** The bootstrap-failure sequence for a ready-wait that ended without a `ready`: the pane tail and
+ *  the outbox to stderr, forensics, the pane killed, the seed stamped over with the truth, the state
+ *  archived — and the EXIT CODE the caller branches on. Split out of `dispatchVerb` for the reason
+ *  `spawnKilled` is: `implement spawn-slices` retries rc 3 and falls back on a second one (D2), and
+ *  an arm no test can RUN is an arm that can go back to returning 1 with the whole suite green.
+ *  Takes `SpawnKilledDeps` — the same side effects, minus the re-raise, in the same order. */
+export async function bootstrapFailed(
+  ctx: { agent: string; model: string; topic: string; pane: string; readyTimeout: number },
+  ev: OutboxEvent | null,
+  deps: SpawnKilledDeps,
+): Promise<number> {
+  const { agent, model, topic, pane, readyTimeout } = ctx;
+  const reason = bootstrapFailureReason(ev);
+  const tail = await deps.capturePane(pane, 25);
+  process.stderr.write(tail + "\n");
+  if (!ev) {
+    const ob = outboxDump(agent, model, topic).trim();
+    if (ob) process.stderr.write(`outbox:\n${ob}\n`);
+  }
+  const fr = await deps.captureFailure(
+    { agent, model, topic, paneId: pane, reason, eventLine: ev ? JSON.stringify(ev) : undefined, readyTimeout },
+    { workerDir, capturePane: (p, n) => deps.capturePane(p, n), atomicWriteSync: (d, c) => writeFileSync(d, c), isWritableDir: (d) => existsSync(d), now: () => isoUtc() },
+  );
+  deps.captureSpawnFailure({
+    agent, model, topic, reason,
+    detail: bootstrapFailureDetail(ev),
+    failureReportPath: fr.ok ? fr.path : undefined,
+  });
+  await deps.killNow(pane);   // no ownership re-check: this id was created by THIS call, it cannot be stale
+  // stamp the truth over the seed: a FAILED archive must not claim a dispatchable state for a worker that never reported (`error` is terminal, so no gate changes)
+  deps.writeWorkerStatus(agent, model, topic, "error", "bootstrap-failed");
+  const arch = deps.stateArchive(agent, model, topic, "FAILED");
+  log.error(`${agent} failed bootstrap (${reason}); state archived to: ${arch}`);
+  return bootstrapFailureRc(reason);
+}
+
 export async function withSigtermGuard<T>(onTerm: () => void | Promise<void>, body: () => Promise<T>): Promise<T> {
   let fired = false;
   const handler = (): void => { if (fired) return; fired = true; void onTerm(); };
@@ -209,7 +262,7 @@ export async function run(args: string[]): Promise<number> {
 }
 
 async function dispatchVerb(args: string[]): Promise<number> {
-  if (args.length < 3) { log.error("usage: spawn <agent|random> <model> <topic> [--mode m] [--cwd abs] [--target-pane id] [--session name] [--role worker|job-hub] [initial-prompt]"); return 2; }
+  if (args.length < 3) { log.error("usage: spawn <agent|random> <model> <topic> [--mode m] [--cwd abs] [--target-pane id] [--session name] [--role worker|job-hub|slice] [initial-prompt]"); return 2; }
   const parsed = parseSpawnArgs(args);
   let agent = parsed.agent;
   let initial = parsed.initial;
@@ -225,7 +278,7 @@ async function dispatchVerb(args: string[]): Promise<number> {
   if (session && !validSessionName(session)) { log.error(`spawn --session must be a tmux-safe name (letter or digit first, then letters/digits/_/-, at most 64 chars, no '.' or ':'); got: '${session}'`); return 2; }
   // The role selects the identity template, i.e. how much authority the pane is granted. An unknown
   // value must never silently fall back to the permissive one.
-  if (role && role !== "worker" && role !== "job-hub") { log.error(`spawn --role must be 'worker' or 'job-hub'; got: '${role}'`); return 2; }
+  if (role && !isWorkerRole(role)) { log.error(`spawn --role must be one of ${Object.keys(IDENTITY_BLOCKS).join(", ")}; got: '${role}'`); return 2; }
 
   // --session creates its OWN session, so the caller need not be inside tmux at all: this gate exists
   // only because the other two placements split the CALLER's pane.
@@ -255,9 +308,10 @@ async function dispatchVerb(args: string[]): Promise<number> {
   if (!modeArgs) { captureSpawnFailure({ agent, model, topic, reason: "config_error", detail: `mode '${useMode}' not defined for ${model} in contracts.yaml` }); log.error(`mode '${useMode}' not defined for ${model} in contracts.yaml`); return 1; }
   const readyTimeout = agentReadyTimeout(model);
 
+  const workerRole = (role || "worker") as WorkerRole;
   log.info(`preparing state for ${agent}-${model} on ${topic}`);
   try {
-    prepareWorkerState(agent, model, topic, (role || "worker") as WorkerRole);
+    prepareWorkerState(agent, model, topic, workerRole);
 
     const startDir = cwd || repoRoot();
     // The worktree PYTHONPATH pin (src/core/provision.ts): "" unless startDir is a worktree ap created
@@ -324,7 +378,7 @@ async function dispatchVerb(args: string[]): Promise<number> {
       atomicWrite(lastFile, formatLastPane(pane, nonce));   // atomic: a torn .last_pane would break the next split-target
     }
     if (!(await ensureWindowBorderStatus(pane))) log.warn(`could not force pane-border-status on the spawn window; '${labelFor(agent, model, topic)}' label may not render`);
-    paneMetaWrite(agent, model, topic, pane, nonce);
+    paneMetaWrite(agent, model, topic, pane, nonce, workerRole);
     log.ok(`spawned ${labelFor(agent, model, topic)} in pane ${pane} (mode=${useMode})`);
 
     const boot = agentBootstrapSleep(model);
@@ -343,28 +397,7 @@ async function dispatchVerb(args: string[]): Promise<number> {
       () => readyWait({ agent, model, topic, pane, nonce, readyTimeout }, { wait: outboxWaitSince, paneAlive: paneOwned }),
     );
     if (!ev || ev.event === "error") {
-      const reason = bootstrapFailureReason(ev);
-      const tail = await capturePane(pane, 25);
-      process.stderr.write(tail + "\n");
-      if (!ev) {
-        const ob = outboxDump(agent, model, topic).trim();
-        if (ob) process.stderr.write(`outbox:\n${ob}\n`);
-      }
-      const fr = await captureFailure(
-        { agent, model, topic, paneId: pane, reason, eventLine: ev ? JSON.stringify(ev) : undefined, readyTimeout },
-        { workerDir, capturePane: (p, n) => capturePane(p, n), atomicWriteSync: (d, c) => writeFileSync(d, c), isWritableDir: (d) => existsSync(d), now: () => isoUtc() },
-      );
-      captureSpawnFailure({
-        agent, model, topic, reason,
-        detail: bootstrapFailureDetail(ev),
-        failureReportPath: fr.ok ? fr.path : undefined,
-      });
-      await killNow(pane);   // no ownership re-check: this id was created by THIS call, it cannot be stale
-      // stamp the truth over the seed: a FAILED archive must not claim a dispatchable state for a worker that never reported (`error` is terminal, so no gate changes)
-      writeWorkerStatus(agent, model, topic, "error", "bootstrap-failed");
-      const arch = stateArchive(agent, model, topic, "FAILED");
-      log.error(`${agent} failed bootstrap (${reason}); state archived to: ${arch}`);
-      return 1;
+      return await bootstrapFailed({ agent, model, topic, pane, readyTimeout }, ev, realSpawnKilledDeps());
     }
     log.ok(`${agent} is ready`);
 

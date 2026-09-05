@@ -10,6 +10,12 @@ export type BranchCommand = "quick" | "implement" | "bridge";
 export function branchNameFor(command: BranchCommand, topic: string): string {
   return `feat/${command}-${topic}`;
 }
+/** A slice's branch in a fanned-out implement run, `feat/implement-<topic>-<agent>`
+ *  (2026-09-04-parallel-slices-design.md, C). A hyphen, not a slash: git refuses `feat/implement-x`
+ *  and `feat/implement-x/y` in one ref store. */
+export function sliceBranchFor(topic: string, agent: string): string {
+  return `${branchNameFor("implement", topic)}-${agent}`;
+}
 
 export interface BranchRecord {
   /** Where the run started — the branch a finish restores and PRs into. */

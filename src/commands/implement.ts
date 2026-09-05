@@ -7,7 +7,7 @@ import { log } from "../core/log.js";
 import { expandArgsFile, kvParse } from "../args.js";
 import { atomicWrite } from "../core/atomic.js";
 import { repoRoot, repoStateDir } from "../core/paths.js";
-import { jobPath, keepOnBranch, withMainCheckout } from "../core/job.js";
+import { jobPath, keepOnBranch, parseJob, sliceWorktreePathFor, withMainCheckout } from "../core/job.js";
 import { auditDoc } from "../core/audit.js";
 import {
   parseImplementArgs, deriveTopicFromPath, detectProvider,
@@ -19,9 +19,23 @@ import { extractComponentsPaths, extractTestingPaths, lintComponentsPaths, match
 import { runnerAt, preSnapshot, createOrResumeBranch, currentBranch, shortstat, finishWork, hasDistinctBranch, targetProblem, type Runner } from "../core/gitwork.js";
 import { runForensics, runFlag, recordHubFlag, runReflect } from "../core/forensics.js";
 import { haveCmd } from "../core/deps.js";
-import { implementState, composeRound1Prompt, composeFixPrompt } from "../core/implementTurn.js";
+import {
+  implementState, composeRound1Prompt, composeFixPrompt,
+  composePlanPrompt, composeGrillPrompt, composeSliceRound1Prompt, composePreludePrompt, composeAbsorbPrompt,
+  evidencePathFor, NAMED_ROUNDS,
+} from "../core/implementTurn.js";
+import {
+  MAX_SLICES, ABANDON_REASONS, absorbIssues, checkSlicePlan, parsePlanTasks, readSlices, sliceMandate, writeSlices,
+  type AbandonReason, type SliceRow, type SliceStatus,
+} from "../core/implementSlices.js";
+import { integrateSlices, readIntegrate, writeIntegrate } from "../core/implementIntegrate.js";
+import { spawnSlices, type SpawnSlicesDeps } from "../core/implementSpawnSlices.js";
+import { pickAgents } from "../core/agents.js";
+import { provisionWorktree } from "./job.js";
+import { run as spawnRun } from "./spawn.js";
+import { run as stopRun } from "./stop.js";
 import { extractQuestionPayload, parseQuestionPayload } from "../core/questionCodec.js";
-import { outboxOffset, outboxPath, paneMetaRead, realClock, statusPath, workerSendGate, resolveModel, type Clock } from "../core/ipc.js";
+import { outboxOffset, outboxPath, paneMetaRead, realClock, statusPath, workerSendGate, resolveModel, PANE_DIED_NOTE, type Clock } from "../core/ipc.js";
 import { holdPrematureDone, liveRearm, paneIdleProbe, prematureDoneS, type RearmFn } from "../core/implementHold.js";
 import { capturePane } from "../core/tmux.js";
 import { kvField, readField, readIfExists, readIfExistsOrNull } from "../core/fsread.js";
@@ -35,6 +49,21 @@ import { classifyTestRun, liveTestRunner, parseWorkerDuration, shouldSkipVerify,
 
 const WORKER = "lead";
 const IMPLEMENT_TURN_TIMEOUT = (): number => envNum("AP_IMPLEMENT_TURN_TIMEOUT_S", DEFAULT_TURN_BUDGET_S);
+/** The plan and grill turns write ONE file and implement nothing, so they get their own budget: a
+ *  lead that never plans must not spend the run's 4h turn budget before the fan-out starts. */
+const PLAN_TURN_TIMEOUT = (): number => envNum("AP_IMPLEMENT_PLAN_TURN_TIMEOUT_S", 3600);
+/** A turn token: a numbered fix round, or one of the lead's NAMED parallel-phase turns (which are
+ *  outside MAX_ROUNDS — it keeps counting the numbered rounds exactly as today). */
+const ROUND_RE = new RegExp(`^([1-9][0-9]*|${NAMED_ROUNDS.join("|")})$`);
+/** A slice's per-agent file stem; the lead's is the bare round, so its 0.5.68 names are unchanged. */
+function stemFor(agent: string, round: number | string): string {
+  return agent === WORKER ? `${round}` : `${agent}-${round}`;
+}
+/** The report a build-shaped turn writes. "" for the plan and grill turns: they write `plan.md`
+ *  (which `evidencePathFor` returns as their COMPLETION evidence) and no report at all. */
+function reportPathFor(art: string, round: number | string, agent: string): string {
+  return round === "plan" || round === "grill" ? "" : evidencePathFor(art, round, agent);
+}
 
 /** model for the lead worker = the resolved provider (codex|claude). Reads provider.txt; default codex. */
 function workerModel(art: string): string {
@@ -61,7 +90,7 @@ function latestObjections(stateFile: string): number {
   return lastKeyedNumber(readFileSync(stateFile, "utf8"), "OBJECTIONS") ?? 0;
 }
 function usage(): number {
-  log.error("usage: implement <init|audit|set-provider|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|verify-tests|summary|finish|forensics|archive|find-latest-doc> ...");
+  log.error("usage: implement <init|audit|set-provider|pre-snapshot|branch|turn-send|turn-wait|reset-status|slice-check|spawn-slices|abandon-slice|slice-gate|integrate|scope-check|verify-tests|summary|finish|forensics|archive|find-latest-doc> ...");
   return 2;
 }
 
@@ -123,6 +152,11 @@ async function dispatchVerb(args: string[]): Promise<number> {
     case "turn-send": return turnSendRun(rest);
     case "turn-wait": return turnWaitRun(rest);
     case "reset-status": return resetStatusRun(rest);
+    case "slice-check":   return sliceCheckRun(rest);
+    case "spawn-slices":  return spawnSlicesRun(rest);
+    case "abandon-slice": return abandonSliceRun(rest);
+    case "slice-gate":    return sliceGateRun(rest);
+    case "integrate":     return integrateRun(rest);
     case "pre-snapshot": return preSnapshotRun(rest);
     case "branch":       return branchRun(expandArgsFile(rest));
     case "scope-check":  return scopeCheckRun(rest);
@@ -236,30 +270,119 @@ async function setProviderRun(rest: string[]): Promise<number> {
 // ---- turn-send (deploy-turn-send.sh) — offset-before-send dispatch ----
 export interface ImplementSendDeps { offsetFor(i: string, m: string, t: string): number; send(args: string[]): Promise<number>; }
 const liveSendDeps: ImplementSendDeps = { offsetFor: (i, m, t) => outboxOffset(outboxPath(i, m, t)), send: sendRun };
-async function turnSendRun(rest: string[]): Promise<number> {
-  const [topic, roundStr] = rest;
-  if (!topic || !roundStr) { log.error("usage: implement turn-send <topic> <round>"); return 2; }
-  if (!/^[1-9][0-9]*$/.test(roundStr)) { log.error(`implement turn-send: round must be a positive integer (got: ${roundStr})`); return 1; }
-  return turnSendWith(topic, Number(roundStr), liveSendDeps);
+/** The `<topic> <round> [--agent <a>]` head both turn verbs parse, or the rc to return. One parser
+ *  so the two verbs cannot drift on which rounds a slice may be sent (D7: round 1 only) and which
+ *  turns are the lead's alone (the four named ones). */
+interface TurnArgs { topic: string; round: number | string; agent: string; rest: string[] }
+function parseTurnArgs(rest: string[], verb: string): TurnArgs | number {
+  let agent = WORKER; const pos: string[] = [];
+  for (let i = 0; i < rest.length; i++) {
+    const t = rest[i];
+    if (t === "--agent" || t.startsWith("--agent=")) { const { value, shift } = kvParse(t, rest[i + 1]); agent = value; if (shift === 2) i++; continue; }
+    pos.push(t);
+  }
+  const [topic, roundStr, ...extra] = pos;
+  if (!topic || !roundStr) { log.error(`usage: implement ${verb} <topic> <round> [--agent <agent>]`); return 2; }
+  if (!ROUND_RE.test(roundStr)) { log.error(`implement ${verb}: round must be a positive integer or one of ${NAMED_ROUNDS.join(", ")} (got: ${roundStr})`); return 1; }
+  const named = (NAMED_ROUNDS as readonly string[]).includes(roundStr);
+  if (agent !== WORKER) {
+    if (named) { log.error(`implement ${verb}: the ${roundStr} turn is ${WORKER}-only — a slice runs round 1 and nothing else`); return 2; }
+    if (roundStr !== "1") { log.error(`implement ${verb}: a slice runs round 1 only; rounds >= 2 are ${WORKER}'s serial fix loop`); return 2; }
+  }
+  return { topic, round: named ? roundStr : Number(roundStr), agent, rest: extra };
 }
-export async function turnSendWith(topic: string, round: number, d: ImplementSendDeps): Promise<number> {
+
+/** Resolve the model a turn verb addresses. The lead's comes from `provider.txt` and is reconciled
+ *  against the spawned worker; a SLICE's comes from its own worker dir, because a per-slice
+ *  codex->claude fallback never touches the run's `provider.txt`. "" = no such worker. */
+function turnModel(art: string, topic: string, agent: string, verb: string): string | null {
+  if (agent === WORKER) {
+    const model = workerModel(art);
+    return assertLeadMatches(topic, model, verb) ? model : null;
+  }
+  const model = resolveModel(agent, topic);
+  if (model === null) { log.error(`implement ${verb}: no worker for agent=${agent} on topic=${topic} — was the slice spawned?`); return null; }
+  return model;
+}
+
+async function turnSendRun(rest: string[]): Promise<number> {
+  const a = parseTurnArgs(rest, "turn-send");
+  if (typeof a === "number") return a;
+  // `turn-send <topic> grill @<file>`: the hub's own text — what it was trying to group and why.
+  const hubFile = a.rest[0]?.startsWith("@") ? a.rest[0].slice(1) : undefined;
+  return turnSendWith(a.topic, a.round, liveSendDeps, a.agent, hubFile);
+}
+export async function turnSendWith(topic: string, round: number | string, d: ImplementSendDeps, agent = WORKER, hubFile?: string): Promise<number> {
   const art = implementArtDir(topic);
   if (!existsSync(art)) { log.error(`implement turn-send: ${art} not found — run implement init first`); return 1; }
-  const model = workerModel(art);
-  if (!assertLeadMatches(topic, model, "turn-send")) return 1;
-  const targetCwd = readIfExists(join(art, "target_cwd.txt")).trim();
-  const testCmd = targetCwd ? detectTestCommand(targetCwd) : "";
-  const stateFile = join(art, `turn-${WORKER}-${round}.txt`);
+  const model = turnModel(art, topic, agent, "turn-send");
+  if (model === null) return 1;
+  // A slice runs in its OWN worktree, so its suite is detected there — the same repo, hence the
+  // same answer, but stated so the composer reads the tree it names.
+  const cwd = agent === WORKER ? readIfExists(join(art, "target_cwd.txt")).trim() : sliceWorktreePathFor(repoRoot(), topic, agent);
+  const testCmd = cwd ? detectTestCommand(cwd) : "";
+  const stateFile = join(art, `turn-${agent}-${round}.txt`);
   if (existsSync(stateFile)) { log.error(`implement turn-send: ${stateFile} already exists; rm to retry`); return 1; }
-  if (!workerSendGate(WORKER, model, topic, "implement turn-send", "turn")) return 1;
-  const promptFile = join(art, `${WORKER}_turn_prompt_${round}.md`);
-  if (round === 1) atomicWrite(promptFile, composeRound1Prompt({ designPath: join(art, "design.md"), planPath: join(art, "plan.md"), verifyPath: join(art, "verify-report-1.md"), round, testCmd }));
-  else { const bundle = join(art, `fix-prompt-${round}.md`); if (!existsSync(bundle)) { log.error(`implement turn-send: fix-prompt-${round}.md not found at ${bundle}; the directive must write it first`); return 1; } atomicWrite(promptFile, composeFixPrompt(round, readFileSync(bundle, "utf8"), join(art, `verify-report-${round}.md`), testCmd)); }
-  const offset = d.offsetFor(WORKER, model, topic);             // BEFORE send (deploy_send_dispatch order)
+  if (!workerSendGate(agent, model, topic, "implement turn-send", "turn")) return 1;
+  const prompt = composeTurnPrompt(art, topic, agent, round, testCmd, hubFile);
+  if (prompt === null) return 1;
+  const promptFile = join(art, `${agent}_turn_prompt_${round}.md`);
+  atomicWrite(promptFile, prompt);
+  const offset = d.offsetFor(agent, model, topic);             // BEFORE send (deploy_send_dispatch order)
   atomicWrite(stateFile, `OFFSET=${offset}\n`);
-  const rc = await d.send(["--from", "hub", WORKER, topic, `@${promptFile}`]);
+  const rc = await d.send(["--from", "hub", agent, topic, `@${promptFile}`]);
   if (rc !== 0) { log.error(`implement turn-send: send failed (rc=${rc}); ${stateFile} kept (rm to retry)`); return 1; }
-  log.info(`[turn-send] ${WORKER} round=${round} offset=${offset}`); return 0;
+  log.info(`[turn-send] ${agent} round=${round} offset=${offset}`); return 0;
+}
+
+/** The prompt for one turn, or null when its inputs are not on disk (the error is already logged).
+ *  The lead's numbered rounds are byte-identical to 0.5.68 — every other arm is a parallel-phase
+ *  turn, whose composer takes the log paths explicitly because N slices share one art dir. */
+function composeTurnPrompt(art: string, topic: string, agent: string, round: number | string, testCmd: string, hubFile?: string): string | null {
+  const designPath = join(art, "design.md"), planPath = join(art, "plan.md");
+  const verifyPath = reportPathFor(art, round, agent);
+  const stem = stemFor(agent, round);
+  const testLog = join(art, `test-output-${stem}.log`);
+  const durationLog = join(art, `worker-test-duration-${stem}.txt`);
+  if (round === "plan") return composePlanPrompt({ designPath, planPath, maxSlices: MAX_SLICES });
+  if (round === "grill") {
+    if (!hubFile) { log.error("usage: implement turn-send <topic> grill @<file>  (the file holds the hub's grouping and why)"); return null; }
+    const hubText = readIfExistsOrNull(hubFile);
+    if (hubText === null) { log.error(`implement turn-send: grill text not found: ${hubFile}`); return null; }
+    const refusals = splitLines(readIfExists(join(art, "slice-refusals.txt")));
+    if (!refusals.length) { log.error(`implement turn-send: no slice-refusals.txt under ${art} — the grill turn exists to answer a slice-check refusal`); return null; }
+    return composeGrillPrompt({ hubText, planPath, refusalLines: refusals });
+  }
+  if (round === "prelude") {
+    const ids = readIfExists(join(art, "prelude.txt")).split(/[,\s]+/).filter(Boolean);
+    if (!ids.length) { log.error(`implement turn-send: prelude.txt is empty or missing under ${art} — an empty prelude has no turn`); return null; }
+    return composePreludePrompt({ designPath, planPath, preludeIds: ids, verifyPath, testLog, durationLog, testCmd });
+  }
+  if (round === "absorb") {
+    const parsed = parsePlanTasks(readIfExists(planPath));
+    const issuesText = absorbIssues({
+      topic, rows: readSlices(join(art, "slices.tsv")), integrate: readIntegrate(join(art, "integrate-1.tsv")),
+      reportTextFor: (a) => readIfExists(evidencePathFor(art, 1, a)),
+      planTasks: parsed.ok ? parsed.tasks : [],
+    });
+    // Symmetric with the prelude arm above: G takes the absorb turn only when the slices LEFT
+    // something, and an empty ISSUES block is a turn that asks the lead to absorb nothing.
+    if (!issuesText) { log.error(`implement turn-send: nothing to absorb — slices.tsv, integrate-1.tsv and the slice reports under ${art} are clean`); return null; }
+    return composeAbsorbPrompt({ designPath, planPath, issuesText, verifyPath, testLog, durationLog, testCmd });
+  }
+  if (agent !== WORKER) {
+    const mandateText = readIfExistsOrNull(join(art, `slice-${agent}.md`));
+    if (mandateText === null) { log.error(`implement turn-send: slice-${agent}.md not found under ${art}; run implement slice-check first`); return null; }
+    return composeSliceRound1Prompt({ designPath, planPath, mandateText, verifyPath, testLog, durationLog, testCmd });
+  }
+  if (round === 1) return composeRound1Prompt({ designPath, planPath, verifyPath, round, testCmd });
+  const bundle = join(art, `fix-prompt-${round}.md`);
+  if (!existsSync(bundle)) { log.error(`implement turn-send: fix-prompt-${round}.md not found at ${bundle}; the directive must write it first`); return null; }
+  return composeFixPrompt(round as number, readFileSync(bundle, "utf8"), verifyPath, testCmd);
+}
+/** Non-empty lines of a state artifact, trimmed. */
+function splitLines(text: string): string[] {
+  return text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
 }
 
 // ---- turn-wait (deploy-turn-wait.sh) — rc 0 ALWAYS; TS= carries outcome ----
@@ -274,60 +397,77 @@ export interface ImplementWaitDeps {
 }
 const liveWaitDeps: ImplementWaitDeps = { multiplier: agentTimeoutMultiplier, now: () => Math.floor(Date.now() / 1000) };
 async function turnWaitRun(rest: string[]): Promise<number> {
-  const [topic, roundStr] = rest;
-  if (!topic || !roundStr) { log.error("usage: implement turn-wait <topic> <round>"); return 2; }
-  if (!/^[1-9][0-9]*$/.test(roundStr)) { log.error(`implement turn-wait: round must be a positive integer (got: ${roundStr})`); return 1; }
-  return turnWaitWith(topic, Number(roundStr), liveWaitDeps);
+  const a = parseTurnArgs(rest, "turn-wait");
+  if (typeof a === "number") return a;
+  return turnWaitWith(a.topic, a.round, liveWaitDeps, a.agent);
 }
-export async function turnWaitWith(topic: string, round: number, d: ImplementWaitDeps): Promise<number> {
+export async function turnWaitWith(topic: string, round: number | string, d: ImplementWaitDeps, agent = WORKER): Promise<number> {
   const art = implementArtDir(topic);
-  const model = workerModel(art);
-  if (!assertLeadMatches(topic, model, "turn-wait")) return 1;
-  const stateFile = join(art, `turn-${WORKER}-${round}.txt`);
+  const model = turnModel(art, topic, agent, "turn-wait");
+  if (model === null) return 1;
+  const stateFile = join(art, `turn-${agent}-${round}.txt`);
   if (!existsSync(stateFile)) { log.error(`implement turn-wait: ${stateFile} missing — run implement turn-send first`); return 1; }
-  const timeout = scaledTimeout(IMPLEMENT_TURN_TIMEOUT(), d.multiplier(model));
+  const budget = round === "plan" || round === "grill" ? PLAN_TURN_TIMEOUT() : IMPLEMENT_TURN_TIMEOUT();
+  const timeout = scaledTimeout(budget, d.multiplier(model));
   const clock = d.clock ?? realClock;
   const startMs = clock.now();
+  // The confirmation layer's flags name the MODEL, which with N workers on one provider no longer
+  // identifies the worker — so every flag this wait produces is prefixed with the agent.
+  const agentFlag = (note: string): void => { recordHubFlag({ command: "implement", topic, note: `${agent}: ${note}` }); };
   const r = await awaitTurn({
-    agent: WORKER, model, topic, stateFile, timeoutS: timeout,
+    agent, model, topic, stateFile, timeoutS: timeout,
     label: "[turn-wait]", policy: { confirm: true },
   }, {
     wait: d.wait, clock: d.clock,
-    onArmed: (offset) => { log.info(`[turn-wait] ${WORKER} round=${round} offset=${offset} timeout=${timeout}s`); },
-    onFlag: (note) => { recordHubFlag({ command: "implement", topic, note }); },
+    onArmed: (offset) => { log.info(`[turn-wait] ${agent} round=${round} offset=${offset} timeout=${timeout}s`); },
+    onFlag: agentFlag,
   });
   if ("missingOffset" in r) { log.error(`implement turn-wait: OFFSET not set in ${stateFile}`); return 1; }
-  const verifyPath = join(art, `verify-report-${round}.md`);
-  // J: a `done` whose verify report is absent is HELD, not failed — the worker that emits `done`
+  // The turn's COMPLETION EVIDENCE, which is per turn and not per round token: the plan and grill
+  // turns write plan.md and no report at all, a slice writes a per-agent one.
+  const evidencePath = evidencePathFor(art, round, agent);
+  // J: a `done` whose evidence is absent is HELD, not failed — the worker that emits `done`
   // per task is still working. The hold needs a pane to watch: an unverifiable pane record
   // (paneMetaRead null, or no ownership nonce) is not evidence to act on, so it takes today's
   // `failed` at once, as does `AP_IMPLEMENT_PREMATURE_DONE_S=0`.
   const idleS = prematureDoneS();
-  const pane = paneMetaRead(WORKER, model, topic);
+  const pane = paneMetaRead(agent, model, topic);
   let ev = r.event;
   if (idleS > 0 && pane?.nonce) {
     const probe = paneIdleProbe({ capture: () => capturePane(pane.paneId), now: clock.now, idleS });
-    const ctx = { agent: WORKER, model, topic, stateFile, round };
+    const ctx = { agent, model, topic, stateFile, round };
+    // NOT `agentFlag`: the hold's own note already names the agent.
     const onFlag = (note: string): void => { recordHubFlag({ command: "implement", topic, note }); };
     ev = await holdPrematureDone(ev, ctx, {
-      evidencePath: verifyPath, deadlineMs: startMs + timeout * 1000, now: clock.now,
-      rearm: d.rearm ?? liveRearm(ctx, { pane, probe, clock, onFlag }), onFlag,
+      evidencePath, deadlineMs: startMs + timeout * 1000, now: clock.now,
+      rearm: d.rearm ?? liveRearm(ctx, { pane, probe, clock, onFlag: agentFlag }), onFlag,
     });
   }
-  const verifyText = readIfExistsOrNull(verifyPath);
-  let ts = implementState(ev, verifyText);
+  // Lead lines, written AHEAD of the terminal TS= so it stays the file's last line. `PANE=died`
+  // because nothing else carries the engine's synthetic pane death out of this process, and
+  // `PLAN=unparseable` so the hub can tell "no plan" from "a plan the verb cannot read".
+  const leadLines: string[] = [];
+  if (ev?.event === "error" && ev.note === PANE_DIED_NOTE) leadLines.push("PANE=died");
+  let evidenceText = readIfExistsOrNull(evidencePath);
+  if (round === "plan" || round === "grill") {
+    const parsed = evidenceText === null ? null : parsePlanTasks(evidenceText);
+    const usable = parsed !== null && parsed.ok && parsed.tasks.length >= 2;
+    if (parsed !== null && !usable) leadLines.push("PLAN=unparseable");
+    if (!usable) evidenceText = null;      // a plan the verb cannot read is not completion evidence
+  }
+  let ts = implementState(ev, evidenceText);
   let question: { file: string; body: string; extraLines?: string } | undefined;
   if (ts === "question" && ev) {
     const payload = extractQuestionPayload(ev, d.now());
     if (payload !== null) {
       const objLine = parseQuestionPayload(payload).route === "objection"
         ? `OBJECTIONS=${latestObjections(stateFile) + 1}\n` : "";
-      question = { file: join(art, `question-${WORKER}-${round}.txt`), body: payload, extraLines: objLine };
+      question = { file: join(art, `question-${agent}-${round}.txt`), body: payload, extraLines: objLine };
     } else { ts = "failed"; log.warn("[turn-wait] malformed question (no message); downgraded to failed"); }
   }
-  recordWaitOutcome(WORKER, model, topic, stateFile, ts, "TS", question);
-  writeFileSync(join(art, `turn-${WORKER}-${round}.done`), "");
-  log.ok(`[turn-wait] ${WORKER} round=${round} TS=${ts}`); return 0;
+  recordWaitOutcome(agent, model, topic, stateFile, ts, "TS", question, leadLines.length ? leadLines.join("\n") : undefined);
+  writeFileSync(join(art, `turn-${agent}-${round}.done`), "");
+  log.ok(`[turn-wait] ${agent} round=${round} TS=${ts}`); return 0;
 }
 
 // ---- reset-status — force a not-idle worker back to idle (deploy "Force-retry" recovery) ----
@@ -341,6 +481,189 @@ async function resetStatusRun(rest: string[]): Promise<number> {
   atomicWrite(statusPath(agent, model, topic), `{"state":"idle","last_event":"force-reset"}\n`);
   log.ok(`implement reset-status: ${agent} state=idle`);
   return 0;
+}
+
+// ---- the parallel-slices verbs (2026-09-04-parallel-slices-design.md, B / D / E / F / G) -------
+// Five thin adapters: the grouping check, the sequential fan-out, one abandonment, the barrier, and
+// the fan-in. Everything each of them DECIDES lives in a core module; what is here is the CLI shape
+// — argument validation, the art-dir reads, the `KEY=value` stdout, and the rc.
+
+const SLICES_TSV = "slices.tsv";
+
+export interface SliceCheckDeps { agentsFor(topic: string, n: number): string[]; root(): string }
+const liveSliceCheckDeps: SliceCheckDeps = { agentsFor: pickAgents, root: repoRoot };
+async function sliceCheckRun(rest: string[]): Promise<number> {
+  const topic = rest[0];
+  if (!topic || rest.length !== 1) { log.error("usage: implement slice-check <topic>"); return 2; }
+  return sliceCheckWith(topic, liveSliceCheckDeps);
+}
+/** Check the hub's grouping (slice-plan.md) against the lead's plan (plan.md) and, when it stands,
+ *  write the roster every later slice verb reads plus one mandate per slice.
+ *
+ *  A refusal writes the refusal LINES (and nothing else): stdout is gone by the time `turn-send
+ *  grill` composes the turn that answers them, and a layer records its own verdict where the next
+ *  layer can still read it. `SLICES` of 0 or 1 is rc 0 — the directive takes the serial path. */
+export async function sliceCheckWith(topic: string, d: SliceCheckDeps): Promise<number> {
+  const art = implementArtDir(topic);
+  if (!existsSync(art)) { log.error(`implement slice-check: ${art} not found — run implement init first`); return 1; }
+  const planText = readIfExistsOrNull(join(art, "plan.md"));
+  if (planText === null) { log.error(`implement slice-check: plan.md missing under ${art} — run the plan turn first`); return 1; }
+  const slicePlan = readIfExistsOrNull(join(art, "slice-plan.md"));
+  if (slicePlan === null) { log.error(`implement slice-check: slice-plan.md missing under ${art} — the Hub writes its decided grouping there`); return 1; }
+  const base = readIfExists(join(art, "target_cwd.txt")).trim() || d.root();
+  const res = checkSlicePlan({
+    plan: planText, slicePlan, existingRows: readSlices(join(art, SLICES_TSV)),
+    agentsFor: (n) => d.agentsFor(topic, n),
+    fileExists: (p) => existsSync(join(base, p)),
+  });
+  for (const w of res.warnings) process.stdout.write(w + "\n");
+  if (!res.ok) {
+    atomicWrite(join(art, "slice-refusals.txt"), res.refusals.join("\n") + "\n");
+    for (const r of res.refusals) process.stdout.write(r + "\n");
+    log.error(`implement slice-check: ${res.refusals.length} refusal(s) — send them to the lead with: implement turn-send ${topic} grill @<file>`);
+    return 1;
+  }
+  const model = workerModel(art);
+  const parsed = parsePlanTasks(planText);
+  const tasks = parsed.ok ? parsed.tasks : [];
+  const rows: SliceRow[] = res.slices.map((s, i) => ({ agent: res.agents[i], model, label: s.label, status: "planned", tasks: s.tasks, files: s.files }));
+  writeSlices(join(art, SLICES_TSV), rows);
+  for (const [i, s] of res.slices.entries()) {
+    atomicWrite(join(art, `slice-${res.agents[i]}.md`), sliceMandate(s, tasks, sliceWorktreePathFor(d.root(), topic, res.agents[i])));
+  }
+  if (res.prelude.length) atomicWrite(join(art, "prelude.txt"), res.prelude.join(", ") + "\n");
+  process.stdout.write(`SLICES=${rows.length}\nPRELUDE=${res.prelude.length ? 1 : 0}\nAGENTS=${rows.map((r) => r.agent).join(",")}\n`);
+  log.ok(`implement slice-check: ${rows.length} slice(s), prelude=${res.prelude.length}`);
+  return 0;
+}
+
+async function spawnSlicesRun(rest: string[]): Promise<number> {
+  const pos = rest.filter((t) => t !== "--retry");
+  const retry = rest.includes("--retry");
+  if (pos.length !== 1 || !pos[0]) { log.error("usage: implement spawn-slices <topic> [--retry]"); return 2; }
+  return spawnSlicesWith(pos[0], retry, liveSpawnSlicesDeps);
+}
+export type SpawnSlicesAdapterDeps = (topic: string, root: string, runCwd: string, session: string) => SpawnSlicesDeps;
+/** Exported for the wiring test: which RUNNER each git call goes through — the root's or the run
+ *  worktree's — is what a wrong root would silently break (C), and it is invisible to every test
+ *  that injects its own adapter. */
+export const liveSpawnSlicesDeps: SpawnSlicesAdapterDeps = (topic, root, runCwd, session) => {
+  const rootRunner = runnerAt(root);
+  return {
+    root, rootRunner, runRunner: runnerAt(runCwd), session,
+    spawn: (argv) => spawnRun(argv),
+    stop: (agent) => stopRun([agent, topic]),
+    provision: (worktree) => { provisionWorktree(root, worktree, rootRunner); },
+    flag: (note) => { recordHubFlag({ command: "implement", topic, note }); },
+  };
+};
+/** Fan out: a worktree, a branch and a pane per planned slice, one at a time.
+ *
+ *  Detached-only by construction (D2): slices branch from the RUN worktree's HEAD, so a job with no
+ *  record — or a `--no-worktree` one, which runs in the operator's live checkout — is refused rc 2
+ *  and the directive takes the serial path. */
+export async function spawnSlicesWith(topic: string, retry: boolean, mk: SpawnSlicesAdapterDeps): Promise<number> {
+  const art = implementArtDir(topic);
+  if (!existsSync(art)) { log.error(`implement spawn-slices: ${art} not found — run implement init first`); return 2; }
+  const rec = parseJob(readIfExists(jobPath(topic)));
+  if (!rec) { log.error(`implement spawn-slices: no detached job record for '${topic}' (${jobPath(topic)}) — slices are detached-only`); return 2; }
+  if (!rec.worktree) { log.error(`implement spawn-slices: this job runs with --no-worktree — slices fork a run worktree, never the operator's live checkout`); return 2; }
+  const runCwd = readIfExists(join(art, "target_cwd.txt")).trim();
+  if (!runCwd) { log.error(`implement spawn-slices: target_cwd.txt missing under ${art}`); return 2; }
+  const out = await spawnSlices(topic, art, retry, mk(topic, repoRoot(), runCwd, rec.session));
+  if (!out.ok) {
+    for (const l of out.refusals) process.stdout.write(l + "\n");
+    log.error(`implement spawn-slices: refused, nothing spawned — commit or resolve what the lines above name, then re-run`);
+    return 1;
+  }
+  process.stdout.write(`SPAWNED=${out.spawned.length}\nFALLBACK=${out.fallback.join(",")}\nFAILED=${out.failed.join(",")}\n`);
+  log.ok(`implement spawn-slices: ${out.spawned.length} spawned, ${out.failed.length} failed (rc=${out.rc})`);
+  return out.rc;
+}
+
+export interface AbandonSliceDeps { stop(agent: string, topic: string): Promise<number> }
+const liveAbandonDeps: AbandonSliceDeps = { stop: (agent, topic) => stopRun([agent, topic]) };
+async function abandonSliceRun(rest: string[]): Promise<number> {
+  const [topic, agent, reason] = rest;
+  if (!topic || !agent || !reason || rest.length !== 3) { log.error(`usage: implement abandon-slice <topic> <agent> <${ABANDON_REASONS.join("|")}>`); return 2; }
+  if (!(ABANDON_REASONS as readonly string[]).includes(reason)) { log.error(`implement abandon-slice: unknown reason '${reason}' — accepted: ${ABANDON_REASONS.join(", ")}`); return 2; }
+  return abandonSliceWith(topic, agent, reason as AbandonReason, liveAbandonDeps);
+}
+/** Retire one slice. Its worktree and branch are LEFT for `job stop`'s sweep: anything it committed
+ *  survives, and `integrate` still merges the branch if it has commits — an abandoned slice's
+ *  partial work is not thrown away. */
+export async function abandonSliceWith(topic: string, agent: string, reason: AbandonReason, d: AbandonSliceDeps): Promise<number> {
+  const art = implementArtDir(topic);
+  const roster = join(art, SLICES_TSV);
+  const rows = readSlices(roster);
+  const row = rows.find((r) => r.agent === agent);
+  if (!row) { log.error(`implement abandon-slice: no slice row for agent '${agent}' on topic '${topic}' (${roster})`); return 1; }
+  const wasSpawned = row.status === "spawned";
+  row.status = `abandoned:${reason}` as SliceStatus;
+  writeSlices(roster, rows);
+  if (wasSpawned) await d.stop(agent, topic);
+  recordHubFlag({ command: "implement", topic, note: `slice-abandoned: ${agent} (${row.label}) ${reason}` });
+  process.stdout.write(`ABANDONED=${agent}\nREASON=${reason}\n`);
+  log.ok(`implement abandon-slice: ${agent} ${reason}`);
+  return 0;
+}
+
+async function sliceGateRun(rest: string[]): Promise<number> {
+  const [topic, round] = rest;
+  if (!topic || !round || rest.length !== 2) { log.error("usage: implement slice-gate <topic> <round>"); return 2; }
+  if (!/^[1-9][0-9]*$/.test(round)) { log.error(`implement slice-gate: round must be a positive integer (got: ${round})`); return 2; }
+  const art = implementArtDir(topic);
+  const rows = readSlices(join(art, SLICES_TSV));
+  let live = 0, ok = 0;
+  for (const r of rows) {
+    const st = sliceGateState(art, r, round);
+    process.stdout.write(`${r.agent}\t${r.label}\t${st}\n`);
+    if (st === "abandoned") continue;
+    live++;
+    if (st === "ok") ok++;
+  }
+  // A gate over zero live slices is rc 1, never vacuously green: it blocks nothing itself — the
+  // Monitors do the waiting — so the only thing it can be wrong about is saying the wave is done.
+  return live > 0 && ok === live ? 0 : 1;
+}
+/** One slice's state for the barrier: the roster's `abandoned`, a hold in progress (the state
+ *  file's last line is the hold's own `PD=`), the last `TS=`, or `pending`. */
+function sliceGateState(art: string, row: SliceRow, round: string): string {
+  if (row.status.startsWith("abandoned:")) return "abandoned";
+  const text = readIfExistsOrNull(join(art, `turn-${row.agent}-${round}.txt`));
+  if (text === null) return "pending";
+  const lines = splitLines(text);
+  if (lines.at(-1)?.startsWith("PD=")) return "held";
+  const ts = [...text.matchAll(/^TS=(.*)$/gm)].at(-1);
+  return ts ? ts[1].trim() : "pending";
+}
+
+async function integrateRun(rest: string[]): Promise<number> {
+  const [topic, round] = rest;
+  if (!topic || !round || rest.length !== 2) { log.error("usage: implement integrate <topic> <round>"); return 2; }
+  if (!/^[1-9][0-9]*$/.test(round)) { log.error(`implement integrate: round must be a positive integer (got: ${round})`); return 2; }
+  return integrateWith(topic, round, liveScopeDeps);
+}
+/** Fan in: merge each finished slice branch into `feat/implement-<topic>`. A REPORT, not a gate —
+ *  rc 0 whatever the per-slice outcomes, the `scope-check` discipline — except when an aborted merge
+ *  left the tree dirty, which needs eyes before Stage 2 runs a suite in it. */
+export async function integrateWith(topic: string, round: string, d: ScopeDeps): Promise<number> {
+  const art = implementArtDir(topic);
+  if (!existsSync(art)) { log.error(`implement integrate: ${art} not found — run implement init first`); return 1; }
+  const cwd = targetCwd(topic);
+  if (!cwd) { log.error(`implement integrate: target_cwd.txt missing under ${art}`); return 1; }
+  const out = integrateSlices(topic, readSlices(join(art, SLICES_TSV)), d.runnerFor(cwd));
+  if (!out.ok) {
+    for (const l of out.refusals) process.stdout.write(l + "\n");
+    log.error(`implement integrate: precondition refused in ${cwd} — the run branch must be checked out and its tracked files clean; nothing was merged`);
+    return 1;
+  }
+  writeIntegrate(join(art, `integrate-${round}.tsv`), out.rows);
+  const of = (s: string): string[] => out.rows.filter((r) => r.status === s).map((r) => r.agent);
+  const skipped = out.rows.filter((r) => r.status.startsWith("skipped")).map((r) => r.agent);
+  process.stdout.write(`MERGED=${of("merged").length}\nCONFLICT=${of("conflict").join(",")}\nEMPTY=${of("empty").join(",")}\nSKIPPED=${skipped.join(",")}\n`);
+  log.ok(`implement integrate: round=${round} ${of("merged").length} merged, ${of("conflict").length} conflicted, ${skipped.length} skipped`);
+  return out.rc;
 }
 
 // ---- pre-snapshot (deploy-pre-snapshot.sh) ----
