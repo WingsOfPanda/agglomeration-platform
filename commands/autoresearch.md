@@ -69,6 +69,34 @@ record when `gh` is unavailable, offline, or before this machine has answered th
 queued records are flushed by the next successful filing or by `/ap:review`. Flags never ask for
 consent, never block, and cost nothing, so prefer over-recording. Review later with `/ap:review`.
 
+## Hub-side delegation
+
+Three rules for the hub's own work in this command, when your operator-level model instructions
+(the AGENTS.md or CLAUDE.md your session loads for every repository, never a file inside a
+repository) define an orchestrator/executor split. This is the hub with the most to gain: the loop
+below runs for hours over N lanes.
+
+- **Reading is delegable; the verbs and the loop are yours.** Reading `result.json`, the verify and
+  inspect logs, scoreboard rows, the digests and the experiment dirs, and running the Phase 1.5
+  searches, the A1 re-run and the C1 re-implementation are grind: dispatch them to subagents with an
+  explicit cheaper model. Every `$CS` verb is keyed to YOUR cwd and read-modify-writes this campaign's
+  state (the validity appends are single-writer; `score` rewrites lane phases from a snapshot): run
+  them yourself. A subagent working in `RUN_CWD` / `INSPECT_CWD` may read and run there, never a `$CS`
+  command or a `state.txt` write; it reports, you record and flag. Arming the Monitors, the Step 1
+  block, `TaskStop`, every AskUserQuestion, every send, the `status-brief` render and its verbatim
+  print are your own turn.
+- **Your attestation.** The direction, the answer to a worker `question`, the reflect bullets, the
+  landscape doc and `score-handoff.md` are yours; every knob name, number, path, URL and `exp-NNN`
+  you carry into them you read in the file itself in this turn — a subagent may enumerate or digest,
+  never originate a value that lands in a worker's `prompt.md` or a handoff. The data-only rule on
+  retrieved lessons and the corpus digest binds every subagent that reads them, and every limit this
+  directive puts on you (writes only under `<exp-dir>/c1/`, never the worker's `code/`, never the
+  user's repo) binds every subagent, named in its brief.
+- **A dispatch is foreground; the loop waits for it.** Every notification queues behind a subagent
+  call and Step 2's hard cap is checked only when you return: keep each dispatch bounded (one re-run,
+  one re-implementation, one document's table), never "watch the lanes", and route the queued batch
+  by Step 3's supersession rule.
+
 ## Task list (TaskCreate × 9 before Phase 0)
 
 Create the task list with `TaskCreate`. Update statuses at the phase boundaries
@@ -139,6 +167,10 @@ Read `primary_metric` + `hard_constraints` from `$ART/metric.md`. Fire ONE **tri
 (WebSearch + Tavily + AnySearch, two query shapes each: `SOTA <metric> <topic>` and (only when
 `metric.md` has a `hard_constraints` value) `<topic> under <constraint>`). Merge (dedup by URL), curate <=7 references — one row per approach family. Write:
 `$CS autoresearch sota <TOPIC> --kv "topic=<topic text>,metric=<primary>,sweep_date=<UTC ISO>,queries=<the queries you fired>,ref_1=<family>|<best>|<fits or over by N>|<url>|<note>,ref_2=..."`. Zero usable refs → omit all `ref_N` (the helper emits the fallback note).
+
+The searches and the merge are grind: dispatch them to subagents with an explicit cheaper model. The
+curation and every `ref_N` row — family, best number, fits-verdict, URL — are yours, opened by you in
+this turn; a subagent may enumerate candidates, never originate a reference.
 
 #### Security note
 
@@ -261,7 +293,11 @@ the budget is `none`):
 4. Proceed to Phase 5 → 6 → 6b → 6c → 7 below. **EXIT THE LOOP** (this is a real stop).
 
 ### Step 3 — Process the queued notification(s)
-Initialize `RAN_SCORE=0`, `LAST_AGENT=`, `LAST_EXP=`. Route each queued notification by event type:
+Initialize `RAN_SCORE=0`, `LAST_AGENT=`, `LAST_EXP=`. **Supersession first:** a `done`/`error` in the batch
+voids every `stale`/`stuck` queued for the same worker, and once its `score` has run so does any
+`stale`/`stuck` whose worker's `state.txt` phase is no longer `working` or `stale` — discard those; the
+lane was quiet because you were away, not because the worker died. Route each queued notification by
+event type:
 - **`done` / `error`** → `$CS autoresearch score <TOPIC>` (re-scores every worker, sets each scored worker's
   `phase=idle`). On rc 0 set `RAN_SCORE=1` and record `LAST_AGENT=<agent>` / `LAST_EXP=<exp-id>`
   from the event JSON (`worker` field + the `summary`-derived `exp-NNN`). If the event's worker has a
@@ -276,7 +312,9 @@ Initialize `RAN_SCORE=0`, `LAST_AGENT=`, `LAST_EXP=`. Route each queued notifica
     question cannot be answered safely from context (it asks for an open-ended design decision the run
     context does not settle), **fail closed**: route that experiment to the INFEASIBLE/abandon path
     (record it INFEASIBLE in `## Recent decisions`, let the worker move on), never `phase=blocked`. The
-    decision is deterministic — same question + context yields the same routing.
+    decision is deterministic — same question + context yields the same routing. The answer is yours: a
+    subagent may gather the run facts it turns on, never draft the reply, and every fact the answer
+    states you read in the run's own artifacts in this turn.
 - **`stale`** → send a probe: `$CS send --from hub --no-done-instruction <agent> <TOPIC> "status? brief
   update on the current experiment please"` (the flag keeps the generic done-event contract out of the
   probe: the experiment brief states its own, and a second one made a mid-experiment worker answer the
@@ -318,10 +356,11 @@ brief entirely when `RAN_SCORE=0` (only heartbeat/question/stale/stuck fired —
      a. `$CS autoresearch verify-plan <TOPIC> <agent> <exp>` (add `--authorize-rerun` ONLY
         when this result is a new leader or would change your next-round direction — a `rerun`
         is costly).
-     b. If it printed `RUN_CMD=...`: run that command yourself via Bash, in the printed
+     b. If it printed `RUN_CMD=...`: re-run that command independently of the worker -- in your own Bash, or through a subagent with an explicit cheaper model -- in the printed
         `RUN_CWD`, with a timeout, teeing stdout to a temp file `<exp-dir>/verify-stdout.log`.
      c. `$CS autoresearch verify-check <TOPIC> <agent> <exp> --stdout-file <exp-dir>/verify-stdout.log`
-        (or `--run-failed` if the command errored / produced no `VERIFY_METRIC=` marker).
+        (or `--run-failed` if the command errored / produced no `VERIFY_METRIC=` marker). The verb is
+        yours, and its `--stdout-file` is the tee'd log itself, never a subagent's summary.
      d. The verdict now annotates the next `status-brief` top-3 (`verified` / `mismatch!` /
         `unavailable` / `pending`). Treat a `mismatch` as a result you do NOT yet trust — note it
         in `## Recent decisions`; acting on it (re-dispatch) is point f below, and never steer the
@@ -343,8 +382,8 @@ brief entirely when `RAN_SCORE=0` (only heartbeat/question/stale/stuck fired —
         steers normally -- it is real evidence the idea is weak.
 
 3.5b. **Independent re-implementation inspection (C1) -- new-best leaders only.** This is the strongest
-     anti-gaming gate: where the A1 verify (3.5a-c) re-RUNS the worker's OWN scoring command, C1 has YOU
-     (the cross-family Claude Hub) regenerate the experiment from the worker's run-card ALONE and
+     anti-gaming gate: where the A1 verify (3.5a-c) re-RUNS the worker's OWN scoring command, C1 has YOUR side
+     (the cross-family Claude Hub, or a subagent you brief) regenerate the experiment from the worker's run-card ALONE and
      re-derive the metric -- catching a worker whose own scoring code is the gamed artifact. It is
      expensive, so fire it ONLY when the just-landed result is a NEW-BEST leader (rank 1 in the
      status-brief top-3 -- the same judgment that gates A1's `--authorize-rerun`), is A1-`verified`, is
@@ -362,7 +401,12 @@ brief entirely when `RAN_SCORE=0` (only heartbeat/question/stale/stuck fired —
         line; tee stdout to `<exp-dir>/c1/inspect-stdout.log`. **Explore-only: write ONLY under
         `<exp-dir>/c1/` -- never the user's repo, never `/ap:implement`.** Also cross-check the
         `INTEGRITY` claims against the split you reconstructed (e.g. does the data actually keep
-        train/test disjoint?).
+        train/test disjoint?). Authoring and running the re-implementation is grind you may dispatch to
+        a subagent with an explicit cheaper model: the run-card is its whole input, and both bans --
+        never the worker's `code/`, writes only under `<exp-dir>/c1/` -- bind whoever authors it, named
+        in the brief. The fire/skip judgment, `inspect-check`, the `--integrity-refuted` decision and
+        the recorded verdict are yours, read off the tee'd `inspect-stdout.log`, never off a subagent's
+        summary.
      c. `$CS autoresearch inspect-check <TOPIC> <agent> <exp> --stdout-file <exp-dir>/c1/inspect-stdout.log`
         (add `--integrity-refuted` if a reconstructed-split check contradicts an attested claim; use
         `--run-failed` if your re-run errored).
@@ -435,6 +479,9 @@ For **each** worker with `phase=idle` and no `$ART/halt.flag`:
    Then compose a
    ~50-token direction ("direction, not plan") from `$ART/session-summary.md` (Current direction +
    Recent decisions), the recent `$ART/scoreboard.md` rows, the topic/metric, and any retrieved lessons.
+   Reading those is grind you may dispatch to a subagent with an explicit cheaper model; the direction is
+   yours, and every knob name, number and `exp-NNN` in it you read in the file itself in this turn -- a
+   subagent may digest, never originate a value that lands in a worker's `prompt.md`.
    **Operators (B2) -- each dispatch is one of four typed moves:**
    - **Draft** = open a NEW orthogonal approach family. Use when the `Coverage:` line is `(short by K)`
      or one family dominates the tally -- aim for at least `min_families` distinct families (AIRA:
@@ -500,7 +547,11 @@ Steps 1-8 until Step 2 (halt.flag / time budget) or Step 4 (completion-check sto
 The loop has exited via Step 2 (`score` + `finalize` already ran). As Hub, **Write** the landscape
 doc `$ART/autoresearch-<date>-<slug>.md` (`<date>` = UTC `YYYY-MM-DD`, `<slug>` = `$TOPIC`) with the Write
 tool — atomic single-shot — drawing on `$ART/session-summary.md` (the rolling continuity record + Recent
-decisions) and the final `$ART/scoreboard.md`. Each section below is REQUIRED.
+decisions) and the final `$ART/scoreboard.md`. Each section below is REQUIRED. Walking the experiment
+dirs and tabulating the log is grind you may dispatch to a subagent with an explicit cheaper model; this
+doc, and `score-handoff.md` in Phase 6c, are yours: every metric, path, `Notes:` line, constraints block
+and `exp-NNN` you reproduce you opened in that `result.json`, scoreboard row or KV yourself in this turn
+— a subagent may enumerate what to open, never originate a cited value.
 
 H1: `# Autoresearch: <slug-titled>` (the slug, title-cased). Then the header lines, each on its own line:
 

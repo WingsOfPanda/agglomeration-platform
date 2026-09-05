@@ -471,3 +471,50 @@ and the absence of the Stage 2 sentences before Stage 2. MUTATION: each of the f
 goes red. No `src` change; `dist` untouched.
 
 With this, every hub of every ap command carries the delegation contract; only the dogfood remains.
+
+## Amendment 2026-09-05 — autoresearch's hub side (0.5.81)
+
+Two checkers read `/ap:autoresearch`'s hub against the hub's own delegation rule. Mechanically it is
+the strongest hub of the family: every verb consumes files, not summaries (`score` reads `result.json`,
+`verify-check` and `inspect-check` take `--stdout-file`, `status-brief` / `memory-retrieve` /
+`corpus-digest` / `consensus` digest for the hub), the hub never opens a worker's `stdout.log`, and one
+test pinned the directive (the stale probe). It is refuted on prose and on one loop defect.
+
+**A third pre-existing hub defect, made routine by delegation.** The monitor's stale/stuck gate counts
+outbox silence while a lane's phase is `working` or `stale`, and the phase stays `working` until the hub
+runs `score`. A hub away for 15 minutes or more — today an inline C1, tomorrow any dispatch — returns to
+a queued `done`, `stale`, `stuck` for one healthy worker. Step 3 routed the batch in order: `score` set
+the lane idle, the probe then set it `stale`, Step 5's idle filter skipped it for the rest of the run,
+and the queued `stuck` invited aborting a live pane. The monitor cannot know the hub is away, so the fix
+is the directive's: a supersession rule before routing.
+
+**Prose.** C1 was pinned to the hub personally ("C1 has YOU … author FRESH, INDEPENDENT code"), the
+largest inline-forced grind in any hub directive; the A1 re-run said "run that command yourself"
+against the worker, not against a subagent; no sentence said the `$CS` verbs are the hub's although
+every one is keyed to its cwd and read-modify-writes campaign state (validity appends single-writer;
+`score` rewrites lane phases from a snapshot); no attestation rule attached to the direction that lands
+verbatim in a worker's `prompt.md` every round, the autonomous answer, the SOTA rows that steer Draft
+dispatches, or the landscape doc and `score-handoff.md` that feed `/ap:design`; and what is hub-only by
+construction — the Monitors, the block, `TaskStop`, AskUserQuestion, the sends, the verbatim
+`status-brief` print — was named nowhere.
+
+**Change (directive prose only, `commands/autoresearch.md`):** a `## Hub-side delegation` section
+between Flagging suspicions and the Task list (explore's shape — the sites span 400 lines), the
+supersession clause in Step 3, and pointers at Phase 1.5, the A1 re-run, C1, the autonomous answer, the
+Step 5 direction, and Phase 5 covering Phase 6c.
+
+| # | Decision | Choice |
+|---|---|---|
+| D34 | Shape | one section naming what is delegable, what is hub-only by construction, and that a dispatch is foreground with the loop waiting; pointers at the seven sites |
+| D35 | A1 re-run | delegable, unlike quick's D25: `verify-plan` prints a self-contained `RUN_CWD` + `RUN_CMD` with no hub-shell pin and `verify-check` adjudicates from the tee'd file; the verb and the file are the hub's |
+| D36 | C1 re-implementation | delegable with boundary inheritance: `inspect-plan`'s family check reads the worker's provider only, so a subagent keeps cross-family against a codex worker; both bans travel in its brief; fire/skip, `inspect-check`, `--integrity-refuted` and the verdict are the hub's |
+| D37 | Queued batch | a `done`/`error` voids every queued `stale`/`stuck` for the same worker, and after `score` so does one whose lane phase is no longer `working`/`stale`; fixed in the directive, not the monitor |
+| D38 | `$CS` verbs | bridge's D33 applied: keyed to the hub's cwd and single-writer, never delegated; a subagent in `RUN_CWD` / `INSPECT_CWD` reads and runs there and reports; the hub records and flags |
+
+Exposure 4 (the 900 s stale monitor) now also records the hub-away batch: the exposure is the hub's
+absence, not the worker's, and D37 is its directive-side fix.
+
+Tests: `tests/autoresearch-hub-side-directive.test.ts` pins the section and its placement, the
+supersession clause inside Step 3 before the event bullets, and every pointer inside its slice; the
+existing stale-probe test stays green (no new worker-directed send line). MUTATION: each sentence
+removed in turn goes red. No `src` change; `dist` untouched.
