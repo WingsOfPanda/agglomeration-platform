@@ -260,3 +260,43 @@ makes the >900 s outbox silence that triggers them the normal case.
 Tests: `monitorScan` emits `stuck` and `stale` for a `stale` lane; `send` with the flag writes an inbox
 without the contract, in either flag order, and the default is unchanged; every worker-directed
 send line in the directive carries the flag. MUTATION: each of the three reverted in turn goes red.
+
+## Amendment 2026-09-05 — the hub on design's fast path (0.5.76)
+
+The `/ap:design` fast path spawns no worker, so the identity block never reaches it: the hub runs
+the time-boxed research pass (Stage 1 step 2), decides the route on the 4-signal check, and drafts
+the six sections itself (Stage 2). Two checkers read it against the hub's own delegation rule (the
+Fable-seat section of the operator's global `CLAUDE.md`).
+
+**Holds.** No fast-path sentence forbids delegation or presumes first-hand hub reading; no artifact
+or state contract assumes a single turn; every hub-side check is form-only and source-agnostic
+(`assemble`'s section join, the nine-regex deploy audit, the warn-only Components path lint that
+re-checks existence hub-side regardless of who stat'd, `export-doc`). Walk state, forensics and the
+archive are escalation-only.
+
+**The gap is provenance, and it predates delegation.** Nothing on the fast path inspects citations:
+the audit reads headings and markers, the path lint covers only `## Components`, and the citation
+machinery in `design diff` / `design adjudicate` needs worker findings the fast path never has. There
+is no adversary and no sign-off. Hub synthesis is this fleet's recorded top wrong-content source in
+this command, caught only by the worker layers the fast path skips. A hub that delegates the reading
+adds a second-hand layer on an unguarded surface.
+
+**Change (directive prose only, two sentences in `commands/design.md`):**
+
+- Stage 1 step 2: "The research pass is grind: apply your own orchestrator/executor split — dispatch
+  the searches and repo sweeps to subagents with an explicit cheaper model; the 4-signal check and
+  the route decision stay with you."
+- Stage 2, the citation paragraph: "Every `path:line`, URL or runtime observation the doc cites, you
+  opened or observed yourself; a subagent may enumerate what to open, never originate a citation."
+
+| # | Decision | Choice |
+|---|---|---|
+| D21 | Hub scope | the hub on the fast path gets the delegation pointer and the attestation rule in the directive; the ensemble stages get nothing (their workers carry the identity block) |
+| D22 | Placement | the pointer rides the research-pass step it governs, outside the drafting bullets that are the synthesis it keeps; the attestation rule rides the citation paragraph |
+
+Tests: `tests/design-fast-path-directive.test.ts` pins both sentences inside their stage slices and
+asserts neither leaks into the ensemble stages; no existing test read those passages. MUTATION:
+either sentence removed goes red.
+
+Follow-up candidate, its own spec: extend the existence lint from `## Components` to every
+`path:line` in the doc, still warn-only — the fast path's first mechanical citation check.
