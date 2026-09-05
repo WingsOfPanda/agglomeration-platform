@@ -354,3 +354,45 @@ each of the three edits reverted in turn goes red.
 
 Still unchecked after this: implement's attached hub side (Stage 2 cross-verify), which has the
 same shape as quick's.
+
+## Amendment 2026-09-05 — implement's attached hub side (0.5.78)
+
+The last unchecked surface. Two checkers read `/ap:implement`'s attached hub (Stage 0 audit and
+init, Stage 1's turn loop and question routing, Stage 2 cross-verify, Stage 3 fix bundle, Stage 4)
+against the hub's own delegation rule. Stage 1P is a job-hub stage, covered by the 0.5.77 block.
+
+**Holds mechanically.** Every hub-side verb takes its inputs from disk and re-derives them per call.
+`verify-tests` derives the `PYTHONPATH` pin inside the verb and writes its own log and verdict record,
+so a delegated gate run is byte-identical: D25's shell concern does not apply here, and the
+`verify-tests` run needs no "in your own shell" clause. Nothing mechanical reads the cross-verify
+doc or the fix bundle beyond existence, which is why the prose attestation carries the weight.
+
+**Three findings, the class quick's hub side had:** Step B's umbrella sentence ("claim only what
+you ran and observed this round") governed a read list that is pure grind and, read loosely, absorbed
+a subagent's output into the diff spot-checks and the VERDICT, which carried no clause of their own;
+Stage 3's citation rule still read "in *this* session", the wording 0.5.77 replaced in quick; Step
+A's "the hub runs the tests itself" contrasts hub with worker, not with subagent.
+
+**Change (directive prose only, `commands/implement.md`):** Step A: reading the log tail is
+delegable, the recorded `VERDICT=` is read off the hub log, never off a subagent's summary. Step B:
+a closing bullet, the report, the hub log's failure tail and the `git log` / `diff --stat` output are
+delegable grind, the spot-checks are the hub's; and on the verdict rule, the spot-checked hunks cited
+as `(file:line)` evidence and the VERDICT are the hub's attestation, opened by the hub itself in this
+turn, a subagent may enumerate, never originate. Stage 3: "you ran yourself in this turn", plus the
+"Gathering the evidence is grind; the bundle is yours" bullet.
+
+| # | Decision | Choice |
+|---|---|---|
+| D26 | Implement hub | the same two-sentence shape as quick (D23) on Step A, Step B and Stage 3; anchors placed outside every existing assertion on `implement.md` (the wrap-sensitive regexes in `implement-turn.test.ts`, the Step B slice in `implement-parallel-directive.test.ts`, the ENDS row in `spawn-retry-directive.test.ts`) |
+| D27 | verify-tests | invoker-independent by construction (pin derived in the verb, record on disk): no "own shell" clause; the attestation is the recorded `VERDICT=`, read off the log |
+
+Noted, not changed: Stage 1's `ROUTE=verify` claim checks are one-line delegable grind whose Verdict
+the worker treats as ground truth; the text neither permits nor forbids relaying a subagent's result.
+
+Tests: `tests/implement-hub-side-directive.test.ts` pins all four sentences inside their stage slices
+and their absence before Stage 2. MUTATION: each of the four removed in turn goes red. No `src`
+change; `dist` untouched.
+
+With this, every ap command has been read against the delegation contract: the workers of every
+command through the identity block, the job hub through its own block, and the attached hubs of
+design (fast path), quick and implement through their directives. The dogfood is the remaining step.

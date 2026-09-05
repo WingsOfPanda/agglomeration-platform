@@ -739,7 +739,9 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
 (`detectTestCommand`) **in `TARGET_CWD` on the worker's branch** and prints `TESTCMD=`/`HUB_RC=`/
 `VERDICT=` (plus `WORKER_DURATION_S=`, the worker's own reported test time) (and writes
 `$ART/hub-test-output-<ROUND>.log`). The default suite budget is 30 min
-(`AP_IMPLEMENT_TEST_TIMEOUT_S=1800`). Branch on `VERDICT`:
+(`AP_IMPLEMENT_TEST_TIMEOUT_S=1800`). Reading the log tail is grind you may dispatch to a subagent;
+the `VERDICT=` you record is the hub's own, read off `$ART/hub-test-output-<ROUND>.log`, never off a
+subagent's summary. Branch on `VERDICT`:
 - **`fail`** — the worker's green claim is contradicted by the hub's OWN run. This is authoritative
   over the worker's `test-output-<ROUND>.log`: read the `$ART/hub-test-output-<ROUND>.log` tail to
   identify the failing tests, set `VERDICT: FAIL`, and go to Stage 3 with one `[bug]` per failing
@@ -779,6 +781,8 @@ observed this round, never the worker's say-so. Read enough to decide, not the w
   `git -C "$TARGET_CWD" diff --stat "$(cat "$ART/branch-base.sha")"..HEAD`,
 - spot-checks: Read the highest-stakes diff hunk per critical requirement (paths from
   `git diff` are relative to `TARGET_CWD`; prefix them).
+- Reading the report, the hub log's failure tail and the `git log` / `diff --stat` output is grind
+  you may dispatch to a subagent with an explicit cheaper model; the spot-checks are yours.
 
 **After a fan-out** (Stage 1P ran and integrated slices), the per-agent and stage-named reports
 **replace** `$ART/verify-report-<ROUND>.md` everywhere this step names it, for round 1: no turn of a
@@ -838,7 +842,9 @@ trend the ratio across runs instead of re-reading reports.
 
 Write the verdict to `$ART/cross-verify-<ROUND>.md`: top line `VERDICT: PASS` or `VERDICT: FAIL`. On
 FAIL, list issues under `## Issues`, each tagged `[bug]` / `[regression]` / `[spec-gap]` with a
-`(file:line)` reference and a one-line fix direction.
+`(file:line)` reference and a one-line fix direction. The spot-checked hunks you cite as
+`(file:line)` evidence and the VERDICT are your attestation — you opened those hunks yourself in this
+turn; a subagent may enumerate what to open, never originate a citation.
 
 - `VERDICT: PASS` → Stage 4.
 - `VERDICT: FAIL` and `ROUND > MAX_ROUNDS` → write `$ART/RESUME.md`; **AskUserQuestion** ("Continue
@@ -858,14 +864,18 @@ preamble, **no** skill mention, **no** `END_OF_INSTRUCTION` (the turn-send verb 
 
 **Citation rule — every path, every number.** The `<file:line evidence>` is the whole value of a fix
 bundle, so it must be evidence and not recall:
-- **Stat every path before you cite it, and write it ABSOLUTE.** A Read/Glob/`ls` in *this* session,
-  not "I know that file". State-dir paths especially: the state dir is keyed to the repo **root** and
+- **Stat every path before you cite it, and write it ABSOLUTE.** A Read/Glob/`ls` you ran yourself in
+  this turn, not "I know that file". State-dir paths especially: the state dir is keyed to the repo **root** and
   never travels with `--target`, so a relative `_implement/…` resolves against the worker's cwd and is
   simply not there. A path named at a location that does not exist costs a whole round.
 - **Every number arrives with the command that produced it**, pasted from a run you did, or expressed
   as a command for the worker to run — never as a prediction. A predicted delta that the run does not
   reproduce reads to the worker as a regression it must chase.
 - **Anything the fix is meant to CREATE is labelled `(new — does not exist yet)`.**
+- **Gathering the evidence is grind; the bundle is yours.** The stats, greps and measuring commands
+  may go to subagents with an explicit cheaper model where your own instructions define that split;
+  every path, number and environment fact the bundle cites stays first-hand — a subagent may
+  enumerate what to open, never originate a citation.
 
 **Generated records — regenerate, never edit.** A bullet about a generated evidence or measurement
 record (a benchmark table, a coverage number, a captured log, a golden file) names its **producer
