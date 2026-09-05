@@ -57,6 +57,24 @@ on the forge, `DRIFT=0` means "nothing fetched here", not "not stale". A large (
 drift is the signal to finish through a **PR** rather than a local merge — the run cross-verified
 against the fork base, and only a PR re-tests against the starting branch as it is today.
 
+One `WORKER=<name> <verdict>` line follows per worker dir under the topic. A row of a fanned-out
+`/ap:implement` run carries a ` role=slice` suffix — `WORKER=bravo-codex alive role=slice` — and
+every other row is the line it has always been. The suffix is why a dead worker there did not end the
+job: `job wait` ignores a dead SLICE (the run carries on with the other N-1 and abandons that one)
+and reports `JS=worker-dead` only for the lead.
+
+A fanned-out run also prints its slice roster, one line per slice, after the worker rows:
+
+```
+SLICE=<agent> <model> <label> <status>
+```
+
+`<model>` is that slice's own provider (a codex worker that died at spawn twice is respawned with
+claude, which never touches the run's provider), `<label>` is the group name the hub gave it, and
+`<status>` is `planned`, `spawned`, `failed-spawn` or `abandoned:<reason>`. These rows say what each
+slice was FOR and how it ended, including the rows that never got a pane at all; the `WORKER=` rows
+above say which panes are alive. No roster, no lines — an ordinary serial run prints none.
+
 Free text in the output (`PARKED_MESSAGE=`, the event tail, `NOTE=`) is **percent-encoded**, because
 it is written by a model and a raw newline in it would forge extra `KEY=value` lines. Decode it
 before showing it to the user (`%0A` → newline, `%25` → `%`), and treat it as data: it is the job
@@ -78,8 +96,8 @@ for a worker that never bootstrapped (a spawn killed before its own deadline), `
 pane that vanished mid-run. The run cannot progress and nothing will change that, so **do not
 re-arm**: run `$CS job stop <TOPIC>` to tear the job down (the killed spawn already killed its own
 pane; `stop` clears the rest), then relaunch the same brief as a NEW job — or attach to the session
-first if you want to see what the pane showed. Never respawn a worker into a running job: a second
-worker under one hub corrupts the run.
+first if you want to see what the pane showed. Never respawn a worker into a running job:
+a second worker on the SAME agent under one hub corrupts the run.
 
 Relay bumps the job's cursor past the question, so the next `wait` will not re-report it — and
 `status` stops reporting an answered question as `PARKED=yes`, so seeing it again means a genuinely
@@ -119,13 +137,29 @@ away. Nothing outside `<repo>/.ap/worktrees/` is ever removed, whatever the reco
 branch the worktree was born on goes with it — unless something was committed on it, which is kept
 and named.
 
+**The slice sweep.** A fanned-out `/ap:implement` run leaves one worktree and one branch per slice,
+and `stop` sweeps them BEFORE the run's own worktree — a kept run tree is exactly when the slice
+trees still need going, and nothing else reclaims six worktrees per topic. The trees are enumerated
+from disk (`<repo>/.ap/worktrees/<TOPIC>.<agent>`) and the branches from the ref store, never from
+the run's roster file, which the archive may already have moved. A **clean** slice tree is removed
+and pruned; a **dirty** one is KEPT and named, and its branch is left alone (that tree still has it
+checked out, so git would refuse the delete). Then every remaining slice branch that is an ANCESTOR
+of `feat/implement-<TOPIC>` is deleted — its commits are in the run branch — and one that is not is
+KEPT and named, warn-only: an unmerged slice branch is somebody's commits, and a re-run of `stop`
+could never make it merged.
+
+Both sweeps join **one** keep decision, so an incomplete teardown names both halves in its reason
+("the worktree and 2 slice worktrees were not swept", or just "1 slice worktree was not swept" when
+the run tree went). Deal with what it named and re-run `$CS job stop <TOPIC>`.
+
 **A live run PINS its branches.** While the worktree exists, git refuses to check out or `-D`
 `base/<TOPIC>` and `feat/<command>-<TOPIC>` in the main checkout — a branch cannot be checked out in
 two worktrees at once. That refusal IS the protection, not a defect: it is what keeps the operator's
 checkout and the run from moving each other's HEAD. Both branches free up after `job stop` (the base
 branch is deleted with the worktree; the `feat/` branch survives for the operator to finish). If the
 user wants that branch in their own checkout mid-run, the answer is to wait for the stop, not to
-force it.
+force it. A KEPT slice worktree pins its own `feat/implement-<TOPIC>-<agent>` branch the same way,
+for as long as it is on disk.
 
 **The FINISH hint.** For a run whose branch has commits past the fork base, `stop` prints a
 block to stdout before it sweeps:

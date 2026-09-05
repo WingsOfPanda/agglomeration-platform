@@ -54,7 +54,7 @@ const para = (p: string, start: string, end: string): string => {
 const FALLBACK_ANCHOR = "**provider fallback**";
 const ENDS: Array<[string, string]> = [
   ["quick.md", "Dispatch round 1"],
-  ["implement.md", "## Stage 1 — run the worker turn"],
+  ["implement.md", "## Stage 1P — parallel slices"],
 ];
 const RETRY_PARAGRAPHS: Array<[string, string]> =
   ENDS.map(([rel]) => [rel, para(rel, "**spawn-retry-once**", FALLBACK_ANCHOR)]);
