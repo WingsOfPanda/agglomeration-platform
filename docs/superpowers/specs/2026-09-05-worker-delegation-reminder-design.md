@@ -396,3 +396,41 @@ change; `dist` untouched.
 With this, every ap command has been read against the delegation contract: the workers of every
 command through the identity block, the job hub through its own block, and the attached hubs of
 design (fast path), quick and implement through their directives. The dogfood is the remaining step.
+
+## Amendment 2026-09-05 — explore's hub side (0.5.79)
+
+Two checkers read `/ap:explore`'s hub against the hub's own delegation rule. Mechanically it holds:
+every hub-side verb re-reads disk and inspects form only, and the adversary re-derives the draft's
+fidelity from the raw peer findings while sign-off checks the Conclusion, a live provenance layer no
+other hub has. It was refuted on prose in seven places, because the explore hub does more and its
+attestation is a different thing.
+
+**The explore hub's attestation is faithful representation, not first-hand citation.** The directive
+forbids the hub from retrieving; its landscape citations come from the workers' findings by design.
+What the hub attests is that every claim, bracket, hedge and CONTESTED marker it carries traces to a
+worker artifact as that file actually reads. The settled two-sentence shape does not transfer
+literally.
+
+**Findings:** the dispatch/wait loops read as delegable grind but need the hub's own Monitors,
+AskUserQuestion and `question` relays; "the Hub never retrieves" was silent on hub subagents; the
+confidence gate matches the draft's bracket tokens literally against the findings, so a digest that
+drops or normalizes a bracket fails open; Phase 8's obligation to address every Material critique
+has no verifier (the tally reads the verdict line only, sign-off may not re-litigate); Phase 8c is
+where the hub originates citations (`hub-answered (<citation>)`) after every provenance layer has
+ended, and the drill read gate binds the reader; Phase 9c's Evidence table and Phase 10's VERBATIM
+Conclusion are built after teardown with nothing downstream; the 8b correction pass is a one-shot
+window driven by a read.
+
+**Change (directive prose only, `commands/explore.md`):** one `## Hub-side delegation` section beside
+the worker ultracode note, stating three rules once; and a one-line pointer at each reading site
+(Phase 5, Phase 8, Phase 8c, Phase 9c, Phase 10).
+
+| # | Decision | Choice |
+|---|---|---|
+| D28 | Explore attestation | faithful representation: every claim, hedge, marker and citation read by the hub in the worker artifact itself in this turn; a subagent may enumerate or digest, never supply a claim, drop a bracket, strip a hedge, or originate a citation |
+| D29 | Retrieval boundary | subagents read this run's artifacts only, after each file's gate has exited 0 (the gate binds whoever opens the file); retrieval stays with the workers, never a hub-side subagent |
+| D30 | Hub-only turn | sends, waits, gates, Monitors, the rc-3 prompt and the `question` relays are never delegated; one section plus five pointers rather than sentences at every site, because the sites span a thousand lines and the section is the single source |
+
+Tests: `tests/explore-hub-side-directive.test.ts` pins the section, its placement, the five pointers
+by phase slice, and the frozen retrieval sentence. MUTATION: the section and each pointer removed in
+turn goes red. No `src` change; `dist` untouched.
