@@ -66,6 +66,9 @@ Decide fast-path vs escalation, in order:
    - **High-stakes** — architecture / security / irreversibility / production data.
    - **Subjective tradeoffs** — no objective right answer (A vs B, should-we-adopt-X).
    If any fires → **escalate**, Path label = `escalated-from-signals`.
+   The research pass is grind: apply your own orchestrator/executor split — dispatch the searches
+   and repo sweeps to subagents with an explicit cheaper model; the 4-signal check and the route
+   decision stay with you.
 3. None fire → **fast-path**, Path label = `fast`.
 
 > **Routing → next stage.** After Stage 1 decides:
@@ -99,7 +102,9 @@ tool** (atomic single-shot writes), one file per section:
 - `.draft/success-criteria.md` → `## Success Criteria` + measurable bullets. *(required)*
 
 Each section body should cite sources inline where applicable (`path/to/file:line`, URLs, runtime
-observations). Audit-required sections must NOT be empty; if a section truly doesn't apply, still
+observations). Every `path:line`, URL or runtime observation the doc cites, you opened or observed
+yourself; a subagent may enumerate what to open, never originate a citation. Audit-required sections
+must NOT be empty; if a section truly doesn't apply, still
 emit the heading + a one-line explanation (never `_(skipped)_` on the four required ones).
 
 Then assemble + audit: `$CS design assemble <TOPIC>`.
