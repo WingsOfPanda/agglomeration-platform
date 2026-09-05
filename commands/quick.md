@@ -148,7 +148,7 @@ consent, never block, and cost nothing, so prefer over-recording. Review later w
    **Citation rule — every path, every number.** A brief written from memory is the single largest
    source of wasted worker rounds in this pipeline, so:
    - **Stat every path before you cite it, and write it ABSOLUTE.** Not "I know that file" — a
-     Read/Glob/`ls` in *this* session. State-dir paths especially: the state dir is keyed to the repo
+     Read/Glob/`ls` you ran yourself in this turn. State-dir paths especially: the state dir is keyed to the repo
      **root** and never travels with `--target`, so a relative `_quick/topic-text.txt` resolves
      against the worker's cwd and is simply not there. `quick branch` warn-lints the brief for both
      failures (a path visible here and missing in the target; a relative state path, including bare
@@ -156,6 +156,10 @@ consent, never block, and cost nothing, so prefer over-recording. Review later w
      `<SLUG state>/_quick/execute/brief-lint.txt`; a relative state path also files a forensics flag,
      while one in a do-not-touch clause warns without filing. It never rewrites the brief and never
      changes an rc — fixing it is yours.
+   - **Gathering the evidence is grind; the brief is yours.** The stats, greps and measuring commands
+     may go to subagents with an explicit cheaper model where your own instructions define that split;
+     the brief's content and every path, number and environment fact it cites stay first-hand — a
+     subagent may enumerate what to open, never originate a citation.
    - **Every number arrives with the command that produced it**, pasted from a run you did (`` 158
      matches (`rg -c foo src/`) ``), or handed to the worker as a command to run. Never a predicted
      delta: a brief that says `158->154` when the change actually lands at `159` burns a round on
@@ -329,6 +333,9 @@ HEAD is probably still on `feat/quick-<SLUG>`, not the start branch. Give the br
    If the suite ran green but any leg of it did NOT run for an environment reason (a missing tool, an
    unset env var, absent build products), that is not a PASS: set
    `VERIFY="PARTIAL (<cmd>) — legs skipped: <names>"`.
+   Reading the log and its failure tail is grind you may dispatch to a subagent; the gate run itself
+   is yours — run it in your own shell with the pin — and the `VERIFY` token is your attestation,
+   read off the tee'd log yourself, never off a subagent's summary.
 3. If `VERIFY` starts with `FAIL`: read the tail of `verify-1.log`, **Write**
    `execute/fix-prompt-2.md` (concrete failures + fix direction), then `$CS quick turn-send <SLUG> 2`,
    then arm the step-4 **Monitor** for round 2 (`$CS quick turn-wait <SLUG> 2`, reading

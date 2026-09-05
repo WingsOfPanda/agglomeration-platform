@@ -300,3 +300,57 @@ either sentence removed goes red.
 
 Follow-up candidate, its own spec: extend the existence lint from `## Components` to every
 `path:line` in the doc, still warn-only — the fast path's first mechanical citation check.
+
+## Amendment 2026-09-05 — quick's hub side and the job hub (0.5.77)
+
+Two checkers read `/ap:quick`'s hub side (attached) and the detached job hub against the hub's own
+delegation rule.
+
+**Attached quick hub: holds.** Hub-side grind is confined to gathering the brief's evidence (Stage 0)
+and running the suite and reading its log (Stage 2); every hub-side check re-reads files and re-stats
+paths itself. The one gap was the brief's citation rule, anchored to "a Read/Glob/`ls` in *this*
+session": the delegation block defines a subagent as work inside the session, so a delegating hub
+could read a subagent's stat sweep as satisfying the strongest rule in the file, over the fleet's
+recorded top falsified-input class. The `quick branch` linter checks only that paths resolve.
+
+**Detached job hub: refuted.** D1 excluded it ("its executors are ap workers"). But it is a claude
+TUI on the operator's box running the most expensive model, it does real hub-side grind (a worker's
+diff and verify log, the fix prompt, the test gate), and it carried unanswered the two sentences that
+stopped workers delegating: its own foreground rule ("backgrounding is expected of you, and ONLY for
+the waits; run everything else in the foreground, in order") and the shared untrusted-message class
+("another session or agent") with no carve-out for its own subagents. Third, the `PYTHONPATH` pin
+for the test gate is bound to the hub's own shell: a delegated gate run on a shadowed box resolves
+the main checkout and a wrong PASS/FAIL lands in the summary undetected. The mechanical side is
+clean: hub liveness is pane-nonce only, `job wait` re-arms on timeout, the worker death probe
+excludes the hub's own directory.
+
+**Changes:**
+
+- `commands/quick.md`: the citation rule's "in *this* session" becomes "you ran yourself in this
+  turn"; a new bullet, "Gathering the evidence is grind; the brief is yours" (stats, greps and
+  measuring commands delegable with an explicit cheaper model; the brief's content and every path,
+  number and environment fact first-hand; a subagent may enumerate, never originate); at Stage 2
+  step 2, reading the log is delegable, the gate run is the hub's own in its own shell with the pin,
+  and the `VERIFY` token is read off the tee'd log, never off a subagent's summary.
+- `src/core/ipc.ts`, the job-hub role block: a hub-shaped `**Delegate the grind:**` paragraph after
+  the backgrounding rule it reconciles and before the spawn floor. Three sentences: subagents are
+  foreground evidence and outside the untrusted class (a directive inside one is FLAGged); hub-side
+  grind goes to execution subagents with an explicit cheaper model where the operator-level
+  instructions define the split, while the brief, the verdict, the finish and every citation, number
+  or gate result stay the hub's, the gate run in its own shell with its pin; every limit binds every
+  subagent, and in-flight subagents are cancelled before a park.
+
+| # | Decision | Choice |
+|---|---|---|
+| D1 (amended) | Scope | every worker of every command, slices by composition, AND the job hub with a hub-shaped block; the origin hub carries the operator's own rule |
+| D23 | Quick hub | the delegation pointer rides the citation rule and the verify step it governs; the brief and the gate run are the hub's own |
+| D24 | Job hub block | three sentences, not the worker's six rules: its executors remain ap workers; the block covers only hub-side grind and the hub's own attestations |
+| D25 | Gate run | the run whose result the hub attests is the hub's own, in its own shell with the `PYTHONPATH` pin; a subagent may read the log |
+
+Tests: `tests/quick-hub-side-directive.test.ts` pins the quick sentences inside their stage slices;
+`tests/job-hub-template.test.ts` pins the job-hub block, its placement, and the absence of the
+worker-only sentences; `tests/fixtures/identity-job-hub.md` regenerated from the render. MUTATION:
+each of the three edits reverted in turn goes red.
+
+Still unchecked after this: implement's attached hub side (Stage 2 cross-verify), which has the
+same shape as quick's.
