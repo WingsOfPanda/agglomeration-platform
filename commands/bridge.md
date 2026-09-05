@@ -27,6 +27,9 @@ record when `gh` is unavailable, offline, or before this machine has answered th
 queued records are flushed by the next successful filing or by `/ap:review`. Flags never ask for
 consent, never block, and cost nothing, so prefer over-recording. Review later with `/ap:review`.
 
+Every `$CS` verb is keyed to YOUR cwd (repo A): run them yourself. A subagent working in repo B may
+read there and run its tests, never a `$CS` command; it reports what it saw and you flag it.
+
 ## Stage 0 — Init
 
 1. Mint an args path and write `$ARGUMENTS` into it:
@@ -78,7 +81,11 @@ For the current `<ROUND>` (starting at 1), on each completion notification read 
 from `<SLUG state>/_bridge/execute/round-<ROUND>.txt` and branch:
 
 - **`TS=ok`** → the worker finished this round. Review its work: read its outbox and run
-  `git -C <TARGET> diff` to see the changes. Then decide:
+  `git -C <TARGET> diff` to see the changes. Reviewing the outbox and the diff is grind you may
+  dispatch to a subagent with an explicit cheaper model (hand it absolute paths); the next-round
+  decision and `followup-<N>.md` are yours, and every repo-B path, symbol or number the brief cites
+  you opened in `<TARGET>` yourself in this turn — a subagent may enumerate what to open, never
+  originate a citation. Then decide:
   - **More to do** → choose the next round number `<N>` = `<ROUND>+1`. **Write**
     `<SLUG state>/_bridge/execute/followup-<N>.md` with your refinement/next instruction, then
     `$CS bridge round-send <SLUG> <N>` and background `$CS bridge round-wait <SLUG> <N>`. Set `<ROUND>=<N>`.
@@ -87,7 +94,8 @@ from `<SLUG state>/_bridge/execute/round-<ROUND>.txt` and branch:
 - **`TS=question`** → read `execute/question-<ROUND>.txt`. **Judgment:**
   - Answerable from context (a path, a naming convention, an obvious clarification) → answer it yourself:
     `$CS bridge relay <SLUG> <ROUND> "<your answer>"` (or `@<reply-file>` for long answers), then re-arm the
-    background `$CS bridge round-wait <SLUG> <ROUND>`.
+    background `$CS bridge round-wait <SLUG> <ROUND>`. A subagent may look up what you ask it to; the
+    answer you relay is yours — every path or fact in it you opened in `<TARGET>` yourself in this turn.
   - A real decision (taste, scope, an ambiguous trade-off) → **AskUserQuestion** the human, then relay
     their answer: `$CS bridge relay <SLUG> <ROUND> "<human's answer>"`, then re-arm the wait.
   The re-arm resumes past the handled question automatically (round-wait appended a bumped `OFFSET=`).
@@ -103,7 +111,10 @@ continue.
 1. Verify (advisory): `TEST_CMD=$($CS bridge detect-test <TARGET>)`. If non-empty, run it once in `<TARGET>`,
    tee to `execute/verify-1.log`; set `VERIFY` to `PASS (<cmd>)` / `FAIL (<cmd>)`. If empty,
    `VERIFY="skipped (no test command detected)"`. A FAIL does not block finish — you may open one more
-   round to fix it (your judgment), or proceed.
+   round to fix it (your judgment), or proceed. Reading the log and its failure tail is grind you may
+   dispatch to a subagent; the run in `<TARGET>` is yours, in your own shell, and the `VERIFY` token is
+   read off the tee'd `verify-1.log` yourself, never off a subagent's summary — it is published in
+   repo B's PR body.
 2. Record the verify result so finish can embed it in the PR body:
    ```bash
    printf '%s\n' "$VERIFY" > <SLUG state>/_bridge/execute/verify-result.txt
