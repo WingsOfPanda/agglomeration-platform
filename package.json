@@ -1,6 +1,6 @@
 {
   "name": "agglomeration-platform",
-  "version": "0.5.73",
+  "version": "0.5.74",
   "private": true,
   "type": "module",
   "description": "Multi-model tmux pane orchestration for Claude Code",
