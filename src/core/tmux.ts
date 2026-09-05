@@ -35,8 +35,8 @@ export function respawnArgs(pane: string, launch: string, cwd?: string): string[
 }
 // ---------- detached session placement (pure builders) ----------
 /** Exact-match tmux target. A BARE session name is PREFIX-matched: verified against tmux 3.x, with
- *  only `ap-foobar` on the server, `has-session -t ap-foo` exits 0 and `new-window -t ap-foo:` opens
- *  its window INSIDE `ap-foobar`. That is a worker silently placed in a stranger's session, so every
+ *  only `ap-foobar` on the server, `has-session -t ap-foo` exits 0 and `list-panes -s -t ap-foo` lists
+ *  the panes INSIDE `ap-foobar`. That is a worker silently placed in a stranger's session, so every
  *  session-scoped target ap builds goes through this `=` form, which matches nothing but the exact
  *  name. `new-session -s` is deliberately NOT wrapped: it names the session being created. */
 export function sessionTarget(session: string): string { return `=${session}`; }
@@ -59,18 +59,18 @@ export function parseSessionName(stdout: string): string {
   return validSessionName(first) ? first : "";
 }
 
+/** The size a detached session is CREATED at. An unattached session takes its size from
+ *  `default-size` (80x24 out of the box) and only follows a client once one attaches
+ *  (`window-size latest`), so the stack of the lead plus up to MAX_SLICES slice panes needs these
+ *  rows before anyone attaches — otherwise the splits fail against a 24-row window. */
+export const DETACHED_SESSION_COLS = 240;
+export const DETACHED_SESSION_ROWS = 100;
+
 /** First worker into a detached session: create it. `-d` so it never steals the caller's terminal;
  *  `-P -F #{pane_id}` so this returns the same thing the split builders return. */
 export function newSessionArgs(session: string, launch: string, cwd?: string): string[] {
-  const a = ["new-session", "-P", "-F", "#{pane_id}", "-d", "-s", session];
-  if (cwd) a.push("-c", cwd);
-  a.push(launch);
-  return a;
-}
-/** Every later worker into an EXISTING detached session: its own window, so `tmux attach` shows one
- *  window per worker instead of a shrinking grid of splits. */
-export function newWindowArgs(session: string, launch: string, cwd?: string): string[] {
-  const a = ["new-window", "-P", "-F", "#{pane_id}", "-d", "-t", `${sessionTarget(session)}:`];
+  const a = ["new-session", "-P", "-F", "#{pane_id}", "-d", "-s", session,
+    "-x", String(DETACHED_SESSION_COLS), "-y", String(DETACHED_SESSION_ROWS)];
   if (cwd) a.push("-c", cwd);
   a.push(launch);
   return a;
@@ -222,7 +222,6 @@ export const respawn = async (pane: string, launch: string, cwd?: string): Promi
 };
 
 export const newSession = (session: string, launch: string, cwd?: string) => tmux(newSessionArgs(session, launch, cwd));
-export const newWindow = (session: string, launch: string, cwd?: string) => tmux(newWindowArgs(session, launch, cwd));
 /** Every pane id currently in `session`, across all of its windows. Empty on ANY tmux error, which
  *  includes "the session is already gone" — the reading that matters to a teardown caller, and the
  *  one that makes sessionKillable answer "nothing to kill" rather than "kill it". */
@@ -372,6 +371,18 @@ export async function capturePane(pane: string, lines?: number): Promise<string>
 
 export async function killNow(pane: string): Promise<void> {
   try { await run(["kill-pane", "-t", pane]); } catch { /* tolerate */ }
+}
+
+export function windowHeightArgs(target?: string): string[] {
+  return ["display-message", "-p", ...(target ? ["-t", target] : []), "#{window_height}"];
+}
+/** Rows in `target`'s window (the current one when no target). 0 on any tmux error or a non-numeric
+ *  answer — "tmux cannot say", which callers must not read as a small window. */
+export async function windowHeight(target?: string): Promise<number> {
+  try {
+    const n = parseInt(await tmux(windowHeightArgs(target)), 10);
+    return Number.isFinite(n) ? n : 0;
+  } catch { return 0; }
 }
 
 export async function selectLayoutMainVertical(target: string): Promise<void> {

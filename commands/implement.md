@@ -327,7 +327,7 @@ You are here because `$CS job mode <TOPIC>` printed `DETACHED=1`. That is the on
 has: there is no flag, no env var, and no operator choice about how the work splits. The lead writes
 the plan, YOU decide the grouping, a verb checks it, and the plan's slices run concurrently — each
 slice worker in its own worktree at `<repo>/.ap/worktrees/<TOPIC>.<agent>` on
-`feat/implement-<TOPIC>-<agent>`, in its own window of the run's session. A plan that does not split
+`feat/implement-<TOPIC>-<agent>`, in its own pane of the hub's window. A plan that does not split
 falls back to the serial Stage 1 and costs one plan turn, nothing else.
 
 Initialize once, exactly as Stage 1 does — `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`
@@ -433,7 +433,10 @@ every slice would be missing. `PRELUDE=0` → skip this step; the lead idles unt
 
 **1P.3 Spawn.** `$CS implement spawn-slices <TOPIC>` — per planned row a worktree and branch forked
 at the run branch's HEAD (recorded once, for the whole run, in `$ART/slice-fork.txt`), provisioned
-like the run worktree, then one `spawn` into its own window with `--role slice`. Spawns are
+like the run worktree, then one `spawn` with `--role slice` into YOUR window: each slice pane splits
+below the last pane on the right (the lead's, then the previous slice's) and the window is re-laid
+`main-vertical` after each spawn — you on the left, the lead and every slice stacked evenly on the
+right; one session, one window, never a second window. Spawns are
 **sequential** by design. **The Bash call MUST carry `timeout: 600000`**: six bootstraps at the 170s
 floor is 17 minutes, and the tool's 120s default would SIGTERM the whole fan-out. On a completed pass
 it prints `SPAWNED=<n>`, `FALLBACK=<agent,...>` (rows whose codex spawn died twice and CAME UP under
@@ -455,6 +458,11 @@ slice's own model is column 2 of `$ART/slices.tsv`) and `FAILED=<agent,...>`.
     lines verbatim and, per agent they name, the by-hand remedy: `git -C <repo> worktree remove
     --force <repo>/.ap/worktrees/<TOPIC>.<agent>` then `git -C <repo> branch -D
     feat/implement-<TOPIC>-<agent>`.
+  - `WINDOW_TOO_SMALL=rows=<r>,need=<n>` — the window cannot hold the lead plus every slice at 8 rows
+    each (a small attached terminal at spawn time; a detached session is created 240x100 and follows
+    whoever attaches). Nothing was spawned and nothing on disk changed. Do NOT park and never open a
+    second window: `$CS implement flag <TOPIC> "parallel-degraded: <the line verbatim>"` and the
+    serial path (Stage 1 with `ROUND=1`, exactly as for `SLICES` < 2).
 - **rc 1 with a `SPAWNED=` line** — a partial wave: some rows are up, `FAILED=` names the rest.
 - **rc 2** — no slice is up, and the pass printed one of two things. **With** a `FAILED=` line, rows
   were attempted and none came up: take the retry below once first. **Without** one, the verb

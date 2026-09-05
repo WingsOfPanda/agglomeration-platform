@@ -797,3 +797,38 @@ stale-token gate (tests/stale-tokens.test.ts) matches none of the new names.
   the lead should be spawned lazily when `PRELUDE=0` (this spec spawns it at Stage 1.1 as today: an
   idle pane is free, and the provider-fallback canary is worth more than the window). D11 itself —
   no operator knob — is settled.
+
+## Amendment 2026-09-05 — one session, one window (0.5.82)
+
+**The operator's direction.** A detached run is ONE new tmux session with ONE window: the Claude
+orchestrator on the left, and on the right the codex workers it decided on, each in its own pane.
+The number of workers comes from the plan — the lead's `## Slices` proposal, the hub's grouping,
+`slice-check`'s `MAX_SLICES` bound — not from the operator. `quick` gets no parallel workers.
+
+**What the first dogfood showed.** The run `home-liupan-ap-archi` (2026-09-05) took a strictly linear
+12-task plan, `slice-check` returned `SLICES=1`, and the run took the serial path — so no window was
+ever opened. The operator, attaching to look at the fan-out, was looking for panes next to the hub,
+not for windows behind it. The placement half of D2 was written for a session nobody attaches to;
+the session is attached, and the layout is what the run looks like.
+
+**What changes.** Only where a slice pane lands, and the fit check that placement needs. The count,
+the worktrees, the branches, the turn protocol, the integration and every other decision below stand.
+
+| # | Decision | Alternative rejected | Why |
+|---|---|---|---|
+| D13 | **Slices are right-column panes of the hub's own window.** `spawn-slices` passes no `--session`; running inside the hub's session, `spawn` takes its attached path and splits below `.last_pane` (the lead's pane, then the previous slice's), and the verb re-lays the window `main-vertical` after each pane that came up. | A window per slice (D2's placement half); a second session. | The hub, the lead and the slices are one run, and the operator attaches to watch it: a stack of panes shows all of them at once, which is the shape `/ap:design`'s attached layout already has and what the dogfood's operator went looking for. `preflight`'s own helper layout is the same `select-layout main-vertical`. |
+| D14 | **A detached session is created at 240x100** (`newSessionArgs` passes `-x`/`-y`; `DETACHED_SESSION_COLS` / `DETACHED_SESSION_ROWS` in src/core/tmux.ts). | Leave the size to tmux; resize at spawn time. | An UNATTACHED session is sized by `default-size` (80x24 on this server) and only follows a client under `window-size latest` once one attaches. At 24 rows the lead plus three slices would get five rows each, below anything a codex TUI can use, and the fit check (D15) would refuse the fan-out before anyone ever attached. |
+| D15 | **A window that cannot hold the lead plus every slice at `MIN_PANE_ROWS = 8` refuses the whole verb BEFORE any side effect**, printing `WINDOW_TOO_SMALL=rows=<r>,need=<n>` with `need = (N+1)*8 + N` (one border row per pane); the directive files `parallel-degraded: <line>` and takes the serial path. A height tmux cannot read (`0`) does NOT refuse. | Spawn anyway and let the splits fail; open a second window; park. | Eight rows is where a codex TUI still shows its composer, status line and some output. A refusal before the first `worktree add` leaves nothing to clean up, and the serial path is a working run — a park is not. An unreadable height is not evidence of a small window, so it is not treated as one; a split that then fails is already reported by the existing rc path. |
+| D16 | **The new-window arm of `spawn --session` is retired.** `--session` stays — `job start` creates the job session through it (src/commands/job.ts) — but a `--session` naming a session that ALREADY exists now refuses with rc 2. | Keep the arm unused. | It was the only code path that put an ap worker in a second window; leaving it live is an invitation to re-open the layout by accident. A worker joins a running session by splitting from inside it. |
+| D17 | **D1 reaffirmed: `quick` has no parallel workers.** | Extend the fan-out to `quick`. | Unchanged from D1 — no plan to slice on, and a hub-authored brief is not a task graph. |
+
+**Tests.** `tests/tmux-session.test.ts` (the `-x`/`-y` args, `windowHeightArgs`, and every
+`newWindowArgs` assertion gone), `tests/implement-spawn-slices.test.ts` (the `--session`-free spawn
+argv, the `WINDOW_TOO_SMALL` refusal with nothing added/provisioned/spawned, `rows === 0` proceeding,
+and `layout` recorded once after each pane that came up and never after one that did not),
+`tests/implement-parallel-directive.test.ts` (1P.3's `WINDOW_TOO_SMALL` arm, `parallel-degraded`,
+`never a second window`, and `own window` gone from the directive). The rc 2 refusal of a `--session`
+naming a live session (D16) has no unit test: this repo tests tmux as pure arg builders and carries no
+tmux shim, so it is exercised by the live detached run (`job start` creates the session; every later
+spawn splits inside it).
+MUTATION (hub-run, each applied to the worktree file, the named test run, the file restored byte-identical): the fit check removed → the `WINDOW_TOO_SMALL` test red; `await d.layout()` removed → 6 tests red; `--session` put back in the slice argv → the argv test red; `-x`/`-y` removed from `newSessionArgs` → 2 tests red; the 1P.3 `WINDOW_TOO_SMALL` bullet removed → the directive test red; all restored → 4 files green.

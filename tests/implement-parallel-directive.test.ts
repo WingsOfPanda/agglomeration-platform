@@ -120,6 +120,13 @@ describe("the rules a hub reading Stage 1P in order must not lose", () => {
       .toContain("edits ONLY `$ART/slice-<agent>.md` while slices are live");
   });
 
+  it("degrades to the serial path when the window is too small, and never opens a second one", () => {
+    expect(f(), "the refusal line a hub greps for").toContain("WINDOW_TOO_SMALL=rows=<r>,need=<n>");
+    expect(f(), "a too-small window is a degrade, not a park").toContain("parallel-degraded: <the line verbatim>");
+    expect(f()).toContain("never a second window");
+    expect(flat(implement), "slices are panes of the hub's own window now").not.toContain("own window");
+  });
+
   it("takes the serial path, never an absorb over a whole plan, when nothing came up", () => {
     expect(f()).toContain("parallel-degraded: no slice spawned");
     expect(f()).toContain("never the absorb turn over a whole plan");
