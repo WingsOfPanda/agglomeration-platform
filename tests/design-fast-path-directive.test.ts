@@ -24,7 +24,7 @@ describe("design.md fast path: the hub's own delegation split", () => {
     expect(stage2).toContain("a subagent may enumerate what to open, never originate a citation");
   });
 
-  it("neither sentence leaks into the ensemble stages (the workers carry their own rule)", () => {
+  it("neither fast-path sentence leaks into the ensemble stages (the ensemble hub has its own section)", () => {
     const rest = design.slice(design.indexOf("## Stage 3"));
     expect(rest).not.toContain("orchestrator/executor split");
     expect(rest).not.toContain("never originate a citation");
