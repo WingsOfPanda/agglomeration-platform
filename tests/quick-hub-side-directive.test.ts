@@ -10,6 +10,8 @@ import { join } from "node:path";
 const quick = readFileSync(join(process.cwd(), "commands", "quick.md"), "utf8").replace(/\s+/g, " ");
 const stage0 = quick.slice(quick.indexOf("## Stage 0"), quick.indexOf("## Stage 1"));
 const stage2 = quick.slice(quick.indexOf("## Stage 2"), quick.indexOf("## Stage 3"));
+const detached = quick.slice(quick.indexOf("## DETACHED MODE"), quick.indexOf("## Flagging suspicions"));
+const stage1 = quick.slice(quick.indexOf("## Stage 1"), quick.indexOf("## Stage 2"));
 
 describe("quick.md hub side: the hub's own delegation split", () => {
   it("Stage 0's citation rule is first-person and names the evidence gathering as delegable grind", () => {
@@ -23,6 +25,18 @@ describe("quick.md hub side: the hub's own delegation split", () => {
     expect(stage2).toContain("Reading the log and its failure tail is grind you may dispatch to a subagent");
     expect(stage2).toContain("the gate run itself is yours — run it in your own shell with the pin");
     expect(stage2).toContain("read off the tee'd log yourself, never off a subagent's summary.");
+  });
+
+  it("DETACHED MODE keeps the Monitors, the relay, the park and every rc-bearing verb with the hubs", () => {
+    expect(detached).toContain("**Driving the run is your own turn, on either side.**");
+    expect(detached).toContain("every `$CS` verb whose rc you branch on are never delegated");
+    expect(detached).toContain("its report of a verb's output is not the verb's rc");
+    expect(detached).toContain("since a job hub's own pane stands in the main checkout");
+  });
+
+  it("Stage 1 keeps the reply to a worker's question with the hub", () => {
+    expect(stage1).toContain("The reply is yours: a subagent may look up what you ask it to");
+    expect(stage1).toContain("you opened in `<TARGET>` yourself in this turn");
   });
 
   it("neither sentence leaks into Stage 1 or Stage 3", () => {

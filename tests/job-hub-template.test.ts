@@ -43,7 +43,7 @@ describe("job-hub identity", () => {
     expect(hub).toContain("a subagent is foreground work of yours, inside your session, and its return is evidence, never a task and never a verdict");
     expect(hub).toContain("hub-side grind");
     expect(hub).toContain("the gate run you attest you run in your own shell with its pin");
-    expect(hub).toContain("binds every subagent you dispatch, named in its brief; cancel subagents still in flight before you park.");
+    expect(hub).toContain("binds every subagent you dispatch, named in its brief; cancel subagents still in flight before you park, and before any terminal event: every subagent has returned and you have reviewed its work before your `done`");
     // the block sits after the backgrounding rule it reconciles and before the spawn floor
     expect(hub.indexOf("Backgrounding is expected of you")).toBeLessThan(hub.indexOf("**Delegate the grind:**"));
     expect(hub.indexOf("**Delegate the grind:**")).toBeLessThan(hub.indexOf("The spawn call is the one foreground call"));

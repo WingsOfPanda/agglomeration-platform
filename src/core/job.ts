@@ -547,6 +547,11 @@ function worktreeLines(j: JobRecord): string[] {
     `a branch there. Your own state (\`.ap/state/...\`, this record, your inbox/outbox) stays keyed`,
     `to the repo ROOT and is unaffected; only the worker's target moves.`,
     ``,
+    `Your own pane sits in the MAIN checkout, not the worktree. Every command about this run's code —`,
+    `yours or a subagent's — names the worktree absolutely (\`git -C '${j.worktree}' ...\`, absolute`,
+    `paths under it, and the gate's pin on the same command line); a number or file read without it`,
+    `describes the operator's checkout, not this run. Every subagent brief you write carries this path.`,
+    ``,
     ...manifestLines(j),
     ``,
     // A4: the probe rule carries the pin, the cwd and the submodule, so the probe that fooled #197

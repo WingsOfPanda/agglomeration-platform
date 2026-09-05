@@ -564,3 +564,51 @@ Tests: `tests/design-ensemble-directive.test.ts` pins the section and its placem
 its stage slice, and single-site uniqueness; `tests/design-fast-path-directive.test.ts` keeps its
 assertions with one test renamed; `tests/design-assemble.test.ts`'s components-bullet slice still holds
 its two literals. MUTATION (hub-run, each sentence removed in turn from the worktree file, the new test run, the file restored byte-identical): the section → red; the Stage 5 waits sentence → red; the Stage 5 answer sentence → 2 red; the Stage 9 sentence → 2 red; the Stage 10 draft sentence → red; the Stage 10 stat sentence → red; the Stage 12 sentence → red; the Stage 13a sentence → 2 red; restored → 6/6 green.
+
+## Amendment 2026-09-05 — quick's detached job hub (0.5.84)
+
+Two checkers read the DETACHED `/ap:quick` run — the origin hub's watch and relay, the job hub's
+identity block and brief, and quick.md as the job hub runs it — against the hub's delegation rule.
+Mechanically it holds: every quick and job verb runs under `withMainCheckout`, `send` fails closed on a
+state-tree mismatch, the death probe excludes the hub, `job relay` refuses a hub that is not parked,
+and the finish `_job` gate is a plain record check. Quick has no premature-done hold (implement's is
+its only caller); its turn-confirm veto runs inside the Monitor's own process. Four findings, all in
+text the two hubs follow.
+
+**The job hub's own pane sits in the main checkout.** `job start` spawns it with `--cwd <root>` and
+hands the worktree over only as `--target`. A subagent inherits that cwd, so the block's own example of
+delegable grind — "reading a worker's diff … repository sweeps" — runs in the operator's checkout,
+which the launch already warned carries uncommitted work the run cannot see. The brief's WORKTREE
+paragraph said the hub's state stays keyed to the root and never said what a command about the code
+must name. This is the delegation instruction failing, not the hub failing to keep judgment; the fix
+is in the brief, so it reaches detached implement too.
+
+**No "the waits are your own turn" sentence.** The origin's `job wait` Monitor and the job hub's
+`turn-wait` Monitor are pure loops over tool output and hub-only by construction; quick was the only
+directive with hub-side work that never said so, and the identity block's grind list was
+reading-shaped only. The same sentence names the `JS=`/`TS=` branches, `job relay`, the park, and
+every `$CS` verb whose rc the hub branches on — a subagent's report of a verb's output is not its rc.
+
+**The reply to a worker's question had no attestation** (bridge's D31 class); on a detached run it
+concerns paths in a worktree the hub does not stand in.
+
+**The block cancelled in-flight subagents only before a park.** `done` is the event the origin acts
+on at once: `job stop` archives the workers, kills the session and every subagent inside it mid-write,
+and a worktree left dirty by that keeps the whole job record.
+
+Adjudicated skips: the reflect bullets' attestation (skipped for attached quick too); dispatch latency
+burning wall-clock budget (a note, not a break); the block's own-shell pin clause is over-broad for
+implement's job hub, whose `verify-tests` derives its own pin — the stronger rule is harmless.
+
+| # | Decision | Choice |
+|---|---|---|
+| D44 | Job brief | the WORKTREE paragraph says the hub's pane sits in the main checkout, every command about the run's code names the worktree absolutely, and every subagent brief carries that path; worktree runs only |
+| D45 | Quick DETACHED MODE | one paragraph after the three bullets, for both hubs: the Monitors, the `JS=`/`TS=` branches, AskUserQuestion and `job relay`, the park and the sends, and every rc-bearing `$CS` verb are never delegated |
+| D46 | Worker-question reply | the hub's own; every path, number or fact in it opened by the hub in `<TARGET>` itself in this turn; worded clear of the 0.5.77 test's no-leak literals |
+| D47 | Job-hub block | in-flight subagents are cancelled before a park AND before any terminal event; every subagent has returned and been reviewed before `done`, because the origin acts on it at once and `job stop` kills the session |
+
+Tests: `tests/job.test.ts` (the paragraph present for a worktree record, absent for `--no-worktree`),
+`tests/job-hub-template.test.ts` (the extended clause), `tests/fixtures/identity-job-hub.md`
+regenerated from the render (`identity-worker.md` unchanged), `tests/quick-hub-side-directive.test.ts`
+(the DETACHED MODE paragraph and the Stage 1 sentence inside their slices; the no-leak test
+unchanged). MUTATION (hub-run, each change reverted in turn in the worktree file, the named tests run, the file restored byte-identical): the job-brief paragraph removed → 1 red (`job.test.ts`); the block clause reverted to "before you park." → 2 red (`job-hub-template.test.ts`, the `identity-render` fixture); the DETACHED MODE paragraph removed → 1 red; the Stage 1 sentence removed → 1 red; restored → 89/89 green across the four files.

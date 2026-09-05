@@ -330,6 +330,9 @@ describe("jobBrief", () => {
     expect(b).toContain("/repo/.ap/worktrees/demo");
     expect(b).toContain("ap implement init --target /repo/.ap/worktrees/demo");
     expect(b).toContain("never check out");
+    expect(b).toContain("Your own pane sits in the MAIN checkout, not the worktree.");
+    expect(b).toContain("git -C '/repo/.ap/worktrees/demo' ...");
+    expect(b).toContain("Every subagent brief you write carries this path.");
   });
   it("tells a quick hub to pass --target to BOTH init and branch", () => {
     const q = J.jobBrief({ ...REC, command: "quick", topic: "demo" });
@@ -351,6 +354,7 @@ describe("jobBrief", () => {
     expect(none).not.toContain("WORKTREE");
     expect(none).not.toContain("--target");
     expect(none).not.toContain("FRESH checkout of the committed HEAD");
+    expect(none).not.toContain("Your own pane sits in the MAIN checkout");
   });
 
   // Environment parity (2026-09-02 worktree-run-provisi design, A4/A6). #197's hub probed a
