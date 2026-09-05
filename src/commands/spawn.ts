@@ -15,7 +15,7 @@ import { identityWrite, identityPath, seedWorkerStatus, writeWorkerStatus, inbox
 import { paneNonceFor } from "../core/roster.js";
 import { pickRandomAgent, agentInUse, formatCollisionError } from "../core/agents.js";
 import { agentBinary, agentDefaultMode, agentModeArgs, agentReadyTimeout, agentBootstrapSleep } from "../core/contracts.js";
-import { wrapLaunch, splitRight, splitDown, respawn, paneOwned, paneNonceSet, paneStateSet, paneLabelSet, paneSend, killNow, capturePane, ensurePaneBorders, ensureWindowBorderStatus, sessionExists, newSession, newWindow, validSessionName } from "../core/tmux.js";
+import { wrapLaunch, splitRight, splitDown, respawn, paneOwned, paneNonceSet, paneStateSet, paneLabelSet, paneSend, killNow, capturePane, ensurePaneBorders, ensureWindowBorderStatus, sessionExists, newSession, validSessionName } from "../core/tmux.js";
 import { labelFor } from "../core/colors.js";
 import { taskNudge } from "./send.js";
 import { captureFailure, captureSpawnFailure, NO_EVENT_SENTINEL, type FailureReason } from "../core/forensics.js";
@@ -276,6 +276,10 @@ async function dispatchVerb(args: string[]): Promise<number> {
   // caller's pane. Silently preferring one would put the worker somewhere the caller did not ask for.
   if (session && targetPane) { log.error("spawn: --session and --target-pane are mutually exclusive (--target-pane respawns a reserved preflight pane; --session places the worker in a detached session of its own)"); return 2; }
   if (session && !validSessionName(session)) { log.error(`spawn --session must be a tmux-safe name (letter or digit first, then letters/digits/_/-, at most 64 chars, no '.' or ':'); got: '${session}'`); return 2; }
+  // --session CREATES the session for its first pane (the job hub); every later worker splits inside
+  // it from one of its panes — one session, one window. A live session is refused HERE, before any
+  // worker state is written, so nothing is left for agentInUse to trip over.
+  if (session && await sessionExists(session)) { log.error(`spawn --session '${session}' names a session that already exists; a worker joins a running session by splitting from inside it (run spawn without --session from a pane of that session)`); return 2; }
   // The role selects the identity template, i.e. how much authority the pane is granted. An unknown
   // value must never silently fall back to the permissive one.
   if (role && !isWorkerRole(role)) { log.error(`spawn --role must be one of ${Object.keys(IDENTITY_BLOCKS).join(", ")}; got: '${role}'`); return 2; }
@@ -352,13 +356,11 @@ async function dispatchVerb(args: string[]): Promise<number> {
       if (!(await stampOrFail(pane, nonce, agent, model, topic))) return 1;
       await paneLabelSet(pane, agent, model, topic);
     } else if (session) {
-      // Detached placement: the worker gets its own window in `session`, created on first use. No
-      // .last_pane write — that file is the ATTACHED layout's split-target memory, and a detached
-      // session has no split geometry to remember.
+      // Detached placement CREATES the session for its FIRST pane (the job hub); a --session naming a
+      // live session was refused above, before any state was written. No .last_pane write either:
+      // that file is the ATTACHED layout's split-target memory, and this pane is the session's first.
       nonce = randomUUID();
-      pane = (await sessionExists(session))
-        ? await newWindow(session, launch, startDir)
-        : await newSession(session, launch, startDir);
+      pane = await newSession(session, launch, startDir);
       if (!(await stampOrFail(pane, nonce, agent, model, topic))) return 1;
       await paneLabelSet(pane, agent, model, topic);
       if (!bordersOk && !(await ensurePaneBorders())) log.warn("could not set pane-border globals; worker labels may not render");

@@ -8,9 +8,19 @@ describe("detached session placement — pure arg builders", () => {
 
   it("newSessionArgs: detached, prints the pane id, optional cwd", () => {
     expect(T.newSessionArgs("ap-foo", "LAUNCH", "/repo")).toEqual(
-      ["new-session", "-P", "-F", "#{pane_id}", "-d", "-s", "ap-foo", "-c", "/repo", "LAUNCH"]);
+      ["new-session", "-P", "-F", "#{pane_id}", "-d", "-s", "ap-foo", "-x", "240", "-y", "100", "-c", "/repo", "LAUNCH"]);
     expect(T.newSessionArgs("ap-foo", "LAUNCH")).toEqual(
-      ["new-session", "-P", "-F", "#{pane_id}", "-d", "-s", "ap-foo", "LAUNCH"]);
+      ["new-session", "-P", "-F", "#{pane_id}", "-d", "-s", "ap-foo", "-x", "240", "-y", "100", "LAUNCH"]);
+  });
+
+  // An UNATTACHED session is sized by `default-size` (80x24), so without this the lead plus the
+  // slice panes would be splitting a 24-row window before anyone ever attaches.
+  it("newSessionArgs sizes the session at creation", () => {
+    expect(T.DETACHED_SESSION_COLS).toBe(240);
+    expect(T.DETACHED_SESSION_ROWS).toBe(100);
+    const a = T.newSessionArgs("ap-foo", "LAUNCH");
+    expect(a[a.indexOf("-x") + 1]).toBe(String(T.DETACHED_SESSION_COLS));
+    expect(a[a.indexOf("-y") + 1]).toBe(String(T.DETACHED_SESSION_ROWS));
   });
 
   it("newSessionArgs names the session BARE — `-s` creates it, `=` is a lookup form", () => {
@@ -18,37 +28,32 @@ describe("detached session placement — pure arg builders", () => {
     expect(T.newSessionArgs("ap-foo", "LAUNCH")).not.toContain("=ap-foo");
   });
 
-  it("newWindowArgs: detached, prints the pane id, exact-match session target", () => {
-    expect(T.newWindowArgs("ap-foo", "LAUNCH", "/repo")).toEqual(
-      ["new-window", "-P", "-F", "#{pane_id}", "-d", "-t", "=ap-foo:", "-c", "/repo", "LAUNCH"]);
-    expect(T.newWindowArgs("ap-foo", "LAUNCH")).toEqual(
-      ["new-window", "-P", "-F", "#{pane_id}", "-d", "-t", "=ap-foo:", "LAUNCH"]);
-  });
-
   it("hasSessionArgs uses the exact-match target", () => {
     expect(T.hasSessionArgs("ap-foo")).toEqual(["has-session", "-t", "=ap-foo"]);
   });
 
   // The regression these `=` forms exist for: a BARE session target is PREFIX-matched, so with only
-  // `ap-foobar` on the server, `has-session -t ap-foo` exits 0 and `new-window -t ap-foo:` opens its
-  // window inside `ap-foobar` — a worker silently placed in a stranger's session.
+  // `ap-foobar` on the server, `has-session -t ap-foo` exits 0 — a worker silently placed in a
+  // stranger's session.
   it("every session-scoped target is '='-prefixed, so a prefix cannot resolve to a longer name", () => {
-    for (const args of [T.newWindowArgs("ap-foo", "L"), T.hasSessionArgs("ap-foo")]) {
-      const target = args[args.indexOf("-t") + 1];
-      expect(target.startsWith("=")).toBe(true);
-    }
+    const args = T.hasSessionArgs("ap-foo");
+    expect(args[args.indexOf("-t") + 1].startsWith("=")).toBe(true);
   });
 
   it("cwd is threaded as -c, and omitted entirely when absent", () => {
     expect(T.newSessionArgs("s", "L", "/w")).toContain("-c");
-    expect(T.newWindowArgs("s", "L", "/w")).toContain("-c");
     expect(T.newSessionArgs("s", "L")).not.toContain("-c");
-    expect(T.newWindowArgs("s", "L")).not.toContain("-c");
   });
 
   it("the launch command is always the LAST argument", () => {
     expect(T.newSessionArgs("s", "LAUNCH", "/w").at(-1)).toBe("LAUNCH");
-    expect(T.newWindowArgs("s", "LAUNCH", "/w").at(-1)).toBe("LAUNCH");
+  });
+});
+
+describe("window height — pure arg builder", () => {
+  it("asks tmux for the window's rows, with and without a target", () => {
+    expect(T.windowHeightArgs("%3")).toEqual(["display-message", "-p", "-t", "%3", "#{window_height}"]);
+    expect(T.windowHeightArgs()).toEqual(["display-message", "-p", "#{window_height}"]);
   });
 });
 

@@ -37,7 +37,7 @@ import { run as stopRun } from "./stop.js";
 import { extractQuestionPayload, parseQuestionPayload } from "../core/questionCodec.js";
 import { outboxOffset, outboxPath, paneMetaRead, realClock, statusPath, workerSendGate, resolveModel, PANE_DIED_NOTE, type Clock } from "../core/ipc.js";
 import { holdPrematureDone, liveRearm, paneIdleProbe, prematureDoneS, type RearmFn } from "../core/implementHold.js";
-import { capturePane } from "../core/tmux.js";
+import { capturePane, selectLayoutMainVertical, windowHeight } from "../core/tmux.js";
 import { kvField, readField, readIfExists, readIfExistsOrNull } from "../core/fsread.js";
 import { branchNameFor, readBranchRecord } from "../core/branchRecord.js";
 import { agentBinary, agentTimeoutMultiplier, listAgents } from "../core/contracts.js";
@@ -543,14 +543,19 @@ async function spawnSlicesRun(rest: string[]): Promise<number> {
   if (pos.length !== 1 || !pos[0]) { log.error("usage: implement spawn-slices <topic> [--retry]"); return 2; }
   return spawnSlicesWith(pos[0], retry, liveSpawnSlicesDeps);
 }
-export type SpawnSlicesAdapterDeps = (topic: string, root: string, runCwd: string, session: string) => SpawnSlicesDeps;
+export type SpawnSlicesAdapterDeps = (topic: string, root: string, runCwd: string) => SpawnSlicesDeps;
 /** Exported for the wiring test: which RUNNER each git call goes through — the root's or the run
  *  worktree's — is what a wrong root would silently break (C), and it is invisible to every test
  *  that injects its own adapter. */
-export const liveSpawnSlicesDeps: SpawnSlicesAdapterDeps = (topic, root, runCwd, session) => {
+export const liveSpawnSlicesDeps: SpawnSlicesAdapterDeps = (topic, root, runCwd) => {
   const rootRunner = runnerAt(root);
   return {
-    root, rootRunner, runRunner: runnerAt(runCwd), session,
+    root, rootRunner, runRunner: runnerAt(runCwd),
+    windowRows: () => windowHeight(process.env.TMUX_PANE || undefined),
+    layout: async () => {
+      try { const t = process.env.TMUX_PANE; if (t) await selectLayoutMainVertical(t); }
+      catch { /* layout is cosmetic; the pane is up */ }
+    },
     spawn: (argv) => spawnRun(argv),
     stop: (agent) => stopRun([agent, topic]),
     provision: (worktree) => { provisionWorktree(root, worktree, rootRunner); },
@@ -570,7 +575,7 @@ export async function spawnSlicesWith(topic: string, retry: boolean, mk: SpawnSl
   if (!rec.worktree) { log.error(`implement spawn-slices: this job runs with --no-worktree — slices fork a run worktree, never the operator's live checkout`); return 2; }
   const runCwd = readIfExists(join(art, "target_cwd.txt")).trim();
   if (!runCwd) { log.error(`implement spawn-slices: target_cwd.txt missing under ${art}`); return 2; }
-  const out = await spawnSlices(topic, art, retry, mk(topic, repoRoot(), runCwd, rec.session));
+  const out = await spawnSlices(topic, art, retry, mk(topic, repoRoot(), runCwd));
   if (!out.ok) {
     for (const l of out.refusals) process.stdout.write(l + "\n");
     log.error(`implement spawn-slices: refused, nothing spawned — commit or resolve what the lines above name, then re-run`);

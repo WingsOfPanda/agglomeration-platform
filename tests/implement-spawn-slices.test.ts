@@ -49,13 +49,16 @@ interface Script {
   spawnRcs?: number[];
   /** git answers keyed by joined argv. */
   git?: Record<string, { code?: number; stdout?: string }>;
+  /** rows of the hub's window; the default is the 100 a detached session is created with. */
+  windowRows?: number;
   /** paths `existsSync` should already see (the worktrees `--retry` reuses). */
 }
 interface Recorded {
   git: string[][]; spawns: string[][]; stops: string[]; provisions: string[]; flags: string[];
-  /** `add:<agent>` / `spawn-start:<agent>` / `spawn-end:<agent>` in the order they happened — the
-   *  sequentiality gate. Both spawn EDGES, because a single `spawn:` mark cannot tell a loop from a
-   *  `Promise.all`: every iteration's synchronous prefix runs before any of them suspends. */
+  /** `add:<agent>` / `spawn-start:<agent>` / `spawn-end:<agent>` / `layout` in the order they
+   *  happened — the sequentiality gate. Both spawn EDGES, because a single `spawn:` mark cannot
+   *  tell a loop from a `Promise.all`: every iteration's synchronous prefix runs before any of them
+   *  suspends. */
   order: string[];
 }
 
@@ -70,8 +73,10 @@ function mk(s: Script = {}): { deps: SpawnSlicesAdapterDeps; rec: Recorded } {
       return { code: a?.code ?? 0, stdout: a?.stdout ?? "" };
     },
   });
-  const deps: SpawnSlicesAdapterDeps = (topic, _root, _runCwd, session) => ({
-    root: ROOT, rootRunner: runner("root"), runRunner: runner("run"), session,
+  const deps: SpawnSlicesAdapterDeps = (topic, _root, _runCwd) => ({
+    root: ROOT, rootRunner: runner("root"), runRunner: runner("run"),
+    windowRows: async () => s.windowRows ?? 100,
+    layout: async () => { rec.order.push("layout"); },
     spawn: async (argv) => {
       rec.spawns.push(argv);
       rec.order.push(`spawn-start:${argv[0]}`);
@@ -152,6 +157,17 @@ describe("implement spawn-slices — the refusals (nothing is spawned)", () => {
     expect(out).toBe("SLICE_TREE_MOVED=bravo\n");
   });
 
+  it("rc 1 when the hub's window cannot hold the lead plus every slice at 8 rows", async () => {
+    const art = seed(planned("bravo", "delta", "echo"));
+    const { rc, out, rec } = await spawnIt(false, { windowRows: 30 });   // need = 4*8 + 3
+    expect(rc).toBe(1);
+    expect(out).toBe("WINDOW_TOO_SMALL=rows=30,need=35\n");
+    expect(rec.git.filter((c) => c[2] === "worktree")).toEqual([]);
+    expect(rec.provisions).toEqual([]);
+    expect(rec.spawns).toEqual([]);
+    expect(readSlices(join(art, "slices.tsv")).map((r) => r.status)).toEqual(["planned", "planned", "planned"]);
+  });
+
   it("--retry refuses a reused branch that has moved off the recorded fork sha", async () => {
     const art = seed([{ ...planned("bravo")[0], status: "failed-spawn" }]);
     writeFileSync(join(art, "slice-fork.txt"), "abc123\n");
@@ -181,9 +197,10 @@ describe("implement spawn-slices — the loop", () => {
     ]);
     expect(rec.git.find((c) => c[3] === "HEAD")?.[0]).toBe("run");
     expect(rec.provisions).toEqual([TREE("bravo"), TREE("delta")]);
+    // No `--session`: the verb runs inside the hub's session, so spawn splits the hub's own window.
     expect(rec.spawns).toEqual([
-      ["bravo", "codex", TOPIC, "--session", "ap-add-oauth", "--role", "slice", "--cwd", TREE("bravo")],
-      ["delta", "codex", TOPIC, "--session", "ap-add-oauth", "--role", "slice", "--cwd", TREE("delta")],
+      ["bravo", "codex", TOPIC, "--role", "slice", "--cwd", TREE("bravo")],
+      ["delta", "codex", TOPIC, "--role", "slice", "--cwd", TREE("delta")],
     ]);
     expect(readSlices(join(art, "slices.tsv")).map((r) => r.status)).toEqual(["spawned", "spawned"]);
     expect(readFileSync(join(art, "slice-fork.txt"), "utf8")).toBe("abc123\n");
@@ -195,10 +212,34 @@ describe("implement spawn-slices — the loop", () => {
     // No INTERLEAVING: each spawn ends before the next row's worktree is made (D12 — six codex
     // bootstraps at once on a loaded box is the failure this ordering exists to prevent).
     expect(rec.order).toEqual([
-      "add:bravo", "spawn-start:bravo", "spawn-end:bravo",
-      "add:delta", "spawn-start:delta", "spawn-end:delta",
-      "add:echo", "spawn-start:echo", "spawn-end:echo",
+      "add:bravo", "spawn-start:bravo", "spawn-end:bravo", "layout",
+      "add:delta", "spawn-start:delta", "spawn-end:delta", "layout",
+      "add:echo", "spawn-start:echo", "spawn-end:echo", "layout",
     ]);
+  });
+
+  it("a window tmux cannot measure does NOT refuse — an unreadable height is not a small window", async () => {
+    seed(planned("bravo", "delta"));
+    const { rc, out, rec } = await spawnIt(false, { windowRows: 0 });
+    expect(rc).toBe(0);
+    expect(out).toBe("SPAWNED=2\nFALLBACK=\nFAILED=\n");
+    expect(rec.spawns.map((a) => a[0])).toEqual(["bravo", "delta"]);
+  });
+
+  it("re-lays the window after each pane that CAME UP, and never after one that did not", async () => {
+    seed(planned("bravo", "delta"));
+    const { rec } = await spawnIt(false, { spawnRcs: [0, 1] });
+    expect(rec.order).toEqual([
+      "add:bravo", "spawn-start:bravo", "spawn-end:bravo", "layout",
+      "add:delta", "spawn-start:delta", "spawn-end:delta",
+    ]);
+  });
+
+  it("a cold-start retry re-lays ONCE, after the attempt that came up", async () => {
+    seed(planned("bravo"));
+    const { rec } = await spawnIt(false, { spawnRcs: [3, 0] });
+    expect(rec.order.filter((o) => o === "layout")).toEqual(["layout"]);
+    expect(rec.order.at(-1)).toBe("layout");
   });
 
   it("rc 3 buys ONE retry of the same spawn; a second rc 3 on codex falls back to claude", async () => {
@@ -313,7 +354,7 @@ describe("implement spawn-slices — the loop", () => {
     expect(rc).toBe(0);
     expect(rec.git.filter((c) => c[2] === "worktree")).toEqual([]);
     expect(rec.provisions).toEqual([]);
-    expect(rec.order).toEqual(["spawn-start:bravo", "spawn-end:bravo"]);
+    expect(rec.order).toEqual(["spawn-start:bravo", "spawn-end:bravo", "layout"]);
   });
 });
 
@@ -373,9 +414,10 @@ describe("liveSpawnSlicesDeps — the wiring every other test replaces with a fa
     writeFileSync(join(root, "id.txt"), "root\n");
     writeFileSync(join(runCwd, "id.txt"), "run\n");
 
-    const d = liveSpawnSlicesDeps(TOPIC, root, runCwd, "ap-add-oauth");
+    const d = liveSpawnSlicesDeps(TOPIC, root, runCwd);
     expect(d.root).toBe(root);
-    expect(d.session).toBe("ap-add-oauth");
+    expect(typeof d.windowRows).toBe("function");
+    expect(typeof d.layout).toBe("function");
     expect(d.rootRunner.run("cat", ["id.txt"]).stdout).toBe("root\n");
     expect(d.runRunner.run("cat", ["id.txt"]).stdout).toBe("run\n");
     d.provision(tree);

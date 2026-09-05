@@ -1,5 +1,7 @@
 // src/core/implementSpawnSlices.ts — fan-OUT: one worktree, one branch and one pane per slice
-// (2026-09-04-parallel-slices-design.md, C / D). Sequential by design (D12): many codex workers
+// (2026-09-04-parallel-slices-design.md, C / D, and its 2026-09-05 amendment). Every slice pane
+// lands in the hub's OWN window — the hub on the left, the lead and the slices stacked on the right
+// under `main-vertical` — never a second window. Sequential by design (D12): many codex workers
 // bootstrapping at once on a loaded box never emit `ready` in time, and six 170 s bootstraps is 17
 // minutes against a multi-hour run.
 //
@@ -22,6 +24,10 @@ import { readSlices, writeSlices } from "./implementSlices.js";
  *  and then another provider, is worth paying for. */
 const SPAWN_COLD_START_RC = 3;
 
+/** The fewest rows a codex TUI stays readable in: its composer, its status line and a few lines of
+ *  output. Below that a slice pane is there but unusable. */
+export const MIN_PANE_ROWS = 8;
+
 export interface SpawnSlicesDeps {
   /** The MAIN checkout: `git worktree add` and `provisionWorktree` are both provenance-gated on it. */
   root: string;
@@ -30,8 +36,10 @@ export interface SpawnSlicesDeps {
   rootRunner: Runner;
   /** Bound to `target_cwd.txt` — the run worktree, whose HEAD every slice branch forks. */
   runRunner: Runner;
-  /** The detached session each slice gets a window in. */
-  session: string;
+  /** Rows of the hub's window (0 when tmux cannot say). */
+  windowRows(): Promise<number>;
+  /** Re-lay the hub's window main-vertical after a slice pane lands; never throws. */
+  layout(): Promise<void>;
   /** `spawn` as an argv, so the verb can branch on its RETURN CODE. */
   spawn(argv: string[]): Promise<number>;
   /** `stop <agent> <topic>`: a `failed-spawn` row can have left a worker dir that `agentInUse`
@@ -71,6 +79,13 @@ export async function spawnSlices(
   const forkSha = readField(forkPath) || head;
 
   const refusals: string[] = [];
+  // Every slice pane splits the hub's own window, so the window has to hold the lead plus each slice
+  // at MIN_PANE_ROWS, one border row apiece. `rows === 0` is tmux refusing to say, which is NOT
+  // evidence of a small window: the pass proceeds and a split that then fails is reported by the
+  // existing rc path.
+  const winRows = await d.windowRows();
+  const need = (targets.length + 1) * MIN_PANE_ROWS + targets.length;
+  if (targets.length && winRows > 0 && winRows < need) refusals.push(`WINDOW_TOO_SMALL=rows=${winRows},need=${need}`);
   for (const r of targets) {
     const branch = sliceBranchFor(topic, r.agent);
     const tree = sliceWorktreePathFor(d.root, topic, r.agent);
@@ -95,11 +110,16 @@ export async function spawnSlices(
   for (const row of targets) {
     const branch = sliceBranchFor(topic, row.agent);
     const tree = sliceWorktreePathFor(d.root, topic, row.agent);
-    /** `spawn` once, and once more on a cold start: rc 3 is the failure a retry actually fixes. */
+    /** `spawn` once, and once more on a cold start: rc 3 is the failure a retry actually fixes. No
+     *  `--session`: this runs inside the hub's session, so spawn's attached path splits below
+     *  `.last_pane` — the lead's pane, then the previous slice's. The pane that lands is re-laid
+     *  main-vertical so the right-hand column stays even. */
     const attempt = async (model: string): Promise<number> => {
-      const argv = [row.agent, model, topic, "--session", d.session, "--role", "slice", "--cwd", tree];
-      const rc = await d.spawn(argv);
-      return rc === SPAWN_COLD_START_RC ? d.spawn(argv) : rc;
+      const argv = [row.agent, model, topic, "--role", "slice", "--cwd", tree];
+      let rc = await d.spawn(argv);
+      if (rc === SPAWN_COLD_START_RC) rc = await d.spawn(argv);
+      if (rc === 0) await d.layout();
+      return rc;
     };
     let rc = 1;
     try {

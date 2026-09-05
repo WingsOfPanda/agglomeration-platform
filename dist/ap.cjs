@@ -633,13 +633,19 @@ function parseSessionName(stdout) {
   return validSessionName(first) ? first : "";
 }
 function newSessionArgs(session, launch, cwd) {
-  const a = ["new-session", "-P", "-F", "#{pane_id}", "-d", "-s", session];
-  if (cwd) a.push("-c", cwd);
-  a.push(launch);
-  return a;
-}
-function newWindowArgs(session, launch, cwd) {
-  const a = ["new-window", "-P", "-F", "#{pane_id}", "-d", "-t", `${sessionTarget(session)}:`];
+  const a = [
+    "new-session",
+    "-P",
+    "-F",
+    "#{pane_id}",
+    "-d",
+    "-s",
+    session,
+    "-x",
+    String(DETACHED_SESSION_COLS),
+    "-y",
+    String(DETACHED_SESSION_ROWS)
+  ];
   if (cwd) a.push("-c", cwd);
   a.push(launch);
   return a;
@@ -850,6 +856,17 @@ async function killNow(pane) {
   } catch {
   }
 }
+function windowHeightArgs(target) {
+  return ["display-message", "-p", ...target ? ["-t", target] : [], "#{window_height}"];
+}
+async function windowHeight(target) {
+  try {
+    const n = parseInt(await tmux(windowHeightArgs(target)), 10);
+    return Number.isFinite(n) ? n : 0;
+  } catch {
+    return 0;
+  }
+}
 async function selectLayoutMainVertical(target) {
   await run(["select-layout", "-t", target, "main-vertical"]);
 }
@@ -922,7 +939,7 @@ async function preflightLayout(topic, list, opts) {
     throw e;
   }
 }
-var import_node_child_process3, import_node_util, import_node_crypto3, import_node_os2, import_node_fs6, import_node_path3, SESSION_NAME_RE, PANE_ID_RE, NONCE_RE, execFileP, splitRight, splitDown, respawn, newSession, newWindow;
+var import_node_child_process3, import_node_util, import_node_crypto3, import_node_os2, import_node_fs6, import_node_path3, SESSION_NAME_RE, DETACHED_SESSION_COLS, DETACHED_SESSION_ROWS, PANE_ID_RE, NONCE_RE, execFileP, splitRight, splitDown, respawn, newSession;
 var init_tmux = __esm({
   "src/core/tmux.ts"() {
     "use strict";
@@ -936,6 +953,8 @@ var init_tmux = __esm({
     init_log();
     init_roster();
     SESSION_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+    DETACHED_SESSION_COLS = 240;
+    DETACHED_SESSION_ROWS = 100;
     PANE_ID_RE = /^%\d+$/;
     NONCE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     execFileP = (0, import_node_util.promisify)(import_node_child_process3.execFile);
@@ -946,7 +965,6 @@ var init_tmux = __esm({
       return pane;
     };
     newSession = (session, launch, cwd) => tmux(newSessionArgs(session, launch, cwd));
-    newWindow = (session, launch, cwd) => tmux(newWindowArgs(session, launch, cwd));
   }
 });
 
@@ -10725,6 +10743,10 @@ async function dispatchVerb2(args) {
     log.error(`spawn --session must be a tmux-safe name (letter or digit first, then letters/digits/_/-, at most 64 chars, no '.' or ':'); got: '${session}'`);
     return 2;
   }
+  if (session && await sessionExists(session)) {
+    log.error(`spawn --session '${session}' names a session that already exists; a worker joins a running session by splitting from inside it (run spawn without --session from a pane of that session)`);
+    return 2;
+  }
   if (role && !isWorkerRole(role)) {
     log.error(`spawn --role must be one of ${Object.keys(IDENTITY_BLOCKS).join(", ")}; got: '${role}'`);
     return 2;
@@ -10810,7 +10832,7 @@ async function dispatchVerb2(args) {
       await paneLabelSet(pane, agent, model, topic);
     } else if (session) {
       nonce = (0, import_node_crypto5.randomUUID)();
-      pane = await sessionExists(session) ? await newWindow(session, launch, startDir) : await newSession(session, launch, startDir);
+      pane = await newSession(session, launch, startDir);
       if (!await stampOrFail(pane, nonce, agent, model, topic)) return 1;
       await paneLabelSet(pane, agent, model, topic);
       if (!bordersOk && !await ensurePaneBorders()) log.warn("could not set pane-border globals; worker labels may not render");
@@ -15514,6 +15536,9 @@ async function spawnSlices(topic, art, retry, d) {
   const forkPath = (0, import_node_path33.join)(art, "slice-fork.txt");
   const forkSha = readField(forkPath) || head;
   const refusals = [];
+  const winRows = await d.windowRows();
+  const need = (targets.length + 1) * MIN_PANE_ROWS + targets.length;
+  if (targets.length && winRows > 0 && winRows < need) refusals.push(`WINDOW_TOO_SMALL=rows=${winRows},need=${need}`);
   for (const r of targets) {
     const branch = sliceBranchFor(topic, r.agent);
     const tree = sliceWorktreePathFor(d.root, topic, r.agent);
@@ -15534,9 +15559,11 @@ async function spawnSlices(topic, art, retry, d) {
     const branch = sliceBranchFor(topic, row.agent);
     const tree = sliceWorktreePathFor(d.root, topic, row.agent);
     const attempt = async (model) => {
-      const argv = [row.agent, model, topic, "--session", d.session, "--role", "slice", "--cwd", tree];
-      const rc3 = await d.spawn(argv);
-      return rc3 === SPAWN_COLD_START_RC ? d.spawn(argv) : rc3;
+      const argv = [row.agent, model, topic, "--role", "slice", "--cwd", tree];
+      let rc3 = await d.spawn(argv);
+      if (rc3 === SPAWN_COLD_START_RC) rc3 = await d.spawn(argv);
+      if (rc3 === 0) await d.layout();
+      return rc3;
     };
     let rc2 = 1;
     try {
@@ -15567,7 +15594,7 @@ async function spawnSlices(topic, art, retry, d) {
   const rc = targets.length ? spawnTally(rcs) : rows.some((r) => r.status === "spawned") ? 0 : 2;
   return { ok: true, rc, spawned, fallback, failed };
 }
-var import_node_fs39, import_node_path33, SPAWN_COLD_START_RC;
+var import_node_fs39, import_node_path33, SPAWN_COLD_START_RC, MIN_PANE_ROWS;
 var init_implementSpawnSlices = __esm({
   "src/core/implementSpawnSlices.ts"() {
     "use strict";
@@ -15583,6 +15610,7 @@ var init_implementSpawnSlices = __esm({
     init_gitwork();
     init_implementSlices();
     SPAWN_COLD_START_RC = 3;
+    MIN_PANE_ROWS = 8;
   }
 });
 
@@ -17115,7 +17143,7 @@ async function spawnSlicesWith(topic, retry, mk) {
     log.error(`implement spawn-slices: target_cwd.txt missing under ${art}`);
     return 2;
   }
-  const out2 = await spawnSlices(topic, art, retry, mk(topic, repoRoot(), runCwd, rec.session));
+  const out2 = await spawnSlices(topic, art, retry, mk(topic, repoRoot(), runCwd));
   if (!out2.ok) {
     for (const l of out2.refusals) process.stdout.write(l + "\n");
     log.error(`implement spawn-slices: refused, nothing spawned \u2014 commit or resolve what the lines above name, then re-run`);
@@ -17659,13 +17687,20 @@ var init_implement2 = __esm({
     liveWaitDeps2 = { multiplier: agentTimeoutMultiplier, now: () => Math.floor(Date.now() / 1e3) };
     SLICES_TSV = "slices.tsv";
     liveSliceCheckDeps = { agentsFor: pickAgents, root: repoRoot };
-    liveSpawnSlicesDeps = (topic, root, runCwd, session) => {
+    liveSpawnSlicesDeps = (topic, root, runCwd) => {
       const rootRunner = runnerAt(root);
       return {
         root,
         rootRunner,
         runRunner: runnerAt(runCwd),
-        session,
+        windowRows: () => windowHeight(process.env.TMUX_PANE || void 0),
+        layout: async () => {
+          try {
+            const t = process.env.TMUX_PANE;
+            if (t) await selectLayoutMainVertical(t);
+          } catch {
+          }
+        },
         spawn: (argv) => run3(argv),
         stop: (agent) => run6([agent, topic]),
         provision: (worktree) => {
