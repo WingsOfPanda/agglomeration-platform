@@ -434,3 +434,40 @@ the worker ultracode note, stating three rules once; and a one-line pointer at e
 Tests: `tests/explore-hub-side-directive.test.ts` pins the section, its placement, the five pointers
 by phase slice, and the frozen retrieval sentence. MUTATION: the section and each pointer removed in
 turn goes red. No `src` change; `dist` untouched.
+
+## Amendment 2026-09-05 — bridge's hub side (0.5.80)
+
+Two checkers read `/ap:bridge`'s hub against the hub's own delegation rule. Mechanically it holds:
+every `bridge` verb re-reads its inputs from disk, the prose the hub writes (`followup-<N>.md`, the
+relay answer, `verify-result.txt`) is taken verbatim, and the cross-repo boundary is enforced by data
+— state is keyed to repo A's cwd, the worker reaches repo B only through `--cwd`. No test pinned any
+sentence of `bridge.md` before this.
+
+**Bridge is the widest exposure of the family.** The hub writes a brief EVERY round about a repo it
+does not stand in, so its citations are second-hand by construction; the directive carried no citation
+rule at all, and unlike explore there is no adversary, no sign-off and no provenance layer between the
+hub's prose and the worker. Verify is not a verb that derives its own pin (implement's case, D27) nor
+a gate the hub re-runs on its own tree (quick's case, D25): it is a bare shell run inside `<TARGET>`
+whose `VERIFY` token finish embeds in a PR body that bridge then opens and merges in repo B.
+
+**Four findings.** Between-round review — reading the outbox and `git -C <TARGET> diff` — is grind
+with no attestation on the next-round brief it feeds. The verify run and its token were kept with
+nobody in particular. "Answer it yourself" in the `TS=question` branch contrasts the hub with the
+human, not with a subagent, so a relayed answer could carry a fact the hub never opened. And every
+`$CS` verb is keyed to repo A's cwd: a subagent running `bridge flag` from repo B silently writes a
+second state tree instead of flagging this run.
+
+**Change (directive prose only, `commands/bridge.md`):** four sentences — one in Flagging, two in
+Stage 2 (`TS=ok` and the `TS=question` self-answer), one in Stage 3 step 1.
+
+| # | Decision | Choice |
+|---|---|---|
+| D31 | Bridge brief | attestation every round: every repo-B path, symbol or number the brief cites is opened by the hub in `<TARGET>` itself in this turn; a subagent may enumerate what to open, never originate a citation |
+| D32 | Bridge verify | the hub's own shell run, quick's D25 shape rather than implement's D27, because the verb derives no pin and the token it produces is published in a foreign repo's PR body |
+| D33 | `$CS` verbs | keyed to the hub's cwd, so they are never delegated; a subagent working in repo B reads there and runs its tests, never a `$CS` command — it reports, the hub flags |
+
+Tests: `tests/bridge-hub-side-directive.test.ts` pins all four sentences inside their section slices
+and the absence of the Stage 2 sentences before Stage 2. MUTATION: each of the four removed in turn
+goes red. No `src` change; `dist` untouched.
+
+With this, every hub of every ap command carries the delegation contract; only the dogfood remains.
