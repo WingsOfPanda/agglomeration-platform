@@ -221,3 +221,42 @@ worker), and the codex lens's first-hand probing (folded into D10), the artifact
 `question` (now stated in the block: a completeness contract binds `done`, not a halt), and the
 explore self-assessment comment in `exploreTurn.ts` that calls the file advisory although the hub
 feeds it to the adversary prompt (stale comment, out of scope here).
+
+## Amendment 2026-09-05 — autoresearch and bridge (0.5.75)
+
+Two checkers read the shipped block against the autoresearch and bridge briefs and against what
+their hubs do to a silent or delegating worker.
+
+**Bridge: holds.** Every round-brief rule survives delegation; the finish path inspects neither
+authorship nor commit count, so the block's "every commit is yours" is strictly stronger than anything
+the code checks. Exposure 5, precision: for bridge the usual exit that accepts a premature `done` is
+the quiet window's quiescence branch during a long silent subagent call, not the veto cap.
+
+**Autoresearch worker text: holds.** Every experiment-brief rule is followable. The brief names
+`stdout.log`/`stderr.log` as tee targets and the block reserves task-named log paths to the worker,
+so the training run itself stays with the worker; delegation there covers writing the experiment
+code. No per-turn text re-points a long-lived worker at its identity; if the dogfood shows the block
+fading over many experiments, a one-line pointer in the `inboxWrite` body (outside the
+done-instruction branch, so `noDoneInstruction` turns cannot skip it) reaches every autoresearch and
+bridge turn.
+
+**Autoresearch hub: two defects, fixed here.** Both pre-date the block; a long subagent dispatch
+makes the >900 s outbox silence that triggers them the normal case.
+
+1. The staleness probe went through the plain `send` verb, whose inbox carries the generic done-event
+   contract the experiment brief deliberately suppresses. A worker mid-experiment answered the probe
+   with a generic-summary `done`, and the loop scored it as the experiment's completion and derived
+   the experiment id from a summary that carries none. Fix: `send --no-done-instruction` (a flag that
+   passes `noDoneInstruction` to `inboxWrite`), used by EVERY worker-directed send in the directive:
+   the probe, the autonomous-mode answer to a `question`, and the operator's clarifying prompt, since
+   all three land mid-experiment on a worker whose brief owns the done contract. The probe still
+   overwrites `inbox.md` (exposure 4 as recorded); the experiment prompt survives in the branch dir's
+   `prompt.md`.
+2. The monitor emitted `stale` and `stuck` only while the lane's phase was `working`. The directive's
+   response to `stale` sets the phase to `stale`, which closed the gate: one probe, and a worker that
+   really hung inside a dispatch was never escalated to the abort-or-extend branch. Fix: the gate
+   admits `working` and `stale`; the probe debounce stays in the directive (`probe_sent_ts`).
+
+Tests: `monitorScan` emits `stuck` and `stale` for a `stale` lane; `send` with the flag writes an inbox
+without the contract, in either flag order, and the default is unchanged; every worker-directed
+send line in the directive carries the flag. MUTATION: each of the three reverted in turn goes red.
