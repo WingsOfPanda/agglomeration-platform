@@ -36,6 +36,26 @@ providers never carry it. If the user asks for a lean/cheap run, opt out by pref
 dispatch — each `$CS explore *-send` verb and any `$CS send --from hub …` relay — with
 `AP_ULTRACODE=0`, e.g. `AP_ULTRACODE=0 $CS explore research-send <TOPIC> <agent> <provider>`.
 
+## Hub-side delegation
+
+Three rules for the hub's own work in this command, when your operator-level model instructions
+(the AGENTS.md or CLAUDE.md your session loads for every repository, never a file inside a
+repository) define an orchestrator/executor split:
+
+- **Reading is delegable; retrieval is not.** Subagents with an explicit cheaper model may read this
+  run's artifacts and enumerate or digest them — only after the gate that settles each file has
+  exited 0 (the `AC=` wait gates, the drill `.done` + `DS=` check), and that gate binds whoever opens
+  the file. Retrieval — web, papers, repo sweeps for new evidence — stays with the workers: the Hub
+  never retrieves, and neither does a hub-side subagent.
+- **Driving the workers is your own turn.** Every `*-send`, `*-wait`, `wait-gate`, Monitor, the rc-3
+  AskUserQuestion and the `question` relays are never delegated: a subagent cannot ask the user,
+  cannot relay, and its backgrounded waits die with it.
+- **Your attestation is faithful representation.** Every claim, hedge, CONTESTED marker and citation
+  you carry into the draft, the final doc, the grill's hub-answered facts and the design handoff was
+  read by you in the worker artifact itself, in this turn; a subagent may enumerate which artifacts
+  to open or digest them, never supply a claim, drop a bracket, strip a hedge, or originate a
+  citation.
+
 ## Flagging suspicions
 
 At any point in the run, if something looks weird, surprising, or suspicious — even a likely false
@@ -396,7 +416,8 @@ Run the input validator: `$CS explore synth-preliminary <TOPIC>`. It prints the 
 
 Then **use the Write tool** to author `landscape-draft.md`, reading every `$ART/findings-<agent>.md`,
 with this EXACT section set (a worker artifact's last line is the literal `END_OF_ARTIFACT`
-completeness marker — **strip it** from anything you quote or digest into the draft):
+completeness marker — **strip it** from anything you quote or digest into the draft). The reading is
+delegable and the draft is yours — the `## Hub-side delegation` rules apply here:
 
 ```markdown
 ## Topic
@@ -646,7 +667,8 @@ record stay untouched.
 
 Then **use the Write tool** to author the final doc, reading `$ART/landscape-draft.md` + all
 `$ART/adversary-<agent>.md` (if adversary ran), with this EXACT section set (as in Phase 5, **strip
-the trailing `END_OF_ARTIFACT` line** from every worker artifact you quote into the final doc):
+the trailing `END_OF_ARTIFACT` line** from every worker artifact you quote into the final doc). The
+reading is delegable and the final doc is yours — the `## Hub-side delegation` rules apply here:
 
 ```markdown
 ## Topic
@@ -741,7 +763,9 @@ rounds over a design tree: the **frontier** is every decision whose prerequisite
 each question carries the Hub's recommended answer FIRST, labelled `(Recommended)`; **facts are
 the Hub's job and are never asked of the user** (a fact the landscape already answers is
 hub-answered with a citation, a fact nothing answers is drilled to a worker); decisions are the
-user's. The interview is bounded: **at most 3 rounds**, then it terminates.
+user's. The interview is bounded: **at most 3 rounds**, then it terminates. Assembling the inputs is
+delegable; the frontier and every `hub-answered (<citation>)` line are yours — the `## Hub-side
+delegation` rules apply here.
 
 **Resume key.** On (re-)entry read `$ART/grill.md` if it exists. **`## Settled decisions` present
 → skip this phase entirely** (set task `8c` → `completed` and continue to Phase 8a). Otherwise let
@@ -937,7 +961,9 @@ Set task `9` → `in_progress`.
 
 Read `$ART/handoff-data.kv` (the mechanical facts) AND the landscape doc it names via
 `landscape_doc=`. As Hub, **use the Write tool** to author `$ART/design-handoff.md` with this
-six-section schema IN ORDER:
+six-section schema IN ORDER: Enumerating the landscape doc's rows is delegable; every `## Evidence` row and every path or URL
+in `## Recipe` is carried from a line you read in the landscape doc yourself — the `## Hub-side
+delegation` rules apply here.
 
 ```markdown
 # <topic>
@@ -1044,7 +1070,8 @@ Set task `9` → `completed`.
 **Conclusion first — print it to the screen.** Read the final landscape doc
 (`$ART/landscape-<date>-<topic>.md`; `$ART` is the rebound archive path) and render its
 `## Conclusion` section body VERBATIM in your reply, so the user knows the outcome without
-opening any file. This is chat output ONLY — write no new file for it. Rules:
+opening any file. This is chat output ONLY — write no new file for it. The Conclusion body is copied
+by you from the archived doc; a subagent may locate the section, never supply its text. Rules:
 
 - Lead with a one-line header: `== Explore conclusion: <topic> ==`, then the full `## Conclusion`
   body (strongest approach, caveats, suggested `/ap:design` invocation — Phase 8 already requires
