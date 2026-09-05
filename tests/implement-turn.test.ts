@@ -102,6 +102,10 @@ describe("composeRound1Prompt", () => {
     expect(p).toContain("TEST_DURATION_S");
     expect(p).toContain("/a/worker-test-duration-1.txt");
   });
+  it("carries the single-`done` contract (spec J): per-task completions are progress events", () => {
+    expect(p).toContain("Emit `done` exactly ONCE, after the verify report is written.");
+    expect(p).toContain('{"event":"progress","note":"task N committed: ..."}');
+  });
   it("encodes planning, scoped implementation, and fresh verification without an external skill dependency", () => {
     expect(p).toContain("task-by-task implementation plan");
     expect(p).toContain("Keep each change scoped to its task");
@@ -122,6 +126,10 @@ describe("composeFixPrompt", () => {
     expect(p).toContain("code-review subagent");
     expect(p).toContain("commit's SHA");
     expect(p).not.toContain("superpowers:");
+  });
+  it("carries the single-`done` contract (spec J) in the fix round too", () => {
+    expect(p).toContain("Emit `done` exactly ONCE, after the verify report is written.");
+    expect(p).toContain('{"event":"progress","note":"task N committed: ..."}');
   });
   it("tees the per-round test-output log into the verify dir and requires the VERDICT line", () => {
     expect(p).toContain("/state/topic/_implement/test-output-2.log");

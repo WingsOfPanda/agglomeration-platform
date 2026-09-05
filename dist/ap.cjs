@@ -14727,6 +14727,7 @@ function composeRound1Prompt2(args) {
     "This is a single-turn workflow: you will write the implementation plan,",
     "implement it, run the test suite, and write the verify report \u2014 all in",
     "one autonomous run. The conductor will only re-engage when you emit done.",
+    SINGLE_DONE,
     "",
     "RESUME CHECK (do this BEFORE starting):",
     `- If ${planPath} already exists, skip the planning phase \u2014 read the`,
@@ -14783,6 +14784,7 @@ function composeFixPrompt2(round, bundleText, verifyPath, testCmd) {
     "",
     "This is a single-turn workflow: address each issue below, re-run the test",
     "suite, and write the verify report \u2014 all in one autonomous run.",
+    SINGLE_DONE,
     "",
     "RESUME CHECK (do this BEFORE starting):",
     "- Check `git log --oneline` for commits since the previous round's",
@@ -14830,7 +14832,7 @@ function composeFixPrompt2(round, bundleText, verifyPath, testCmd) {
     blockers(testCmd)
   ].join("\n");
 }
-var import_node_path31, REPORT_CONTRACT, BRANCH_DISCIPLINE2;
+var import_node_path31, REPORT_CONTRACT, SINGLE_DONE, BRANCH_DISCIPLINE2;
 var init_implementTurn = __esm({
   "src/core/implementTurn.ts"() {
     "use strict";
@@ -14847,6 +14849,7 @@ var init_implementTurn = __esm({
       "  SPEC-derived expectation \u2014 a literal, or an independently recomputed",
       "  value \u2014 never the implementation's own output read back at itself."
     ];
+    SINGLE_DONE = 'Emit `done` exactly ONCE, after the verify report is written. Per-task\ncompletions are `progress` events ({"event":"progress","note":"task N committed: ..."}),\nnever `done`.';
     BRANCH_DISCIPLINE2 = `BRANCH DISCIPLINE (hard rule):
 - You are operating on the conductor's current branch in the target
   repository. Do NOT run 'git checkout', 'git switch',
@@ -14920,6 +14923,75 @@ var init_questionCodec = __esm({
   "src/core/questionCodec.ts"() {
     "use strict";
     KNOWN_KINDS = /* @__PURE__ */ new Set(["path", "git", "env", "cmd", "test"]);
+  }
+});
+
+// src/core/implementHold.ts
+function prematureDoneS() {
+  const raw = process.env.AP_IMPLEMENT_PREMATURE_DONE_S;
+  const n = raw === void 0 || raw.trim() === "" ? PREMATURE_DONE_DEFAULT_S : Number(raw);
+  if (!Number.isFinite(n)) return PREMATURE_DONE_DEFAULT_S;
+  return n <= 0 ? 0 : n;
+}
+function paneIdleProbe(d) {
+  let hash = "";
+  let since = 0;
+  return async () => {
+    const h = (0, import_node_crypto6.createHash)("sha256").update(await d.capture()).digest("hex");
+    const t = d.now();
+    if (h !== hash) {
+      hash = h;
+      since = t;
+      return null;
+    }
+    return t - since >= d.idleS * 1e3 ? { event: "error", note: "pane-idle", ts: isoUtc() } : null;
+  };
+}
+function holdWaitOpts(pane, probe2) {
+  return { paneAlive: (p) => paneOwned(p, pane.nonce), paneId: pane.paneId, extendMult: 1, onPoll: probe2 };
+}
+function liveRearm(ctx, d) {
+  const wait = d.wait ?? ((i, m, t, off, ev, to) => outboxWaitSince(i, m, t, off, ev, to, holdWaitOpts(d.pane, d.probe), d.clock));
+  return async (timeoutS) => {
+    const r = await awaitTurn(
+      { agent: ctx.agent, model: ctx.model, topic: ctx.topic, stateFile: ctx.stateFile, timeoutS, label: "[turn-wait]", policy: { confirm: true } },
+      { wait, clock: d.clock, onFlag: d.onFlag }
+    );
+    return "missingOffset" in r ? null : r.event;
+  };
+}
+function hasEvidence(path) {
+  const t = readIfExistsOrNull(path);
+  return t !== null && t.length > 0;
+}
+async function holdPrematureDone(ev, ctx, d) {
+  let cur = ev;
+  let holds = 0;
+  while (cur !== null && cur.event === "done" && !hasEvidence(d.evidencePath)) {
+    const remainingS = Math.floor((d.deadlineMs - d.now()) / 1e3);
+    if (remainingS <= 0) return cur;
+    const offset = outboxOffset(outboxPath(ctx.agent, ctx.model, ctx.topic));
+    holds++;
+    if (holds === 1) d.onFlag(`premature-done: ${ctx.agent} ${ctx.round} \u2014 holding`);
+    (0, import_node_fs37.appendFileSync)(ctx.stateFile, `OFFSET=${offset}
+PD=${holds}
+`);
+    cur = await d.rearm(remainingS);
+  }
+  return cur;
+}
+var import_node_fs37, import_node_crypto6, PREMATURE_DONE_DEFAULT_S;
+var init_implementHold = __esm({
+  "src/core/implementHold.ts"() {
+    "use strict";
+    import_node_fs37 = require("node:fs");
+    import_node_crypto6 = require("node:crypto");
+    init_ipc();
+    init_wait();
+    init_tmux();
+    init_fsread();
+    init_archive();
+    PREMATURE_DONE_DEFAULT_S = 1800;
   }
 });
 
@@ -15015,8 +15087,8 @@ function assertLeadMatches(topic, model, verb) {
   return false;
 }
 function latestObjections(stateFile) {
-  if (!(0, import_node_fs37.existsSync)(stateFile)) return 0;
-  return lastKeyedNumber((0, import_node_fs37.readFileSync)(stateFile, "utf8"), "OBJECTIONS") ?? 0;
+  if (!(0, import_node_fs38.existsSync)(stateFile)) return 0;
+  return lastKeyedNumber((0, import_node_fs38.readFileSync)(stateFile, "utf8"), "OBJECTIONS") ?? 0;
 }
 function usage3() {
   log.error("usage: implement <init|audit|set-provider|pre-snapshot|branch|turn-send|turn-wait|reset-status|scope-check|verify-tests|summary|finish|forensics|archive|find-latest-doc> ...");
@@ -15025,15 +15097,15 @@ function usage3() {
 async function findLatestDocRun() {
   const stateDir = repoStateDir();
   let best = null;
-  if ((0, import_node_fs37.existsSync)(stateDir)) for (const topic of (0, import_node_fs37.readdirSync)(stateDir)) {
+  if ((0, import_node_fs38.existsSync)(stateDir)) for (const topic of (0, import_node_fs38.readdirSync)(stateDir)) {
     const dd = (0, import_node_path32.join)(stateDir, topic, "_design", "design-doc");
-    if (!(0, import_node_fs37.existsSync)(dd)) continue;
-    for (const f of (0, import_node_fs37.readdirSync)(dd)) {
+    if (!(0, import_node_fs38.existsSync)(dd)) continue;
+    for (const f of (0, import_node_fs38.readdirSync)(dd)) {
       if (!f.endsWith("-design.md")) continue;
       const p = (0, import_node_path32.join)(dd, f);
       let mt = 0;
       try {
-        mt = (0, import_node_fs37.statSync)(p).mtimeMs;
+        mt = (0, import_node_fs38.statSync)(p).mtimeMs;
       } catch {
         continue;
       }
@@ -15054,13 +15126,13 @@ async function auditRun(rest) {
     log.error("usage: implement audit <doc>");
     return 2;
   }
-  if (!(0, import_node_fs37.existsSync)(doc)) {
+  if (!(0, import_node_fs38.existsSync)(doc)) {
     log.error(`implement audit: doc unreadable: ${doc}`);
     return 2;
   }
   let text;
   try {
-    text = (0, import_node_fs37.readFileSync)(doc, "utf8");
+    text = (0, import_node_fs38.readFileSync)(doc, "utf8");
   } catch {
     log.error(`implement audit: doc unreadable: ${doc}`);
     return 2;
@@ -15149,11 +15221,11 @@ async function initWith3(tokens, d) {
     log.error("implement init: exactly one design-doc path is required");
     return 2;
   }
-  if (!(0, import_node_fs37.existsSync)(designPath)) {
+  if (!(0, import_node_fs38.existsSync)(designPath)) {
     log.error(`implement init: design doc unreadable: ${designPath}`);
     return 1;
   }
-  const text = (0, import_node_fs37.readFileSync)(designPath, "utf8");
+  const text = (0, import_node_fs38.readFileSync)(designPath, "utf8");
   const topic = parsed.topic || deriveTopicFromPath(designPath);
   if (!topic) {
     log.error("implement init: could not derive topic; pass --topic <slug>");
@@ -15174,7 +15246,7 @@ async function initWith3(tokens, d) {
     log.warn(`implement init: audit FAILED on ${designPath} but --force given; proceeding`);
   }
   const art = implementArtDir(topic);
-  if ((0, import_node_fs37.existsSync)(art)) {
+  if ((0, import_node_fs38.existsSync)(art)) {
     log.error(`implement init: topic already in flight: ${art} (run /ap:stop or pick a different --topic)`);
     return 2;
   }
@@ -15187,7 +15259,7 @@ async function initWith3(tokens, d) {
     }
   }
   const provider = detectProvider(targetCwd2);
-  (0, import_node_fs37.mkdirSync)(art, { recursive: true });
+  (0, import_node_fs38.mkdirSync)(art, { recursive: true });
   atomicWrite((0, import_node_path32.join)(art, "design.md"), text);
   atomicWrite((0, import_node_path32.join)(art, "topic.txt"), topic);
   atomicWrite((0, import_node_path32.join)(art, "target_cwd.txt"), targetCwd2 + "\n");
@@ -15228,7 +15300,7 @@ async function setProviderRun2(rest) {
     return 2;
   }
   const art = implementArtDir(topic);
-  if (!(0, import_node_fs37.existsSync)(art)) {
+  if (!(0, import_node_fs38.existsSync)(art)) {
     log.error(`implement set-provider: ${art} not found \u2014 run implement init first`);
     return 1;
   }
@@ -15264,7 +15336,7 @@ async function turnSendRun2(rest) {
 }
 async function turnSendWith2(topic, round, d) {
   const art = implementArtDir(topic);
-  if (!(0, import_node_fs37.existsSync)(art)) {
+  if (!(0, import_node_fs38.existsSync)(art)) {
     log.error(`implement turn-send: ${art} not found \u2014 run implement init first`);
     return 1;
   }
@@ -15273,7 +15345,7 @@ async function turnSendWith2(topic, round, d) {
   const targetCwd2 = readIfExists((0, import_node_path32.join)(art, "target_cwd.txt")).trim();
   const testCmd = targetCwd2 ? detectTestCommand(targetCwd2) : "";
   const stateFile = (0, import_node_path32.join)(art, `turn-${WORKER}-${round}.txt`);
-  if ((0, import_node_fs37.existsSync)(stateFile)) {
+  if ((0, import_node_fs38.existsSync)(stateFile)) {
     log.error(`implement turn-send: ${stateFile} already exists; rm to retry`);
     return 1;
   }
@@ -15282,11 +15354,11 @@ async function turnSendWith2(topic, round, d) {
   if (round === 1) atomicWrite(promptFile, composeRound1Prompt2({ designPath: (0, import_node_path32.join)(art, "design.md"), planPath: (0, import_node_path32.join)(art, "plan.md"), verifyPath: (0, import_node_path32.join)(art, "verify-report-1.md"), round, testCmd }));
   else {
     const bundle = (0, import_node_path32.join)(art, `fix-prompt-${round}.md`);
-    if (!(0, import_node_fs37.existsSync)(bundle)) {
+    if (!(0, import_node_fs38.existsSync)(bundle)) {
       log.error(`implement turn-send: fix-prompt-${round}.md not found at ${bundle}; the directive must write it first`);
       return 1;
     }
-    atomicWrite(promptFile, composeFixPrompt2(round, (0, import_node_fs37.readFileSync)(bundle, "utf8"), (0, import_node_path32.join)(art, `verify-report-${round}.md`), testCmd));
+    atomicWrite(promptFile, composeFixPrompt2(round, (0, import_node_fs38.readFileSync)(bundle, "utf8"), (0, import_node_path32.join)(art, `verify-report-${round}.md`), testCmd));
   }
   const offset = d.offsetFor(WORKER, model, topic);
   atomicWrite(stateFile, `OFFSET=${offset}
@@ -15316,11 +15388,13 @@ async function turnWaitWith2(topic, round, d) {
   const model = workerModel(art);
   if (!assertLeadMatches(topic, model, "turn-wait")) return 1;
   const stateFile = (0, import_node_path32.join)(art, `turn-${WORKER}-${round}.txt`);
-  if (!(0, import_node_fs37.existsSync)(stateFile)) {
+  if (!(0, import_node_fs38.existsSync)(stateFile)) {
     log.error(`implement turn-wait: ${stateFile} missing \u2014 run implement turn-send first`);
     return 1;
   }
   const timeout = scaledTimeout(IMPLEMENT_TURN_TIMEOUT(), d.multiplier(model));
+  const clock = d.clock ?? realClock;
+  const startMs = clock.now();
   const r = await awaitTurn({
     agent: WORKER,
     model,
@@ -15343,8 +15417,24 @@ async function turnWaitWith2(topic, round, d) {
     log.error(`implement turn-wait: OFFSET not set in ${stateFile}`);
     return 1;
   }
-  const ev = r.event;
   const verifyPath = (0, import_node_path32.join)(art, `verify-report-${round}.md`);
+  const idleS = prematureDoneS();
+  const pane = paneMetaRead(WORKER, model, topic);
+  let ev = r.event;
+  if (idleS > 0 && pane?.nonce) {
+    const probe2 = paneIdleProbe({ capture: () => capturePane(pane.paneId), now: clock.now, idleS });
+    const ctx = { agent: WORKER, model, topic, stateFile, round };
+    const onFlag = (note) => {
+      recordHubFlag({ command: "implement", topic, note });
+    };
+    ev = await holdPrematureDone(ev, ctx, {
+      evidencePath: verifyPath,
+      deadlineMs: startMs + timeout * 1e3,
+      now: clock.now,
+      rearm: d.rearm ?? liveRearm(ctx, { pane, probe: probe2, clock, onFlag }),
+      onFlag
+    });
+  }
   const verifyText = readIfExistsOrNull(verifyPath);
   let ts = implementState(ev, verifyText);
   let question;
@@ -15360,7 +15450,7 @@ async function turnWaitWith2(topic, round, d) {
     }
   }
   recordWaitOutcome(WORKER, model, topic, stateFile, ts, "TS", question);
-  (0, import_node_fs37.writeFileSync)((0, import_node_path32.join)(art, `turn-${WORKER}-${round}.done`), "");
+  (0, import_node_fs38.writeFileSync)((0, import_node_path32.join)(art, `turn-${WORKER}-${round}.done`), "");
   log.ok(`[turn-wait] ${WORKER} round=${round} TS=${ts}`);
   return 0;
 }
@@ -15389,11 +15479,11 @@ async function preSnapshotRun(rest) {
 }
 async function preSnapshotWith(topic, opts, runnerFor) {
   const art = implementArtDir(topic, opts);
-  if (!(0, import_node_fs37.existsSync)(art)) {
+  if (!(0, import_node_fs38.existsSync)(art)) {
     log.error(`implement pre-snapshot: art-dir missing: ${art} (run implement init first)`);
     return 1;
   }
-  (0, import_node_fs37.mkdirSync)((0, import_node_path32.join)(art, "baselines"), { recursive: true });
+  (0, import_node_fs38.mkdirSync)((0, import_node_path32.join)(art, "baselines"), { recursive: true });
   let clean = 0, committed = 0, blocked = 0;
   const cwd = targetCwd(topic, opts);
   if (cwd) {
@@ -15448,7 +15538,7 @@ function staleBranchRefusal(branch, cwd) {
 }
 async function branchWith2(a, opts, runnerFor) {
   const art = implementArtDir(a.topic, opts);
-  if (!(0, import_node_fs37.existsSync)(art)) {
+  if (!(0, import_node_fs38.existsSync)(art)) {
     log.error(`implement branch: art-dir missing: ${art} (run implement init first)`);
     return 1;
   }
@@ -15495,8 +15585,8 @@ async function branchWith2(a, opts, runnerFor) {
     }
     row = `main	${recorded}`;
     const baseline = (0, import_node_path32.join)(art, "baselines", "main.tsv");
-    if ((0, import_node_fs37.existsSync)(baseline)) {
-      const m = (0, import_node_fs37.readFileSync)(baseline, "utf8").match(/^baseline_sha=(.*)$/m);
+    if ((0, import_node_fs38.existsSync)(baseline)) {
+      const m = (0, import_node_fs38.readFileSync)(baseline, "utf8").match(/^baseline_sha=(.*)$/m);
       if (m) atomicWrite((0, import_node_path32.join)(art, "branch-base.sha"), m[1] + "\n");
     }
   }
@@ -15517,11 +15607,11 @@ async function scopeCheckWith(topic, d) {
   const art = implementArtDir(topic);
   const designFile = (0, import_node_path32.join)(art, "design.md");
   const targetFile = (0, import_node_path32.join)(art, "target_cwd.txt"), baseFile = (0, import_node_path32.join)(art, "branch-base.sha");
-  if (!(0, import_node_fs37.existsSync)(targetFile) || !(0, import_node_fs37.existsSync)(baseFile)) {
+  if (!(0, import_node_fs38.existsSync)(targetFile) || !(0, import_node_fs38.existsSync)(baseFile)) {
     log.error(`implement scope-check: target_cwd.txt/branch-base.sha missing under ${art}`);
     return 1;
   }
-  if (!(0, import_node_fs37.existsSync)(designFile)) {
+  if (!(0, import_node_fs38.existsSync)(designFile)) {
     log.error(`implement scope-check: design.md missing under ${art}`);
     return 1;
   }
@@ -15529,7 +15619,7 @@ async function scopeCheckWith(topic, d) {
   const base = readField(baseFile);
   const diffPaths = d.runnerFor(targetCwd2).run("git", ["diff", "--name-only", `${base}..HEAD`]).stdout.split("\n").filter((x) => x.length > 0);
   atomicWrite((0, import_node_path32.join)(art, "diff-paths.txt"), diffPaths.length ? diffPaths.join("\n") + "\n" : "");
-  const design = (0, import_node_fs37.readFileSync)(designFile, "utf8");
+  const design = (0, import_node_fs38.readFileSync)(designFile, "utf8");
   const compPaths = extractComponentsPaths(design);
   const testingPaths = extractTestingPaths(design);
   atomicWrite((0, import_node_path32.join)(art, "components-paths.txt"), compPaths.length ? compPaths.join("\n") + "\n" : "");
@@ -15571,19 +15661,19 @@ async function verifyTestsRun(rest) {
 }
 async function verifyTestsWith(topic, round, d) {
   const art = implementArtDir(topic);
-  if (!(0, import_node_fs37.existsSync)(art)) {
+  if (!(0, import_node_fs38.existsSync)(art)) {
     log.error(`implement verify-tests: art-dir missing: ${art}`);
     return 1;
   }
   const targetFile = (0, import_node_path32.join)(art, "target_cwd.txt");
-  if (!(0, import_node_fs37.existsSync)(targetFile)) {
+  if (!(0, import_node_fs38.existsSync)(targetFile)) {
     log.error(`implement verify-tests: target_cwd.txt missing under ${art}`);
     return 1;
   }
   const targetCwd2 = readField(targetFile);
   const testCmd = d.detect(targetCwd2);
   const durFile = (0, import_node_path32.join)(art, `worker-test-duration-${round}.txt`);
-  const workerDur = (0, import_node_fs37.existsSync)(durFile) ? parseWorkerDuration((0, import_node_fs37.readFileSync)(durFile, "utf8")) : null;
+  const workerDur = (0, import_node_fs38.existsSync)(durFile) ? parseWorkerDuration((0, import_node_fs38.readFileSync)(durFile, "utf8")) : null;
   let code = null;
   let verdict;
   if (testCmd === "") {
@@ -15624,21 +15714,21 @@ async function summaryRun2(rest) {
 }
 async function summaryWith(topic, d) {
   const art = implementArtDir(topic);
-  if (!(0, import_node_fs37.existsSync)(art)) {
+  if (!(0, import_node_fs38.existsSync)(art)) {
     log.error(`implement summary: art-dir missing: ${art}`);
     return 1;
   }
-  (0, import_node_fs37.mkdirSync)((0, import_node_path32.join)(art, "posts"), { recursive: true });
+  (0, import_node_fs38.mkdirSync)((0, import_node_path32.join)(art, "posts"), { recursive: true });
   const cwd = targetCwd(topic);
   if (!cwd) return 0;
   const baseline = (0, import_node_path32.join)(art, "baselines", "main.tsv"), post = (0, import_node_path32.join)(art, "posts", "main.tsv");
-  if (!(0, import_node_fs37.existsSync)(baseline)) {
+  if (!(0, import_node_fs38.existsSync)(baseline)) {
     log.error(`implement summary: baseline missing for slug=main (${baseline})`);
     return 0;
   }
   let st;
   try {
-    st = (0, import_node_fs37.statSync)(cwd);
+    st = (0, import_node_fs38.statSync)(cwd);
   } catch {
   }
   if (!st?.isDirectory()) {
@@ -15720,24 +15810,24 @@ function applyFinish(topic, art, cwd, action, d) {
 }
 async function finishWith2(topic, action, d) {
   const art = implementArtDir(topic);
-  if (!(0, import_node_fs37.existsSync)(art)) {
+  if (!(0, import_node_fs38.existsSync)(art)) {
     log.error(`implement finish: art-dir missing: ${art}`);
     return 1;
   }
-  if ((0, import_node_fs37.existsSync)(jobPath(topic)) && action !== "keep") {
+  if ((0, import_node_fs38.existsSync)(jobPath(topic)) && action !== "keep") {
     log.error(`implement finish: detached job in flight (${jobPath(topic)}) \u2014 only 'keep' is allowed; ${action} would publish with no one watching`);
     runFlag("implement", topic, `finish ${action}: REFUSED \u2014 a detached job record is in flight for this topic, so only 'keep' is allowed; nothing was merged, pushed, or discarded`);
     return 2;
   }
   const results = (0, import_node_path32.join)(art, "finish-results.tsv");
-  (0, import_node_fs37.writeFileSync)(results, "");
+  (0, import_node_fs38.writeFileSync)(results, "");
   let n = 0, stranded = 0, baseBlocked = 0;
   const cwd = targetCwd(topic);
   if (cwd) {
     const outcome = applyFinish(topic, art, cwd, action, d);
     if (outcome === "same-branch") stranded++;
     else if (outcome === "base-checkout-failed") baseBlocked++;
-    (0, import_node_fs37.appendFileSync)(results, `main	${action}	${outcome}
+    (0, import_node_fs38.appendFileSync)(results, `main	${action}	${outcome}
 `);
     log.info(`finish: main -> ${action} -> ${outcome}`);
     n++;
@@ -15760,11 +15850,11 @@ async function archiveRun2(rest) {
   log.ok(`implement archive: archived _implement for ${topic}`);
   return 0;
 }
-var import_node_fs37, import_node_path32, WORKER, IMPLEMENT_TURN_TIMEOUT, liveInitDeps3, liveSendDeps2, liveWaitDeps2, liveScopeDeps, liveVerifyTestsDeps, liveSummaryDeps, liveFinishDeps;
+var import_node_fs38, import_node_path32, WORKER, IMPLEMENT_TURN_TIMEOUT, liveInitDeps3, liveSendDeps2, liveWaitDeps2, liveScopeDeps, liveVerifyTestsDeps, liveSummaryDeps, liveFinishDeps;
 var init_implement2 = __esm({
   "src/commands/implement.ts"() {
     "use strict";
-    import_node_fs37 = require("node:fs");
+    import_node_fs38 = require("node:fs");
     import_node_path32 = require("node:path");
     init_log();
     init_args();
@@ -15781,6 +15871,8 @@ var init_implement2 = __esm({
     init_implementTurn();
     init_questionCodec();
     init_ipc();
+    init_implementHold();
+    init_tmux();
     init_fsread();
     init_branchRecord();
     init_contracts();
@@ -16268,8 +16360,8 @@ var init_autoresearchExperiment = __esm({
 // src/core/autoresearch.ts
 function latestExpDir(dir) {
   let latest = "";
-  if ((0, import_node_fs38.existsSync)(dir)) {
-    for (const name of (0, import_node_fs38.readdirSync)(dir)) {
+  if ((0, import_node_fs39.existsSync)(dir)) {
+    for (const name of (0, import_node_fs39.readdirSync)(dir)) {
       if (EXP_ID_RE.test(name) && name > latest) latest = name;
     }
   }
@@ -16293,16 +16385,16 @@ function experimentDir(artDir, agent, expId) {
 function seedLib(art, configRoot) {
   try {
     const seedDir = (0, import_node_path33.join)(configRoot, "config", "autoresearch-lib-seed");
-    if (!(0, import_node_fs38.existsSync)(seedDir)) return;
-    (0, import_node_fs38.cpSync)(seedDir, (0, import_node_path33.join)(art, "lib"), { recursive: true, force: false });
+    if (!(0, import_node_fs39.existsSync)(seedDir)) return;
+    (0, import_node_fs39.cpSync)(seedDir, (0, import_node_path33.join)(art, "lib"), { recursive: true, force: false });
   } catch {
   }
 }
-var import_node_fs38, import_node_path33;
+var import_node_fs39, import_node_path33;
 var init_autoresearch = __esm({
   "src/core/autoresearch.ts"() {
     "use strict";
-    import_node_fs38 = require("node:fs");
+    import_node_fs39 = require("node:fs");
     import_node_path33 = require("node:path");
     init_paths();
     init_autoresearchExperiment();
@@ -16433,7 +16525,7 @@ function parseVerifyBlock(result) {
   return block;
 }
 function hashContent(content) {
-  return (0, import_node_crypto6.createHash)("sha256").update(content).digest("hex");
+  return (0, import_node_crypto7.createHash)("sha256").update(content).digest("hex");
 }
 function recomputedFromOutput(stdout, metricFrom, readJson) {
   if (metricFrom === "marker") {
@@ -16496,11 +16588,11 @@ function planVerify(p) {
   }
   return { run: true, command: b.command, metricFrom: b.metric_from ?? "marker" };
 }
-var import_node_crypto6, import_node_path34, MARKER_RE, VERIFICATION_TSV_HEADER;
+var import_node_crypto7, import_node_path34, MARKER_RE, VERIFICATION_TSV_HEADER;
 var init_autoresearchVerify = __esm({
   "src/core/autoresearchVerify.ts"() {
     "use strict";
-    import_node_crypto6 = require("node:crypto");
+    import_node_crypto7 = require("node:crypto");
     import_node_path34 = require("node:path");
     init_tsv();
     MARKER_RE = /^VERIFY_METRIC=(-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)$/;
@@ -17080,11 +17172,11 @@ function retrieveForDispatch(io, opts) {
   };
   return retrieveLessons(store, ctx, policy, now).map((l) => renderLesson(l));
 }
-var import_node_fs39, import_node_path39, liveMemoryIo;
+var import_node_fs40, import_node_path39, liveMemoryIo;
 var init_autoresearchMemoryStore = __esm({
   "src/core/autoresearchMemoryStore.ts"() {
     "use strict";
-    import_node_fs39 = require("node:fs");
+    import_node_fs40 = require("node:fs");
     import_node_path39 = require("node:path");
     init_atomic();
     init_paths();
@@ -17092,9 +17184,9 @@ var init_autoresearchMemoryStore = __esm({
     init_autoresearchLessonMap();
     init_autoresearchMemory();
     liveMemoryIo = {
-      exists: (p) => (0, import_node_fs39.existsSync)(p),
-      readFile: (p) => (0, import_node_fs39.readFileSync)(p, "utf8"),
-      mkdir: (p) => (0, import_node_fs39.mkdirSync)(p, { recursive: true }),
+      exists: (p) => (0, import_node_fs40.existsSync)(p),
+      readFile: (p) => (0, import_node_fs40.readFileSync)(p, "utf8"),
+      mkdir: (p) => (0, import_node_fs40.mkdirSync)(p, { recursive: true }),
       writeAtomic: (dest, content) => atomicWrite(dest, content)
     };
   }
@@ -17120,7 +17212,7 @@ function parseHardConstraints(promptMd) {
 }
 function listExpDirs(expsRoot) {
   try {
-    return (0, import_node_fs40.readdirSync)(expsRoot, { withFileTypes: true }).filter((e) => e.isDirectory() && EXP_ID_RE.test(e.name)).map((e) => e.name).sort();
+    return (0, import_node_fs41.readdirSync)(expsRoot, { withFileTypes: true }).filter((e) => e.isDirectory() && EXP_ID_RE.test(e.name)).map((e) => e.name).sort();
   } catch {
     return [];
   }
@@ -17129,7 +17221,7 @@ function dirByteSize(dir) {
   let total = 0;
   let entries;
   try {
-    entries = (0, import_node_fs40.readdirSync)(dir, { withFileTypes: true });
+    entries = (0, import_node_fs41.readdirSync)(dir, { withFileTypes: true });
   } catch {
     return 0;
   }
@@ -17138,7 +17230,7 @@ function dirByteSize(dir) {
     if (e.isDirectory()) total += dirByteSize(p);
     else if (e.isFile()) {
       try {
-        total += (0, import_node_fs40.statSync)(p).size;
+        total += (0, import_node_fs41.statSync)(p).size;
       } catch {
       }
     }
@@ -17147,7 +17239,7 @@ function dirByteSize(dir) {
 }
 function fileCountDepth1(dir) {
   try {
-    return (0, import_node_fs40.readdirSync)(dir, { withFileTypes: true }).filter((e) => e.isFile()).length;
+    return (0, import_node_fs41.readdirSync)(dir, { withFileTypes: true }).filter((e) => e.isFile()).length;
   } catch {
     return 0;
   }
@@ -17183,7 +17275,7 @@ function pruneIntermediate(art, agents) {
       }
       let entries;
       try {
-        entries = (0, import_node_fs40.readdirSync)(expDir);
+        entries = (0, import_node_fs41.readdirSync)(expDir);
       } catch {
         continue;
       }
@@ -17192,7 +17284,7 @@ function pruneIntermediate(art, agents) {
         const pt = (0, import_node_path40.join)(expDir, name);
         if (pt === keptAbs) continue;
         try {
-          if ((0, import_node_fs40.statSync)(pt).isFile()) (0, import_node_fs40.rmSync)(pt, { force: true });
+          if ((0, import_node_fs41.statSync)(pt).isFile()) (0, import_node_fs41.rmSync)(pt, { force: true });
         } catch {
         }
       }
@@ -17204,13 +17296,13 @@ function linkPaneArtifacts(art, agents, topic) {
     const model = resolveModel(agent, topic);
     if (!model) continue;
     const targetDir = workerStateDir(art, agent);
-    (0, import_node_fs40.mkdirSync)(targetDir, { recursive: true });
+    (0, import_node_fs41.mkdirSync)(targetDir, { recursive: true });
     const paneFiles = [
       ["outbox.jsonl", outboxPath(agent, model, topic)],
       ["inbox.md", inboxPath(agent, model, topic)]
     ];
     for (const [name, src] of paneFiles) {
-      if (!(0, import_node_fs40.existsSync)(src)) {
+      if (!(0, import_node_fs41.existsSync)(src)) {
         log.warn(`link_pane_artifacts: pane file missing for ${agent}: ${name}`);
         continue;
       }
@@ -17218,10 +17310,10 @@ function linkPaneArtifacts(art, agents, topic) {
       const rel = (0, import_node_path40.relative)(targetDir, src);
       try {
         try {
-          if ((0, import_node_fs40.lstatSync)(linkPath)) (0, import_node_fs40.unlinkSync)(linkPath);
+          if ((0, import_node_fs41.lstatSync)(linkPath)) (0, import_node_fs41.unlinkSync)(linkPath);
         } catch {
         }
-        (0, import_node_fs40.symlinkSync)(rel, linkPath);
+        (0, import_node_fs41.symlinkSync)(rel, linkPath);
       } catch {
       }
     }
@@ -17251,10 +17343,10 @@ function computeAuditWarnings(art, agents, warningsPath) {
       const expDir = (0, import_node_path40.join)(expsRoot, expId);
       const promptMd = (0, import_node_path40.join)(expDir, "prompt.md");
       const auditJson = (0, import_node_path40.join)(expDir, "audit.json");
-      if (!(0, import_node_fs40.existsSync)(promptMd)) continue;
+      if (!(0, import_node_fs41.existsSync)(promptMd)) continue;
       const audit = readJsonOr(auditJson, null);
       if (audit === null) continue;
-      for (const { key, value } of parseHardConstraints((0, import_node_fs40.readFileSync)(promptMd, "utf8"))) {
+      for (const { key, value } of parseHardConstraints((0, import_node_fs41.readFileSync)(promptMd, "utf8"))) {
         const actual = audit[key];
         if (actual == null || String(actual) === "null") continue;
         if (String(value) !== String(actual)) {
@@ -17341,11 +17433,11 @@ function renderWarningLines(warningsText) {
   }
   return warnings;
 }
-var import_node_fs40, import_node_path40, HC_RE, GIB;
+var import_node_fs41, import_node_path40, HC_RE, GIB;
 var init_autoresearchFinalize = __esm({
   "src/core/autoresearchFinalize.ts"() {
     "use strict";
-    import_node_fs40 = require("node:fs");
+    import_node_fs41 = require("node:fs");
     import_node_path40 = require("node:path");
     init_log();
     init_atomic();
@@ -17550,43 +17642,43 @@ function applyTransition(art, agent, updates) {
 }
 function applyTransitionStrict(art, agent, updates) {
   const p = lanePath(art, agent);
-  atomicWrite(p, mergeState((0, import_node_fs41.readFileSync)(p, "utf8"), updates));
+  atomicWrite(p, mergeState((0, import_node_fs42.readFileSync)(p, "utf8"), updates));
 }
 function applyTransitionFrom(art, agent, existing, updates) {
   atomicWrite(lanePath(art, agent), mergeState(existing, updates));
 }
 function reconcileLaneAtFinalize(art, agent, topic) {
   const stateTxt = lanePath(art, agent);
-  if (!(0, import_node_fs41.existsSync)(stateTxt)) return;
+  if (!(0, import_node_fs42.existsSync)(stateTxt)) return;
   const cursorRaw = readOr((0, import_node_path42.join)(workerStateDir(art, agent), "liveness-cursor.txt"));
   const offset = Number.parseInt(cursorRaw.trim(), 10) || 0;
   const model = resolveModel(agent, topic);
   const ob = model ? outboxPath(agent, model, topic) : "";
   let tail = "";
-  if (ob && (0, import_node_fs41.existsSync)(ob)) {
+  if (ob && (0, import_node_fs42.existsSync)(ob)) {
     try {
-      tail = (0, import_node_fs41.readFileSync)(ob).subarray(offset).toString("utf8");
+      tail = (0, import_node_fs42.readFileSync)(ob).subarray(offset).toString("utf8");
     } catch {
       tail = "";
     }
   }
   const curExp = readLane(art, agent).current_exp_id ?? "";
-  const doneResultExists = !!curExp && (0, import_node_fs41.existsSync)((0, import_node_path42.join)(experimentDir(art, agent, curExp), "result.json"));
+  const doneResultExists = !!curExp && (0, import_node_fs42.existsSync)((0, import_node_path42.join)(experimentDir(art, agent, curExp), "result.json"));
   const recon = reconcileFromOutbox(tail, doneResultExists);
   if (recon === "failed" || recon === "idle") applyTransition(art, agent, { phase: recon });
   const np = finalizePhase(readLane(art, agent).phase ?? "");
   if (np) applyTransition(art, agent, { phase: np });
 }
 function reconcileLaneAtResume(art, agent, outboxText, offset, expId) {
-  const doneResultExists = !!expId && (0, import_node_fs41.existsSync)((0, import_node_path42.join)(experimentDir(art, agent, expId), "result.json"));
+  const doneResultExists = !!expId && (0, import_node_fs42.existsSync)((0, import_node_path42.join)(experimentDir(art, agent, expId), "result.json"));
   const recon = reconcileFromOutboxSince(outboxText, offset, doneResultExists);
   if (recon === "failed" || recon === "idle") applyTransition(art, agent, { phase: recon });
 }
-var import_node_fs41, import_node_path42;
+var import_node_fs42, import_node_path42;
 var init_autoresearchLane = __esm({
   "src/core/autoresearchLane.ts"() {
     "use strict";
-    import_node_fs41 = require("node:fs");
+    import_node_fs42 = require("node:fs");
     import_node_path42 = require("node:path");
     init_atomic();
     init_fsread();
@@ -18100,7 +18192,7 @@ var init_autoresearchArbiter = __esm({
 // src/core/autoresearchValidity.ts
 function appendRow(art, agent, expId, spec, row) {
   const tsv = spec.tsvPath(art);
-  const prior = (0, import_node_fs42.existsSync)(tsv) ? (0, import_node_fs42.readFileSync)(tsv, "utf8") : spec.header;
+  const prior = (0, import_node_fs43.existsSync)(tsv) ? (0, import_node_fs43.readFileSync)(tsv, "utf8") : spec.header;
   atomicWrite(tsv, prior + spec.renderRow(row));
   atomicWrite((0, import_node_path43.join)(experimentDir(art, agent, expId), spec.sidecarName), spec.sidecarLine(row));
 }
@@ -18130,11 +18222,11 @@ function readExperimentResult(art, agent, expId) {
 function inspectionCount(art) {
   return parseInspectionRows(readIfExists(inspectionTsvPath(art))).length;
 }
-var import_node_fs42, import_node_path43;
+var import_node_fs43, import_node_path43;
 var init_autoresearchValidity = __esm({
   "src/core/autoresearchValidity.ts"() {
     "use strict";
-    import_node_fs42 = require("node:fs");
+    import_node_fs43 = require("node:fs");
     import_node_path43 = require("node:path");
     init_atomic();
     init_fsread();
@@ -18327,11 +18419,11 @@ __export(autoresearch_exports, {
 });
 function ledgerAppender(art) {
   const path = ledgerPath(art);
-  if (!(0, import_node_fs43.existsSync)(path)) return () => false;
-  let text = (0, import_node_fs43.readFileSync)(path, "utf8");
+  if (!(0, import_node_fs44.existsSync)(path)) return () => false;
+  let text = (0, import_node_fs44.readFileSync)(path, "utf8");
   return (ev) => {
     const line = appendEvent(text, ev);
-    (0, import_node_fs43.appendFileSync)(path, line);
+    (0, import_node_fs44.appendFileSync)(path, line);
     text += line;
     return true;
   };
@@ -18340,7 +18432,7 @@ function controllerGen(art) {
   const fromFile = readGen(readIfExistsOrNull(controllerGenPath(art))).gen;
   if (fromFile > 0) return fromFile;
   try {
-    return replayLedger((0, import_node_fs43.readFileSync)(ledgerPath(art), "utf8")).gen || 1;
+    return replayLedger((0, import_node_fs44.readFileSync)(ledgerPath(art), "utf8")).gen || 1;
   } catch {
     return 1;
   }
@@ -18429,15 +18521,15 @@ async function initWith4(args, deps) {
     return 2;
   }
   const art = autoresearchArtDir(slug, deps.opts);
-  if ((0, import_node_fs43.existsSync)(art)) {
+  if ((0, import_node_fs44.existsSync)(art)) {
     log.error(`autoresearch init: topic already in flight: ${art} (re-enter with 'autoresearch resume <topic>')`);
     return 2;
   }
-  if (p.seedFrom && !(0, import_node_fs43.existsSync)(p.seedFrom)) {
+  if (p.seedFrom && !(0, import_node_fs44.existsSync)(p.seedFrom)) {
     log.error(`autoresearch init: --seed-from not found: ${p.seedFrom}`);
     return 1;
   }
-  (0, import_node_fs43.mkdirSync)(art, { recursive: true });
+  (0, import_node_fs44.mkdirSync)(art, { recursive: true });
   seedLib(art, deps.configRoot());
   atomicWrite((0, import_node_path45.join)(art, "topic.txt"), p.topic);
   atomicWrite((0, import_node_path45.join)(art, "metric.txt"), extractMetric(p.topic) + "\n");
@@ -18530,7 +18622,7 @@ async function spawnAllWith2(args, deps, opts) {
   }
   const art = autoresearchArtDir(topic, opts);
   const staleResults = (0, import_node_path45.join)(art, "spawn-results.tsv");
-  if ((0, import_node_fs43.existsSync)(staleResults)) (0, import_node_fs43.rmSync)(staleResults);
+  if ((0, import_node_fs44.existsSync)(staleResults)) (0, import_node_fs44.rmSync)(staleResults);
   const agents = deps.pickAgents(topic, n);
   if (agents.length < 2) {
     log.error(`autoresearch spawn-all: need >= 2 codex workers; picked ${agents.length}`);
@@ -18543,7 +18635,7 @@ async function spawnAllWith2(args, deps, opts) {
     log.error(`autoresearch spawn-all: preflight failed (rc ${prc})`);
     return 3;
   }
-  const panes = parsePanesFile((0, import_node_fs43.readFileSync)((0, import_node_path45.join)(art, "preflight-panes.txt"), "utf8"));
+  const panes = parsePanesFile((0, import_node_fs44.readFileSync)((0, import_node_path45.join)(art, "preflight-panes.txt"), "utf8"));
   const orphans = rows.filter((r) => !panes.has(r.agent));
   if (orphans.length) {
     log.error(`autoresearch spawn-all: workers missing a preflight pane: ${orphans.map((r) => r.agent).join(", ")}`);
@@ -18570,13 +18662,13 @@ async function dropWorkerWith(rest, deps, opts) {
   }
   const art = autoresearchArtDir(topic, opts);
   const workersFile = (0, import_node_path45.join)(art, "workers.txt");
-  if (!(0, import_node_fs43.existsSync)(workersFile)) {
+  if (!(0, import_node_fs44.existsSync)(workersFile)) {
     log.error(`autoresearch drop-worker: workers.txt missing`);
     return 1;
   }
   const kept = [];
   let dropped = false;
-  for (const line of (0, import_node_fs43.readFileSync)(workersFile, "utf8").split("\n")) {
+  for (const line of (0, import_node_fs44.readFileSync)(workersFile, "utf8").split("\n")) {
     if (line.length === 0) continue;
     if (line === agent) {
       dropped = true;
@@ -18590,9 +18682,9 @@ async function dropWorkerWith(rest, deps, opts) {
   }
   atomicWrite(workersFile, kept.length ? kept.join("\n") + "\n" : "");
   const panesFile = (0, import_node_path45.join)(art, "preflight-panes.txt");
-  if ((0, import_node_fs43.existsSync)(panesFile)) {
+  if ((0, import_node_fs44.existsSync)(panesFile)) {
     try {
-      const pin = parsePanesFile((0, import_node_fs43.readFileSync)(panesFile, "utf8")).get(agent);
+      const pin = parsePanesFile((0, import_node_fs44.readFileSync)(panesFile, "utf8")).get(agent);
       if (pin && await deps.paneOwned(pin.pane, pin.nonce)) deps.killPane(pin.pane);
     } catch (e) {
       log.warn(`autoresearch drop-worker: preflight pane kill failed (${e.message})`);
@@ -18773,16 +18865,16 @@ function parseExperimentSendArgs(args) {
 }
 function gatherPeers(art, self) {
   const workersFile = (0, import_node_path45.join)(art, "workers.txt");
-  if (!(0, import_node_fs43.existsSync)(workersFile)) return [];
-  const peers = (0, import_node_fs43.readFileSync)(workersFile, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && l !== self);
+  if (!(0, import_node_fs44.existsSync)(workersFile)) return [];
+  const peers = (0, import_node_fs44.readFileSync)(workersFile, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && l !== self);
   const rows = [];
   for (const peer of peers) {
     const peerDir = workerStateDir(art, peer);
-    if (!(0, import_node_fs43.existsSync)(peerDir)) continue;
+    if (!(0, import_node_fs44.existsSync)(peerDir)) continue;
     let phase = "", currentExp = "";
     const statePath = lanePath(art, peer);
-    if ((0, import_node_fs43.existsSync)(statePath)) {
-      const kv = parseState((0, import_node_fs43.readFileSync)(statePath, "utf8"));
+    if ((0, import_node_fs44.existsSync)(statePath)) {
+      const kv = parseState((0, import_node_fs44.readFileSync)(statePath, "utf8"));
       phase = kv.phase ?? "";
       currentExp = kv.current_exp_id ?? "";
     }
@@ -18823,12 +18915,12 @@ async function experimentSendWith(args, deps) {
     return fail(`--operator must be one of ${DISPATCH_OPERATORS.join("|")}; got '${p.operator}'`);
   }
   const art = autoresearchArtDir(topic, opts);
-  if (!(0, import_node_fs43.existsSync)(art)) return fail(`topic state dir missing: ${art} (was autoresearch init run?)`, 1);
+  if (!(0, import_node_fs44.existsSync)(art)) return fail(`topic state dir missing: ${art} (was autoresearch init run?)`, 1);
   const metricMd = (0, import_node_path45.join)(art, "metric.md");
-  if (!(0, import_node_fs43.existsSync)(metricMd)) return fail(`metric.md missing at ${metricMd}`, 1);
+  if (!(0, import_node_fs44.existsSync)(metricMd)) return fail(`metric.md missing at ${metricMd}`, 1);
   const stateTxt = lanePath(art, agent);
-  if (!(0, import_node_fs43.existsSync)(stateTxt)) return fail(`worker state.txt missing: ${stateTxt}`, 1);
-  const hasLedger = (0, import_node_fs43.existsSync)(ledgerPath(art));
+  if (!(0, import_node_fs44.existsSync)(stateTxt)) return fail(`worker state.txt missing: ${stateTxt}`, 1);
+  const hasLedger = (0, import_node_fs44.existsSync)(ledgerPath(art));
   const effGen = hasLedger ? controllerGen(art) : 1;
   if (hasLedger && effGen > 1 && p.gen === void 0) {
     return fail(`campaign is on controller generation ${effGen}; pass --gen (re-enter via 'autoresearch resume ${topic}')`, 3);
@@ -18836,20 +18928,20 @@ async function experimentSendWith(args, deps) {
   if (hasLedger && p.gen !== void 0 && Number(p.gen) !== effGen) {
     return fail(`stale controller generation (--gen ${p.gen}, current ${effGen}); re-enter via 'autoresearch resume ${topic}'`, 3);
   }
-  const phase = parseState((0, import_node_fs43.readFileSync)(stateTxt, "utf8")).phase ?? "";
+  const phase = parseState((0, import_node_fs44.readFileSync)(stateTxt, "utf8")).phase ?? "";
   if (phase === "abandoned") return fail(`worker ${agent} lane is abandoned; not dispatching`);
   if (phase !== "idle") return fail(`worker ${agent} not idle (phase=${phase}); wait or finalize first`, 1);
   if (p.parentId !== void 0) {
     if (!EXP_ID_RE.test(p.parentId)) return fail(`--parent must match exp-[0-9]+; got '${p.parentId}'`);
-    if (!(0, import_node_fs43.existsSync)(experimentDir(art, agent, p.parentId))) return fail(`--parent ${p.parentId} has no experiment dir under ${agent}`, 1);
+    if (!(0, import_node_fs44.existsSync)(experimentDir(art, agent, p.parentId))) return fail(`--parent ${p.parentId} has no experiment dir under ${agent}`, 1);
   }
   const branchDir = experimentDir(art, agent, expId);
-  (0, import_node_fs43.mkdirSync)((0, import_node_path45.join)(branchDir, "code"), { recursive: true });
+  (0, import_node_fs44.mkdirSync)((0, import_node_path45.join)(branchDir, "code"), { recursive: true });
   const model = resolveModel(agent, topic);
   if (!model) return fail(`no worker '${agent}' on topic '${topic}' (resolveModel null)`, 1);
   const outbox = outboxPath(agent, model, topic);
-  if (!(0, import_node_fs43.existsSync)(outbox)) return fail(`worker outbox missing: ${outbox} (was spawn run for ${agent}?)`, 1);
-  const metricBlock = (0, import_node_fs43.readFileSync)(metricMd, "utf8");
+  if (!(0, import_node_fs44.existsSync)(outbox)) return fail(`worker outbox missing: ${outbox} (was spawn run for ${agent}?)`, 1);
+  const metricBlock = (0, import_node_fs44.readFileSync)(metricMd, "utf8");
   const metricName = parseMetricMd(metricBlock).primaryMetric;
   if (!metricName) return fail(`could not parse Primary metric from ${metricMd}`, 1);
   const probe2 = deps.probeHardware();
@@ -18863,8 +18955,8 @@ async function experimentSendWith(args, deps) {
   const peersBlock = formatPeersBlock(gatherPeers(art, agent));
   const timeBudgetS = String(p.timeout ?? deps.consultTimeout());
   const templatePath = (0, import_node_path45.join)(pluginRoot(), "config", "prompt-templates", "autoresearch", "experiment.md");
-  if (!(0, import_node_fs43.existsSync)(templatePath)) return fail(`template missing: ${templatePath}`, 1);
-  const template = (0, import_node_fs43.readFileSync)(templatePath, "utf8");
+  if (!(0, import_node_fs44.existsSync)(templatePath)) return fail(`template missing: ${templatePath}`, 1);
+  const template = (0, import_node_fs44.readFileSync)(templatePath, "utf8");
   let prompt;
   try {
     prompt = renderExperimentPrompt(template, {
@@ -18905,7 +18997,7 @@ async function experimentSendWith(args, deps) {
   if (p.operator !== void 0) atomicWrite((0, import_node_path45.join)(branchDir, "operator.txt"), `operator=${p.operator}
 `);
   (deps.inboxWrite ?? inboxWrite)(agent, model, topic, prompt, { from: "hub", noDoneInstruction: true });
-  atomicWrite(stateTxt, buildDispatchState((0, import_node_fs43.readFileSync)(stateTxt, "utf8"), expId, deps.now()));
+  atomicWrite(stateTxt, buildDispatchState((0, import_node_fs44.readFileSync)(stateTxt, "utf8"), expId, deps.now()));
   const deliveredRc = fencedAppend({ gen: effGen, ts: deps.now(), kind: "dispatch-delivered", agent, exp_id: expId, data: { outboxOffset: preOffset } });
   if (deliveredRc !== null) return deliveredRc;
   if (!deps.dryRun) {
@@ -18952,7 +19044,7 @@ async function scoreWith(args, deps) {
   const topic = positionals[0];
   const art = autoresearchArtDir(topic, deps.opts);
   const workersRoot = workersDir(art);
-  if (!(0, import_node_fs43.existsSync)(workersRoot)) {
+  if (!(0, import_node_fs44.existsSync)(workersRoot)) {
     log.error(`autoresearch score: workers dir missing: ${workersRoot}`);
     return 1;
   }
@@ -18979,7 +19071,7 @@ async function scoreWith(args, deps) {
         const [expId, agent] = line.split("	");
         if (!expId || !agent || seen.has(`${agent}/${expId}`)) continue;
         const ev = appendEvent(text, { gen, ts: deps.now(), kind: "result-recorded", agent, exp_id: expId });
-        (0, import_node_fs43.appendFileSync)(lp, ev);
+        (0, import_node_fs44.appendFileSync)(lp, ev);
         text += ev;
         seen.add(`${agent}/${expId}`);
       }
@@ -18992,13 +19084,13 @@ async function scoreWith(args, deps) {
 function readSlice(path, start, end) {
   if (end <= start) return "";
   try {
-    const fd = (0, import_node_fs43.openSync)(path, "r");
+    const fd = (0, import_node_fs44.openSync)(path, "r");
     try {
       const buf = Buffer.alloc(end - start);
-      const n = (0, import_node_fs43.readSync)(fd, buf, 0, buf.length, start);
+      const n = (0, import_node_fs44.readSync)(fd, buf, 0, buf.length, start);
       return buf.subarray(0, n).toString("utf8");
     } finally {
-      (0, import_node_fs43.closeSync)(fd);
+      (0, import_node_fs44.closeSync)(fd);
     }
   } catch {
     return "";
@@ -19014,7 +19106,7 @@ async function monitorRun(args, opts) {
   const [topic, agent] = pos;
   assertSlug("agent", agent);
   const art = autoresearchArtDir(topic, opts);
-  if (!(0, import_node_fs43.existsSync)(art)) {
+  if (!(0, import_node_fs44.existsSync)(art)) {
     log.error(`autoresearch monitor: art dir missing: ${art}`);
     return 2;
   }
@@ -19025,7 +19117,7 @@ async function monitorRun(args, opts) {
   }
   const outbox = outboxPath(agent, model, topic);
   const stateDir = workerStateDir(art, agent);
-  (0, import_node_fs43.mkdirSync)(stateDir, { recursive: true });
+  (0, import_node_fs44.mkdirSync)(stateDir, { recursive: true });
   const cursorFile = (0, import_node_path45.join)(stateDir, "liveness-cursor.txt");
   const rescanFile = (0, import_node_path45.join)(stateDir, "liveness-rescan-emitted.txt");
   const stateTxt = lanePath(art, agent);
@@ -19042,7 +19134,7 @@ async function monitorRun(args, opts) {
     persistedOffset = state2.offset;
     persistedRescan = state2.rescanEmitted.size;
   };
-  const initBuf = (0, import_node_fs43.existsSync)(outbox) ? (0, import_node_fs43.readFileSync)(outbox) : Buffer.alloc(0);
+  const initBuf = (0, import_node_fs44.existsSync)(outbox) ? (0, import_node_fs44.readFileSync)(outbox) : Buffer.alloc(0);
   let state = initScanState(
     initBuf.length,
     initBuf.toString("utf8"),
@@ -19059,7 +19151,7 @@ async function monitorRun(args, opts) {
   do {
     let size = 0, mtime = 0;
     try {
-      const st = (0, import_node_fs43.statSync)(outbox);
+      const st = (0, import_node_fs44.statSync)(outbox);
       size = st.size;
       mtime = Math.floor(st.mtimeMs / 1e3);
     } catch {
@@ -19068,7 +19160,7 @@ async function monitorRun(args, opts) {
     const rescanDue = now - state.lastRescan >= thresholds.rescanEveryS;
     const full = rescanDue ? readOr(outbox) : "";
     const text = readSlice(outbox, state.offset, size);
-    const phase = ((0, import_node_fs43.existsSync)(stateTxt) ? parseState((0, import_node_fs43.readFileSync)(stateTxt, "utf8")).phase : "") ?? "";
+    const phase = ((0, import_node_fs44.existsSync)(stateTxt) ? parseState((0, import_node_fs44.readFileSync)(stateTxt, "utf8")).phase : "") ?? "";
     const r = monitorScan(outbox, agent, state, {
       outboxText: text,
       outboxFullText: full,
@@ -19100,8 +19192,8 @@ async function monitorRun(args, opts) {
   return 0;
 }
 function approachFromPrompt(promptPath) {
-  if (!(0, import_node_fs43.existsSync)(promptPath)) return "";
-  for (const line of (0, import_node_fs43.readFileSync)(promptPath, "utf8").split("\n")) {
+  if (!(0, import_node_fs44.existsSync)(promptPath)) return "";
+  for (const line of (0, import_node_fs44.readFileSync)(promptPath, "utf8").split("\n")) {
     const m = /^\s*Approach label:\s+(.*?)\s*$/.exec(line);
     if (m) return m[1];
   }
@@ -19119,14 +19211,14 @@ function gatherCompletion(art) {
   const metricPath = (0, import_node_path45.join)(art, "metric.md");
   let completionOrder;
   const lp = ledgerPath(art);
-  if ((0, import_node_fs43.existsSync)(lp)) {
+  if ((0, import_node_fs44.existsSync)(lp)) {
     try {
-      completionOrder = replayLedger((0, import_node_fs43.readFileSync)(lp, "utf8")).completionOrder;
+      completionOrder = replayLedger((0, import_node_fs44.readFileSync)(lp, "utf8")).completionOrder;
     } catch {
       completionOrder = void 0;
     }
   }
-  const completion = scoreboardMd !== null && (0, import_node_fs43.existsSync)(metricPath) ? checkCompletion(scoreboardMd, (0, import_node_fs43.readFileSync)(metricPath, "utf8"), completionOrder) : null;
+  const completion = scoreboardMd !== null && (0, import_node_fs44.existsSync)(metricPath) ? checkCompletion(scoreboardMd, (0, import_node_fs44.readFileSync)(metricPath, "utf8"), completionOrder) : null;
   return { scoreboardMd, completion };
 }
 function parseStatusBriefArgs(args) {
@@ -19149,14 +19241,14 @@ async function statusBriefWith(args, v = {}) {
   const art = autoresearchArtDir(p.topic, v.opts);
   const workers = [];
   const workersFile = (0, import_node_path45.join)(art, "workers.txt");
-  if ((0, import_node_fs43.existsSync)(workersFile)) {
-    const agents = splitNonCommentLines((0, import_node_fs43.readFileSync)(workersFile, "utf8"));
+  if ((0, import_node_fs44.existsSync)(workersFile)) {
+    const agents = splitNonCommentLines((0, import_node_fs44.readFileSync)(workersFile, "utf8"));
     for (const agent of agents) {
       let phase = "?", currentOrLast = "\u2014";
       const stateTxt = lanePath(art, agent);
       let curExp = "";
-      if ((0, import_node_fs43.existsSync)(stateTxt)) {
-        const kv = parseState((0, import_node_fs43.readFileSync)(stateTxt, "utf8"));
+      if ((0, import_node_fs44.existsSync)(stateTxt)) {
+        const kv = parseState((0, import_node_fs44.readFileSync)(stateTxt, "utf8"));
         phase = kv.phase || "?";
         curExp = kv.current_exp_id ?? "";
       }
@@ -19206,7 +19298,7 @@ async function statusBriefWith(args, v = {}) {
 function gatherStatusRows(art, agents) {
   const statusRows = [];
   for (const agent of agents) {
-    if ((0, import_node_fs43.existsSync)(lanePath(art, agent))) {
+    if ((0, import_node_fs44.existsSync)(lanePath(art, agent))) {
       const kv = readLane(art, agent);
       statusRows.push({
         agent,
@@ -19227,7 +19319,7 @@ function gatherRecentEvents(agents, topic) {
     const model = resolveModel(agent, topic);
     if (!model) continue;
     const ob = outboxPath(agent, model, topic);
-    if (!(0, import_node_fs43.existsSync)(ob)) continue;
+    if (!(0, import_node_fs44.existsSync)(ob)) continue;
     const lines = readOr(ob).split("\n").filter((l) => l.trim() !== "").slice(-10);
     for (const line of lines) {
       const o = parseEvent(line);
@@ -19252,12 +19344,12 @@ async function finalizeWith(args, deps) {
   }
   const topic = rest[0];
   const art = autoresearchArtDir(topic, opts);
-  if (!(0, import_node_fs43.existsSync)(art) || !(0, import_node_fs43.statSync)(art).isDirectory()) {
+  if (!(0, import_node_fs44.existsSync)(art) || !(0, import_node_fs44.statSync)(art).isDirectory()) {
     log.error(`finalize: art-dir missing: ${art}`);
     return 1;
   }
   const workersFile = (0, import_node_path45.join)(art, "workers.txt");
-  const agents = (0, import_node_fs43.existsSync)(workersFile) ? splitNonCommentLines((0, import_node_fs43.readFileSync)(workersFile, "utf8")) : [];
+  const agents = (0, import_node_fs44.existsSync)(workersFile) ? splitNonCommentLines((0, import_node_fs44.readFileSync)(workersFile, "utf8")) : [];
   for (const agent of agents) reconcileLaneAtFinalize(art, agent, topic);
   normalizeResults(art, agents);
   if (!keep) pruneIntermediate(art, agents);
@@ -19272,7 +19364,7 @@ async function finalizeWith(args, deps) {
       const l = rowToLine(r);
       if (l !== null) lines.push(l);
     }
-    if (lines.length) (0, import_node_fs43.appendFileSync)(warningsPath, lines.join("\n") + "\n");
+    if (lines.length) (0, import_node_fs44.appendFileSync)(warningsPath, lines.join("\n") + "\n");
   };
   foldWarnings(parseSanityRows(readIfExists(sanityTsvPath(art))), (r) => r.flag !== "audit-knob-drift" && r.expId && r.agent && r.flag ? `sanity	${r.agent}/${r.expId}	${r.flag}	${r.detail}` : null);
   foldWarnings(parseLineageRows(readIfExists(lineageTsvPath(art))), (r) => r.verdict === "improve-multi" && r.expId && r.agent ? `lineage	${r.agent}/${r.expId}	improve-multi	parent=${r.parentId} knobs_changed=${r.knobsChanged}` : null);
@@ -19282,11 +19374,11 @@ async function finalizeWith(args, deps) {
   const budgetPath = (0, import_node_path45.join)(art, "time-budget.txt");
   const startPath = (0, import_node_path45.join)(art, "session-start.txt");
   let hardCap = null;
-  if ((0, import_node_fs43.existsSync)(budgetPath) && (0, import_node_fs43.existsSync)(startPath)) {
+  if ((0, import_node_fs44.existsSync)(budgetPath) && (0, import_node_fs44.existsSync)(startPath)) {
     try {
       hardCap = checkTimeBudget(
-        (0, import_node_fs43.readFileSync)(budgetPath, "utf8").trim(),
-        (0, import_node_fs43.readFileSync)(startPath, "utf8").trim(),
+        (0, import_node_fs44.readFileSync)(budgetPath, "utf8").trim(),
+        (0, import_node_fs44.readFileSync)(startPath, "utf8").trim(),
         Math.floor(Date.parse(deps.now()) / 1e3)
       );
     } catch {
@@ -19297,8 +19389,8 @@ async function finalizeWith(args, deps) {
   const warnings = renderWarningLines(readOr(warningsPath));
   const haltPath = (0, import_node_path45.join)(art, "halt.flag");
   const halt = readHaltFlag(readIfExistsOrNull(haltPath));
-  const startedIso = (0, import_node_fs43.existsSync)(startPath) ? (0, import_node_fs43.readFileSync)(startPath, "utf8").trim() : "(unknown)";
-  const budget = (0, import_node_fs43.existsSync)(budgetPath) ? (0, import_node_fs43.readFileSync)(budgetPath, "utf8").trim() : "none";
+  const startedIso = (0, import_node_fs44.existsSync)(startPath) ? (0, import_node_fs44.readFileSync)(startPath, "utf8").trim() : "(unknown)";
+  const budget = (0, import_node_fs44.existsSync)(budgetPath) ? (0, import_node_fs44.readFileSync)(budgetPath, "utf8").trim() : "none";
   const summary = renderSessionSummary({
     topic,
     updatedIso: deps.now(),
@@ -19333,12 +19425,12 @@ async function refineWith(args, deps) {
   }
   const art = autoresearchArtDir(topic, deps.opts);
   const branchDir = experimentDir(art, agent, expId);
-  if (!(0, import_node_fs43.existsSync)(branchDir) || !(0, import_node_fs43.statSync)(branchDir).isDirectory()) {
+  if (!(0, import_node_fs44.existsSync)(branchDir) || !(0, import_node_fs44.statSync)(branchDir).isDirectory()) {
     log.error(`branch dir missing: ${branchDir}`);
     return 1;
   }
   let n = 1;
-  while ((0, import_node_fs43.existsSync)((0, import_node_path45.join)(branchDir, `refine-${n}.md`))) n++;
+  while ((0, import_node_fs44.existsSync)((0, import_node_path45.join)(branchDir, `refine-${n}.md`))) n++;
   const refinePath = (0, import_node_path45.join)(branchDir, `refine-${n}.md`);
   atomicWrite(refinePath, text + "\n");
   log.info(`[refine] wrote ${refinePath}`);
@@ -19362,26 +19454,26 @@ function resultStr(r, k) {
 }
 async function handoffExtractWith(args, deps) {
   const art = args[0];
-  if (!art || !(0, import_node_fs43.existsSync)(art) || !(0, import_node_fs43.statSync)(art).isDirectory()) {
+  if (!art || !(0, import_node_fs44.existsSync)(art) || !(0, import_node_fs44.statSync)(art).isDirectory()) {
     log.error(`autoresearch handoff-extract: art-dir required (got '${art ?? ""}')`);
     return 2;
   }
   const topicTxt = (0, import_node_path45.join)(art, "topic.txt");
-  if (!(0, import_node_fs43.existsSync)(topicTxt)) {
+  if (!(0, import_node_fs44.existsSync)(topicTxt)) {
     log.error(`autoresearch handoff-extract: topic.txt missing under ${art}`);
     return 2;
   }
-  const topic = (0, import_node_fs43.readFileSync)(topicTxt, "utf8").replace(/\n/g, " ").replace(/\s+$/, "");
+  const topic = (0, import_node_fs44.readFileSync)(topicTxt, "utf8").replace(/\n/g, " ").replace(/\s+$/, "");
   const sbPath = (0, import_node_path45.join)(art, "scoreboard.md");
   const { winner, runnerUps } = parseScoreboard(readIfExists(sbPath));
   let landscapeDoc;
-  for (const name of (0, import_node_fs43.readdirSync)(art).sort()) {
-    if (/^autoresearch-.*\.md$/.test(name) && (0, import_node_fs43.statSync)((0, import_node_path45.join)(art, name)).isFile()) {
+  for (const name of (0, import_node_fs44.readdirSync)(art).sort()) {
+    if (/^autoresearch-.*\.md$/.test(name) && (0, import_node_fs44.statSync)((0, import_node_path45.join)(art, name)).isFile()) {
       landscapeDoc = name;
       break;
     }
   }
-  const hasMetricMd = (0, import_node_fs43.existsSync)((0, import_node_path45.join)(art, "metric.md"));
+  const hasMetricMd = (0, import_node_fs44.existsSync)((0, import_node_path45.join)(art, "metric.md"));
   const generatedTs = deps.now();
   let input;
   if (!winner) {
@@ -19425,7 +19517,7 @@ function sweepTmpLock(dir, depth) {
   if (depth < 0) return;
   let entries;
   try {
-    entries = (0, import_node_fs43.readdirSync)(dir, { withFileTypes: true });
+    entries = (0, import_node_fs44.readdirSync)(dir, { withFileTypes: true });
   } catch {
     return;
   }
@@ -19435,7 +19527,7 @@ function sweepTmpLock(dir, depth) {
       sweepTmpLock(p, depth - 1);
     } else if (e.isFile() && (e.name.endsWith(".tmp") || e.name.endsWith(".lock"))) {
       try {
-        (0, import_node_fs43.rmSync)(p, { force: true });
+        (0, import_node_fs44.rmSync)(p, { force: true });
       } catch {
       }
     }
@@ -19450,37 +19542,37 @@ async function teardownWith(args, deps) {
     return 2;
   }
   const art = autoresearchArtDir(topic, deps.opts);
-  if (!(0, import_node_fs43.existsSync)(art) || !(0, import_node_fs43.statSync)(art).isDirectory()) {
+  if (!(0, import_node_fs44.existsSync)(art) || !(0, import_node_fs44.statSync)(art).isDirectory()) {
     log.error(`${art} not found`);
     return 1;
   }
   await killPreflightOrphans(art, deps, "[teardown]");
   try {
-    (0, import_node_fs43.rmSync)((0, import_node_path45.join)(art, "preflight-panes.txt"), { force: true });
+    (0, import_node_fs44.rmSync)((0, import_node_path45.join)(art, "preflight-panes.txt"), { force: true });
   } catch {
   }
   if (panesOnly) {
     try {
-      (0, import_node_fs43.rmSync)((0, import_node_path45.join)(art, "spawn-results.tsv"), { force: true });
+      (0, import_node_fs44.rmSync)((0, import_node_path45.join)(art, "spawn-results.tsv"), { force: true });
     } catch {
     }
     log.ok(`[teardown] panes-only reset for ${topic} (state preserved for retry)`);
     return 0;
   }
   const shared = (0, import_node_path45.join)(art, "shared");
-  if ((0, import_node_fs43.existsSync)(shared) && (0, import_node_fs43.statSync)(shared).isDirectory()) sweepTmpLock(shared, 2);
+  if ((0, import_node_fs44.existsSync)(shared) && (0, import_node_fs44.statSync)(shared).isDirectory()) sweepTmpLock(shared, 2);
   const sbPath = (0, import_node_path45.join)(art, "scoreboard.md");
-  if ((0, import_node_fs43.existsSync)(sbPath)) {
-    const { winner } = parseScoreboard((0, import_node_fs43.readFileSync)(sbPath, "utf8"));
+  if ((0, import_node_fs44.existsSync)(sbPath)) {
+    const { winner } = parseScoreboard((0, import_node_fs44.readFileSync)(sbPath, "utf8"));
     if (winner) {
       const rel = `workers/${winner.agent}/experiments/${winner.expId}/code`;
-      if ((0, import_node_fs43.existsSync)((0, import_node_path45.join)(art, rel)) && (0, import_node_fs43.statSync)((0, import_node_path45.join)(art, rel)).isDirectory()) {
+      if ((0, import_node_fs44.existsSync)((0, import_node_path45.join)(art, rel)) && (0, import_node_fs44.statSync)((0, import_node_path45.join)(art, rel)).isDirectory()) {
         const link = (0, import_node_path45.join)(art, "winner");
         try {
-          (0, import_node_fs43.rmSync)(link, { force: true });
+          (0, import_node_fs44.rmSync)(link, { force: true });
         } catch {
         }
-        (0, import_node_fs43.symlinkSync)(rel, link);
+        (0, import_node_fs44.symlinkSync)(rel, link);
         log.ok(`[teardown] winner symlink -> ${rel} (${winner.agent}/${winner.expId})`);
       } else {
         log.warn(`[teardown] scoreboard top-1 dir missing: ${(0, import_node_path45.join)(art, rel)}; no symlink`);
@@ -19511,11 +19603,11 @@ async function freshWorkerWith(args, deps) {
   }
   const art = autoresearchArtDir(topic, deps.opts);
   const stateTxt = lanePath(art, agent);
-  if (!(0, import_node_fs43.existsSync)(stateTxt)) {
+  if (!(0, import_node_fs44.existsSync)(stateTxt)) {
     log.error(`worker state.txt missing: ${stateTxt}`);
     return 1;
   }
-  const prev = parseState((0, import_node_fs43.readFileSync)(stateTxt, "utf8"));
+  const prev = parseState((0, import_node_fs44.readFileSync)(stateTxt, "utf8"));
   if (prev.phase === "working") {
     log.error(`worker ${agent} is mid-experiment (phase=working); abort or wait for done before fresh-worker.`);
     return 1;
@@ -19556,22 +19648,22 @@ async function resumeWith(args, deps) {
     return 2;
   }
   const art = autoresearchArtDir(topic, deps.opts);
-  if (!(0, import_node_fs43.existsSync)(art)) {
+  if (!(0, import_node_fs44.existsSync)(art)) {
     log.error(`autoresearch resume: no art dir for topic '${topic}' (${art}); nothing to resume`);
     return 1;
   }
   const lp = ledgerPath(art);
-  if (!(0, import_node_fs43.existsSync)(lp)) {
+  if (!(0, import_node_fs44.existsSync)(lp)) {
     log.error(`autoresearch resume: no campaign ledger under ${art}; pre-ledger campaigns cannot be resumed (init remains the creation path)`);
     return 1;
   }
   const ledgerAdd = ledgerAppender(art);
-  const prior = replayLedger((0, import_node_fs43.readFileSync)(lp, "utf8"));
+  const prior = replayLedger((0, import_node_fs44.readFileSync)(lp, "utf8"));
   const gen = Math.max(readGen(readIfExistsOrNull(controllerGenPath(art))).gen, prior.gen) + 1;
   atomicWrite(controllerGenPath(art), renderGen(gen, deps.now(), "resume"));
   ledgerAdd({ gen, ts: deps.now(), kind: "resume" });
   const workersFile = (0, import_node_path45.join)(art, "workers.txt");
-  const agents = (0, import_node_fs43.existsSync)(workersFile) ? splitNonCommentLines((0, import_node_fs43.readFileSync)(workersFile, "utf8")) : [];
+  const agents = (0, import_node_fs44.existsSync)(workersFile) ? splitNonCommentLines((0, import_node_fs44.readFileSync)(workersFile, "utf8")) : [];
   const redispatch = /* @__PURE__ */ new Set();
   const outboxCache = /* @__PURE__ */ new Map();
   const readOutbox = (agent) => {
@@ -19580,9 +19672,9 @@ async function resumeWith(args, deps) {
     const model = resolveModel(agent, topic);
     const ob = model ? outboxPath(agent, model, topic) : "";
     let buf = Buffer.alloc(0);
-    if (ob && (0, import_node_fs43.existsSync)(ob)) {
+    if (ob && (0, import_node_fs44.existsSync)(ob)) {
       try {
-        buf = (0, import_node_fs43.readFileSync)(ob);
+        buf = (0, import_node_fs44.readFileSync)(ob);
       } catch {
         buf = Buffer.alloc(0);
       }
@@ -19590,19 +19682,19 @@ async function resumeWith(args, deps) {
     outboxCache.set(agent, buf);
     return buf;
   };
-  let replay = replayLedger((0, import_node_fs43.readFileSync)(lp, "utf8"));
+  let replay = replayLedger((0, import_node_fs44.readFileSync)(lp, "utf8"));
   for (const agent of agents) {
-    if (!(0, import_node_fs43.existsSync)(lanePath(art, agent))) continue;
+    if (!(0, import_node_fs44.existsSync)(lanePath(art, agent))) continue;
     const obText = readOutbox(agent).toString("utf8");
     const offset = replay.lastDeliveredOffset.get(agent) ?? 0;
     reconcileLaneAtResume(art, agent, obText, offset, readLane(art, agent).current_exp_id ?? "");
     const seen = new Set(replay.completionOrder);
     for (const expId of listExpDirs(experimentsDir(art, agent))) {
-      if (!(0, import_node_fs43.existsSync)((0, import_node_path45.join)(experimentDir(art, agent, expId), "result.json"))) continue;
+      if (!(0, import_node_fs44.existsSync)((0, import_node_path45.join)(experimentDir(art, agent, expId), "result.json"))) continue;
       if (!seen.has(`${agent}/${expId}`)) ledgerAdd({ gen, ts: deps.now(), kind: "result-recorded", agent, exp_id: expId });
     }
   }
-  replay = replayLedger((0, import_node_fs43.readFileSync)(lp, "utf8"));
+  replay = replayLedger((0, import_node_fs44.readFileSync)(lp, "utf8"));
   for (const intent of replay.intents.values()) {
     if (intent.delivered) continue;
     const { agent, expId } = intent;
@@ -19624,7 +19716,7 @@ async function resumeWith(args, deps) {
     const stateTxt = lanePath(art, agent);
     if (accepted) {
       ledgerAdd({ gen, ts: deps.now(), kind: "dispatch-delivered", agent, exp_id: expId, data: { outboxOffset: reconstructed, reconstructed: true } });
-      if ((0, import_node_fs43.existsSync)(stateTxt)) {
+      if ((0, import_node_fs44.existsSync)(stateTxt)) {
         const st = readLane(art, agent);
         const stateN = /^[0-9]+$/.test((st.exp_counter ?? "").trim()) ? parseInt(st.exp_counter, 10) : 0;
         const intentN = parseInt(expId.slice("exp-".length), 10) || 0;
@@ -19638,7 +19730,7 @@ async function resumeWith(args, deps) {
         reconcileLaneAtResume(art, agent, obBuf.toString("utf8"), reconstructed, expId);
       }
     } else {
-      const phase = (0, import_node_fs43.existsSync)(stateTxt) ? readLane(art, agent).phase ?? "" : "";
+      const phase = (0, import_node_fs44.existsSync)(stateTxt) ? readLane(art, agent).phase ?? "" : "";
       if (phase !== "working") redispatch.add(`${agent}:${expId}`);
     }
   }
@@ -19647,7 +19739,7 @@ async function resumeWith(args, deps) {
   const monitors = [];
   for (const agent of agents) {
     const stateTxt = lanePath(art, agent);
-    if (!(0, import_node_fs43.existsSync)(stateTxt)) {
+    if (!(0, import_node_fs44.existsSync)(stateTxt)) {
       rows.push(`WORKER=${agent}:?:no`);
       continue;
     }
@@ -19692,7 +19784,7 @@ async function resumeWith(args, deps) {
   for (const r of rows) out2(r);
   for (const rd of redispatch) out2(`REDISPATCH=${rd}`);
   for (const m of monitors) out2(m);
-  out2(`LAST_SEQ=${replayLedger((0, import_node_fs43.readFileSync)(lp, "utf8")).lastSeq}`);
+  out2(`LAST_SEQ=${replayLedger((0, import_node_fs44.readFileSync)(lp, "utf8")).lastSeq}`);
   return 0;
 }
 async function abortWith(args, deps) {
@@ -19703,13 +19795,13 @@ async function abortWith(args, deps) {
   const topic = args[0];
   const reason = args[1] ?? "unspecified";
   const art = autoresearchArtDir(topic, deps.opts);
-  if (!(0, import_node_fs43.existsSync)(art) || !(0, import_node_fs43.statSync)(art).isDirectory()) {
+  if (!(0, import_node_fs44.existsSync)(art) || !(0, import_node_fs44.statSync)(art).isDirectory()) {
     log.error(`no active autoresearch session for topic: ${topic} (art-dir ${art} missing)`);
     return 1;
   }
   const mt = (0, import_node_path45.join)(art, "monitor-tasks.txt");
-  const ids = (0, import_node_fs43.existsSync)(mt) ? (0, import_node_fs43.readFileSync)(mt, "utf8").split("\n").map((l) => l.trim()).filter(Boolean) : [];
-  (0, import_node_fs43.writeFileSync)((0, import_node_path45.join)(art, "halt.flag"), `halted_by=user
+  const ids = (0, import_node_fs44.existsSync)(mt) ? (0, import_node_fs44.readFileSync)(mt, "utf8").split("\n").map((l) => l.trim()).filter(Boolean) : [];
+  (0, import_node_fs44.writeFileSync)((0, import_node_path45.join)(art, "halt.flag"), `halted_by=user
 halted_at=${deps.now()}
 reason=${reason}
 `);
@@ -19762,14 +19854,14 @@ async function consensusWith(args, deps) {
   const epsilon = p.epsilon;
   const art = autoresearchArtDir(p.topic, deps.opts);
   const workersRoot = workersDir(art);
-  if (!(0, import_node_fs43.existsSync)(workersRoot)) {
+  if (!(0, import_node_fs44.existsSync)(workersRoot)) {
     log.error(`autoresearch consensus: no workers dir under ${art}`);
     return 1;
   }
   const latestOk = {};
   let agents;
   try {
-    agents = (0, import_node_fs43.readdirSync)(workersRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+    agents = (0, import_node_fs44.readdirSync)(workersRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
   } catch {
     agents = [];
   }
@@ -19777,7 +19869,7 @@ async function consensusWith(args, deps) {
     const expsRoot = experimentsDir(art, agent);
     let names;
     try {
-      names = (0, import_node_fs43.readdirSync)(expsRoot).filter((n) => EXP_ID_RE.test(n)).sort();
+      names = (0, import_node_fs44.readdirSync)(expsRoot).filter((n) => EXP_ID_RE.test(n)).sort();
     } catch {
       continue;
     }
@@ -19804,9 +19896,9 @@ async function memoryRetrieveWith(args, deps) {
   }
   const art = autoresearchArtDir(topic, deps.opts);
   const metricPath = (0, import_node_path45.join)(art, "metric.md");
-  if (!(0, import_node_fs43.existsSync)(metricPath)) return 0;
+  if (!(0, import_node_fs44.existsSync)(metricPath)) return 0;
   const scope = resolveMemoryScope(
-    (0, import_node_fs43.readFileSync)(metricPath, "utf8"),
+    (0, import_node_fs44.readFileSync)(metricPath, "utf8"),
     { storeRoot: deps.memoryStoreRoot, repoHash: deps.repoHash }
   );
   if (scope === null) return 0;
@@ -19828,7 +19920,7 @@ function countLines(path) {
 }
 function listNames(dir, kind) {
   try {
-    return (0, import_node_fs43.readdirSync)(dir, { withFileTypes: true }).filter((e) => kind === "dir" ? e.isDirectory() : e.isFile()).map((e) => e.name).sort();
+    return (0, import_node_fs44.readdirSync)(dir, { withFileTypes: true }).filter((e) => kind === "dir" ? e.isDirectory() : e.isFile()).map((e) => e.name).sort();
   } catch {
     return [];
   }
@@ -19842,13 +19934,13 @@ async function corpusDigestWith(args, deps) {
     return 2;
   }
   const art = autoresearchArtDir(topic, deps.opts);
-  if (!(0, import_node_fs43.existsSync)(art)) {
+  if (!(0, import_node_fs44.existsSync)(art)) {
     log.error(`autoresearch corpus-digest: art dir missing: ${art}`);
     return 1;
   }
   const metricPath = (0, import_node_path45.join)(art, "metric.md");
-  if (!(0, import_node_fs43.existsSync)(metricPath)) return 0;
-  const family = metricFamilyOf(parseMetricMd((0, import_node_fs43.readFileSync)(metricPath, "utf8")).primaryMetric);
+  if (!(0, import_node_fs44.existsSync)(metricPath)) return 0;
+  const family = metricFamilyOf(parseMetricMd((0, import_node_fs44.readFileSync)(metricPath, "utf8")).primaryMetric);
   if (family === null) return 0;
   const archiveRoot = deps.archiveRoot ?? (0, import_node_path45.join)(globalRoot(), "archive", repoHash());
   const dated = [];
@@ -19942,11 +20034,11 @@ async function dispatchVerb10(args) {
       return usage4();
   }
 }
-var import_node_fs43, import_node_child_process8, import_node_path45, stdoutLine, liveInitDeps4, liveSpawnAllDeps2, liveDropWorkerDeps, liveExperimentSendDeps, liveScoreDeps, sleep3, liveFinalizeDeps, liveRefineDeps, liveHandoffDeps, liveTeardownDeps, liveFreshWorkerDeps, liveResumeDeps, liveAbortDeps, liveConsensusDeps, liveMemoryRetrieveDeps, readMetricMd, liveValidityCheckDeps, liveVerifyPlanDeps, liveVerifyCheckDeps, liveInspectPlanDeps, liveInspectCheckDeps;
+var import_node_fs44, import_node_child_process8, import_node_path45, stdoutLine, liveInitDeps4, liveSpawnAllDeps2, liveDropWorkerDeps, liveExperimentSendDeps, liveScoreDeps, sleep3, liveFinalizeDeps, liveRefineDeps, liveHandoffDeps, liveTeardownDeps, liveFreshWorkerDeps, liveResumeDeps, liveAbortDeps, liveConsensusDeps, liveMemoryRetrieveDeps, readMetricMd, liveValidityCheckDeps, liveVerifyPlanDeps, liveVerifyCheckDeps, liveInspectPlanDeps, liveInspectCheckDeps;
 var init_autoresearch2 = __esm({
   "src/commands/autoresearch.ts"() {
     "use strict";
-    import_node_fs43 = require("node:fs");
+    import_node_fs44 = require("node:fs");
     import_node_child_process8 = require("node:child_process");
     import_node_path45 = require("node:path");
     init_log();
@@ -20022,11 +20114,11 @@ var init_autoresearch2 = __esm({
     liveScoreDeps = {
       computeScore,
       fs: {
-        exists: import_node_fs43.existsSync,
+        exists: import_node_fs44.existsSync,
         read: readIfExistsOrNull,
         listDir: (p) => {
           try {
-            return (0, import_node_fs43.readdirSync)(p).sort();
+            return (0, import_node_fs44.readdirSync)(p).sort();
           } catch {
             return [];
           }
@@ -20036,7 +20128,7 @@ var init_autoresearch2 = __esm({
       writeAtomic: atomicWrite,
       removeFile: (p) => {
         try {
-          (0, import_node_fs43.rmSync)(p, { force: true });
+          (0, import_node_fs44.rmSync)(p, { force: true });
         } catch {
         }
       },
@@ -20238,11 +20330,11 @@ function crossVerificationCoverage(artDir) {
   return { kind: "stamp", stamp: { value, crossverify, adversary } };
 }
 function extractHandoffData(artDir, now) {
-  if (!(0, import_node_fs44.existsSync)(artDir) || !(0, import_node_fs44.statSync)(artDir).isDirectory()) return null;
+  if (!(0, import_node_fs45.existsSync)(artDir) || !(0, import_node_fs45.statSync)(artDir).isDirectory()) return null;
   const topicTxt = readIfExistsOrNull((0, import_node_path47.join)(artDir, "topic.txt"));
   if (topicTxt === null) return null;
   const topic = topicTxt.replace(/\n/g, " ").replace(/ +$/, "");
-  const names = (0, import_node_fs44.readdirSync)(artDir);
+  const names = (0, import_node_fs45.readdirSync)(artDir);
   const landscapes = names.filter((n) => /^landscape-.*\.md$/.test(n)).sort();
   const landscapeDoc = landscapes.find((n) => n !== "landscape-draft.md") ?? (landscapes.includes("landscape-draft.md") ? "landscape-draft.md" : void 0);
   const findingsPaths = names.filter((n) => /^findings-.*\.md$/.test(n)).sort();
@@ -20250,7 +20342,7 @@ function extractHandoffData(artDir, now) {
   const drillPaths = names.filter((n) => /^drill-.*\.md$/.test(n)).sort();
   let top = "", tradeoff = false;
   if (landscapeDoc) {
-    const doc = (0, import_node_fs44.readFileSync)((0, import_node_path47.join)(artDir, landscapeDoc), "utf8");
+    const doc = (0, import_node_fs45.readFileSync)((0, import_node_path47.join)(artDir, landscapeDoc), "utf8");
     top = topApproach(doc);
     tradeoff = /^## Tradeoff matrix/m.test(doc);
   }
@@ -20285,11 +20377,11 @@ function extractHandoffData(artDir, now) {
   atomicWrite(dest, body);
   return dest;
 }
-var import_node_fs44, import_node_path47;
+var import_node_fs45, import_node_path47;
 var init_exploreHandoff = __esm({
   "src/core/exploreHandoff.ts"() {
     "use strict";
-    import_node_fs44 = require("node:fs");
+    import_node_fs45 = require("node:fs");
     import_node_path47 = require("node:path");
     init_atomic();
     init_archive();
@@ -21252,7 +21344,7 @@ async function initWith5(tokens, d) {
     list = list.slice(0, 3);
   }
   const art = exploreArtDir(topic);
-  if ((0, import_node_fs45.existsSync)(art)) {
+  if ((0, import_node_fs46.existsSync)(art)) {
     log.error(`explore init: topic already in flight: ${art}`);
     log.error("  run /ap:stop or pick a different topic");
     return 2;
@@ -21263,7 +21355,7 @@ async function initWith5(tokens, d) {
     return 1;
   }
   const rows = list.map((provider, i) => ({ provider, agent: agents[i] }));
-  (0, import_node_fs45.mkdirSync)(art, { recursive: true });
+  (0, import_node_fs46.mkdirSync)(art, { recursive: true });
   atomicWrite((0, import_node_path48.join)(art, "topic.txt"), topicText2);
   atomicWrite((0, import_node_path48.join)(art, "list.txt"), formatListFile(rows, isoUtc()));
   log.ok(`explore init: topic=${topic} N=${rows.length}`);
@@ -21282,7 +21374,7 @@ async function classifyRun(rest) {
     return 2;
   }
   const art = exploreArtDir(topic);
-  if (!(0, import_node_fs45.existsSync)(art)) {
+  if (!(0, import_node_fs46.existsSync)(art)) {
     log.error(`explore classify: ${art} not found (run explore init)`);
     return 1;
   }
@@ -21326,7 +21418,7 @@ async function openqCollateRun(rest) {
     return 2;
   }
   const art = exploreArtDir(topic);
-  if (!(0, import_node_fs45.existsSync)(art)) {
+  if (!(0, import_node_fs46.existsSync)(art)) {
     log.error(`explore openq-collate: ${art} not found \u2014 run explore init`);
     return 1;
   }
@@ -21401,11 +21493,11 @@ async function crossverifySendWith(topic, agent, provider, d) {
       const parts = [];
       for (const f of verifyScopeFiles(agent, agents)) {
         const p = (0, import_node_path48.join)(art, f);
-        if (!(0, import_node_fs45.existsSync)(p)) {
+        if (!(0, import_node_fs46.existsSync)(p)) {
           log.error(`explore crossverify-send: expected bucket missing: ${p} (run explore diff first)`);
           return { fail: 1 };
         }
-        const c = (0, import_node_fs45.readFileSync)(p, "utf8");
+        const c = (0, import_node_fs46.readFileSync)(p, "utf8");
         if (c.split("\n").some((l) => l.length > 0)) parts.push(c.replace(/\n+$/, ""));
       }
       const items = parts.join("\n");
@@ -21506,7 +21598,7 @@ async function contributionRun(rest) {
     return 2;
   }
   const art = exploreArtDir(topic);
-  if (!(0, import_node_fs45.existsSync)(art)) {
+  if (!(0, import_node_fs46.existsSync)(art)) {
     log.error(`explore contribution: ${art} not found \u2014 run explore init`);
     return 1;
   }
@@ -21554,7 +21646,7 @@ async function survivorsRun(rest) {
     return 2;
   }
   const art = exploreArtDir(topic);
-  if (!(0, import_node_fs45.existsSync)(art)) {
+  if (!(0, import_node_fs46.existsSync)(art)) {
     log.error(`explore survivors: ${art} not found \u2014 run explore init`);
     return 1;
   }
@@ -21580,7 +21672,7 @@ async function survivorsRun(rest) {
     return 0;
   }
   const originalPath = (0, import_node_path48.join)(art, "list-original.txt");
-  if (!(0, import_node_fs45.existsSync)(originalPath)) atomicWrite(originalPath, (0, import_node_fs45.readFileSync)(listPath, "utf8"));
+  if (!(0, import_node_fs46.existsSync)(originalPath)) atomicWrite(originalPath, (0, import_node_fs46.readFileSync)(listPath, "utf8"));
   atomicWrite(listPath, formatListFile(survivors, isoUtc()));
   log.warn(`explore survivors: dropped ${dropped.map((r) => r.agent).join(", ")} \u2014 ${survivors.length} of ${rows.length} continue`);
   process.stdout.write(`SURVIVORS=${survivors.length}
@@ -21597,7 +21689,7 @@ async function synthPreliminaryRun(rest) {
     return 2;
   }
   const art = exploreArtDir(topic);
-  if (!(0, import_node_fs45.existsSync)(art)) {
+  if (!(0, import_node_fs46.existsSync)(art)) {
     log.error(`explore synth-preliminary: ${art} not found \u2014 run explore init`);
     return 1;
   }
@@ -21671,7 +21763,7 @@ async function annotateRun(rest) {
   }
   const art = exploreArtDir(topic);
   const markerPath = (0, import_node_path48.join)(art, "annotate-applied.txt");
-  if ((0, import_node_fs45.existsSync)(markerPath)) {
+  if ((0, import_node_fs46.existsSync)(markerPath)) {
     log.ok(`explore annotate: already applied (${markerPath}) \u2014 no-op`);
     return 0;
   }
@@ -21682,7 +21774,7 @@ async function annotateRun(rest) {
     return 1;
   }
   const listPath = (0, import_node_path48.join)(art, "list.txt");
-  if (!(0, import_node_fs45.existsSync)(listPath)) {
+  if (!(0, import_node_fs46.existsSync)(listPath)) {
     log.error(`explore annotate: list.txt missing at ${art}`);
     return 1;
   }
@@ -21760,7 +21852,7 @@ async function synthFinalRun(rest) {
     return 2;
   }
   const art = exploreArtDir(topic);
-  if (!(0, import_node_fs45.existsSync)(art)) {
+  if (!(0, import_node_fs46.existsSync)(art)) {
     log.error(`explore synth-final: ${art} not found`);
     return 1;
   }
@@ -21797,7 +21889,7 @@ async function verdictTallyRun(rest) {
     return 2;
   }
   const art = exploreArtDir(topic);
-  if (!(0, import_node_fs45.existsSync)(art)) {
+  if (!(0, import_node_fs46.existsSync)(art)) {
     log.error(`explore verdict-tally: ${art} not found \u2014 run explore init`);
     return 1;
   }
@@ -21850,7 +21942,7 @@ async function teardownWith2(args, deps) {
     return 2;
   }
   const art = exploreArtDir(topic);
-  if (!(0, import_node_fs45.existsSync)(art) || !(0, import_node_fs45.statSync)(art).isDirectory()) {
+  if (!(0, import_node_fs46.existsSync)(art) || !(0, import_node_fs46.statSync)(art).isDirectory()) {
     log.error(`${art} not found`);
     return 1;
   }
@@ -21858,7 +21950,7 @@ async function teardownWith2(args, deps) {
   if (panesOnly) {
     for (const f of ["preflight-panes.txt", "spawn-results.tsv"]) {
       try {
-        (0, import_node_fs45.rmSync)((0, import_node_path48.join)(art, f), { force: true });
+        (0, import_node_fs46.rmSync)((0, import_node_path48.join)(art, f), { force: true });
       } catch {
       }
     }
@@ -21887,11 +21979,11 @@ async function handoffExtractRun(rest) {
   process.stdout.write(path + "\n");
   return 0;
 }
-var import_node_fs45, import_node_path48, liveExploreInitDeps, liveExploreSpawnAllDeps, RESEARCH2, OPENQ, CROSSVERIFY, ADVERSARY, REBUTTAL, GAP, SIGNOFF, DRILL, liveExploreTeardownDeps;
+var import_node_fs46, import_node_path48, liveExploreInitDeps, liveExploreSpawnAllDeps, RESEARCH2, OPENQ, CROSSVERIFY, ADVERSARY, REBUTTAL, GAP, SIGNOFF, DRILL, liveExploreTeardownDeps;
 var init_explore2 = __esm({
   "src/commands/explore.ts"() {
     "use strict";
-    import_node_fs45 = require("node:fs");
+    import_node_fs46 = require("node:fs");
     import_node_path48 = require("node:path");
     init_log();
     init_args();
@@ -22150,7 +22242,7 @@ async function initWith6(tokens, d) {
     log.error(`bridge init: --repo must be a whitespace-free absolute path: '${repo}'`);
     return 1;
   }
-  if (!(0, import_node_fs46.existsSync)(repo)) {
+  if (!(0, import_node_fs47.existsSync)(repo)) {
     log.error(`bridge init: --repo does not exist: ${repo}`);
     return 1;
   }
@@ -22174,7 +22266,7 @@ async function initWith6(tokens, d) {
     return 3;
   }
   const art = bridgeArtDir(slug);
-  if ((0, import_node_fs46.existsSync)(art)) {
+  if ((0, import_node_fs47.existsSync)(art)) {
     log.error(`bridge init: topic already in flight: ${art}`);
     log.error("  run /ap:stop or pick a different task");
     return 2;
@@ -22186,7 +22278,7 @@ async function initWith6(tokens, d) {
   }
   const mode = inPlace ? "in-place" : "branch";
   const exec = bridgeExecDir(slug);
-  (0, import_node_fs46.mkdirSync)(exec, { recursive: true });
+  (0, import_node_fs47.mkdirSync)(exec, { recursive: true });
   atomicWrite((0, import_node_path50.join)(art, "topic.txt"), slug + "\n");
   atomicWrite((0, import_node_path50.join)(art, "topic-text.txt"), taskText);
   atomicWrite((0, import_node_path50.join)(art, "selected-provider.txt"), provider + "\n");
@@ -22294,7 +22386,7 @@ async function relayRun(rest) {
     log.error(`bridge relay: send failed (rc=${rc})`);
     return 1;
   }
-  (0, import_node_fs46.appendFileSync)(BRIDGE_ROUND.questionFile(bridgeExecDir(topic), round), `RELAYED=${answer}
+  (0, import_node_fs47.appendFileSync)(BRIDGE_ROUND.questionFile(bridgeExecDir(topic), round), `RELAYED=${answer}
 `);
   log.ok(`bridge relay: round=${round} answered`);
   return 0;
@@ -22379,7 +22471,7 @@ duration=${duration}
 `);
   }
   let rounds = 0;
-  while ((0, import_node_fs46.existsSync)(BRIDGE_ROUND.stateFile(exec, rounds + 1))) rounds++;
+  while ((0, import_node_fs47.existsSync)(BRIDGE_ROUND.stateFile(exec, rounds + 1))) rounds++;
   const rec = readBranchRecord("bridge", { dir: exec });
   const facts = {
     topic,
@@ -22420,11 +22512,11 @@ duration=${duration}
   log.ok(`bridge summary: wrote ${(0, import_node_path50.join)(art, "SUMMARY.md")}`);
   return 0;
 }
-var import_node_fs46, import_node_path50, liveInitDeps5, DUET_TURN_TIMEOUT, BRIDGE_ROUND;
+var import_node_fs47, import_node_path50, liveInitDeps5, DUET_TURN_TIMEOUT, BRIDGE_ROUND;
 var init_bridge2 = __esm({
   "src/commands/bridge.ts"() {
     "use strict";
-    import_node_fs46 = require("node:fs");
+    import_node_fs47 = require("node:fs");
     import_node_path50 = require("node:path");
     init_log();
     init_args();
@@ -22558,9 +22650,9 @@ function hubState(rec) {
 async function ownedPanes(topic) {
   const td = topicDir(topic);
   const out2 = /* @__PURE__ */ new Map();
-  if (!(0, import_node_fs47.existsSync)(td)) return out2;
+  if (!(0, import_node_fs48.existsSync)(td)) return out2;
   const live = await livePaneNonces();
-  for (const e of (0, import_node_fs47.readdirSync)(td, { withFileTypes: true })) {
+  for (const e of (0, import_node_fs48.readdirSync)(td, { withFileTypes: true })) {
     if (!e.isDirectory() || isArtifactDir(e.name)) continue;
     const m = paneMetaReadForDir((0, import_node_path51.join)(td, e.name));
     if (m.paneId && ownsPane(live, m.paneId, m.nonce)) out2.set(m.paneId, m.nonce);
@@ -22610,7 +22702,7 @@ function startWorktree(root, topic, r, envDeps = realEnvDeps()) {
     return null;
   }
   const worktree = worktreePathFor(root, topic);
-  if ((0, import_node_fs47.existsSync)(worktree)) {
+  if ((0, import_node_fs48.existsSync)(worktree)) {
     log.error(`job start: ${worktree} already exists \u2014 an earlier run's worktree was KEPT because it had uncommitted work in it (see 'ap job stop'). Archive or commit what is in it, then: git -C ${root} worktree remove ${worktree}  (add --force to discard), and start again.`);
     return null;
   }
@@ -22619,11 +22711,11 @@ function startWorktree(root, topic, r, envDeps = realEnvDeps()) {
     log.error(`job start: branch ${baseBranch} already exists \u2014 an earlier run's worktree base branch outlived its worktree (an interrupted 'ap job stop'). Check what is on it, then clear it by hand: git -C ${root} branch -D ${baseBranch}  (and 'git -C ${root} worktree remove ${worktree}' first if that worktree is still registered), and start again.`);
     return null;
   }
-  (0, import_node_fs47.mkdirSync)((0, import_node_path51.dirname)(worktree), { recursive: true });
+  (0, import_node_fs48.mkdirSync)((0, import_node_path51.dirname)(worktree), { recursive: true });
   const gi = (0, import_node_path51.join)(root, ".ap", ".gitignore");
-  if (!(0, import_node_fs47.existsSync)(gi)) {
+  if (!(0, import_node_fs48.existsSync)(gi)) {
     try {
-      (0, import_node_fs47.writeFileSync)(gi, "*\n");
+      (0, import_node_fs48.writeFileSync)(gi, "*\n");
     } catch {
     }
   }
@@ -22633,7 +22725,7 @@ function startWorktree(root, topic, r, envDeps = realEnvDeps()) {
     return null;
   }
   const deps = (0, import_node_path51.join)(root, "node_modules");
-  if ((0, import_node_fs47.existsSync)(deps)) {
+  if ((0, import_node_fs48.existsSync)(deps)) {
     const dest = (0, import_node_path51.join)(worktree, "node_modules");
     const modes = [["-al", "hardlink-cloned"], ["-cR", "clone-copied"], ["-R", "copied"]];
     let mode = "";
@@ -22642,7 +22734,7 @@ function startWorktree(root, topic, r, envDeps = realEnvDeps()) {
         mode = label;
         break;
       }
-      (0, import_node_fs47.rmSync)(dest, { recursive: true, force: true });
+      (0, import_node_fs48.rmSync)(dest, { recursive: true, force: true });
     }
     if (mode) log.ok(`job start: ${mode} node_modules into the worktree`);
     else log.warn(`job start: could not clone node_modules into ${worktree} (cp -al, -cR and -R all failed) \u2014 the worker will have to install dependencies itself`);
@@ -22680,7 +22772,7 @@ function sweepWorktree(rec, root, r, deps = realEnvDeps()) {
     log.warn(`job stop: the record names a worktree OUTSIDE ${(0, import_node_path51.join)(root, ".ap", "worktrees")} (${wt}) \u2014 ap will not remove a path it cannot prove it created. Deal with it by hand.`);
     return false;
   }
-  if (!(0, import_node_fs47.existsSync)(wt)) {
+  if (!(0, import_node_fs48.existsSync)(wt)) {
     r.run("git", ["worktree", "prune"]);
     sweepBaseBranch(rec, root, r);
     return true;
@@ -22699,7 +22791,7 @@ function sweepWorktree(rec, root, r, deps = realEnvDeps()) {
     return false;
   }
   const rm = r.run("git", ["worktree", "remove", wt]);
-  if (rm.code !== 0 || (0, import_node_fs47.existsSync)(wt)) {
+  if (rm.code !== 0 || (0, import_node_fs48.existsSync)(wt)) {
     log.warn(`job stop: 'git worktree remove ${wt}' did not complete (rc ${rm.code}) \u2014 the worktree is still there. Inspect it, then remove it by hand: git -C ${root} worktree remove --force ${wt}`);
     return false;
   }
@@ -22772,7 +22864,7 @@ async function startRun(rest, origCwd, deps = realEnvDeps()) {
     return 2;
   }
   if (argsFile) argsFile = (0, import_node_path51.isAbsolute)(argsFile) ? argsFile : (0, import_node_path51.resolve)(origCwd, argsFile);
-  if (!argsFile || !(0, import_node_fs47.existsSync)(argsFile)) {
+  if (!argsFile || !(0, import_node_fs48.existsSync)(argsFile)) {
     log.error(`job start: --args-file must be an existing path; got: '${argsFile}'`);
     return 2;
   }
@@ -22797,7 +22889,7 @@ async function startRun(rest, origCwd, deps = realEnvDeps()) {
     log.error(`job start: '${session}' is not a usable tmux session name; pick a shorter --topic`);
     return 2;
   }
-  if ((0, import_node_fs47.existsSync)(jobPath(topic))) {
+  if ((0, import_node_fs48.existsSync)(jobPath(topic))) {
     log.error(`job start: topic '${topic}' already has a job in flight (${jobPath(topic)}); run 'ap job stop ${topic}' first`);
     return 2;
   }
@@ -22839,7 +22931,7 @@ async function startRun(rest, origCwd, deps = realEnvDeps()) {
     ...wt?.shadows.length ? { python_shadow: wt.shadows } : {},
     ...wt?.pin ? { python_pin: wt.pin } : {}
   };
-  (0, import_node_fs47.mkdirSync)(jobDir(topic), { recursive: true });
+  (0, import_node_fs48.mkdirSync)(jobDir(topic), { recursive: true });
   atomicWrite(jobPath(topic), formatJob(rec));
   const rc = await run3([agent, "claude", topic, "--session", session, "--role", "job-hub", "--cwd", root, jobBrief(rec)]);
   if (rc !== 0) {
@@ -22931,7 +23023,7 @@ async function waitRun(rest, deps = realWaitDeps()) {
     process.stdout.write("JS=torn\n");
     return 1;
   }
-  if (!(0, import_node_fs47.existsSync)(jobPath(topic))) {
+  if (!(0, import_node_fs48.existsSync)(jobPath(topic))) {
     process.stdout.write("JS=standdown\n");
     return 0;
   }
@@ -23012,8 +23104,8 @@ function listRun() {
 `);
   process.stdout.write(`${"-".repeat(24)} ${"-".repeat(10)} ${"-".repeat(20)} ${"-".repeat(24)} -------
 `);
-  if (!(0, import_node_fs47.existsSync)(repo)) return 0;
-  for (const t of (0, import_node_fs47.readdirSync)(repo, { withFileTypes: true })) {
+  if (!(0, import_node_fs48.existsSync)(repo)) return 0;
+  for (const t of (0, import_node_fs48.readdirSync)(repo, { withFileTypes: true })) {
     if (!t.isDirectory()) continue;
     const rec = readJob(t.name);
     if (!rec) continue;
@@ -23048,9 +23140,9 @@ async function stopJobRun(rest) {
   const r = runnerAt(root);
   finishHint(rec, r);
   if (!sweepWorktree(rec, root, r)) return keepRecord(rec, "the worktree was not swept");
-  (0, import_node_fs47.rmSync)(jobDir(rec.topic), { recursive: true, force: true });
+  (0, import_node_fs48.rmSync)(jobDir(rec.topic), { recursive: true, force: true });
   try {
-    (0, import_node_fs47.rmdirSync)(topicDir(rec.topic));
+    (0, import_node_fs48.rmdirSync)(topicDir(rec.topic));
   } catch {
   }
   log.ok(`job stop: ${rec.topic} torn down`);
@@ -23075,7 +23167,7 @@ function modeRun(rest) {
     log.error("usage: job mode <topic>");
     return 2;
   }
-  const on = (0, import_node_fs47.existsSync)(jobPath(topic));
+  const on = (0, import_node_fs48.existsSync)(jobPath(topic));
   process.stdout.write(`DETACHED=${on ? 1 : 0}
 `);
   return on ? 0 : 1;
@@ -23101,11 +23193,11 @@ BUDGET_H=${rec.budget_hours}
 `);
   return exceeded ? 1 : 0;
 }
-var import_node_fs47, import_node_os6, import_node_path51, enc, realEnvDeps, realWaitDeps;
+var import_node_fs48, import_node_os6, import_node_path51, enc, realEnvDeps, realWaitDeps;
 var init_job2 = __esm({
   "src/commands/job.ts"() {
     "use strict";
-    import_node_fs47 = require("node:fs");
+    import_node_fs48 = require("node:fs");
     import_node_os6 = require("node:os");
     import_node_path51 = require("node:path");
     init_args();

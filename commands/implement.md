@@ -353,7 +353,9 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
    worker's pane stays alive the wait runs up to `AP_WAIT_EXTEND_MULT`× the budget (default 3,
    so worst case 12h; set `AP_WAIT_EXTEND_MULT=1` for a hard cap) — a pane death still fails
    fast regardless. The wait also CONFIRMS a terminal event against continued outbox
-   activity (quiet window `AP_TURN_CONFIRM_S`, default 20s; `0` disables): a worker that emits `done`
+   activity (quiet window `AP_TURN_CONFIRM_S`, default 20s; `0` disables that layer only — the
+   premature-`done` HOLD below is a different layer with its own switch,
+   `AP_IMPLEMENT_PREMATURE_DONE_S`, default 1800s, `0` disables): a worker that emits `done`
    mid-turn and keeps working is vetoed, the wait re-arms for the turn's real end, and each veto
    records a `turn-confirm-veto` flag for `/ap:review`. It is bounded — at most 2 vetoes (3 windows),
    and the re-arm expires at `max(wait-start + budget, first-leg-end + 3 windows)`; a
@@ -363,6 +365,14 @@ Initialize once: `ROUND=1`, `RETRY=0`, `MAX_ROUNDS=${MAX_ROUNDS_OVERRIDE:-5}`. T
    and done-then-question is `TS=question` — the worker's last word wins. Confirmation does not
    replace the verify gate: a confirmed `done` still becomes `TS=failed` unless
    `verify-report-<ROUND>.md` is present and passing.
+   A `done` with no `verify-report-<ROUND>.md` is HELD rather than failed while the worker's pane
+   keeps changing — the worker that emits `done` after every task is still implementing, and the
+   old `TS=failed` retry re-sent the round into it. A held turn shows `PD=` lines in
+   `$ART/turn-lead-<ROUND>.txt` and no `TS=` yet, so its Monitor is still running: leave it. It
+   ends `TS=ok` on the final `done` with the report present, `TS=failed` once the pane has been
+   unchanged for `AP_IMPLEMENT_PREMATURE_DONE_S`, and `TS=timeout` at the turn deadline; a worker
+   whose pane record is missing or unverifiable is never held. The first hold of a turn records one
+   `premature-done` flag for `/ap:review`.
 3. On completion, read `TS=` from `$ART/turn-lead-<ROUND>.txt` (the **last** `TS=` line). Branch:
    - **`TS=ok`** → Stage 2.
    - **`TS=failed` / `TS=timeout`** → auto-retry **once**: if `RETRY==0`, set `RETRY=1`,
