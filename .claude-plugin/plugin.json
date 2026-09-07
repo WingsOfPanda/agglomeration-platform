@@ -1,0 +1,20 @@
+{
+  "name": "ap",
+  "version": "0.6.0",
+  "description": "Multi-model tmux pane orchestration for Claude Code — spawn codex/claude/agy/opencode TUIs as attachable parts",
+  "author": {
+    "name": "WOP",
+    "email": "WingsOfPanda@users.noreply.github.com"
+  },
+  "homepage": "https://github.com/WingsOfPanda/agglomeration-platform",
+  "repository": "https://github.com/WingsOfPanda/agglomeration-platform",
+  "license": "SEE LICENSE IN LICENSE",
+  "keywords": [
+    "claude-code",
+    "plugin",
+    "multi-agent",
+    "orchestration",
+    "tmux",
+    "codex"
+  ]
+}
