@@ -9,7 +9,7 @@
       "name": "ap",
       "source": "./",
       "description": "Multi-model tmux pane orchestration for Claude Code — spawn codex/claude/agy/opencode TUIs as attachable parts",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "author": {
         "name": "WOP",
         "email": "WingsOfPanda@users.noreply.github.com"

@@ -1,6 +1,6 @@
 {
   "name": "ap",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Multi-model tmux pane orchestration for Claude Code — spawn codex/claude/agy/opencode TUIs as attachable parts",
   "author": {
     "name": "WOP",
