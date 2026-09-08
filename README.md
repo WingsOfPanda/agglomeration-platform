@@ -45,6 +45,17 @@ on a stale clone that `/plugin marketplace update` cannot recover. Re-add the ma
 Workers act on your repository unattended and reach the network. Point them only at repositories and
 tasks you would trust an unattended agent with.
 
+## Diagnostics
+
+When ap itself fails — a worker pane that dies at spawn or mid-turn, a worktree, verb or directive
+that misbehaves — it files one GitHub issue per run on this repository, with the run's metadata (the
+topic's slug, hostname, username, paths, providers, repository origin) and, for a spawn failure, the
+pane's last screen lines. The task text you typed, your repository's code and the worker's output
+are not sent. It asks once per machine before the first filing; answer "Never on this machine" or
+run `ap review consent no` to keep records in a local queue instead, and `ap review consent yes` to
+change your mind (also the fix for a machine that answered on 0.6.0 or 0.6.1 while it could not
+reach the tracker). Report anything else here by hand: Issues are open.
+
 ## License
 
 Proprietary — see `LICENSE`. You may download, cache and run this artifact unmodified;
