@@ -1,7 +1,7 @@
 ---
 description: Fast landscape for a small idea — two pinned workers research and cross-verify, the hub writes one landscape doc and a handoff for /ap:design; no gate, no adversary, no interviews
-argument-hint: <topic — a small idea>
-allowed-tools: Bash, Write, Read, Edit, AskUserQuestion, TodoWrite
+argument-hint: <topic — a small idea> [--detached [--budget-hours N]]
+allowed-tools: Bash, Write, Read, Edit, AskUserQuestion, Skill, TodoWrite
 ---
 The arguments for this invocation, verbatim: $ARGUMENTS
 Wherever the text below says `\$ARGUMENTS`, it means exactly the text on the line above.

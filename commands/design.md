@@ -1,7 +1,7 @@
 ---
 description: Author + adversarial reviewer design doc: claude writes, codex reviews, claude fixes, at most one more review round; produces the deploy-schema doc /ap:implement consumes
-argument-hint: <topic — what to design>
-allowed-tools: Bash, Write, Read, AskUserQuestion, TodoWrite
+argument-hint: <topic — what to design> [--detached [--budget-hours N]]
+allowed-tools: Bash, Write, Read, AskUserQuestion, Skill, TodoWrite
 ---
 The arguments for this invocation, verbatim: $ARGUMENTS
 Wherever the text below says `\$ARGUMENTS`, it means exactly the text on the line above.

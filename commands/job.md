@@ -1,7 +1,7 @@
 ---
-description: Observe and control a DETACHED /ap:implement or /ap:quick run — status, parked questions, re-attach after a restart, teardown
+description: Observe and control a DETACHED /ap:implement, /ap:quick, /ap:explore, /ap:fast-explore or /ap:design run — arm the watch, status, parked questions, re-attach after a restart, teardown
 argument-hint: status|attach|relay|list|stop <topic> [message]
-allowed-tools: Bash, Read, AskUserQuestion
+allowed-tools: Bash, Read, Write, AskUserQuestion
 ---
 The arguments for this invocation, verbatim: $ARGUMENTS
 Wherever the text below says `\$ARGUMENTS`, it means exactly the text on the line above.

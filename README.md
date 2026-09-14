@@ -119,7 +119,7 @@ your session (and your checkout) back ([details](#detached-jobs---detached)).
 | A small idea, a fast landscape — two workers, one pass, a handoff | [`/ap:fast-explore`](#apfast-explore) |
 | A buildable, audited design doc ("design X", "should we adopt X?") | [`/ap:design`](#apdesign) |
 | To turn a design doc into code, cross-verified, on a branch | [`/ap:implement`](#apimplement) |
-| An implement/quick run that takes **hours** — without holding your session hostage | [`--detached`](#detached-jobs---detached) + [`/ap:job`](#apjob) |
+| A run that takes **hours** — without holding your session hostage | [`--detached`](#detached-jobs---detached) + [`/ap:job`](#apjob) |
 | A metric-driven experiment loop that never touches real code | [`/ap:autoresearch`](#apautoresearch) |
 | The same orchestration, but the work belongs in a *different* repo | [`/ap:bridge`](#apbridge) |
 | Health check + pick which model CLIs to use | [`/ap:check`](#apcheck) |
@@ -154,7 +154,7 @@ When the task is fuzzy, contested, or architectural — don't `quick` it; run th
 ### `/ap:explore`
 
 ```
-/ap:explore <topic — what to survey / think deeply about>
+/ap:explore <topic — what to survey / think deeply about> [--detached [--budget-hours N]]
 ```
 
 Deep multi-aspect exploration: N workers research the topic in parallel (with a literature-weight
@@ -172,10 +172,16 @@ Explore answers *"what's out there and what should we think?"* — it deliberate
 produce a buildable plan. That's design's job. When the idea is small and the question is only
 "is this worth a design doc", run [`/ap:fast-explore`](#apfast-explore) instead.
 
+`--detached` runs it as a background job in its own tmux session, watched from
+[`/ap:job`](#apjob): the framing interview is skipped, each grill round parks for you to answer
+through `/ap:job relay`, and the result is shown from the run's `present.md`. There is no worktree:
+the workers read your **live checkout**, so your edits are visible to them and switching branches
+mid-run changes what they read.
+
 ### `/ap:fast-explore`
 
 ```
-/ap:fast-explore <topic — a small idea>
+/ap:fast-explore <topic — a small idea> [--detached [--budget-hours N]]
 ```
 
 The short path through explore's own machinery: two pinned workers (`claude` on the literature,
@@ -192,10 +198,15 @@ consent, and a run is minutes rather than an hour.
 - For a real survey — several angles, an adversary-tested landscape — use
   [`/ap:explore`](#apexplore).
 
+`--detached` runs it as a background job in its own tmux session, watched from
+[`/ap:job`](#apjob); a worker's question parks for you there. There is no worktree: the workers
+read your **live checkout**, so your edits are visible to them and switching branches mid-run
+changes what they read.
+
 ### `/ap:design`
 
 ```
-/ap:design <topic — what to design>
+/ap:design <topic — what to design, or an explore handoff path> [--detached [--budget-hours N]]
 ```
 
 One **author** (`claude`) writes the **deploy-schema design doc** (Problem / Goal / Architecture /
@@ -213,6 +224,12 @@ deploy-audit gate (the six exact headings, no placeholders) before it is exporte
   implementing worker a question round. Tag a line `[on-box]` for paths that deliberately live
   elsewhere — a box-local config, a sibling repo — and that line is exempt. The warning never fails
   the run; the deploy-audit gate alone decides pass/fail.
+
+`--detached` runs it as a background job in its own tmux session, watched from
+[`/ap:job`](#apjob); a worker's question parks for you there. There is no worktree: the workers
+read your **live checkout**, so your edits are visible to them and switching branches mid-run
+changes what they read. The exported doc lands uncommitted in your checkout — commit it before
+`/ap:implement --detached`, which refuses an uncommitted doc.
 
 ### `/ap:implement`
 
@@ -239,6 +256,9 @@ detached tmux session `ap-<topic>`, which runs the same directive itself and spa
 beside it. Your session gets the launch back in about a minute and keeps only a cheap watch — a persistent
 monitor, not a shell, so it can be parked and re-armed across your session's restarts while the
 run itself never notices.
+
+The envelope below is an `implement` or `quick` job's. An `explore`, `fast-explore` or `design` job
+has no worktree, branch or finish step: its workers read your live checkout (see those commands).
 
 ```
 your session (the origin hub)             tmux session ap-<topic> (detached) — one window
@@ -303,12 +323,13 @@ The unattended envelope is deliberately tighter than an attended run:
 ```
 
 The origin session's view of a detached run. Jobs are **started** by `--detached` on
-implement/quick, not here.
+implement, quick, explore, fast-explore or design, not here.
 
 - **`status <topic>`** — one screen: what was launched, hub liveness (three-valued: `alive` /
   `dead` / **`unknown`** — an unverifiable pane is never reported dead), elapsed vs budget, the
   event tail, and any **parked question**.
-- **`attach <topic>`** — after your session restarted: prints the re-arm block (watch command,
+- **`attach <topic>`** — arms the watch: right after a detached explore, fast-explore or design
+  launch, or after your session restarted. Prints the re-arm block (watch command,
   wait command, outbox path) plus the parked state, so a job waiting on you is the first thing
   you see. The job itself never noticed your restart.
 - **`relay <topic> "<answer>"`** — answer a parked question. Refuses (rc 1) when nothing is

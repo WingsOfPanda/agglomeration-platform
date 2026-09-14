@@ -1,6 +1,6 @@
 ---
 description: Deep multi-aspect exploration — SOTA surveys, multi-angle thinking, adversary-tested landscape doc that feeds /ap:design
-argument-hint: <topic>
+argument-hint: <topic> [--detached [--budget-hours N]]
 allowed-tools: Bash, Write, Read, Edit, AskUserQuestion, WebSearch, WebFetch, Skill, TaskCreate, TaskUpdate
 ---
 The arguments for this invocation, verbatim: $ARGUMENTS
