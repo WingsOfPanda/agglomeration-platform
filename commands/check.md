@@ -1,5 +1,5 @@
 ---
-description: Health check (tmux/pane-border/state/config/providers) plus interactive list picker — selects the active provider set for /ap:design
+description: Health check (tmux/pane-border/state/config/providers) plus interactive list picker — selects the active provider set (/ap:design needs codex in it)
 argument-hint: (no args)
 allowed-tools: Bash, Write, AskUserQuestion
 ---

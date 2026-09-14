@@ -1,5 +1,5 @@
 ---
-description: Author + adversarial reviewer design doc: claude writes, codex reviews, claude fixes, at most one more review round; produces the deploy-schema doc /ap:implement consumes
+description: The hub writes the deploy-schema design doc, one codex worker reviews it, the hub fixes; one worker turn; produces the doc /ap:implement consumes
 argument-hint: <topic — what to design> [--detached [--budget-hours N]]
 allowed-tools: Bash, Write, Read, AskUserQuestion, Skill, TodoWrite
 ---

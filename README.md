@@ -68,11 +68,9 @@ pane with a color-coded border label:
 
 ```
 ┌──────────────────────────────┬──────────────────────────────┐
-│ hub — Claude Code            │ [azure] mike-codex · topic    │
-│ > /ap:design "..."           │  codex TUI, working…          │
-│   design write-wait …        ├──────────────────────────────┤
-│                              │ [sage] victor-claude · topic  │
-│                              │  claude TUI, working…         │
+│ hub — Claude Code            │ [azure] mike-codex · topic   │
+│ > /ap:design "..."           │  codex TUI, working…         │
+│   design review-wait …       │                              │
 └──────────────────────────────┴──────────────────────────────┘
 ```
 
@@ -209,12 +207,12 @@ changes what they read.
 /ap:design <topic — what to design, or an explore handoff path> [--detached [--budget-hours N]]
 ```
 
-One **author** (`claude`) writes the **deploy-schema design doc** (Problem / Goal / Architecture /
-Components / Testing / Success Criteria), one **reviewer** (`codex`) attacks it — every finding with
-evidence and a concrete fix — and the author fixes or rebuts each one. A second review+fix pair runs
-only when the review's verdict was `needs-attention` or the author rejected a finding: five worker
-turns at most, no mid-run questions except a worker's own. The doc must pass a mechanical
-deploy-audit gate (the six exact headings, no placeholders) before it is exported.
+The **hub** researches and writes the **deploy-schema design doc** itself (Problem / Goal /
+Architecture / Components / Testing / Success Criteria); one **reviewer** (`codex`) attacks it —
+every finding with evidence and a concrete fix — and the hub fixes or rebuts each one. One worker,
+one worker turn: no second round, no mid-run questions except the reviewer's own. The doc must pass
+a mechanical deploy-audit gate (the six exact headings, no placeholders), and it is exported right
+after that first audit — before the reviewer is spawned — so nothing later can lose it.
 
 - You get: `docs/ap/specs/<date>-<topic>-design.md` — exported into your repo as the primary,
   discoverable copy — plus the full research trail in the archived run dir.
@@ -226,10 +224,11 @@ deploy-audit gate (the six exact headings, no placeholders) before it is exporte
   the run; the deploy-audit gate alone decides pass/fail.
 
 `--detached` runs it as a background job in its own tmux session, watched from
-[`/ap:job`](#apjob); a worker's question parks for you there. There is no worktree: the workers
-read your **live checkout**, so your edits are visible to them and switching branches mid-run
-changes what they read. The exported doc lands uncommitted in your checkout — commit it before
-`/ap:implement --detached`, which refuses an uncommitted doc.
+[`/ap:job`](#apjob); the reviewer's question parks for you there. There is no worktree: the job hub
+itself writes the doc from your **live checkout**, and its reviewer reads the same one, so your
+edits are visible and switching branches mid-run changes what they read. The exported doc lands
+uncommitted in your checkout — commit it before `/ap:implement --detached`, which refuses an
+uncommitted doc.
 
 ### `/ap:implement`
 
@@ -441,8 +440,8 @@ You end with `landscape-….md` (a tradeoff matrix with citations, contested cla
 /ap:design ~/.ap/archive/<hash>/<topic>/_explore-<ts>/design-handoff.md
 ```
 
-Design's author writes the doc, its reviewer attacks it, and the author fixes what the review
-found — one more round if the reviewer was not satisfied. It exports:
+Design's hub writes the doc itself, one reviewer attacks it, and the hub fixes or rebuts what the
+review found — one worker turn, no second round. It exports:
 
 ```text
 docs/ap/specs/2026-08-09-adaptive-cache-eviction-design.md
