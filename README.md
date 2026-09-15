@@ -252,9 +252,9 @@ relayed to you with verified claims attached.
 An attached run holds your session for its whole duration and dies with it. `--detached` hands the
 **entire pipeline** — not just the worker — to a **job hub**: a `claude` TUI spawned into a
 detached tmux session `ap-<topic>`, which runs the same directive itself and spawns its own worker
-beside it. Your session gets the launch back in about a minute and keeps only a cheap watch — a persistent
-monitor, not a shell, so it can be parked and re-armed across your session's restarts while the
-run itself never notices.
+beside it. Your session gets the launch back in about a minute and keeps only a cheap watch — a
+background shell that costs nothing while it waits; if your session restarts, `/ap:job attach`
+re-arms it while the run itself never notices.
 
 The envelope below is an `implement` or `quick` job's. An `explore`, `fast-explore` or `design` job
 has no worktree, branch or finish step: its workers read your live checkout (see those commands).
@@ -323,6 +323,9 @@ The unattended envelope is deliberately tighter than an attended run:
 
 The origin session's view of a detached run. Jobs are **started** by `--detached` on
 implement, quick, explore, fast-explore or design, not here.
+On a box whose `~/.claude/job-records/` directory exists, `job start` also writes
+`apjob-<topic>.md` there — the record an operator's external job watcher reads — and prints
+`HANDOFF=<path>`; `job stop` marks it `done`.
 
 - **`status <topic>`** — one screen: what was launched, hub liveness (three-valued: `alive` /
   `dead` / **`unknown`** — an unverifiable pane is never reported dead), elapsed vs budget, the
