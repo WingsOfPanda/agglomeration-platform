@@ -296,7 +296,8 @@ The unattended envelope is deliberately tighter than an attended run:
   `.ap/worktrees/<topic>.<agent>` and its own pane on the right. `integrate` merges the slice
   branches into the run branch and the lead absorbs conflicts, abandoned tasks and out-of-slice
   changes in one more turn. A plan that does not split — a linear dependency chain — runs serially
-  with the lead and files a `parallel-degraded` flag; you lose one plan turn, nothing else.
+  with the lead and files a `parallel-degraded` flag; you lose one plan turn, and the job hub skips
+  the plan turn outright for a design whose components do not split.
 - **Nothing merges or publishes while nobody is watching.** The finish action is locked to `keep` —
   mechanically, in the finish verbs, not just in prose, and with no flag to loosen it — so the run
   ends on its `feat/...` branch and *you* run the finish menu afterwards. When you do, integrate
@@ -323,9 +324,9 @@ The unattended envelope is deliberately tighter than an attended run:
 
 The origin session's view of a detached run. Jobs are **started** by `--detached` on
 implement, quick, explore, fast-explore or design, not here.
-On a box whose `~/.claude/job-records/` directory exists, `job start` also writes
-`apjob-<topic>.md` there — the record an operator's external job watcher reads — and prints
-`HANDOFF=<path>`; `job stop` marks it `done`.
+Optional, off unless you opt in: when a `~/.claude/job-records/` directory already exists (ap
+never creates it), `job start` also writes `apjob-<topic>.md` there for an external job watcher to
+read, and prints `HANDOFF=<path>`; `job stop` marks it `done`. Nothing in ap reads the record.
 
 - **`status <topic>`** — one screen: what was launched, hub liveness (three-valued: `alive` /
   `dead` / **`unknown`** — an unverifiable pane is never reported dead), elapsed vs budget, the
