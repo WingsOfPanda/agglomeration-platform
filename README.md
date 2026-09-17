@@ -208,7 +208,9 @@ changes what they read.
 ```
 
 The **hub** researches and writes the **deploy-schema design doc** itself (Problem / Goal /
-Architecture / Components / Testing / Success Criteria); one **reviewer** (`codex`) attacks it —
+Architecture / Components / Testing / Success Criteria), its Testing section naming the repo's
+full-suite command in a `Suite:` bullet that `/ap:implement` runs verbatim; one **reviewer**
+(`codex`) attacks it —
 every finding with evidence and a concrete fix — and the hub fixes or rebuts each one. One worker,
 one worker turn: no second round, no mid-run questions except the reviewer's own. The doc must pass
 a mechanical deploy-audit gate (the six exact headings, no placeholders), and it is exported right
@@ -478,7 +480,8 @@ prefix a single command. They survive plugin updates.
 | `AP_WAIT_EXTEND_MULT` | Extend an expired wait up to N× while the worker's pane is still alive | `3` (cap 10) | **`1` is the only off-switch** — `0`/unset fall back to 3 |
 | `AP_ARTIFACT_GRACE_S` | How long a wait holds after a worker's `done` for its artifact to finish (sentinel or quiescence) | `60` (clamp 10–300) | **`0` disables the artifact-completeness layer entirely** |
 | `AP_TURN_CONFIRM_S` | Quiet window a turn/round wait needs after a terminal event before it classifies the turn (quick · implement · bridge) | `20` (clamp 5–120) | **`0` disables the terminal-confirmation layer entirely**; a worker still writing vetoes the classification (at most 2 vetoes) |
-| `AP_IMPLEMENT_PREMATURE_DONE_S` | How long an implement turn HOLDS a `done` whose verify report is missing, watching the worker's PANE rather than its outbox | `1800` | **`0` disables the hold entirely** (a report-less `done` is `TS=failed` at once); a different layer from `AP_TURN_CONFIRM_S`, with its own switch |
+| `AP_IMPLEMENT_PREMATURE_DONE_S` | How long an implement turn HOLDS a `done` whose verify report is missing, watching the worker's PANE rather than its outbox | `1800` (one pane-idle window, shared with `AP_WAIT_STALL_S`) | **`0` disables the hold entirely** (a report-less `done` is `TS=failed` at once); a different layer from `AP_TURN_CONFIRM_S`, with its own switch |
+| `AP_WAIT_STALL_S` | Seconds of unchanged pane content, with no outbox event, before a quick/implement/design turn wait ends as `stalled` (the hub nudges an idle worker once) | `1800`; `0` disables (one pane-idle window, shared with `AP_IMPLEMENT_PREMATURE_DONE_S`) | quick, implement, design |
 | `AP_QUICK_TURN_TIMEOUT` | quick's turn wall-clock | `14400` (4 h) | |
 | `AP_IMPLEMENT_TURN_TIMEOUT_S` | implement's turn wall-clock | `14400` | |
 | `AP_DUET_TURN_TIMEOUT` | bridge's round wall-clock (legacy name, still the one the code reads) | `14400` | |
@@ -540,6 +543,9 @@ There are **two roots**:
   "check this run by hand".
 - **A wait outlived its budget but the pane is alive** — that's `AP_WAIT_EXTEND_MULT` extending;
   a dead pane fails fast instead.
+- **A turn ended `TS=stalled`** — the pane sat unchanged for `AP_WAIT_STALL_S` with no event; the
+  directive's arm runs `nudge`, which re-points an idle worker at its inbox and leaves a busy one
+  alone.
 - **`stop <topic>` refuses: "a detached job is in flight"** — intentional, not stuck: the topic
   form would kill the job hub mid-run. The message names both remedies (`ap job stop <topic>` /
   per-agent stop).
