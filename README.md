@@ -240,9 +240,9 @@ uncommitted doc.
 
 Turns a deploy-schema design doc into code, single-repo. The doc is **audited first** (schema
 gate); one worker plans, implements, and self-verifies on `feat/implement-<TOPIC>` while the hub
-**cross-verifies with its own independent test re-run** — the worker's green log is a claim, not
-evidence — and drives a bounded fix-loop (default 5 rounds). Worker objections and questions are
-relayed to you with verified claims attached.
+**cross-verifies with its own independent test re-run** once the read-based cross-verify is clean
+— the worker's green log is a claim, not evidence — and drives a bounded fix-loop (default 5
+rounds). Worker objections and questions are relayed to you with verified claims attached.
 
 - With no doc path, the newest exported design doc is offered.
 - Ends with a finish menu — **merge / push+PR / keep / discard** — then scope-conformance check,
@@ -481,7 +481,7 @@ prefix a single command. They survive plugin updates.
 | `AP_ARTIFACT_GRACE_S` | How long a wait holds after a worker's `done` for its artifact to finish (sentinel or quiescence) | `60` (clamp 10–300) | **`0` disables the artifact-completeness layer entirely** |
 | `AP_TURN_CONFIRM_S` | Quiet window a turn/round wait needs after a terminal event before it classifies the turn (quick · implement · bridge) | `20` (clamp 5–120) | **`0` disables the terminal-confirmation layer entirely**; a worker still writing vetoes the classification (at most 2 vetoes) |
 | `AP_IMPLEMENT_PREMATURE_DONE_S` | How long an implement turn HOLDS a `done` whose verify report is missing, watching the worker's PANE rather than its outbox | `1800` (one pane-idle window, shared with `AP_WAIT_STALL_S`) | **`0` disables the hold entirely** (a report-less `done` is `TS=failed` at once); a different layer from `AP_TURN_CONFIRM_S`, with its own switch |
-| `AP_WAIT_STALL_S` | Seconds of unchanged pane content, with no outbox event, before a quick/implement/design turn wait ends as `stalled` (the hub nudges an idle worker once) | `1800`; `0` disables (one pane-idle window, shared with `AP_IMPLEMENT_PREMATURE_DONE_S`) | quick, implement, design |
+| `AP_WAIT_STALL_S` | Seconds of unchanged pane content, with no outbox event, before a quick/implement/design turn wait ends as `stalled` (the hub nudges an idle worker once); and the origin's `job wait` ends `JS=stalled` when a finished worker turn has waited that long on a silent job hub | `1800`; `0` disables (one pane-idle window, shared with `AP_IMPLEMENT_PREMATURE_DONE_S`) | quick, implement, design |
 | `AP_QUICK_TURN_TIMEOUT` | quick's turn wall-clock | `14400` (4 h) | |
 | `AP_IMPLEMENT_TURN_TIMEOUT_S` | implement's turn wall-clock | `14400` | |
 | `AP_DUET_TURN_TIMEOUT` | bridge's round wall-clock (legacy name, still the one the code reads) | `14400` | |
@@ -554,6 +554,9 @@ There are **two roots**:
 - **`job status` says `LIVENESS=unknown`** — the platform cannot prove the hub's pane either way
   (e.g. no ownership nonce). Unknown is **not** dead: check `tmux attach -t ap-<topic>` before
   concluding anything.
+- **`job wait` said `JS=stalled`** — a worker turn finished and the job hub emitted nothing for
+  `AP_WAIT_STALL_S`; the directive nudges the hub once and then reports. `tmux attach -t <SESSION>`
+  shows what the hub's pane says.
 
 ## Diagnostics
 
