@@ -338,7 +338,8 @@ read, and prints `HANDOFF=<path>`; `job stop` marks it `done`. Nothing in ap rea
   wait command, outbox path) plus the parked state, so a job waiting on you is the first thing
   you see. The job itself never noticed your restart.
 - **`relay <topic> "<answer>"`** — answer a parked question. Refuses (rc 1) when nothing is
-  parked — the hub is working or finished, and a write then would clobber its task.
+  parked — the hub is working or finished, and a write then would clobber its task — and when a
+  relay is already recorded against the newest question, so an answer is delivered once.
 - **`list`** — every job in this repo (also appended to `/ap:list` as a `DETACHED JOBS` section).
 - **`stop <topic>`** — tear down the hub and its workers, sweep the `ap-<topic>` session
   (ownership-gated), print the finish hint, sweep the run's worktree (clean ones only), clear the
@@ -549,8 +550,10 @@ There are **two roots**:
 - **`stop <topic>` refuses: "a detached job is in flight"** — intentional, not stuck: the topic
   form would kill the job hub mid-run. The message names both remedies (`ap job stop <topic>` /
   per-agent stop).
-- **`job relay` refuses: "nothing is parked"** — intentional: the hub is mid-task or already
-  finished, and the parked check is the only gate protecting its inbox from a clobbering write.
+- **`job relay` refuses: "nothing is parked" / "already answered by a relay"** — intentional: the
+  hub is mid-task or finished, or the newest question already has your answer. The parked check, read
+  through the relay cursor, is the only gate protecting its inbox from a clobbering write, and the
+  same read is why `status` shows `PARKED=no`.
 - **`job status` says `LIVENESS=unknown`** — the platform cannot prove the hub's pane either way
   (e.g. no ownership nonce). Unknown is **not** dead: check `tmux attach -t ap-<topic>` before
   concluding anything.
