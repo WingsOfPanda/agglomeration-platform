@@ -1,7 +1,7 @@
 ---
 description: Light pipeline — one worker implements a clear single-repo change unattended on its own branch; the hub briefs, verifies, and finishes by default. No research, no design doc, no gates.
 argument-hint: <topic-text> [--detached] [--provider codex|claude|agy|opencode] [--no-finish] [--stash-wip]
-allowed-tools: Bash, Write, Read, Edit, AskUserQuestion
+allowed-tools: Bash, Write, Read, Edit, AskUserQuestion, Skill
 ---
 The arguments for this invocation, verbatim: $ARGUMENTS
 Wherever the text below says `\$ARGUMENTS`, it means exactly the text on the line above.
