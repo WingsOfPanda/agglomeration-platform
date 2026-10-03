@@ -5,12 +5,13 @@ allowed-tools: Bash, Write, Read, Edit, AskUserQuestion, WebSearch, WebFetch, Sk
 ---
 The arguments for this invocation, verbatim: $ARGUMENTS
 Wherever the text below says `\$ARGUMENTS`, it means exactly the text on the line above.
-The lines below expand to this command's directive, ending with 3 end markers of the form
-`<!-- ap:explore n/3 end -->`. If what follows is not that directive (a placeholder, or nothing),
+The lines below expand to this command's directive, ending with 4 end markers of the form
+`<!-- ap:explore n/4 end -->`. If what follows is not that directive (a placeholder, or nothing),
 inline shell execution is disabled on this machine (`disableSkillShellExecution`): stop, take no
-other action, and say so. If any of the 3 end markers is missing, the directive was truncated in
+other action, and say so. If any of the 4 end markers is missing, the directive was truncated in
 transit: stop and tell the operator instead of acting.
 
-!`node "${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs" directive explore 1 --of 3`
-!`node "${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs" directive explore 2 --of 3`
-!`node "${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs" directive explore 3 --of 3`
+!`node "${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs" directive explore 1 --of 4`
+!`node "${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs" directive explore 2 --of 4`
+!`node "${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs" directive explore 3 --of 4`
+!`node "${CLAUDE_PLUGIN_ROOT}/dist/ap.cjs" directive explore 4 --of 4`
