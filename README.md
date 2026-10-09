@@ -254,9 +254,11 @@ rounds). Worker objections and questions are relayed to you with verified claims
 An attached run holds your session for its whole duration and dies with it. `--detached` hands the
 **entire pipeline** — not just the worker — to a **job hub**: a `claude` TUI spawned into a
 detached tmux session `ap-<topic>`, which runs the same directive itself and spawns its own worker
-beside it. Your session gets the launch back in about a minute and keeps only a cheap watch — a
-background shell that costs nothing while it waits; if your session restarts, `/ap:job attach`
-re-arms it while the run itself never notices.
+beside it. Your session gets the launch back in about a minute and keeps only a cheap watch:
+when `~/.claude/job-records/` exists and the launch is inside tmux (the job-watch mod's
+convention), the job record (`WATCHER=record`), which survives a restart of your session; otherwise
+a background shell that costs nothing while it waits, and `/ap:job attach` re-arms it after a
+restart while the run itself never notices.
 
 The envelope below is an `implement` or `quick` job's. An `explore`, `fast-explore` or `design` job
 has no worktree, branch or finish step: its workers read your live checkout (see those commands).
@@ -327,8 +329,12 @@ The unattended envelope is deliberately tighter than an attended run:
 The origin session's view of a detached run. Jobs are **started** by `--detached` on
 implement, quick, explore, fast-explore or design, not here.
 Optional, off unless you opt in: when a `~/.claude/job-records/` directory already exists (ap
-never creates it), `job start` also writes `apjob-<topic>.md` there for an external job watcher to
-read, and prints `HANDOFF=<path>`; `job stop` marks it `done`. Nothing in ap reads the record.
+never creates it), `job start` also writes `apjob-<topic>.md` there for the job-watch mod to read,
+and prints `HANDOFF=<path>`; `job stop` marks it `done`. Launched inside tmux, that record is the
+watch (`WATCHER=record`): the mod wakes your session when the job finishes, fails, parks or dies,
+so you can restart the session whenever you like. Otherwise (`WATCHER=loop`) the background watch
+dies with your session and `/ap:job attach` re-arms it; `attach` from a new tmux pane also claims
+the record.
 
 - **`status <topic>`** — one screen: what was launched, hub liveness (three-valued: `alive` /
   `dead` / **`unknown`** — an unverifiable pane is never reported dead), elapsed vs budget, the
@@ -336,7 +342,8 @@ read, and prints `HANDOFF=<path>`; `job stop` marks it `done`. Nothing in ap rea
 - **`attach <topic>`** — arms the watch: right after a detached explore, fast-explore or design
   launch, or after your session restarted. Prints the re-arm block (watch command,
   wait command, outbox path) plus the parked state, so a job waiting on you is the first thing
-  you see. The job itself never noticed your restart.
+  you see, then `HANDOFF=` (with a job record) and `WATCHER=`. From a new tmux pane it claims the
+  record; it arms the loop only on `WATCHER=loop`. The job itself never noticed your restart.
 - **`relay <topic> "<answer>"`** — answer a parked question. Refuses (rc 1) when nothing is
   parked — the hub is working or finished, and a write then would clobber its task — and when a
   relay is already recorded against the newest question, so an answer is delivered once.
