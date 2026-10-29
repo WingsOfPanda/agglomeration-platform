@@ -260,6 +260,11 @@ convention), the job record (`WATCHER=record`), which survives a restart of your
 a background shell that costs nothing while it waits, and `/ap:job attach` re-arms it after a
 restart while the run itself never notices.
 
+The job hub runs your session's model and effort: `spawn` reads the effort from `CLAUDE_EFFORT` and
+the model from your session's newest reply, and prints one line naming both. A value it cannot find
+is left to Claude Code's default. The workers the job hub spawns run the worker model (see
+[Operating & tuning](#operating--tuning)).
+
 The envelope below is an `implement` or `quick` job's. An `explore`, `fast-explore` or `design` job
 has no worktree, branch or finish step: its workers read your live checkout (see those commands).
 
@@ -478,6 +483,13 @@ performed: three commands and a few approvals.
 
 All knobs are environment variables read by the bundled CLI — export them in the hub's shell, or
 prefix a single command. They survive plugin updates.
+
+**Worker model.** Every claude worker runs the newest Opus (`--model opus --effort high`) and every
+codex worker the newest Sol at high effort: on each spawn ap picks the highest-version visible
+`gpt-<N>-sol` from codex's `models_cache.json`, and falls back to `gpt-6.1-sol` with a warning when
+it finds none. Both are fixed in `config/contracts.json` (`worker_model`); there is no environment
+variable or flag for them, and the model and effort in your box's own Claude Code and Codex settings
+no longer reach workers. `agy` and `opencode` workers are unchanged.
 
 ### The knobs you'll actually touch
 
